@@ -151,7 +151,21 @@ jobs:
         run: |
           curl -L "https://github.com/astral-sh/python-build-standalone/releases/download/20260602/cpython-3.12.13+20260602-aarch64-apple-darwin-install_only_stripped.tar.gz" -o python.tar.gz
 
-          APP_PATH="build/Release/LumenArc.app"
+          # Find the correct .app path
+          APP_PATH=""
+          for p in "build/Release/LumenArc.app" "build/LumenArc.app"; do
+            if [ -d "$p" ]; then
+              APP_PATH="$p"
+              break
+            fi
+          done
+          if [ -z "$APP_PATH" ]; then
+            echo "ERROR: LumenArc.app not found!"
+            find build -name "LumenArc.app" -type d 2>/dev/null
+            exit 1
+          fi
+          echo "Found app at: $APP_PATH"
+
           PYTHON_DIR="$APP_PATH/Contents/MacOS/python"
           mkdir -p "$PYTHON_DIR"
           tar xzf python.tar.gz -C .
@@ -165,7 +179,13 @@ jobs:
 
       - name: Create macOS DMG
         run: |
-          APP_PATH="build/Release/LumenArc.app"
+          APP_PATH=""
+          for p in "build/Release/LumenArc.app" "build/LumenArc.app"; do
+            if [ -d "$p" ]; then
+              APP_PATH="$p"
+              break
+            fi
+          done
           DMG_NAME="LumenArc-${{ github.ref_name }}-mac-arm64.dmg"
           hdiutil create -volname "LumenArc" -srcfolder "$APP_PATH" -ov -format UDZO "$DMG_NAME"
         shell: bash
