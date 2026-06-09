@@ -169,7 +169,11 @@ jobs:
           PYTHON_DIR="$APP_PATH/Contents/MacOS/python"
           mkdir -p "$PYTHON_DIR"
           tar xzf python.tar.gz -C .
-          mv python/python/* "$PYTHON_DIR/"
+          # Check what was extracted
+          echo "Extracted contents:"
+          ls -la python/
+          # Move Python files to the app bundle
+          cp -R python/* "$PYTHON_DIR/"
           rm -rf python python.tar.gz
 
           "$PYTHON_DIR/bin/python3" -m pip install opencv-python-headless numpy --no-warn-script-location
