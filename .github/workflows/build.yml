@@ -129,14 +129,11 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Install Qt 6
-        uses: jurplel/install-qt-action@v4
-        with:
-          version: '6.8.0'
-          host: 'mac'
-          target: 'desktop'
-          arch: 'macos'
-          modules: 'qtcharts'
+      - name: Install Qt 6 via Homebrew
+        run: |
+          brew install qt@6
+          echo "QT6_DIR=$(brew --prefix qt@6)" >> $GITHUB_ENV
+        shell: bash
 
       - name: Install VLC
         run: brew install vlc
