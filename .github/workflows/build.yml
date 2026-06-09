@@ -1,0 +1,188 @@
+name: Build and Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Qt 6
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: '6.8.0'
+          host: 'windows'
+          target: 'desktop'
+          arch: 'win64_msvc2022_64'
+          modules: 'qtcharts'
+
+      - name: Install VLC SDK
+        run: |
+          # SDK headers/libs are in the repository
+          echo "VLC_SDK_PATH=${{ github.workspace }}\vlc_extracted\vlc-3.0.21" >> $env:GITHUB_ENV
+          # Install VLC player for runtime DLLs
+          choco install vlc -y --no-progress
+          echo "VLC_BIN_PATH=C:\Program Files\VideoLAN\VLC" >> $env:GITHUB_ENV
+        shell: pwsh
+
+      - name: Install Python dependencies
+        run: |
+          pip install opencv-python-headless numpy
+        shell: bash
+
+      - name: Bundle Python (embeddable)
+        run: |
+          $pyVer = "3.12.8"
+          $pyUrl = "https://www.python.org/ftp/python/$pyVer/python-$pyVer-embed-amd64.zip"
+          Write-Host "Downloading Python $pyVer embeddable..."
+          Invoke-WebRequest -Uri $pyUrl -OutFile "python-embed.zip"
+          Expand-Archive -Path "python-embed.zip" -DestinationPath "build\Release\python"
+          Remove-Item "python-embed.zip"
+
+          # Modify python312._pth to enable site-packages
+          $pthFile = "build\Release\python\python312._pth"
+          $content = Get-Content -Path $pthFile -Raw
+          $content = $content -replace "# import site", "import site"
+          Set-Content -Path $pthFile -Value $content -NoNewline
+          Write-Host "Python embeddable extracted and configured"
+
+          # Use system Python to install dependencies into the embeddable Python's site-packages
+          $targetDir = "${{ github.workspace }}\build\Release\python\Lib\site-packages"
+          python -m pip install opencv-python-headless numpy --target "$targetDir" --no-warn-script-location
+          Write-Host "Python dependencies installed to $targetDir"
+          Get-ChildItem "$targetDir" -Directory | Select-Object Name
+        shell: pwsh
+
+      - name: Configure CMake
+        run: |
+          cmake -B build -S . -G "Visual Studio 17 2022" -A x64 -DCMAKE_BUILD_TYPE=Release
+        shell: bash
+
+      - name: Build
+        run: |
+          cmake --build build --config Release
+        shell: bash
+
+      - name: Create Windows package
+        run: |
+          Copy-Item "setup_python_deps.bat" "build\Release\" -ErrorAction SilentlyContinue
+          Compress-Archive -Path "build\Release\*" -DestinationPath "LumenArc-${{ github.ref_name }}-win64.zip"
+        shell: pwsh
+
+      - name: Upload Windows artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-release
+          path: LumenArc-${{ github.ref_name }}-win64.zip
+
+  build-macos:
+    runs-on: macos-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Qt 6
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: '6.8.0'
+          host: 'mac'
+          target: 'desktop'
+          modules: 'qtcharts'
+
+      - name: Install VLC
+        run: |
+          brew install vlc
+        shell: bash
+
+      - name: Bundle Python (macOS)
+        run: |
+          # Download python-build-standalone for macOS ARM64 (relocatable Python)
+          curl -L "https://github.com/astral-sh/python-build-standalone/releases/download/20260602/cpython-3.12.13+20260602-aarch64-apple-darwin-install_only_stripped.tar.gz" -o python-macos.tar.gz
+
+          APP_PATH="build/LumenArc.app"
+          if [ ! -d "$APP_PATH" ]; then
+            APP_PATH="build/Release/LumenArc.app"
+          fi
+          PYTHON_DIR="$APP_PATH/Contents/MacOS/python"
+          mkdir -p "$PYTHON_DIR"
+
+          # Extract to a temp directory first, then move contents
+          mkdir -p python-tmp
+          tar xzf python-macos.tar.gz -C python-tmp
+          # The archive extracts to python/ directory
+          mv python-tmp/python/* "$PYTHON_DIR/"
+          rm -rf python-tmp python-macos.tar.gz
+
+          echo "Python bundled at: $PYTHON_DIR"
+          ls -la "$PYTHON_DIR/bin/" | head -5
+
+          # Install dependencies using the bundled Python
+          "$PYTHON_DIR/bin/python3" -m pip install opencv-python-headless numpy --no-warn-script-location
+
+          echo "Python bundled successfully"
+        shell: bash
+
+      - name: Configure CMake
+        run: |
+          cmake -B build -S . -DCMAKE_BUILD_TYPE=Release
+        shell: bash
+
+      - name: Build
+        run: |
+          cmake --build build --config Release
+        shell: bash
+
+      - name: Create macOS DMG
+        run: |
+          APP_PATH="build/LumenArc.app"
+          if [ ! -d "$APP_PATH" ]; then
+            APP_PATH="build/Release/LumenArc.app"
+          fi
+          DMG_NAME="LumenArc-${{ github.ref_name }}-mac.dmg"
+          echo "Creating DMG from: $APP_PATH"
+          hdiutil create -volname "LumenArc" -srcfolder "$APP_PATH" -ov -format UDZO "$DMG_NAME"
+        shell: bash
+
+      - name: Upload macOS artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-release
+          path: LumenArc-${{ github.ref_name }}-mac.dmg
+
+  create-release:
+    needs: [build-windows, build-macos]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Download Windows artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: windows-release
+          path: ./artifacts
+
+      - name: Download macOS artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: macos-release
+          path: ./artifacts
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            ./artifacts/LumenArc-${{ github.ref_name }}-win64.zip
+            ./artifacts/LumenArc-${{ github.ref_name }}-mac.dmg
+          body: |
+            追光者 Lumen Arc v0.2 Beta 首次发布。支持 Windows 和 macOS，内置 Python 分析环境，开箱即用。
+          generate_release_notes: false
+          draft: false
+          prerelease: false
