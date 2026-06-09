@@ -23,19 +23,12 @@ jobs:
 
       - name: Install VLC SDK
         run: |
-          # SDK headers/libs are in the repository
           echo "VLC_SDK_PATH=${{ github.workspace }}\vlc_extracted\vlc-3.0.21" >> $env:GITHUB_ENV
-          # Install VLC player for runtime DLLs
           choco install vlc -y --no-progress
           echo "VLC_BIN_PATH=C:\Program Files\VideoLAN\VLC" >> $env:GITHUB_ENV
         shell: pwsh
 
-      - name: Install Python dependencies
-        run: |
-          pip install opencv-python-headless numpy
-        shell: bash
-
-      - name: Bundle Python (embeddable)
+      - name: Bundle Python (Windows)
         run: |
           $pyVer = "3.12.8"
           $pyUrl = "https://www.python.org/ftp/python/$pyVer/python-$pyVer-embed-amd64.zip"
@@ -44,28 +37,22 @@ jobs:
           Expand-Archive -Path "python-embed.zip" -DestinationPath "build\Release\python"
           Remove-Item "python-embed.zip"
 
-          # Modify python312._pth to enable site-packages
           $pthFile = "build\Release\python\python312._pth"
           $content = Get-Content -Path $pthFile -Raw
           $content = $content -replace "# import site", "import site"
           Set-Content -Path $pthFile -Value $content -NoNewline
-          Write-Host "Python embeddable extracted and configured"
 
-          # Use system Python to install dependencies into the embeddable Python's site-packages
           $targetDir = "${{ github.workspace }}\build\Release\python\Lib\site-packages"
           python -m pip install opencv-python-headless numpy --target "$targetDir" --no-warn-script-location
-          Write-Host "Python dependencies installed to $targetDir"
-          Get-ChildItem "$targetDir" -Directory | Select-Object Name
+          Write-Host "Python bundled successfully"
         shell: pwsh
 
       - name: Configure CMake
-        run: |
-          cmake -B build -S . -G "Visual Studio 17 2022" -A x64 -DCMAKE_BUILD_TYPE=Release
+        run: cmake -B build -S . -G "Visual Studio 17 2022" -A x64 -DCMAKE_BUILD_TYPE=Release
         shell: bash
 
       - name: Build
-        run: |
-          cmake --build build --config Release
+        run: cmake --build build --config Release
         shell: bash
 
       - name: Create Windows package
@@ -80,7 +67,63 @@ jobs:
           name: windows-release
           path: LumenArc-${{ github.ref_name }}-win64.zip
 
-  build-macos:
+  build-macos-intel:
+    runs-on: macos-13
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Qt 6
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: '6.8.0'
+          host: 'mac'
+          target: 'desktop'
+          arch: 'clang_64'
+          modules: 'qtcharts'
+
+      - name: Install VLC
+        run: brew install vlc
+        shell: bash
+
+      - name: Bundle Python (Intel)
+        run: |
+          curl -L "https://github.com/astral-sh/python-build-standalone/releases/download/20260602/cpython-3.12.13+20260602-x86_64-apple-darwin-install_only_stripped.tar.gz" -o python.tar.gz
+
+          APP_PATH="build/Release/LumenArc.app"
+          PYTHON_DIR="$APP_PATH/Contents/MacOS/python"
+          mkdir -p "$PYTHON_DIR"
+          tar xzf python.tar.gz -C .
+          mv python/python/* "$PYTHON_DIR/"
+          rm -rf python python.tar.gz
+
+          "$PYTHON_DIR/bin/python3" -m pip install opencv-python-headless numpy --no-warn-script-location
+          echo "Intel Python bundled successfully"
+          file "$PYTHON_DIR/bin/python3"
+        shell: bash
+
+      - name: Configure CMake
+        run: cmake -B build -S . -DCMAKE_BUILD_TYPE=Release
+        shell: bash
+
+      - name: Build
+        run: cmake --build build --config Release
+        shell: bash
+
+      - name: Create macOS DMG
+        run: |
+          APP_PATH="build/Release/LumenArc.app"
+          DMG_NAME="LumenArc-${{ github.ref_name }}-mac-intel.dmg"
+          hdiutil create -volname "LumenArc" -srcfolder "$APP_PATH" -ov -format UDZO "$DMG_NAME"
+        shell: bash
+
+      - name: Upload macOS Intel artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-intel-release
+          path: LumenArc-${{ github.ref_name }}-mac-intel.dmg
+
+  build-macos-arm64:
     runs-on: macos-latest
     steps:
       - name: Checkout code
@@ -92,98 +135,52 @@ jobs:
           version: '6.8.0'
           host: 'mac'
           target: 'desktop'
+          arch: 'macos'
           modules: 'qtcharts'
 
       - name: Install VLC
-        run: |
-          brew install vlc
+        run: brew install vlc
         shell: bash
 
-      - name: Bundle Python (macOS Universal)
+      - name: Bundle Python (ARM64)
         run: |
-          # Download python-build-standalone for both ARM64 and x86_64
-          curl -L "https://github.com/astral-sh/python-build-standalone/releases/download/20260602/cpython-3.12.13+20260602-aarch64-apple-darwin-install_only_stripped.tar.gz" -o python-arm64.tar.gz
-          curl -L "https://github.com/astral-sh/python-build-standalone/releases/download/20260602/cpython-3.12.13+20260602-x86_64-apple-darwin-install_only_stripped.tar.gz" -o python-x86_64.tar.gz
+          curl -L "https://github.com/astral-sh/python-build-standalone/releases/download/20260602/cpython-3.12.13+20260602-aarch64-apple-darwin-install_only_stripped.tar.gz" -o python.tar.gz
 
-          APP_PATH="build/LumenArc.app"
-          if [ ! -d "$APP_PATH" ]; then
-            APP_PATH="build/Release/LumenArc.app"
-          fi
+          APP_PATH="build/Release/LumenArc.app"
           PYTHON_DIR="$APP_PATH/Contents/MacOS/python"
           mkdir -p "$PYTHON_DIR"
+          tar xzf python.tar.gz -C .
+          mv python/python/* "$PYTHON_DIR/"
+          rm -rf python python.tar.gz
 
-          # Extract both architectures
-          mkdir -p python-arm64 python-x86_64
-          tar xzf python-arm64.tar.gz -C python-arm64
-          tar xzf python-x86_64.tar.gz -C python-x86_64
-
-          # Use ARM64 as the base (has the correct directory structure)
-          cp -R python-arm64/python/* "$PYTHON_DIR/"
-
-          # Combine Python binaries and dylibs using lipo
-          echo "Creating universal Python binaries..."
-          for bin in python3 python3.12; do
-            if [ -f "python-arm64/python/bin/$bin" ] && [ -f "python-x86_64/python/bin/$bin" ]; then
-              lipo -create "python-arm64/python/bin/$bin" "python-x86_64/python/bin/$bin" -output "$PYTHON_DIR/bin/$bin"
-              echo "  Combined $bin"
-            fi
-          done
-
-          # Combine dylibs in lib/
-          for dylib in $(find python-arm64/python/lib -name "*.dylib" -type f 2>/dev/null); do
-            rel_path="${dylib#python-arm64/python/lib/}"
-            x86_path="python-x86_64/python/lib/$rel_path"
-            if [ -f "$x86_path" ]; then
-              mkdir -p "$PYTHON_DIR/lib/$(dirname "$rel_path")"
-              lipo -create "$dylib" "$x86_path" -output "$PYTHON_DIR/lib/$rel_path" 2>/dev/null || cp "$dylib" "$PYTHON_DIR/lib/$rel_path"
-            fi
-          done
-          echo "Universal Python binaries created"
-
-          # Copy x86_64 Python modules (pyd/pyo files) that ARM64 might not have
-          cp -R python-x86_64/python/lib/python3.12/ "$PYTHON_DIR/lib/python3.12/" 2>/dev/null || true
-
-          # Clean up
-          rm -rf python-arm64 python-x86_64 python-arm64.tar.gz python-x86_64.tar.gz
-
-          echo "Python bundled at: $PYTHON_DIR"
-          file "$PYTHON_DIR/bin/python3"
-
-          # Install dependencies using the bundled Python
           "$PYTHON_DIR/bin/python3" -m pip install opencv-python-headless numpy --no-warn-script-location
-
-          echo "Python bundled successfully"
+          echo "ARM64 Python bundled successfully"
+          file "$PYTHON_DIR/bin/python3"
         shell: bash
 
       - name: Configure CMake
-        run: |
-          cmake -B build -S . -DCMAKE_BUILD_TYPE=Release
+        run: cmake -B build -S . -DCMAKE_BUILD_TYPE=Release
         shell: bash
 
       - name: Build
-        run: |
-          cmake --build build --config Release
+        run: cmake --build build --config Release
         shell: bash
 
       - name: Create macOS DMG
         run: |
-          APP_PATH="build/LumenArc.app"
-          if [ ! -d "$APP_PATH" ]; then
-            APP_PATH="build/Release/LumenArc.app"
-          fi
-          DMG_NAME="LumenArc-${{ github.ref_name }}-mac.dmg"
-          echo "Creating DMG from: $APP_PATH"
+          APP_PATH="build/Release/LumenArc.app"
+          DMG_NAME="LumenArc-${{ github.ref_name }}-mac-arm64.dmg"
           hdiutil create -volname "LumenArc" -srcfolder "$APP_PATH" -ov -format UDZO "$DMG_NAME"
         shell: bash
 
-      - name: Upload macOS artifact
+      - name: Upload macOS ARM64 artifact
         uses: actions/upload-artifact@v4
         with:
-          name: macos-release
-          path: LumenArc-${{ github.ref_name }}-mac.dmg
+          name: macos-arm64-release
+          path: LumenArc-${{ github.ref_name }}-mac-arm64.dmg
 
   create-release:
-    needs: [build-windows, build-macos]
+    needs: [build-windows, build-macos-intel, build-macos-arm64]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -191,26 +188,25 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Download Windows artifact
+      - name: Download all artifacts
         uses: actions/download-artifact@v4
         with:
-          name: windows-release
-          path: ./artifacts
-
-      - name: Download macOS artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: macos-release
           path: ./artifacts
 
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            ./artifacts/LumenArc-${{ github.ref_name }}-win64.zip
-            ./artifacts/LumenArc-${{ github.ref_name }}-mac.dmg
+            ./artifacts/windows-release/LumenArc-${{ github.ref_name }}-win64.zip
+            ./artifacts/macos-intel-release/LumenArc-${{ github.ref_name }}-mac-intel.dmg
+            ./artifacts/macos-arm64-release/LumenArc-${{ github.ref_name }}-mac-arm64.dmg
           body: |
-            追光者 Lumen Arc v0.2 Beta 首次发布。支持 Windows 和 macOS，内置 Python 分析环境，开箱即用。
+            追光者 Lumen Arc v0.2 Beta 首次发布。支持 Windows 和 macOS（Intel + Apple Silicon），内置 Python 分析环境，开箱即用。
+
+            ## 下载说明
+            - **Windows**: `LumenArc-v0.2-win64.zip` — 解压后双击 LumenArc.exe 运行
+            - **macOS (Intel)**: `LumenArc-v0.2-mac-intel.dmg` — 适用于 2020 年及之前的 Intel 芯片 Mac
+            - **macOS (Apple Silicon)**: `LumenArc-v0.2-mac-arm64.dmg` — 适用于 M1/M2/M3/M4 芯片 Mac
           generate_release_notes: false
           draft: false
           prerelease: false
