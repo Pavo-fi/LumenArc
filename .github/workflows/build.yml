@@ -99,10 +99,11 @@ jobs:
           brew install vlc
         shell: bash
 
-      - name: Bundle Python (macOS)
+      - name: Bundle Python (macOS Universal)
         run: |
-          # Download python-build-standalone for macOS ARM64 (relocatable Python)
-          curl -L "https://github.com/astral-sh/python-build-standalone/releases/download/20260602/cpython-3.12.13+20260602-aarch64-apple-darwin-install_only_stripped.tar.gz" -o python-macos.tar.gz
+          # Download python-build-standalone for both ARM64 and x86_64
+          curl -L "https://github.com/astral-sh/python-build-standalone/releases/download/20260602/cpython-3.12.13+20260602-aarch64-apple-darwin-install_only_stripped.tar.gz" -o python-arm64.tar.gz
+          curl -L "https://github.com/astral-sh/python-build-standalone/releases/download/20260602/cpython-3.12.13+20260602-x86_64-apple-darwin-install_only_stripped.tar.gz" -o python-x86_64.tar.gz
 
           APP_PATH="build/LumenArc.app"
           if [ ! -d "$APP_PATH" ]; then
@@ -111,15 +112,42 @@ jobs:
           PYTHON_DIR="$APP_PATH/Contents/MacOS/python"
           mkdir -p "$PYTHON_DIR"
 
-          # Extract to a temp directory first, then move contents
-          mkdir -p python-tmp
-          tar xzf python-macos.tar.gz -C python-tmp
-          # The archive extracts to python/ directory
-          mv python-tmp/python/* "$PYTHON_DIR/"
-          rm -rf python-tmp python-macos.tar.gz
+          # Extract both architectures
+          mkdir -p python-arm64 python-x86_64
+          tar xzf python-arm64.tar.gz -C python-arm64
+          tar xzf python-x86_64.tar.gz -C python-x86_64
+
+          # Use ARM64 as the base (has the correct directory structure)
+          cp -R python-arm64/python/* "$PYTHON_DIR/"
+
+          # Combine Python binaries and dylibs using lipo
+          echo "Creating universal Python binaries..."
+          for bin in python3 python3.12; do
+            if [ -f "python-arm64/python/bin/$bin" ] && [ -f "python-x86_64/python/bin/$bin" ]; then
+              lipo -create "python-arm64/python/bin/$bin" "python-x86_64/python/bin/$bin" -output "$PYTHON_DIR/bin/$bin"
+              echo "  Combined $bin"
+            fi
+          done
+
+          # Combine dylibs in lib/
+          for dylib in $(find python-arm64/python/lib -name "*.dylib" -type f 2>/dev/null); do
+            rel_path="${dylib#python-arm64/python/lib/}"
+            x86_path="python-x86_64/python/lib/$rel_path"
+            if [ -f "$x86_path" ]; then
+              mkdir -p "$PYTHON_DIR/lib/$(dirname "$rel_path")"
+              lipo -create "$dylib" "$x86_path" -output "$PYTHON_DIR/lib/$rel_path" 2>/dev/null || cp "$dylib" "$PYTHON_DIR/lib/$rel_path"
+            fi
+          done
+          echo "Universal Python binaries created"
+
+          # Copy x86_64 Python modules (pyd/pyo files) that ARM64 might not have
+          cp -R python-x86_64/python/lib/python3.12/ "$PYTHON_DIR/lib/python3.12/" 2>/dev/null || true
+
+          # Clean up
+          rm -rf python-arm64 python-x86_64 python-arm64.tar.gz python-x86_64.tar.gz
 
           echo "Python bundled at: $PYTHON_DIR"
-          ls -la "$PYTHON_DIR/bin/" | head -5
+          file "$PYTHON_DIR/bin/python3"
 
           # Install dependencies using the bundled Python
           "$PYTHON_DIR/bin/python3" -m pip install opencv-python-headless numpy --no-warn-script-location
