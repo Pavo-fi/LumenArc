@@ -139,6 +139,14 @@ jobs:
         run: brew install vlc
         shell: bash
 
+      - name: Configure CMake
+        run: cmake -B build -S . -DCMAKE_BUILD_TYPE=Release
+        shell: bash
+
+      - name: Build
+        run: cmake --build build --config Release
+        shell: bash
+
       - name: Bundle Python (ARM64)
         run: |
           curl -L "https://github.com/astral-sh/python-build-standalone/releases/download/20260602/cpython-3.12.13+20260602-aarch64-apple-darwin-install_only_stripped.tar.gz" -o python.tar.gz
@@ -153,14 +161,6 @@ jobs:
           "$PYTHON_DIR/bin/python3" -m pip install opencv-python-headless numpy --no-warn-script-location
           echo "ARM64 Python bundled successfully"
           file "$PYTHON_DIR/bin/python3"
-        shell: bash
-
-      - name: Configure CMake
-        run: cmake -B build -S . -DCMAKE_BUILD_TYPE=Release
-        shell: bash
-
-      - name: Build
-        run: cmake --build build --config Release
         shell: bash
 
       - name: Create macOS DMG
