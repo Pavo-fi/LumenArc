@@ -214,7 +214,7 @@ jobs:
           path: LumenArc-${{ github.ref_name }}-mac-arm64.dmg
 
   create-release:
-    needs: [build-windows, build-macos-intel, build-macos-arm64]
+    needs: [build-windows, build-macos-arm64]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -232,15 +232,14 @@ jobs:
         with:
           files: |
             ./artifacts/windows-release/LumenArc-${{ github.ref_name }}-win64.zip
-            ./artifacts/macos-intel-release/LumenArc-${{ github.ref_name }}-mac-intel.dmg
             ./artifacts/macos-arm64-release/LumenArc-${{ github.ref_name }}-mac-arm64.dmg
           body: |
-            追光者 Lumen Arc v0.2 Beta 首次发布。支持 Windows 和 macOS（Intel + Apple Silicon），内置 Python 分析环境，开箱即用。
+            追光者 Lumen Arc v0.2 Beta 首次发布。支持 Windows 和 macOS，内置 Python 分析环境，开箱即用。
 
             ## 下载说明
             - **Windows**: `LumenArc-v0.2-win64.zip` — 解压后双击 LumenArc.exe 运行
-            - **macOS (Intel)**: `LumenArc-v0.2-mac-intel.dmg` — 适用于 2020 年及之前的 Intel 芯片 Mac
             - **macOS (Apple Silicon)**: `LumenArc-v0.2-mac-arm64.dmg` — 适用于 M1/M2/M3/M4 芯片 Mac
+            - **macOS (Intel)**: 稍后提供，或在 Intel Mac 上手动编译
           generate_release_notes: false
           draft: false
           prerelease: false
