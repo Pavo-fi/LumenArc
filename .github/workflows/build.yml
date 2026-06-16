@@ -67,75 +67,6 @@ jobs:
           name: windows-release
           path: LumenArc-${{ github.ref_name }}-win64.zip
 
-  build-macos-intel:
-    runs-on: macos-latest
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Install Qt 6
-        uses: jurplel/install-qt-action@v4
-        with:
-          version: '6.8.0'
-          host: 'mac'
-          target: 'desktop'
-          arch: 'clang_64'
-          modules: 'qtcharts'
-
-      - name: Install VLC
-        run: brew install vlc
-        shell: bash
-
-      - name: Configure CMake (cross-compile for x86_64)
-        run: cmake -B build -S . -DCMAKE_BUILD_TYPE=Release -DCMAKE_OSX_ARCHITECTURES=x86_64
-        shell: bash
-
-      - name: Build
-        run: cmake --build build --config Release
-        shell: bash
-
-      - name: Bundle Python (Intel via cross-compile)
-        run: |
-          curl -L "https://github.com/astral-sh/python-build-standalone/releases/download/20260602/cpython-3.12.13+20260602-x86_64-apple-darwin-install_only_stripped.tar.gz" -o python.tar.gz
-
-          APP_PATH=""
-          for p in "build/Release/LumenArc.app" "build/LumenArc.app"; do
-            if [ -d "$p" ]; then APP_PATH="$p"; break; fi
-          done
-          if [ -z "$APP_PATH" ]; then
-            echo "ERROR: LumenArc.app not found!"
-            find build -name "LumenArc.app" -type d 2>/dev/null
-            exit 1
-          fi
-          echo "Found app at: $APP_PATH"
-
-          PYTHON_DIR="$APP_PATH/Contents/MacOS/python"
-          mkdir -p "$PYTHON_DIR"
-          tar xzf python.tar.gz -C .
-          cp -R python/* "$PYTHON_DIR/"
-          rm -rf python python.tar.gz
-
-          "$PYTHON_DIR/bin/python3" -m pip install opencv-python-headless numpy --no-warn-script-location
-          echo "Intel Python bundled successfully"
-          file "$PYTHON_DIR/bin/python3"
-        shell: bash
-
-      - name: Create macOS DMG
-        run: |
-          APP_PATH=""
-          for p in "build/Release/LumenArc.app" "build/LumenArc.app"; do
-            if [ -d "$p" ]; then APP_PATH="$p"; break; fi
-          done
-          DMG_NAME="LumenArc-${{ github.ref_name }}-mac-intel.dmg"
-          hdiutil create -volname "LumenArc" -srcfolder "$APP_PATH" -ov -format UDZO "$DMG_NAME"
-        shell: bash
-
-      - name: Upload macOS Intel artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: macos-intel-release
-          path: LumenArc-${{ github.ref_name }}-mac-intel.dmg
-
   build-macos-arm64:
     runs-on: macos-latest
     steps:
@@ -242,7 +173,6 @@ jobs:
             ## 下载说明
             - **Windows**: `LumenArc-${{ github.ref_name }}-win64.zip` — 解压后双击 LumenArc.exe 运行
             - **macOS (Apple Silicon)**: `LumenArc-${{ github.ref_name }}-mac-arm64.dmg` — 适用于 M1/M2/M3/M4 芯片 Mac
-            - **macOS (Intel)**: 稍后提供，或在 Intel Mac 上手动编译
           generate_release_notes: false
           draft: false
           prerelease: false
