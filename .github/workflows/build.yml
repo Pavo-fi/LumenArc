@@ -38,9 +38,7 @@ jobs:
           Remove-Item "python-embed.zip"
 
           $pthFile = "build\Release\python\python312._pth"
-          $content = Get-Content -Path $pthFile -Raw
-          $content = $content -replace "# import site", "import site"
-          Set-Content -Path $pthFile -Value $content -NoNewline
+          Set-Content -Path $pthFile -Value "python312.zip`n.`nimport site" -NoNewline
 
           $targetDir = "${{ github.workspace }}\build\Release\python\Lib\site-packages"
           python -m pip install opencv-python-headless numpy --target "$targetDir" --no-warn-script-location
