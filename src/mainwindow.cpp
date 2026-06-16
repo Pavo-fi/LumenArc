@@ -61,7 +61,7 @@ MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent)
 {
     loadLanguage();
-    setWindowTitle(lang("追光者 Lumen Arc v0.2 beta", "Lumen Arc v0.2 beta"));
+    setWindowTitle(lang("追光者 Lumen Arc v0.2 beta 内部测试", "Lumen Arc v0.2 beta Internal Test"));
     resize(1280, 720);
 
     m_regionModel = new RegionModel(this);
@@ -673,7 +673,7 @@ void MainWindow::openVideoFile(const QString &filePath)
         }
 
         m_currentVideoPath = filePath;
-            setWindowTitle("Lumen Arc v0.2 beta - [Loaded: " +
+            setWindowTitle("Lumen Arc v0.2 beta 内部测试 - [Loaded: " +
                            QFileInfo(filePath).fileName() + "]");
             QMessageBox::information(this, lang("已加载", "Loaded"),
                 lang("分析结果加载成功。", "Analysis result loaded successfully."));
