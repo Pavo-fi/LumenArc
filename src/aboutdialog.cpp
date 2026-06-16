@@ -42,7 +42,7 @@ AboutDialog::AboutDialog(QWidget *parent)
     layout->addSpacing(16);
 
     // System name
-    auto *sysLabel = new QLabel(lang("视频亮度分析系统", "Video Luminance Analysis System"), this);
+    auto *sysLabel = new QLabel(lang("火灾调查视频分析工具", "Fire Investigation Video Analysis Tool"), this);
     sysLabel->setStyleSheet("font-size: 13px; color: #ccc;");
     sysLabel->setAlignment(Qt::AlignCenter);
     layout->addWidget(sysLabel);

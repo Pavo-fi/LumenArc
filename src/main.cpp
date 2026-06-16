@@ -84,7 +84,7 @@ static QPixmap createSplashPixmap(const QString &statusText, int progress = 30)
     p.setFont(descFont);
     p.setPen(QColor(255, 255, 240, 200));
     p.drawText(QRect(60, 160, W - 120, 28), Qt::AlignLeft | Qt::AlignVCenter,
-               QString::fromUtf8("\xe8\xa7\x86\xe9\xa2\x91\xe4\xba\xae\xe5\xba\xa6\xe9\x87\x8f\xe5\x8c\x96\xe5\x88\x86\xe6\x9e\x90\xe7\xb3\xbb\xe7\xbb\x9f"));
+               QString::fromUtf8("\xe7\x81\xab\xe7\x81\xbe\xe8\xb0\x83\xe6\x9f\xa5\xe8\xa7\x86\xe9\xa2\x91\xe5\x88\x86\xe6\x9e\x90\xe5\xb7\xa5\xe5\x85\xb7"));
 
     // --- Version tag ---
     QFont verFont = fontMono(10);
