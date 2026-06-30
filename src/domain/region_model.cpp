@@ -19,6 +19,7 @@ void RegionModel::addRegion(const QRect &rect)
 {
     QWriteLocker lock(&m_lock);
     m_regions.append(rect);
+    m_roiIds.append(m_nextRoiId++);
     lock.unlock();
     emit regionsChanged();
 }
@@ -28,9 +29,11 @@ void RegionModel::removeRegion(int index)
     QWriteLocker lock(&m_lock);
     if (index < 0 || index >= m_regions.size())
         return;
+    int roiId = m_roiIds[index];
     m_regions.removeAt(index);
+    m_roiIds.removeAt(index);
     lock.unlock();
-    emit regionRemoved(index);
+    emit regionRemoved(index, roiId);
     emit regionsChanged();
 }
 
@@ -48,6 +51,7 @@ void RegionModel::clearRegions()
 {
     QWriteLocker lock(&m_lock);
     m_regions.clear();
+    m_roiIds.clear();
     lock.unlock();
     emit regionsChanged();
 }
@@ -62,6 +66,20 @@ int RegionModel::regionCount() const
 {
     QReadLocker lock(&m_lock);
     return m_regions.size();
+}
+
+int RegionModel::roiIdAt(int index) const
+{
+    QReadLocker lock(&m_lock);
+    if (index < 0 || index >= m_roiIds.size())
+        return -1;
+    return m_roiIds[index];
+}
+
+int RegionModel::findIndexByRoiId(int roiId) const
+{
+    QReadLocker lock(&m_lock);
+    return m_roiIds.indexOf(roiId);
 }
 
 QColor RegionModel::regionColor(int index)

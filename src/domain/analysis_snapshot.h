@@ -140,6 +140,15 @@ struct AudioData
 };
 
 /**
+ * @brief Metadata for a single data entry, tracking which ROI it belongs to.
+ */
+struct DataEntry {
+    enum Type { Rect = 0, Polygon = 1 };
+    Type type = Rect;
+    int roiId = -1;
+};
+
+/**
  * @brief Immutable value-type representing the full result of a luminance analysis run.
  *
  * All data is stored as QVector, which uses implicit sharing (copy-on-write),
@@ -149,12 +158,22 @@ struct AnalysisSnapshot
 {
     QVector<qint64> timestamps;
     QVector<QVector<qreal>> values; // outer: region index, inner: time series
+    QVector<DataEntry> dataEntries; // parallel to values[], tracks ROI identity
     AudioData audio;                // v0.3: audio analysis data
 
     bool isEmpty() const { return timestamps.isEmpty(); }
     bool hasAudio() const { return !audio.isEmpty(); }
     int pointCount() const { return timestamps.size(); }
     int regionCount() const { return values.size(); }
+
+    /// Find the data index for a given ROI ID. Returns -1 if not found.
+    int dataIndexOfRoiId(int roiId) const
+    {
+        for (int i = 0; i < dataEntries.size(); ++i)
+            if (dataEntries[i].roiId == roiId)
+                return i;
+        return -1;
+    }
 
     QVector<qreal> series(int regionIndex) const
     {

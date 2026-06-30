@@ -27,6 +27,19 @@ void TimelineModel::setData(QVector<qint64> timestamps, QVector<QVector<qreal>> 
     QWriteLocker lock(&m_lock);
     m_snapshot.timestamps = std::move(timestamps);
     m_snapshot.values = std::move(values);
+    m_snapshot.dataEntries.clear();
+    m_snapshot.audio = audio;
+    lock.unlock();
+    emit dataReplaced();
+}
+
+void TimelineModel::setData(QVector<qint64> timestamps, QVector<QVector<qreal>> values,
+                             QVector<DataEntry> dataEntries, const AudioData &audio)
+{
+    QWriteLocker lock(&m_lock);
+    m_snapshot.timestamps = std::move(timestamps);
+    m_snapshot.values = std::move(values);
+    m_snapshot.dataEntries = std::move(dataEntries);
     m_snapshot.audio = audio;
     lock.unlock();
     emit dataReplaced();
@@ -37,6 +50,7 @@ void TimelineModel::clearData()
     QWriteLocker lock(&m_lock);
     m_snapshot.timestamps.clear();
     m_snapshot.values.clear();
+    m_snapshot.dataEntries.clear();
     m_snapshot.audio = AudioData();
     lock.unlock();
     emit dataCleared();
@@ -47,6 +61,7 @@ void TimelineModel::clearLuminanceData()
     QWriteLocker lock(&m_lock);
     m_snapshot.timestamps.clear();
     m_snapshot.values.clear();
+    m_snapshot.dataEntries.clear();
     // Preserve m_snapshot.audio
     lock.unlock();
     // Emit dataReplaced (not dataCleared) so ChartPanel can re-render with audio only
@@ -58,6 +73,30 @@ void TimelineModel::removeRegionData(int index)
     QWriteLocker lock(&m_lock);
     if (index >= 0 && index < m_snapshot.values.size()) {
         m_snapshot.values.removeAt(index);
+        if (index < m_snapshot.dataEntries.size())
+            m_snapshot.dataEntries.removeAt(index);
+    }
+    if (m_snapshot.values.isEmpty()) {
+        m_snapshot.timestamps.clear();
+    }
+    lock.unlock();
+    emit dataReplaced();
+}
+
+void TimelineModel::removeRegionDataByRoiId(int roiId)
+{
+    QWriteLocker lock(&m_lock);
+    int idx = -1;
+    for (int i = 0; i < m_snapshot.dataEntries.size(); ++i) {
+        if (m_snapshot.dataEntries[i].roiId == roiId) {
+            idx = i;
+            break;
+        }
+    }
+    if (idx >= 0 && idx < m_snapshot.values.size()) {
+        m_snapshot.values.removeAt(idx);
+        if (idx < m_snapshot.dataEntries.size())
+            m_snapshot.dataEntries.removeAt(idx);
     }
     if (m_snapshot.values.isEmpty()) {
         m_snapshot.timestamps.clear();
@@ -88,7 +127,7 @@ bool TimelineModel::saveToFile(const QString &filePath,
         return false;
 
     QJsonObject root;
-    root["version"] = 5;
+    root["version"] = 6;
     root["analyzed_at"] = QDateTime::currentDateTime().toString(Qt::ISODate);
     root["time_offset"] = static_cast<double>(timeOffsetMs);
 
@@ -217,6 +256,18 @@ bool TimelineModel::saveToFile(const QString &filePath,
     root["luminances"] = lumArray;
     root["point_count"] = m_snapshot.pointCount();
     root["region_count"] = m_snapshot.regionCount();
+
+    // v6: DataEntry metadata (ROI type + ID mapping)
+    if (!m_snapshot.dataEntries.isEmpty()) {
+        QJsonArray entriesArray;
+        for (const DataEntry &entry : m_snapshot.dataEntries) {
+            QJsonObject eObj;
+            eObj["type"] = (entry.type == DataEntry::Rect) ? "rect" : "polygon";
+            eObj["roi_id"] = entry.roiId;
+            entriesArray.append(eObj);
+        }
+        root["data_entries"] = entriesArray;
+    }
 
     lock.unlock();
 
@@ -416,8 +467,45 @@ bool TimelineModel::loadFromFile(const QString &filePath,
         audioData.timeResolutionMs = 1000.0 * audioData.hopLength / audioData.sampleRate;
     }
 
+    // Parse data entries (v6+)
+    QVector<DataEntry> dataEntries;
+    if (version >= 6 && root.contains("data_entries")) {
+        QJsonArray entriesArray = root["data_entries"].toArray();
+        dataEntries.reserve(entriesArray.size());
+        for (const auto &v : entriesArray) {
+            QJsonObject eObj = v.toObject();
+            DataEntry entry;
+            entry.type = (eObj["type"].toString() == "polygon") ? DataEntry::Polygon : DataEntry::Rect;
+            entry.roiId = eObj["roi_id"].toInt(-1);
+            dataEntries.append(entry);
+        }
+    } else if (version >= 2 && version < 6) {
+        // Backward compatibility: generate dataEntries from regions/polygons order
+        int nextId = 1;
+        if (regions) {
+            for (int i = 0; i < regions->size(); ++i) {
+                DataEntry entry;
+                entry.type = DataEntry::Rect;
+                entry.roiId = nextId++;
+                dataEntries.append(entry);
+            }
+        }
+        if (polygons) {
+            for (int i = 0; i < polygons->size(); ++i) {
+                DataEntry entry;
+                entry.type = DataEntry::Polygon;
+                entry.roiId = nextId++;
+                dataEntries.append(entry);
+            }
+        }
+    }
+
     // Set data (emits dataReplaced)
-    setData(std::move(timestamps), std::move(values), audioData);
+    if (!dataEntries.isEmpty()) {
+        setData(std::move(timestamps), std::move(values), std::move(dataEntries), audioData);
+    } else {
+        setData(std::move(timestamps), std::move(values), audioData);
+    }
     return true;
 }
 

@@ -40,7 +40,9 @@ public:
      */
     virtual void startAnalysis(const QString &videoPath, const QVector<QRect> &regions,
                                const QVector<QPolygon> &polygons = {},
-                               const QStringList &extraVideos = {}) = 0;
+                               const QStringList &extraVideos = {},
+                               const QVector<int> &rectRoiIds = {},
+                               const QVector<int> &polygonRoiIds = {}) = 0;
     virtual void cancelAnalysis() = 0;
     virtual bool isRunning() const = 0;
 

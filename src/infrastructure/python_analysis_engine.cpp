@@ -106,7 +106,9 @@ static int computeProcessCount(qint64 totalFrames, float fps)
 
 void PythonAnalysisEngine::startAnalysis(const QString &videoPath, const QVector<QRect> &regions,
                                           const QVector<QPolygon> &polygons,
-                                          const QStringList &extraVideos)
+                                          const QStringList &extraVideos,
+                                          const QVector<int> &rectRoiIds,
+                                          const QVector<int> &polygonRoiIds)
 {
     if (m_process) {
         emit analysisFailed("Analysis is already running.");
@@ -142,20 +144,24 @@ void PythonAnalysisEngine::startAnalysis(const QString &videoPath, const QVector
     }
 
     QJsonArray roiArray;
-    for (const QRect &rc : regions) {
+    for (int i = 0; i < regions.size(); ++i) {
         QJsonObject obj;
         obj["type"] = "rect";
-        obj["x"] = rc.x();
-        obj["y"] = rc.y();
-        obj["w"] = rc.width();
-        obj["h"] = rc.height();
+        if (i < rectRoiIds.size())
+            obj["roi_id"] = rectRoiIds[i];
+        obj["x"] = regions[i].x();
+        obj["y"] = regions[i].y();
+        obj["w"] = regions[i].width();
+        obj["h"] = regions[i].height();
         roiArray.append(obj);
     }
-    for (const QPolygon &poly : polygons) {
+    for (int i = 0; i < polygons.size(); ++i) {
         QJsonObject obj;
         obj["type"] = "polygon";
+        if (i < polygonRoiIds.size())
+            obj["roi_id"] = polygonRoiIds[i];
         QJsonArray pointsArray;
-        for (const QPoint &pt : poly) {
+        for (const QPoint &pt : polygons[i]) {
             QJsonArray ptArr;
             ptArr.append(pt.x());
             ptArr.append(pt.y());
@@ -196,6 +202,10 @@ void PythonAnalysisEngine::startAnalysis(const QString &videoPath, const QVector
 
     m_outputBuffer.clear();
     m_stderrBuffer.clear();
+
+    // Store roiIds for use in onFinished
+    m_pendingRectRoiIds = rectRoiIds;
+    m_pendingPolygonRoiIds = polygonRoiIds;
 
     m_process = new QProcess(this);
     m_process->setProgram(m_pythonPath);
@@ -467,6 +477,25 @@ void PythonAnalysisEngine::onFinished(int exitCode)
         AnalysisSnapshot snapshot;
         snapshot.timestamps = std::move(timestamps);
         snapshot.values = std::move(values);
+
+        // Populate dataEntries from stored roiIds
+        int totalRois = snapshot.values.size();
+        int rectCount = m_pendingRectRoiIds.size();
+        for (int i = 0; i < totalRois; ++i) {
+            DataEntry entry;
+            if (i < rectCount) {
+                entry.type = DataEntry::Rect;
+                entry.roiId = (i < m_pendingRectRoiIds.size()) ? m_pendingRectRoiIds[i] : -1;
+            } else {
+                entry.type = DataEntry::Polygon;
+                int pi = i - rectCount;
+                entry.roiId = (pi < m_pendingPolygonRoiIds.size()) ? m_pendingPolygonRoiIds[pi] : -1;
+            }
+            snapshot.dataEntries.append(entry);
+        }
+        m_pendingRectRoiIds.clear();
+        m_pendingPolygonRoiIds.clear();
+
         snapshot.audio = audio;
         emit progressUpdated(100, 100, 100.0);
         emit analysisFinished(snapshot);

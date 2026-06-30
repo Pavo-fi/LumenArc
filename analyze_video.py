@@ -163,6 +163,7 @@ def analyze_luminance(video_path, rois, start_frame=None, end_frame=None):
     return {
         "timestamps": timestamps,
         "luminances": luminances,
+        "roi_ids": [roi.get("roi_id", -1) for roi in rois],
         "frame_step": frame_step,
         "total_frames": actual_total,
         "fps": fps
@@ -182,7 +183,7 @@ def merge_segment_results(results):
     results = [r for r in results if r.get("timestamps")]
 
     if not results:
-        return {"timestamps": [], "luminances": [], "frame_step": 1, "total_frames": 0, "fps": 30.0}
+        return {"timestamps": [], "luminances": [], "roi_ids": [], "frame_step": 1, "total_frames": 0, "fps": 30.0}
     if len(results) == 1:
         return results[0]
 
@@ -199,6 +200,7 @@ def merge_segment_results(results):
     return {
         "timestamps": merged_ts,
         "luminances": merged_lum,
+        "roi_ids": results[0].get("roi_ids", []),
         "frame_step": results[0]["frame_step"],
         "total_frames": results[0]["total_frames"],
         "fps": results[0]["fps"]

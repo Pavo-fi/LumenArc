@@ -29,14 +29,18 @@ public:
 
     QVector<QPolygon> polygons() const;
     int polygonCount() const;
+    int roiIdAt(int index) const;
+    int findIndexByRoiId(int roiId) const;
 
     static QColor polygonColor(int index);
 
 signals:
     void polygonsChanged();
-    void polygonRemoved(int index);
+    void polygonRemoved(int index, int roiId);
 
 private:
     mutable QReadWriteLock m_lock;
     QVector<QPolygon> m_polygons;
+    QVector<int> m_roiIds;
+    int m_nextRoiId = 1;
 };

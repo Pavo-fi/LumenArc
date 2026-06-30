@@ -857,15 +857,18 @@ void MainWindow::setupConnections()
                 Q_UNUSED(newRect);
                 AnalysisSnapshot snapshot = m_timelineModel->snapshot();
                 if (!snapshot.isEmpty()) {
-                    auto reply = QMessageBox::question(this,
-                        lang("数据失效警告", "Data Invalidation Warning"),
-                        lang("调整该区域将导致亮度量化数据失效。\n确定要继续吗？",
-                             "Adjusting this region will invalidate the luminance analysis data.\nContinue?"),
-                        QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
-                    if (reply == QMessageBox::Yes) {
-                        m_timelineModel->clearLuminanceData();
-                    } else {
-                        m_regionModel->updateRegion(regionIndex, originalRect);
+                    int roiId = m_regionModel->roiIdAt(regionIndex);
+                    if (roiId > 0 && snapshot.dataIndexOfRoiId(roiId) >= 0) {
+                        auto reply = QMessageBox::question(this,
+                            lang("数据失效警告", "Data Invalidation Warning"),
+                            lang("调整该区域将导致亮度量化数据失效。\n确定要继续吗？",
+                                 "Adjusting this region will invalidate the luminance analysis data.\nContinue?"),
+                            QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
+                        if (reply == QMessageBox::Yes) {
+                            m_timelineModel->removeRegionDataByRoiId(roiId);
+                        } else {
+                            m_regionModel->updateRegion(regionIndex, originalRect);
+                        }
                     }
                 }
             });
@@ -873,10 +876,44 @@ void MainWindow::setupConnections()
     // Bug fix: When an ROI region is deleted, remove its corresponding analysis data
     // to prevent stale curves from appearing when a new ROI is drawn at the same index.
     connect(m_regionModel, &RegionModel::regionRemoved,
-            this, [this](int index) {
+            this, [this](int index, int roiId) {
+                Q_UNUSED(index);
                 AnalysisSnapshot snapshot = m_timelineModel->snapshot();
-                if (!snapshot.isEmpty() && index < snapshot.regionCount()) {
-                    m_timelineModel->removeRegionData(index);
+                if (!snapshot.isEmpty()) {
+                    m_timelineModel->removeRegionDataByRoiId(roiId);
+                }
+            });
+
+    // When a polygon ROI is deleted, remove its data by ROI ID
+    connect(m_polygonModel, &PolygonModel::polygonRemoved,
+            this, [this](int index, int roiId) {
+                Q_UNUSED(index);
+                AnalysisSnapshot snapshot = m_timelineModel->snapshot();
+                if (!snapshot.isEmpty()) {
+                    m_timelineModel->removeRegionDataByRoiId(roiId);
+                }
+            });
+
+    // Polygon adjustment: show data invalidation warning
+    connect(overlay, &OverlayWidget::polygonAdjustmentFinished,
+            this, [this](int polygonIndex, const QPolygon &originalPolygon, const QPolygon &newPolygon) {
+                Q_UNUSED(newPolygon);
+                AnalysisSnapshot snapshot = m_timelineModel->snapshot();
+                if (!snapshot.isEmpty()) {
+                    int roiId = m_polygonModel->roiIdAt(polygonIndex);
+                    int dataIdx = snapshot.dataIndexOfRoiId(roiId);
+                    if (dataIdx >= 0) {
+                        auto reply = QMessageBox::question(this,
+                            lang("数据失效警告", "Data Invalidation Warning"),
+                            lang("调整该多边形将导致亮度量化数据失效。\n确定要继续吗？",
+                                 "Adjusting this polygon will invalidate the luminance analysis data.\nContinue?"),
+                            QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
+                        if (reply == QMessageBox::Yes) {
+                            m_timelineModel->removeRegionDataByRoiId(roiId);
+                        } else {
+                            m_polygonModel->updatePolygon(polygonIndex, originalPolygon);
+                        }
+                    }
                 }
             });
 
@@ -1713,15 +1750,41 @@ void MainWindow::createMagnifier()
                 Q_UNUSED(newRect);
                 AnalysisSnapshot snapshot = m_timelineModel->snapshot();
                 if (!snapshot.isEmpty()) {
-                    auto reply = QMessageBox::question(this,
-                        lang("数据失效警告", "Data Invalidation Warning"),
-                        lang("调整该区域将导致亮度量化数据失效。\n确定要继续吗？",
-                             "Adjusting this region will invalidate the luminance analysis data.\nContinue?"),
-                        QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
-                    if (reply == QMessageBox::Yes) {
-                        m_timelineModel->clearLuminanceData();
-                    } else {
-                        m_regionModel->updateRegion(regionIndex, originalRect);
+                    int roiId = m_regionModel->roiIdAt(regionIndex);
+                    if (roiId > 0 && snapshot.dataIndexOfRoiId(roiId) >= 0) {
+                        auto reply = QMessageBox::question(this,
+                            lang("数据失效警告", "Data Invalidation Warning"),
+                            lang("调整该区域将导致亮度量化数据失效。\n确定要继续吗？",
+                                 "Adjusting this region will invalidate the luminance analysis data.\nContinue?"),
+                            QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
+                        if (reply == QMessageBox::Yes) {
+                            m_timelineModel->removeRegionDataByRoiId(roiId);
+                        } else {
+                            m_regionModel->updateRegion(regionIndex, originalRect);
+                        }
+                    }
+                }
+            });
+
+    // Connect magnifier overlay's polygonAdjustmentFinished
+    connect(m_magnifier->overlay(), &OverlayWidget::polygonAdjustmentFinished,
+            this, [this](int polygonIndex, const QPolygon &originalPolygon, const QPolygon &newPolygon) {
+                Q_UNUSED(newPolygon);
+                AnalysisSnapshot snapshot = m_timelineModel->snapshot();
+                if (!snapshot.isEmpty()) {
+                    int roiId = m_polygonModel->roiIdAt(polygonIndex);
+                    int dataIdx = snapshot.dataIndexOfRoiId(roiId);
+                    if (dataIdx >= 0) {
+                        auto reply = QMessageBox::question(this,
+                            lang("数据失效警告", "Data Invalidation Warning"),
+                            lang("调整该多边形将导致亮度量化数据失效。\n确定要继续吗？",
+                                 "Adjusting this polygon will invalidate the luminance analysis data.\nContinue?"),
+                            QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
+                        if (reply == QMessageBox::Yes) {
+                            m_timelineModel->removeRegionDataByRoiId(roiId);
+                        } else {
+                            m_polygonModel->updatePolygon(polygonIndex, originalPolygon);
+                        }
                     }
                 }
             });
@@ -1830,6 +1893,13 @@ void MainWindow::onAnalyze()
         return;
     }
 
+    // Collect ROI IDs for data tracking
+    QVector<int> rectRoiIds, polygonRoiIds;
+    for (int i = 0; i < m_regionModel->regionCount(); ++i)
+        rectRoiIds.append(m_regionModel->roiIdAt(i));
+    for (int i = 0; i < m_polygonModel->polygonCount(); ++i)
+        polygonRoiIds.append(m_polygonModel->roiIdAt(i));
+
     if (m_analysisEngine->isRunning()) {
         QMessageBox::information(this, lang("亮度分析", "Luminance Analysis"),
             lang("分析正在运行中。", "Analysis is already running."));
@@ -1846,7 +1916,8 @@ void MainWindow::onAnalyze()
     m_statusLabel->setText(lang("正在准备分析...", "Preparing analysis..."));
 
     m_analysisPhase = Luminance;
-    m_analysisEngine->startAnalysis(m_currentVideoPath, regions, polygons, {});
+    m_analysisEngine->startAnalysis(m_currentVideoPath, regions, polygons, {},
+                                     rectRoiIds, polygonRoiIds);
 }
 
 /// @brief 启动音频分析（独立于亮度分析，无需 ROI）

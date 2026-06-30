@@ -49,6 +49,10 @@ public:
     void setData(QVector<qint64> timestamps, QVector<QVector<qreal>> values,
                  const AudioData &audio = AudioData());
 
+    /// Replace all data with metadata (for analysis results that include ROI IDs).
+    void setData(QVector<qint64> timestamps, QVector<QVector<qreal>> values,
+                 QVector<DataEntry> dataEntries, const AudioData &audio = AudioData());
+
     void clearData();
 
     /// Clear only luminance data (timestamps + values), preserve audio data.
@@ -58,6 +62,10 @@ public:
     /// Remove luminance data for a specific region index.
     /// Used when an ROI region is deleted to keep data/region indices in sync.
     void removeRegionData(int index);
+
+    /// Remove luminance data for a specific ROI by its stable ID.
+    /// Finds the entry by ID and removes it without positional index dependency.
+    void removeRegionDataByRoiId(int roiId);
 
     /// Returns a copy of the current snapshot (cheap thanks to implicit sharing).
     AnalysisSnapshot snapshot() const;

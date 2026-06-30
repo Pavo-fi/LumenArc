@@ -41,16 +41,22 @@ public:
     QVector<QRect> regions() const;
     /// @brief 返回区域数量
     int regionCount() const;
+    /// @brief 返回指定索引的 ROI ID
+    int roiIdAt(int index) const;
+    /// @brief 查找指定 ROI ID 的当前索引，未找到返回 -1
+    int findIndexByRoiId(int roiId) const;
 
     /// @brief 按索引返回调色板颜色（7色循环）
     static QColor regionColor(int index);
 
 signals:
     void regionsChanged();
-    /// Emitted after a specific region is removed, with its former index.
-    void regionRemoved(int index);
+    /// Emitted after a specific region is removed, with its former index and ROI ID.
+    void regionRemoved(int index, int roiId);
 
 private:
     mutable QReadWriteLock m_lock;
     QVector<QRect> m_regions;
+    QVector<int> m_roiIds;
+    int m_nextRoiId = 1;
 };

@@ -571,23 +571,54 @@ void ChartPanel::rebuildSeries()
     if (!m_regionModel)
         return;
 
-    int rectCount = m_regionModel->regionCount();
-    int polyCount = m_polygonModel ? m_polygonModel->polygonCount() : 0;
-    int totalCount = rectCount + polyCount;
+    // Determine series count: use dataEntries if available, otherwise fall back to ROI models
+    int totalCount = 0;
+    AnalysisSnapshot snap;
+    bool hasDataEntries = false;
+    if (m_timelineModel) {
+        snap = m_timelineModel->snapshot();
+        if (!snap.dataEntries.isEmpty()) {
+            totalCount = snap.dataEntries.size();
+            hasDataEntries = true;
+        }
+    }
+    if (!hasDataEntries) {
+        int rectCount = m_regionModel->regionCount();
+        int polyCount = m_polygonModel ? m_polygonModel->polygonCount() : 0;
+        totalCount = rectCount + polyCount;
+    }
 
     for (int i = 0; i < totalCount; ++i) {
         auto *series = new QLineSeries();
-        if (i < rectCount) {
-            series->setName(QString(lang("区域 %1", "Region %1")).arg(i + 1));
-            QPen pen(RegionModel::regionColor(i));
-            pen.setWidth(2);
-            series->setPen(pen);
+        if (hasDataEntries) {
+            // Use DataEntry metadata for correct type/color
+            const DataEntry &entry = snap.dataEntries[i];
+            if (entry.type == DataEntry::Rect) {
+                series->setName(QString(lang("区域 %1", "Region %1")).arg(i + 1));
+                QPen pen(RegionModel::regionColor(i));
+                pen.setWidth(2);
+                series->setPen(pen);
+            } else {
+                series->setName(QString(lang("多边形 %1", "Polygon %1")).arg(i + 1));
+                QPen pen(PolygonModel::polygonColor(i));
+                pen.setWidth(2);
+                series->setPen(pen);
+            }
         } else {
-            int pi = i - rectCount;
-            series->setName(QString(lang("多边形 %1", "Polygon %1")).arg(pi + 1));
-            QPen pen(PolygonModel::polygonColor(pi));
-            pen.setWidth(2);
-            series->setPen(pen);
+            // No data entries: use ROI model counts
+            int rectCount = m_regionModel->regionCount();
+            if (i < rectCount) {
+                series->setName(QString(lang("区域 %1", "Region %1")).arg(i + 1));
+                QPen pen(RegionModel::regionColor(i));
+                pen.setWidth(2);
+                series->setPen(pen);
+            } else {
+                int pi = i - rectCount;
+                series->setName(QString(lang("多边形 %1", "Polygon %1")).arg(pi + 1));
+                QPen pen(PolygonModel::polygonColor(pi));
+                pen.setWidth(2);
+                series->setPen(pen);
+            }
         }
 
         m_chart->addSeries(series);
@@ -982,15 +1013,23 @@ void ChartPanel::updateCursorPosition()
                 int idx = snap.indexAtTime(m_cursorTimeMs);
                 if (idx >= 0 && idx < snap.pointCount()) {
                     QStringList parts;
-                    int rectCount = m_regionModel ? m_regionModel->regionCount() : 0;
                     for (int i = 0; i < snap.regionCount(); ++i) {
                         if (i >= snap.values.size() || snap.values[i].isEmpty() || idx >= snap.values[i].size())
                             continue;
                         qreal val = snap.values[i][idx];
-                        if (i < rectCount)
-                            parts << QString("R%1:%2").arg(i + 1).arg(static_cast<int>(val));
-                        else
-                            parts << QString("P%1:%2").arg(i - rectCount + 1).arg(static_cast<int>(val));
+                        // Use DataEntry for R/P labeling if available
+                        if (i < snap.dataEntries.size()) {
+                            if (snap.dataEntries[i].type == DataEntry::Rect)
+                                parts << QString("R%1:%2").arg(i + 1).arg(static_cast<int>(val));
+                            else
+                                parts << QString("P%1:%2").arg(i + 1).arg(static_cast<int>(val));
+                        } else {
+                            int rectCount = m_regionModel ? m_regionModel->regionCount() : 0;
+                            if (i < rectCount)
+                                parts << QString("R%1:%2").arg(i + 1).arg(static_cast<int>(val));
+                            else
+                                parts << QString("P%1:%2").arg(i - rectCount + 1).arg(static_cast<int>(val));
+                        }
                     }
                     // Append volume in dB
                     if (snap.hasAudio()) {

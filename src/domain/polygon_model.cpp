@@ -15,6 +15,7 @@ void PolygonModel::addPolygon(const QPolygon &polygon)
 {
     QWriteLocker lock(&m_lock);
     m_polygons.append(polygon);
+    m_roiIds.append(m_nextRoiId++);
     lock.unlock();
     emit polygonsChanged();
 }
@@ -24,9 +25,11 @@ void PolygonModel::removePolygon(int index)
     QWriteLocker lock(&m_lock);
     if (index < 0 || index >= m_polygons.size())
         return;
+    int roiId = m_roiIds[index];
     m_polygons.removeAt(index);
+    m_roiIds.removeAt(index);
     lock.unlock();
-    emit polygonRemoved(index);
+    emit polygonRemoved(index, roiId);
     emit polygonsChanged();
 }
 
@@ -44,6 +47,7 @@ void PolygonModel::clearPolygons()
 {
     QWriteLocker lock(&m_lock);
     m_polygons.clear();
+    m_roiIds.clear();
     lock.unlock();
     emit polygonsChanged();
 }
@@ -58,6 +62,20 @@ int PolygonModel::polygonCount() const
 {
     QReadLocker lock(&m_lock);
     return m_polygons.size();
+}
+
+int PolygonModel::roiIdAt(int index) const
+{
+    QReadLocker lock(&m_lock);
+    if (index < 0 || index >= m_roiIds.size())
+        return -1;
+    return m_roiIds[index];
+}
+
+int PolygonModel::findIndexByRoiId(int roiId) const
+{
+    QReadLocker lock(&m_lock);
+    return m_roiIds.indexOf(roiId);
 }
 
 QColor PolygonModel::polygonColor(int index)

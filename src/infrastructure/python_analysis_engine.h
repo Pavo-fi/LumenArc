@@ -43,7 +43,9 @@ public:
 
     void startAnalysis(const QString &videoPath, const QVector<QRect> &regions,
                        const QVector<QPolygon> &polygons = {},
-                       const QStringList &extraVideos = {}) override;
+                       const QStringList &extraVideos = {},
+                       const QVector<int> &rectRoiIds = {},
+                       const QVector<int> &polygonRoiIds = {}) override;
     void startAudioAnalysis(const QString &videoPath);
     void cancelAnalysis() override;
     bool isRunning() const override;
@@ -67,4 +69,7 @@ private:
     QByteArray m_stderrBuffer;
     QMap<QString, VideoInfo> m_videoInfoCache;  // B7: cache to avoid repeated blocking calls
     qreal m_noiseReduction = 0.0;
+    // Stored for current analysis run (populated in startAnalysis, used in onFinished)
+    QVector<int> m_pendingRectRoiIds;
+    QVector<int> m_pendingPolygonRoiIds;
 };
