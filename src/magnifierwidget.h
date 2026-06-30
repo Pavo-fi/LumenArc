@@ -3,7 +3,7 @@
  * @brief 放大镜停靠窗口：滚轮缩放/光标跟随/截图叠加同步
  * @author Huang Jingyun, Liu xinghua, Huang Wenhua
  * @date 2026-05-31
- * @version 0.2
+ * @version 0.3
  *
  * Copyright 2026 Huang Jingyun/Liu xinghua/Huang Wenhua. All rights reserved.
  * Licensed under the Apache License, Version 2.0
@@ -16,6 +16,8 @@
 
 class OverlayWidget;
 class RegionModel;
+class PolygonModel;
+class GuideLineModel;
 class QWidget;
 
 /**
@@ -34,6 +36,8 @@ public:
     ~MagnifierWidget();
 
     void setRegionModel(RegionModel *model);
+    void setPolygonModel(PolygonModel *model);
+    void setGuideLineModel(GuideLineModel *model);
     /// @brief 设置源视频尺寸，用于坐标映射与裁剪范围计算
     void setVideoSize(int width, int height);
 
@@ -42,6 +46,8 @@ public:
     qreal zoomLevel() const { return m_zoomLevel; }
     /// @brief 滚轮步进调整缩放倍率
     void adjustZoom(int delta);
+    /// @brief 以鼠标位置为锚点缩放（保持像素不动）
+    void zoomAtPoint(int delta, QPoint videoPos);
 
     /// @brief 更新光标在视频中的位置，触发放大区域重绘
     void updateCursorPosition(QPoint videoPos);
@@ -56,9 +62,11 @@ public:
     void setSnapshotOverlay(const QImage &img, int brightness, int contrast, int opacity);
     /// @brief 清除截图叠加
     void clearSnapshotOverlay();
+    /// @brief 获取内部 overlay（用于信号连接）
+    OverlayWidget *overlay() const { return m_overlay; }
 
 private slots:
-    void onInternalOverlayWheelZoom(int delta);
+    void onInternalOverlayWheelZoom(int delta, QPoint videoPos);
     void onInternalOverlayCursorMoved(QPoint videoPos);
 
 private:

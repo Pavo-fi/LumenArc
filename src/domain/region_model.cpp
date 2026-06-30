@@ -3,7 +3,7 @@
  * @brief ROI 区域模型实现，线程安全增删改查
  * @author Huang Jingyun, Liu xinghua, Huang Wenhua
  * @date 2026-05-31
- * @version 0.2
+ * @version 0.3
  *
  * Copyright 2026 Huang Jingyun/Liu xinghua/Huang Wenhua. All rights reserved.
  * Licensed under the Apache License, Version 2.0
@@ -30,6 +30,7 @@ void RegionModel::removeRegion(int index)
         return;
     m_regions.removeAt(index);
     lock.unlock();
+    emit regionRemoved(index);
     emit regionsChanged();
 }
 

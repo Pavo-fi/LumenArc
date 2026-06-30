@@ -3,7 +3,7 @@
  * @brief 放大镜窗口实现：源区域计算/缩放/截图叠加同步
  * @author Huang Jingyun, Liu xinghua, Huang Wenhua
  * @date 2026-05-31
- * @version 0.2
+ * @version 0.3
  *
  * Copyright 2026 Huang Jingyun/Liu xinghua/Huang Wenhua. All rights reserved.
  * Licensed under the Apache License, Version 2.0
@@ -11,10 +11,13 @@
 #include "magnifierwidget.h"
 #include "videowidget.h"
 #include "domain/region_model.h"
+#include "domain/polygon_model.h"
+#include "domain/guide_line_model.h"
 #include "i18n.h"
 
 #include <QPainter>
 #include <QResizeEvent>
+#include <QContextMenuEvent>
 #include <climits>
 
 // =============================================================================
@@ -26,6 +29,7 @@ public:
     explicit ContentWidget(MagnifierWidget *owner);
 
     void setRegionModel(RegionModel *model);
+    void setPolygonModel(PolygonModel *model);
     void onFrameReady(const QImage &frame);
     void updateOverlayGeometry();
     OverlayWidget *overlay() const { return m_overlay; }
@@ -39,6 +43,7 @@ public:
 protected:
     void paintEvent(QPaintEvent *event) override;
     void resizeEvent(QResizeEvent *event) override;
+    void contextMenuEvent(QContextMenuEvent *event) override;
 
 private:
     QRect displayRect() const;
@@ -73,6 +78,11 @@ MagnifierWidget::ContentWidget::ContentWidget(MagnifierWidget *owner)
 void MagnifierWidget::ContentWidget::setRegionModel(RegionModel *model)
 {
     m_overlay->setRegionModel(model);
+}
+
+void MagnifierWidget::ContentWidget::setPolygonModel(PolygonModel *model)
+{
+    m_overlay->setPolygonModel(model);
 }
 
 void MagnifierWidget::ContentWidget::onFrameReady(const QImage &frame)
@@ -170,22 +180,7 @@ void MagnifierWidget::ContentWidget::paintEvent(QPaintEvent * /*event*/)
             if (m_adjustedSnapshot.isNull() ||
                 m_cachedBrightness != m_snapshotBrightness ||
                 m_cachedContrast != m_snapshotContrast) {
-                m_adjustedSnapshot = m_snapshot.convertToFormat(QImage::Format_ARGB32);
-                int b = m_snapshotBrightness;
-                int c = m_snapshotContrast;
-                if (b != 0 || c != 0) {
-                    double cf = (259.0 * (c + 255)) / (255.0 * (259 - c));
-                    for (int y = 0; y < m_adjustedSnapshot.height(); ++y) {
-                        QRgb *line = reinterpret_cast<QRgb*>(m_adjustedSnapshot.scanLine(y));
-                        for (int x = 0; x < m_adjustedSnapshot.width(); ++x) {
-                            QRgb px = line[x];
-                            int r = qBound(0, int(cf * (qRed(px) + b * 2 - 128) + 128), 255);
-                            int g = qBound(0, int(cf * (qGreen(px) + b * 2 - 128) + 128), 255);
-                            int bl = qBound(0, int(cf * (qBlue(px) + b * 2 - 128) + 128), 255);
-                            line[x] = qRgba(r, g, bl, qAlpha(px));
-                        }
-                    }
-                }
+                m_adjustedSnapshot = applyBrightnessContrast(m_snapshot, m_snapshotBrightness, m_snapshotContrast);
                 m_cachedBrightness = m_snapshotBrightness;
                 m_cachedContrast = m_snapshotContrast;
             }
@@ -211,6 +206,12 @@ void MagnifierWidget::ContentWidget::resizeEvent(QResizeEvent * /*event*/)
     updateOverlayGeometry();
 }
 
+void MagnifierWidget::ContentWidget::contextMenuEvent(QContextMenuEvent *event)
+{
+    // 阻止右键事件传播到 QDockWidget 的停靠菜单
+    event->accept();
+}
+
 // =============================================================================
 // MagnifierWidget (QDockWidget)
 // =============================================================================
@@ -227,18 +228,28 @@ MagnifierWidget::MagnifierWidget(QWidget *parent)
 
     // Connect internal overlay signals so magnifier responds to
     // wheel zoom inside its own view. Cursor tracking is NOT connected here —
-    // magnifier pan should only happen via Alt+move on the main video overlay.
+    // magnifier pan should only happen via middle-button drag on the main video overlay.
     if (m_overlay) {
         connect(m_overlay, &OverlayWidget::magnifierWheelZoom,
                 this, &MagnifierWidget::onInternalOverlayWheelZoom);
+        connect(m_overlay, &OverlayWidget::magnifierPanRequested,
+                this, [this](QPoint delta) {
+            QPoint newCenter = m_cursorPos + delta;
+            newCenter.setX(qBound(0, newCenter.x(), m_videoWidth - 1));
+            newCenter.setY(qBound(0, newCenter.y(), m_videoHeight - 1));
+            if (newCenter != m_cursorPos) {
+                m_cursorPos = newCenter;
+                recalcSourceRect();
+            }
+        });
     }
 }
 
 MagnifierWidget::~MagnifierWidget() = default;
 
-void MagnifierWidget::onInternalOverlayWheelZoom(int delta)
+void MagnifierWidget::onInternalOverlayWheelZoom(int delta, QPoint videoPos)
 {
-    adjustZoom(delta);
+    zoomAtPoint(delta, videoPos);
 }
 
 /// @brief 放大镜内光标移动：映射到全视频坐标
@@ -266,6 +277,18 @@ void MagnifierWidget::setRegionModel(RegionModel *model)
         m_overlay->setRegionModel(model);
 }
 
+void MagnifierWidget::setPolygonModel(PolygonModel *model)
+{
+    if (m_overlay)
+        m_overlay->setPolygonModel(model);
+}
+
+void MagnifierWidget::setGuideLineModel(GuideLineModel *model)
+{
+    if (m_overlay)
+        m_overlay->setGuideLineModel(model);
+}
+
 void MagnifierWidget::setVideoSize(int width, int height)
 {
     m_videoWidth = qMax(1, width);
@@ -285,6 +308,41 @@ void MagnifierWidget::adjustZoom(int delta)
 {
     qreal step = ZOOM_STEP * (delta > 0 ? 1 : -1);
     setZoomLevel(m_zoomLevel + step);
+}
+
+/// @brief 以鼠标位置为锚点缩放：缩放后鼠标下的像素保持不动
+void MagnifierWidget::zoomAtPoint(int delta, QPoint videoPos)
+{
+    if (m_videoWidth <= 0 || m_videoHeight <= 0)
+        return;
+    if (m_sourceRect.isEmpty())
+        return;
+
+    qreal newZoom = qBound(MIN_ZOOM, m_zoomLevel + ZOOM_STEP * (delta > 0 ? 1 : -1), MAX_ZOOM);
+    int newSrcW = qMax(1, int(m_videoWidth / newZoom));
+    int newSrcH = qMax(1, int(m_videoHeight / newZoom));
+
+    // 鼠标在当前源区域内的相对比例 (0.0~1.0)
+    qreal tX = qreal(videoPos.x() - m_sourceRect.x()) / m_sourceRect.width();
+    qreal tY = qreal(videoPos.y() - m_sourceRect.y()) / m_sourceRect.height();
+
+    // 锚点缩放：保持鼠标下的像素不动
+    int newSrcX = qBound(0, int(videoPos.x() - tX * newSrcW), m_videoWidth - newSrcW);
+    int newSrcY = qBound(0, int(videoPos.y() - tY * newSrcH), m_videoHeight - newSrcH);
+
+    m_zoomLevel = newZoom;
+    m_sourceRect = QRect(newSrcX, newSrcY, newSrcW, newSrcH);
+    m_content->updateOverlayGeometry();
+
+    if (m_overlay) {
+        m_overlay->setVideoSize(newSrcW, newSrcH);
+        m_overlay->setVideoOriginOffset(QPoint(newSrcX, newSrcY));
+    }
+
+    if (!m_snapshotOriginal.isNull() && m_content->hasSnapshot())
+        m_content->reCropSnapshot(m_sourceRect, m_snapshotOriginal);
+
+    m_content->update();
 }
 
 void MagnifierWidget::updateCursorPosition(QPoint videoPos)

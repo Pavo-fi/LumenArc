@@ -3,7 +3,7 @@
  * @brief 离线亮度分析引擎抽象接口
  * @author Huang Jingyun, Liu xinghua, Huang Wenhua
  * @date 2026-05-31
- * @version 0.2
+ * @version 0.3
  *
  * Copyright 2026 Huang Jingyun/Liu xinghua/Huang Wenhua. All rights reserved.
  * Licensed under the Apache License, Version 2.0
@@ -14,6 +14,8 @@
 #include <QObject>
 #include <QVector>
 #include <QRect>
+#include <QPolygon>
+#include <QStringList>
 #include "domain/analysis_snapshot.h"
 
 /**
@@ -27,7 +29,18 @@ public:
     explicit IAnalysisEngine(QObject *parent = nullptr) : QObject(parent) {}
     virtual ~IAnalysisEngine() = default;
 
-    virtual void startAnalysis(const QString &videoPath, const QVector<QRect> &regions) = 0;
+    /**
+     * @brief Start luminance analysis.
+     * @param videoPath  primary video (also the one whose ROI/timing anchors the timeline)
+     * @param regions    ROI rectangles (shared across all videos)
+     * @param polygons   ROI polygons (shared across all videos, v0.5)
+     * @param extraVideos  additional videos to merge after the primary one (B2).
+     *                     Empty = single-video analysis. The engine concatenates all
+     *                     videos on a continuous timeline.
+     */
+    virtual void startAnalysis(const QString &videoPath, const QVector<QRect> &regions,
+                               const QVector<QPolygon> &polygons = {},
+                               const QStringList &extraVideos = {}) = 0;
     virtual void cancelAnalysis() = 0;
     virtual bool isRunning() const = 0;
 

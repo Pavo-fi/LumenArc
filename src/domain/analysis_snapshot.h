@@ -3,7 +3,7 @@
  * @brief 不可变分析结果值类型 + CSV 导出
  * @author Huang Jingyun, Liu xinghua, Huang Wenhua
  * @date 2026-05-31
- * @version 0.2
+ * @version 0.3
  *
  * Copyright 2026 Huang Jingyun/Liu xinghua/Huang Wenhua. All rights reserved.
  * Licensed under the Apache License, Version 2.0
@@ -26,6 +26,120 @@ struct ChartLabel
 };
 
 /**
+ * @brief Audio analysis data: volume curve + spectrogram.
+ *
+ * The audio timeline is self-contained: each sample at index i corresponds to
+ * time i * timeResolutionMs (ms). Volume/spectrogram accessors therefore do
+ * NOT depend on the video luminance timestamps — this keeps audio rendering
+ * correct regardless of sample rate, hop length, or whether luminance data
+ * exists (e.g. --audio-only mode). (B3)
+ */
+struct AudioData
+{
+    QVector<qreal> volume;                    // Normalized volume 0-1
+    QVector<QVector<qreal>> spectrogram;      // [freq_bin][time_frame]
+    qreal sampleRate = 16000;
+    int hopLength = 512;
+    int nFft = 1280;
+    qreal timeResolutionMs = 32.0;            // ms per audio frame
+    qreal specMin = 0;                        // spectrogram min (from Python)
+    qreal specMax = 0;                        // spectrogram max (from Python)
+
+    bool isEmpty() const { return volume.isEmpty() && !hasSpectrogram(); }
+    bool hasVolume() const { return !volume.isEmpty(); }
+    bool hasSpectrogram() const
+    {
+        return !spectrogram.isEmpty() && !spectrogram[0].isEmpty();
+    }
+
+    /// Safe time resolution: never 0 (would cause div-by-zero in viewport math).
+    qreal safeTimeResolutionMs() const
+    {
+        return (timeResolutionMs > 0.0) ? timeResolutionMs : 32.0;
+    }
+
+    /// Total audio duration in ms (based on whichever signal is longer).
+    qint64 durationMs() const
+    {
+        qreal res = safeTimeResolutionMs();
+        int n = 0;
+        if (!volume.isEmpty())
+            n = volume.size();
+        if (hasSpectrogram())
+            n = qMax(n, spectrogram[0].size());
+        return static_cast<qint64>(n * res);
+    }
+
+    /**
+     * @brief Volume points within [tMin, tMax], using the audio's own timeline.
+     *
+     * Each volume sample i is placed at x = i * timeResolutionMs. No dependency
+     * on video timestamps, so this works for --audio-only too. (B3)
+     * Downsamples to maxPoints via stride if the viewport is very dense.
+     */
+    QVector<QPointF> volumePointsForViewport(qint64 tMin, qint64 tMax,
+                                              int maxPoints = 8000) const
+    {
+        QVector<QPointF> result;
+        if (volume.isEmpty())
+            return result;
+
+        qreal res = safeTimeResolutionMs();
+        int iStart = static_cast<int>(tMin / res);
+        int iEnd = static_cast<int>(tMax / res) + 1;
+        iStart = qMax(0, iStart);
+        iEnd = qMin(iEnd, volume.size() - 1);
+        if (iStart > iEnd)
+            return result;
+
+        int count = iEnd - iStart + 1;
+        int stride = (count > maxPoints) ? (count / maxPoints) : 1;
+        if (stride < 1) stride = 1;
+
+        result.reserve(count / stride + 1);
+        for (int i = iStart; i <= iEnd; i += stride) {
+            result.append(QPointF(static_cast<qreal>(i) * res, volume[i]));
+        }
+        return result;
+    }
+
+    /**
+     * @brief Spectrogram columns within [tMin, tMax], using the audio's own timeline.
+     * Returns [freq_bin][time_frame] slice. (B3)
+     */
+    QVector<QVector<qreal>> spectrogramForViewport(qint64 tMin, qint64 tMax) const
+    {
+        if (!hasSpectrogram())
+            return {};
+
+        qreal res = safeTimeResolutionMs();
+        int nFrames = spectrogram[0].size();
+        int aIdxMin = static_cast<int>(tMin / res);
+        int aIdxMax = static_cast<int>(tMax / res);
+        aIdxMin = qBound(0, aIdxMin, nFrames - 1);
+        aIdxMax = qBound(0, aIdxMax, nFrames - 1);
+
+        if (aIdxMin > aIdxMax)
+            return {};
+
+        int nFreqBins = spectrogram.size();
+        int nCols = aIdxMax - aIdxMin + 1;
+        QVector<QVector<qreal>> result(nFreqBins);
+        for (int f = 0; f < nFreqBins; ++f) {
+            result[f].resize(nCols);
+            for (int t = 0; t < nCols; ++t) {
+                int srcIdx = aIdxMin + t;
+                if (srcIdx < spectrogram[f].size())
+                    result[f][t] = spectrogram[f][srcIdx];
+                else
+                    result[f][t] = -10.0;  // log silence
+            }
+        }
+        return result;
+    }
+};
+
+/**
  * @brief Immutable value-type representing the full result of a luminance analysis run.
  *
  * All data is stored as QVector, which uses implicit sharing (copy-on-write),
@@ -35,8 +149,10 @@ struct AnalysisSnapshot
 {
     QVector<qint64> timestamps;
     QVector<QVector<qreal>> values; // outer: region index, inner: time series
+    AudioData audio;                // v0.3: audio analysis data
 
     bool isEmpty() const { return timestamps.isEmpty(); }
+    bool hasAudio() const { return !audio.isEmpty(); }
     int pointCount() const { return timestamps.size(); }
     int regionCount() const { return values.size(); }
 
@@ -148,7 +264,7 @@ struct AnalysisSnapshot
 
         QTextStream out(&file);
 
-        // Header: raw ms + formatted time + one column per ROI
+        // Header: raw ms + formatted time + one column per ROI + volume
         out << "Time(ms),Time";
         for (int r = 0; r < regions.size(); ++r) {
             const QRect &rc = regions[r];
@@ -156,6 +272,8 @@ struct AnalysisSnapshot
                        .arg(r + 1).arg(rc.x()).arg(rc.y())
                        .arg(rc.width()).arg(rc.height());
         }
+        if (hasAudio())
+            out << ",Volume";
         out << "\n";
 
         for (int i = 0; i < timestamps.size(); ++i) {
@@ -164,6 +282,14 @@ struct AnalysisSnapshot
             out << "," << formatTime(ts + timeOffsetMs);
             for (int r = 0; r < values.size(); ++r) {
                 out << "," << ((i < values[r].size()) ? values[r][i] : 0.0);
+            }
+            if (hasAudio()) {
+                // Map timestamp to audio volume index
+                int aIdx = static_cast<int>(ts / audio.timeResolutionMs);
+                if (aIdx >= 0 && aIdx < audio.volume.size())
+                    out << "," << audio.volume[aIdx];
+                else
+                    out << ",";
             }
             out << "\n";
         }
@@ -185,5 +311,4 @@ private:
             .arg(seconds, 2, 10, QChar('0'));
     }
 
-public:
 };

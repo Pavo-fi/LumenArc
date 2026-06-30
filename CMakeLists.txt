@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(LumenArc VERSION 0.2.0 LANGUAGES CXX)
+project(LumenArc VERSION 0.5.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -122,7 +122,13 @@ set(SOURCES
     src/pinnedwidget.cpp
     src/i18n.cpp
     src/aboutdialog.cpp
+    src/videolistpanel.cpp
+    src/spectrogrampanel.cpp
+    src/spectrogrampanel_enhanced.cpp
+    src/videostatemanager.cpp
     src/domain/region_model.cpp
+    src/domain/polygon_model.cpp
+    src/domain/guide_line_model.cpp
     src/domain/timeline_model.cpp
     src/infrastructure/vlc_video_engine.cpp
     src/infrastructure/python_analysis_engine.cpp
@@ -142,8 +148,16 @@ set(HEADERS
     src/pinnedwidget.h
     src/i18n.h
     src/aboutdialog.h
+    src/videolistpanel.h
+    src/spectrogrampanel.h
+    src/spectrogrampanel_enhanced.h
+    src/videostatemanager.h
     src/domain/analysis_snapshot.h
     src/domain/region_model.h
+    src/domain/region_shape.h
+    src/domain/polygon_model.h
+    src/domain/guide_line.h
+    src/domain/guide_line_model.h
     src/domain/timeline_model.h
     src/infrastructure/ivideo_engine.h
     src/infrastructure/ianalysis_engine.h
@@ -167,8 +181,8 @@ elseif(APPLE)
         MACOSX_BUNDLE TRUE
         MACOSX_BUNDLE_INFO_PLIST "${CMAKE_CURRENT_SOURCE_DIR}/src/Info.plist"
         MACOSX_BUNDLE_BUNDLE_NAME "LumenArc"
-        MACOSX_BUNDLE_BUNDLE_VERSION "0.2"
-        MACOSX_BUNDLE_SHORT_VERSION_STRING "0.2 beta"
+        MACOSX_BUNDLE_BUNDLE_VERSION "0.5"
+        MACOSX_BUNDLE_SHORT_VERSION_STRING "0.5 beta"
         MACOSX_BUNDLE_GUI_IDENTIFIER "com.firetech.lumenarc"
     )
 else()
@@ -183,6 +197,7 @@ target_include_directories(${PROJECT_NAME} PRIVATE
 target_link_libraries(${PROJECT_NAME} PRIVATE
     Qt6::Widgets
     Qt6::Charts
+    Qt6::OpenGL
     ${VLC_LIBRARY}
 )
 
@@ -246,6 +261,17 @@ if(WIN32)
             "$<TARGET_FILE_DIR:${PROJECT_NAME}>"
         COMMENT "Copying analyze_video.py..."
     )
+
+    # Copy ffmpeg (if bundled)
+    set(FFMPEG_SRC "${CMAKE_CURRENT_SOURCE_DIR}/portable/ffmpeg")
+    if(EXISTS "${FFMPEG_SRC}/ffmpeg.exe")
+        add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_directory
+                "${FFMPEG_SRC}"
+                "$<TARGET_FILE_DIR:${PROJECT_NAME}>/ffmpeg"
+            COMMENT "Copying ffmpeg..."
+        )
+    endif()
 
     # Copy app icon
     add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
@@ -311,6 +337,17 @@ if(APPLE)
             "$<TARGET_FILE_DIR:${PROJECT_NAME}>/../MacOS/"
         COMMENT "Copying analyze_video.py..."
     )
+
+    # Copy ffmpeg (if bundled)
+    set(FFMPEG_SRC "${CMAKE_CURRENT_SOURCE_DIR}/portable/ffmpeg")
+    if(EXISTS "${FFMPEG_SRC}/ffmpeg")
+        add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_directory
+                "${FFMPEG_SRC}"
+                "$<TARGET_FILE_DIR:${PROJECT_NAME}>/../MacOS/ffmpeg"
+            COMMENT "Copying ffmpeg..."
+        )
+    endif()
 
     # Copy lightchaser background
     if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/lightchaser.jpg")

@@ -1,9 +1,9 @@
 /**
  * @file python_analysis_engine.cpp
- * @brief Python 分析引擎实现：QProcess 管理/JSON 解析/进度回调
+ * @brief Python 分析引擎实现：QProcess 管理/JSON 解析/进度回调/多进程/音频
  * @author Huang Jingyun, Liu xinghua, Huang Wenhua
  * @date 2026-05-31
- * @version 0.2
+ * @version 0.3
  *
  * Copyright 2026 Huang Jingyun/Liu xinghua/Huang Wenhua. All rights reserved.
  * Licensed under the Apache License, Version 2.0
@@ -15,8 +15,11 @@
 #include <QJsonObject>
 #include <QJsonArray>
 #include <QDir>
+#include <QFile>
 #include <QCoreApplication>
+#include <QThread>
 #include <QDebug>
+#include <cstring>
 
 PythonAnalysisEngine::PythonAnalysisEngine(QObject *parent)
     : IAnalysisEngine(parent)
@@ -40,7 +43,70 @@ void PythonAnalysisEngine::setScriptPath(const QString &path)
     m_scriptPath = path;
 }
 
-void PythonAnalysisEngine::startAnalysis(const QString &videoPath, const QVector<QRect> &regions)
+QString PythonAnalysisEngine::findFfmpegPath()
+{
+    QString appDir = QCoreApplication::applicationDirPath();
+    // Check bundled location first
+    QString bundled = appDir + "/ffmpeg/ffmpeg.exe";
+    if (QFile::exists(bundled)) return bundled;
+    // Same directory
+    QString sameDir = appDir + "/ffmpeg.exe";
+    if (QFile::exists(sameDir)) return sameDir;
+    // System PATH
+    return "ffmpeg";
+}
+
+PythonAnalysisEngine::VideoInfo PythonAnalysisEngine::getVideoInfo(const QString &videoPath)
+{
+    // B7: Return cached result if available (avoids blocking main thread again)
+    if (m_videoInfoCache.contains(videoPath))
+        return m_videoInfoCache[videoPath];
+
+    VideoInfo info;
+    if (m_pythonPath.isEmpty() || !QFile::exists(m_pythonPath))
+        return info;
+    if (!QFile::exists(m_scriptPath))
+        return info;
+
+    QProcess proc;
+    proc.setProgram(m_pythonPath);
+    proc.setArguments({ m_scriptPath, videoPath, "--check-fps" });
+    proc.start();
+    if (!proc.waitForFinished(10000))
+        return info;
+
+    if (proc.exitCode() != 0)
+        return info;
+
+    QByteArray output = proc.readAllStandardOutput().trimmed();
+    QJsonDocument doc = QJsonDocument::fromJson(output);
+    if (!doc.isObject())
+        return info;
+
+    QJsonObject obj = doc.object();
+    info.fps = obj["fps"].toDouble(30.0);
+    info.totalFrames = static_cast<qint64>(obj["total_frames"].toDouble());
+
+    // B7: Cache the result for future calls
+    m_videoInfoCache[videoPath] = info;
+    return info;
+}
+
+static int computeProcessCount(qint64 totalFrames, float fps)
+{
+    if (fps <= 0) fps = 30.0f;
+    qint64 durationSec = totalFrames / fps;
+    int maxProcs = QThread::idealThreadCount();
+    if (maxProcs < 1) maxProcs = 1;
+
+    if (durationSec < 30)  return 1;
+    if (durationSec < 120) return qMin(2, maxProcs);
+    return qMin(4, maxProcs);
+}
+
+void PythonAnalysisEngine::startAnalysis(const QString &videoPath, const QVector<QRect> &regions,
+                                          const QVector<QPolygon> &polygons,
+                                          const QStringList &extraVideos)
 {
     if (m_process) {
         emit analysisFailed("Analysis is already running.");
@@ -63,37 +129,128 @@ void PythonAnalysisEngine::startAnalysis(const QString &videoPath, const QVector
         return;
     }
 
+    // Ensure script path is set before checking existence
+    if (m_scriptPath.isEmpty()) {
+        m_scriptPath = QDir::toNativeSeparators(
+            QCoreApplication::applicationDirPath() + "/analyze_video.py");
+    }
+
     if (!QFile::exists(m_scriptPath)) {
         emit analysisFailed(QString(lang("未找到分析脚本：\n%1",
                                           "Analysis script not found:\n%1")).arg(m_scriptPath));
         return;
     }
 
-    if (m_scriptPath.isEmpty()) {
-        m_scriptPath = QDir::toNativeSeparators(
-            QCoreApplication::applicationDirPath() + "/analyze_video.py");
-    }
-
     QJsonArray roiArray;
     for (const QRect &rc : regions) {
         QJsonObject obj;
+        obj["type"] = "rect";
         obj["x"] = rc.x();
         obj["y"] = rc.y();
         obj["w"] = rc.width();
         obj["h"] = rc.height();
         roiArray.append(obj);
     }
+    for (const QPolygon &poly : polygons) {
+        QJsonObject obj;
+        obj["type"] = "polygon";
+        QJsonArray pointsArray;
+        for (const QPoint &pt : poly) {
+            QJsonArray ptArr;
+            ptArr.append(pt.x());
+            ptArr.append(pt.y());
+            pointsArray.append(ptArr);
+        }
+        obj["points"] = pointsArray;
+        roiArray.append(obj);
+    }
     QString roiJson = QString::fromUtf8(QJsonDocument(roiArray).toJson(QJsonDocument::Compact));
+
+    // B2: Build arguments. Multi-video uses --videos; single video uses positional args.
+    // The Python script merges all videos onto one continuous timeline internally.
+    QStringList args;
+    if (extraVideos.isEmpty()) {
+        args = { m_scriptPath, videoPath, roiJson };
+    } else {
+        QStringList allVideos;
+        allVideos << videoPath;
+        for (const QString &p : extraVideos)
+            if (!p.isEmpty())
+                allVideos << p;
+        args = { m_scriptPath, allVideos[0], roiJson, "--videos" };
+        for (int i = 1; i < allVideos.size(); ++i)
+            if (!allVideos[i].isEmpty())
+                args << allVideos[i];
+    }
+
+    // v0.3: Compute actual process count based on the primary video's duration.
+    // (For multi-video, per-video process count is still driven by the primary;
+    // the script applies it to each video in sequence.)
+    VideoInfo vInfo = getVideoInfo(videoPath);
+    int procCount = computeProcessCount(vInfo.totalFrames, vInfo.fps);
+    args << "--processes" << QString::number(procCount);
+
+    // Add --ffmpeg-path
+    QString ffmpegPath = findFfmpegPath();
+    args << "--ffmpeg-path" << ffmpegPath;
 
     m_outputBuffer.clear();
     m_stderrBuffer.clear();
 
     m_process = new QProcess(this);
     m_process->setProgram(m_pythonPath);
-    m_process->setArguments({ m_scriptPath, videoPath, roiJson });
+    m_process->setArguments(args);
 
-    connect(m_process, &QProcess::readyReadStandardOutput, this, &PythonAnalysisEngine::onReadyRead);
-    connect(m_process, &QProcess::readyReadStandardError, this, &PythonAnalysisEngine::onReadyRead);
+    // B12: separate stdout/stderr handlers avoid double-fire timing fragility.
+    connect(m_process, &QProcess::readyReadStandardOutput,
+            this, &PythonAnalysisEngine::onReadyReadStdout);
+    connect(m_process, &QProcess::readyReadStandardError,
+            this, &PythonAnalysisEngine::onReadyReadStderr);
+    connect(m_process, &QProcess::finished,
+            this, [this](int exitCode, QProcess::ExitStatus) {
+                onFinished(exitCode);
+            });
+
+    m_process->start();
+}
+
+void PythonAnalysisEngine::startAudioAnalysis(const QString &videoPath)
+{
+    if (m_process) {
+        emit analysisFailed("Analysis is already running.");
+        return;
+    }
+
+    if (m_pythonPath.isEmpty() || !QFile::exists(m_pythonPath)) {
+        emit analysisFailed(lang("Python 可执行文件路径未配置。", "Python executable path is not configured."));
+        return;
+    }
+
+    if (!QFile::exists(m_scriptPath)) {
+        emit analysisFailed(QString(lang("未找到分析脚本：\n%1", "Analysis script not found:\n%1")).arg(m_scriptPath));
+        return;
+    }
+
+    QStringList args = { m_scriptPath, videoPath, "--audio-only" };
+
+    if (m_noiseReduction > 0) {
+        args << "--noise-reduction" << QString::number(m_noiseReduction, 'f', 1);
+    }
+
+    QString ffmpegPath = findFfmpegPath();
+    args << "--ffmpeg-path" << ffmpegPath;
+
+    m_outputBuffer.clear();
+    m_stderrBuffer.clear();
+
+    m_process = new QProcess(this);
+    m_process->setProgram(m_pythonPath);
+    m_process->setArguments(args);
+
+    connect(m_process, &QProcess::readyReadStandardOutput,
+            this, &PythonAnalysisEngine::onReadyReadStdout);
+    connect(m_process, &QProcess::readyReadStandardError,
+            this, &PythonAnalysisEngine::onReadyReadStderr);
     connect(m_process, &QProcess::finished,
             this, [this](int exitCode, QProcess::ExitStatus) {
                 onFinished(exitCode);
@@ -110,8 +267,13 @@ void PythonAnalysisEngine::cancelAnalysis()
 
     m_process = nullptr;
     disconnect(proc, nullptr, this, nullptr);
-    proc->kill();
-    proc->waitForFinished(2000);
+
+    // M2: Try graceful termination first, then force kill
+    proc->terminate();
+    if (!proc->waitForFinished(3000)) {
+        proc->kill();
+        proc->waitForFinished(2000);
+    }
     proc->deleteLater();
 
     emit analysisFailed("Analysis cancelled by user.");
@@ -122,46 +284,128 @@ bool PythonAnalysisEngine::isRunning() const
     return m_process != nullptr;
 }
 
-void PythonAnalysisEngine::onReadyRead()
+void PythonAnalysisEngine::onReadyReadStdout()
 {
     if (!m_process)
         return;
-
     QByteArray out = m_process->readAllStandardOutput();
     if (!out.isEmpty())
         m_outputBuffer.append(out);
 
+    // Also drain stderr to prevent pipe blocking
     QByteArray err = m_process->readAllStandardError();
-    if (!err.isEmpty()) {
-        // Accumulate all stderr for error reporting
+    if (!err.isEmpty())
         m_stderrBuffer.append(err);
-
-        // Also parse PROGRESS: lines inline
-        QString errStr = QString::fromUtf8(err).trimmed();
-        for (const QString &line : errStr.split('\n')) {
-            if (line.startsWith("PROGRESS:")) {
-                QStringList parts = line.mid(9).split('|');
-                if (parts.size() >= 3) {
-                    qreal pct = parts[2].toDouble();
-                    emit progressUpdated(parts[0].toInt(), parts[1].toInt(), pct);
-                }
-            }
-        }
-    }
 }
 
-void PythonAnalysisEngine::onFinished(int exitCode)
+void PythonAnalysisEngine::onReadyReadStderr()
 {
     if (!m_process)
         return;
 
+    // Accumulate into m_stderrBuffer, then parse complete lines from it
+    m_stderrBuffer.append(m_process->readAllStandardError());
+
+    // Process complete lines from buffer (preserve incomplete last line)
+    int newlineIdx;
+    while ((newlineIdx = m_stderrBuffer.indexOf('\n')) >= 0) {
+        QByteArray line = m_stderrBuffer.left(newlineIdx).trimmed();
+        m_stderrBuffer.remove(0, newlineIdx + 1);
+
+        QString lineStr = QString::fromUtf8(line);
+        if (lineStr.startsWith("PROGRESS:")) {
+            QStringList parts = lineStr.mid(9).split('|');
+            if (parts.size() >= 3) {
+                qreal pct = parts[2].toDouble();
+                emit progressUpdated(parts[0].toInt(), parts[1].toInt(), pct);
+            }
+        }
+    }
+
+    // Drain stdout alongside stderr to prevent Python from blocking on
+    // print(json) when the pipe buffer fills up (deadlock prevention).
+    m_outputBuffer.append(m_process->readAllStandardOutput());
+}
+
+static AudioData parseAudioData(const QJsonObject &audioObj)
+{
+    AudioData audio;
+
+    QJsonArray volArray = audioObj["volume"].toArray();
+    audio.volume.reserve(volArray.size());
+    for (const auto &v : volArray)
+        audio.volume.append(v.toDouble());
+
+    // Read spectrogram from binary file (fast path)
+    QString specFile = audioObj["spectrogram_file"].toString();
+    if (!specFile.isEmpty()) {
+        QJsonArray shape = audioObj["spectrogram_shape"].toArray();
+        int nFreqBins = shape.size() > 0 ? shape[0].toInt() : 0;
+        int nFrames = shape.size() > 1 ? shape[1].toInt() : 0;
+        if (nFreqBins > 0 && nFrames > 0) {
+            QFile file(specFile);
+            if (file.open(QIODevice::ReadOnly)) {
+                qint64 expectedSize = static_cast<qint64>(nFreqBins) * nFrames * sizeof(double);
+                if (file.size() == expectedSize) {
+                    QByteArray data = file.readAll();
+                    const double *src = reinterpret_cast<const double*>(data.constData());
+                    audio.spectrogram.resize(nFreqBins);
+                    for (int f = 0; f < nFreqBins; ++f) {
+                        audio.spectrogram[f].resize(nFrames);
+                        memcpy(audio.spectrogram[f].data(), &src[f * nFrames],
+                               nFrames * sizeof(double));
+                    }
+                } else {
+                    qWarning() << "Spectrogram file size mismatch:" << file.size()
+                               << "expected:" << expectedSize;
+                }
+                file.close();
+            } else {
+                qWarning() << "Failed to open spectrogram file:" << specFile;
+            }
+            // Clean up temp file
+            QFile::remove(specFile);
+        }
+    }
+
+    // Fallback: read from JSON (legacy / multi-video merged path)
+    if (audio.spectrogram.isEmpty()) {
+        QJsonArray specArray = audioObj["spectrogram"].toArray();
+        audio.spectrogram.reserve(specArray.size());
+        for (const auto &binVal : specArray) {
+            QJsonArray binArray = binVal.toArray();
+            QVector<qreal> bin;
+            bin.reserve(binArray.size());
+            for (const auto &v : binArray)
+                bin.append(v.toDouble());
+            audio.spectrogram.append(std::move(bin));
+        }
+    }
+
+    audio.sampleRate = audioObj["sample_rate"].toDouble(16000);
+    audio.hopLength = audioObj["hop_length"].toInt(512);
+    audio.nFft = audioObj["n_fft"].toInt(1280);
+    audio.timeResolutionMs = audioObj["time_resolution_ms"].toDouble(
+        1000.0 * audio.hopLength / audio.sampleRate);
+    audio.specMin = audioObj["spec_min"].toDouble(0);
+    audio.specMax = audioObj["spec_max"].toDouble(0);
+
+    return audio;
+}
+
+void PythonAnalysisEngine::onFinished(int exitCode)
+{
+    QProcess *proc = m_process;
+    if (!proc)
+        return;
+
+    // Clear member pointer before emitting signals to prevent re-entrant issues
+    m_process = nullptr;
+
     if (exitCode != 0) {
-        // Use accumulated stderr buffer — readAllStandardError() may be empty
-        // because onReadyRead() already consumed the data.
         QString err = QString::fromUtf8(m_stderrBuffer).trimmed();
         if (err.isEmpty()) {
-            // Fallback: try reading directly
-            err = QString::fromUtf8(m_process->readAllStandardError()).trimmed();
+            err = QString::fromUtf8(proc->readAllStandardError()).trimmed();
         }
         if (err.isEmpty()) {
             err = QString(lang("进程以代码 %1 退出，无标准错误输出。\n"
@@ -174,15 +418,14 @@ void PythonAnalysisEngine::onFinished(int exitCode)
         }
         emit analysisFailed(err);
     } else {
-        QByteArray finalOut = m_process->readAllStandardOutput();
+        QByteArray finalOut = proc->readAllStandardOutput();
         if (!finalOut.isEmpty())
             m_outputBuffer.append(finalOut);
 
         QJsonDocument doc = QJsonDocument::fromJson(m_outputBuffer);
         if (!doc.isObject()) {
             emit analysisFailed("Invalid analysis result format.");
-            m_process->deleteLater();
-            m_process = nullptr;
+            proc->deleteLater();
             return;
         }
 
@@ -211,12 +454,23 @@ void PythonAnalysisEngine::onFinished(int exitCode)
             values.append(std::move(series));
         }
 
+        // Parse audio data if present
+        AudioData audio;
+        if (obj.contains("audio")) {
+            audio = parseAudioData(obj["audio"].toObject());
+            if (audio.hasVolume() && !audio.hasSpectrogram()) {
+                qWarning() << "Audio parsed: volume has" << audio.volume.size()
+                           << "points but spectrogram is empty (file may have been deleted)";
+            }
+        }
+
         AnalysisSnapshot snapshot;
         snapshot.timestamps = std::move(timestamps);
         snapshot.values = std::move(values);
+        snapshot.audio = audio;
+        emit progressUpdated(100, 100, 100.0);
         emit analysisFinished(snapshot);
     }
 
-    m_process->deleteLater();
-    m_process = nullptr;
+    proc->deleteLater();
 }

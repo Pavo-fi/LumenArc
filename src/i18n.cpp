@@ -3,7 +3,7 @@
  * @brief 国际化实现：语言检测/切换/持久化/跨平台字体
  * @author Huang Jingyun, Liu xinghua, Huang Wenhua
  * @date 2026-05-31
- * @version 0.2
+ * @version 0.3
  *
  * Copyright 2026 Huang Jingyun/Liu xinghua/Huang Wenhua. All rights reserved.
  * Licensed under the Apache License, Version 2.0
@@ -53,4 +53,27 @@ QFont fontMono(int size, QFont::Weight weight) {
 #endif
     f.setStyleStrategy(QFont::PreferAntialias);
     return f;
+}
+
+QImage applyBrightnessContrast(const QImage &src, int brightness, int contrast)
+{
+    if (src.isNull())
+        return src;
+    if (brightness == 0 && contrast == 0)
+        return src.convertToFormat(QImage::Format_ARGB32);
+
+    QImage result = src.convertToFormat(QImage::Format_ARGB32);
+    double cf = (259.0 * (contrast + 255)) / (255.0 * (259 - contrast));
+
+    for (int y = 0; y < result.height(); ++y) {
+        QRgb *line = reinterpret_cast<QRgb*>(result.scanLine(y));
+        for (int x = 0; x < result.width(); ++x) {
+            QRgb px = line[x];
+            int r = qBound(0, int(cf * (qRed(px) + brightness * 2 - 128) + 128), 255);
+            int g = qBound(0, int(cf * (qGreen(px) + brightness * 2 - 128) + 128), 255);
+            int b = qBound(0, int(cf * (qBlue(px) + brightness * 2 - 128) + 128), 255);
+            line[x] = qRgba(r, g, b, qAlpha(px));
+        }
+    }
+    return result;
 }

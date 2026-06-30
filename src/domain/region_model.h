@@ -3,7 +3,7 @@
  * @brief 线程安全 ROI 区域管理，7色调色板循环
  * @author Huang Jingyun, Liu xinghua, Huang Wenhua
  * @date 2026-05-31
- * @version 0.2
+ * @version 0.3
  *
  * Copyright 2026 Huang Jingyun/Liu xinghua/Huang Wenhua. All rights reserved.
  * Licensed under the Apache License, Version 2.0
@@ -47,6 +47,8 @@ public:
 
 signals:
     void regionsChanged();
+    /// Emitted after a specific region is removed, with its former index.
+    void regionRemoved(int index);
 
 private:
     mutable QReadWriteLock m_lock;

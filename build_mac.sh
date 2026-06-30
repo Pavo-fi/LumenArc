@@ -1,6 +1,6 @@
 #!/bin/bash
 # =============================================================================
-# Lumen Arc v0.2 Beta - macOS 编译打包脚本
+# Lumen Arc v0.3 Beta - macOS 编译打包脚本
 # 
 # 使用方法：
 #   1. 首次运行前确保已安装依赖：
@@ -12,7 +12,7 @@
 set -e
 
 echo "============================================"
-echo "  Lumen Arc v0.2 Beta - macOS Build"
+echo "  Lumen Arc v0.3 Beta - macOS Build"
 echo "============================================"
 
 # --- 1. 环境检测 ---
@@ -92,15 +92,15 @@ if [ -f "lightchaser.jpg" ]; then
 fi
 
 # 操作手册
-if [ -f "追光者 Lumen Arc v0.2 Beta — 操作手册.pdf" ]; then
+if [ -f "追光者 Lumen Arc v0.3 Beta — 操作手册.pdf" ]; then
     mkdir -p "$APP_PATH/Contents/Resources"
-    cp -f "追光者 Lumen Arc v0.2 Beta — 操作手册.pdf" "$APP_PATH/Contents/Resources/"
+    cp -f "追光者 Lumen Arc v0.3 Beta — 操作手册.pdf" "$APP_PATH/Contents/Resources/"
 fi
 
 # --- 7. 创建 DMG ---
 echo ""
 echo "[7/8] 创建 DMG..."
-DMG_NAME="LumenArc-v0.2-beta-mac"
+DMG_NAME="LumenArc-v0.3-beta-mac"
 rm -f "${DMG_NAME}.dmg"
 hdiutil create -volname "LumenArc" \
     -srcfolder "$APP_PATH" \

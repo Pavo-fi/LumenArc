@@ -1,4 +1,4 @@
-# Lumen Arc v0.2 Beta — Mac 版本移植文件
+# Lumen Arc v0.3 Beta — Mac 版本移植文件
 
 本目录包含 Mac 版本编译所需的文件和说明。
 
@@ -27,7 +27,7 @@ pip3 install opencv-python-headless numpy
 
 ### 2. 复制文件到项目
 
-将本目录中的文件复制到 `C:\code\LumenArc_v0.2\` 对应位置：
+将本目录中的文件复制到 `C:\code\LumenArc_v0.3\` 对应位置：
 - `Info.plist` → `src/Info.plist`
 - `build_mac.sh` → 项目根目录
 - `CMakeLists.txt` → 项目根目录（覆盖）
@@ -37,12 +37,12 @@ pip3 install opencv-python-headless numpy
 ### 3. 编译打包
 
 ```bash
-cd /path/to/LumenArc_v0.2
+cd /path/to/LumenArc_v0.3
 chmod +x build_mac.sh
 ./build_mac.sh
 ```
 
-输出：`LumenArc-v0.2-beta-mac.dmg`
+输出：`LumenArc-v0.3-beta-mac.dmg`
 
 ### 4. 使用
 

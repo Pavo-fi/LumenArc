@@ -3,7 +3,7 @@
  * @brief 关于对话框实现
  * @author Huang Jingyun, Liu xinghua, Huang Wenhua
  * @date 2026-05-31
- * @version 0.2
+ * @version 0.3
  *
  * Copyright 2026 Huang Jingyun/Liu xinghua/Huang Wenhua. All rights reserved.
  * Licensed under the Apache License, Version 2.0
@@ -35,7 +35,7 @@ AboutDialog::AboutDialog(QWidget *parent)
     layout->addSpacing(4);
 
     // Version
-    auto *versionLabel = new QLabel(lang("版本 v0.2", "Version v0.2"), this);
+    auto *versionLabel = new QLabel(lang("版本 v0.5", "Version v0.5"), this);
     versionLabel->setStyleSheet("font-size: 12px; color: #999;");
     versionLabel->setAlignment(Qt::AlignCenter);
     layout->addWidget(versionLabel);

@@ -3,7 +3,7 @@
  * @brief 线程安全时间序列模型 + .vla 文件序列化
  * @author Huang Jingyun, Liu xinghua, Huang Wenhua
  * @date 2026-05-31
- * @version 0.2
+ * @version 0.3
  *
  * Copyright 2026 Huang Jingyun/Liu xinghua/Huang Wenhua. All rights reserved.
  * Licensed under the Apache License, Version 2.0
@@ -13,7 +13,9 @@
 #include <QObject>
 #include <QReadWriteLock>
 #include <QImage>
+#include <QPolygon>
 #include "analysis_snapshot.h"
+#include "guide_line.h"
 
 /**
  * @brief Snapshot fusion parameters for VLA persistence.
@@ -44,30 +46,50 @@ public:
     explicit TimelineModel(QObject *parent = nullptr);
 
     /// Replace all data at once (efficient, no per-point locking).
-    void setData(QVector<qint64> timestamps, QVector<QVector<qreal>> values);
+    void setData(QVector<qint64> timestamps, QVector<QVector<qreal>> values,
+                 const AudioData &audio = AudioData());
 
     void clearData();
+
+    /// Clear only luminance data (timestamps + values), preserve audio data.
+    /// Used when ROI regions change but audio analysis should be retained.
+    void clearLuminanceData();
+
+    /// Remove luminance data for a specific region index.
+    /// Used when an ROI region is deleted to keep data/region indices in sync.
+    void removeRegionData(int index);
 
     /// Returns a copy of the current snapshot (cheap thanks to implicit sharing).
     AnalysisSnapshot snapshot() const;
 
-    /// Serialize current snapshot to .vla JSON file (v3 format).
-    /// Saves timestamps, luminance data, ROIs, time offset, magnifier, labels, pinned, snapshot fusion.
+    /// Serialize current snapshot to .vla JSON file (v5 format).
+    /// Saves timestamps, luminance data, ROIs (rect+polygon+guide_lines), time offset, magnifier, labels, pinned, snapshot fusion.
     bool saveToFile(const QString &filePath, const QVector<QRect> &regions,
                     qint64 timeOffsetMs = 0, const QRect &magnifier = QRect(),
                     const QVector<ChartLabel> &labels = {},
                     const QRect &pinned = QRect(),
-                    const SnapshotFusionData &snapshotFusion = SnapshotFusionData()) const;
+                    const SnapshotFusionData &snapshotFusion = SnapshotFusionData(),
+                    const QVector<QPolygon> &polygons = {},
+                    const QVector<GuideLine> &guideLines = {}) const;
 
     /// Deserialize snapshot from .vla JSON file. Emits dataReplaced() on success.
-    /// Output params restore ROI, time offset, magnifier, labels, pinned, snapshot fusion.
+    /// Output params restore ROI, time offset, magnifier, labels, pinned, snapshot fusion, polygons, guide lines.
     bool loadFromFile(const QString &filePath,
                       QVector<QRect> *regions = nullptr,
                       qint64 *timeOffsetMs = nullptr,
                       QRect *magnifier = nullptr,
                       QVector<ChartLabel> *labels = nullptr,
                       QRect *pinned = nullptr,
-                      SnapshotFusionData *snapshotFusion = nullptr);
+                      SnapshotFusionData *snapshotFusion = nullptr,
+                      QVector<QPolygon> *polygons = nullptr,
+                      QVector<GuideLine> *guideLines = nullptr);
+
+    /// Serialize spectrogram data to binary .vla.spec file.
+    /// Format: [uint32 nFrames][uint32 nFreqBins][float32 sampleRate][uint32 hopLength][float32 data...]
+    static bool saveSpecToFile(const QString &filePath, const AudioData &audio);
+
+    /// Deserialize spectrogram data from binary .vla.spec file.
+    static bool loadSpecFromFile(const QString &filePath, AudioData &audio);
 
 signals:
     void dataReplaced();

@@ -3,7 +3,7 @@
  * @brief 截图叠加浮窗实现：缩略图/编辑器/滑块/放置
  * @author Huang Jingyun, Liu xinghua, Huang Wenhua
  * @date 2026-05-31
- * @version 0.2
+ * @version 0.3
  *
  * Copyright 2026 Huang Jingyun/Liu xinghua/Huang Wenhua. All rights reserved.
  * Licensed under the Apache License, Version 2.0
@@ -222,35 +222,7 @@ QImage SnapshotOverlay::applyAdjustments(const QImage &src) const
     int b = m_brightnessSlider->value();
     int c = m_contrastSlider->value();
 
-    if (b == 0 && c == 0)
-        return src.convertToFormat(QImage::Format_ARGB32);
-
-    QImage safe = src.convertToFormat(QImage::Format_ARGB32);
-    QImage result = safe.copy();
-
-    double cf = (259.0 * (c + 255)) / (255.0 * (259 - c));
-
-    for (int y = 0; y < result.height(); ++y) {
-        QRgb *line = reinterpret_cast<QRgb*>(result.scanLine(y));
-        for (int x = 0; x < result.width(); ++x) {
-            QRgb px = line[x];
-            int r = qRed(px);
-            int g = qGreen(px);
-            int bl = qBlue(px);
-
-            r += b * 2;
-            g += b * 2;
-            bl += b * 2;
-
-            r = qBound(0, static_cast<int>(cf * (r - 128) + 128), 255);
-            g = qBound(0, static_cast<int>(cf * (g - 128) + 128), 255);
-            bl = qBound(0, static_cast<int>(cf * (bl - 128) + 128), 255);
-
-            line[x] = qRgba(r, g, bl, qAlpha(px));
-        }
-    }
-
-    return result;
+    return applyBrightnessContrast(src, b, c);
 }
 
 void SnapshotOverlay::layoutControls()

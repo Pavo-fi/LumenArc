@@ -3,7 +3,7 @@
  * @brief 程序入口，启动画面创建和初始化流程
  * @author Huang Jingyun, Liu xinghua, Huang Wenhua
  * @date 2026-05-31
- * @version 0.2
+ * @version 0.3
  *
  * Copyright 2026 Huang Jingyun/Liu xinghua/Huang Wenhua. All rights reserved.
  * Licensed under the Apache License, Version 2.0
@@ -90,7 +90,7 @@ static QPixmap createSplashPixmap(const QString &statusText, int progress = 30)
     QFont verFont = fontMono(10);
     p.setFont(verFont);
     p.setPen(QColor(255, 255, 240, 150));
-    p.drawText(QRect(60, 198, W - 120, 22), Qt::AlignLeft | Qt::AlignVCenter, "v0.2 beta 内部测试");
+    p.drawText(QRect(60, 198, W - 120, 22), Qt::AlignLeft | Qt::AlignVCenter, "v0.5 beta");
 
     // --- Progress bar background ---
     int barX = 60;
@@ -121,10 +121,35 @@ static QPixmap createSplashPixmap(const QString &statusText, int progress = 30)
 
 int main(int argc, char *argv[])
 {
-    QCoreApplication::setAttribute(Qt::AA_UseSoftwareOpenGL);
     QApplication app(argc, argv);
     app.setApplicationName("LumenArc");
     app.setOrganizationName("LumenArc");
+
+    // Global dark theme stylesheet
+    app.setStyleSheet(
+        "QMainWindow, QWidget { background-color: #2b2b2b; color: #F5F0E8; }"
+        "QMenuBar { background-color: #3c3c3c; color: #F5F0E8; }"
+        "QMenu { background-color: #3c3c3c; color: #F5F0E8; }"
+        "QMenu::item:selected { background-color: #505050; }"
+        "QMenu::item:disabled { color: #888; }"
+        "QToolBar { background-color: #3c3c3c; border: none; }"
+        "QStatusBar { background-color: #3c3c3c; color: #F5F0E8; }"
+        "QDockWidget { color: #F5F0E8; }"
+        "QDockWidget::title { background: #363636; padding: 4px; }"
+        "QLabel { color: #F5F0E8; background: transparent; }"
+        "QPushButton { background-color: #454545; color: #F5F0E8; border: 1px solid #555; padding: 4px 8px; }"
+        "QPushButton:hover { background-color: #505050; }"
+        "QPushButton:pressed { background-color: #3a3a3a; }"
+        "QPushButton:disabled { background-color: #555; color: #888; }"
+        "QSlider { background: transparent; }"
+        "QSlider::groove:horizontal { background: #555; height: 4px; }"
+        "QSlider::handle:horizontal { background: #F5F0E8; width: 12px; margin: -4px 0; }"
+        "QSplitter { background: #2b2b2b; }"
+        "QProgressBar { background: #555; border: 1px solid #666; text-align: center; color: #F5F0E8; }"
+        "QProgressBar::chunk { background: #4CAF50; }"
+        "QListWidget { background-color: #2b2b2b; color: #F5F0E8; border: 1px solid #555; }"
+        "QListWidget::item:selected { background-color: #505050; }"
+    );
 
     QString iconPath = QDir(app.applicationDirPath()).filePath("app.ico");
     app.setWindowIcon(QIcon(iconPath));
@@ -152,7 +177,7 @@ int main(int argc, char *argv[])
     app.processEvents();
 
     splash.finish(&window);
-    window.show();
+    window.showMaximized();
 
     return app.exec();
 }

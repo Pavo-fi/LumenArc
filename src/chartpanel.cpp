@@ -3,19 +3,22 @@
  * @brief 折线图面板实现：时间标签/光标/缩放平移/刻度尺/标签管理
  * @author Huang Jingyun, Liu xinghua, Huang Wenhua
  * @date 2026-05-31
- * @version 0.2
+ * @version 0.3
  *
  * Copyright 2026 Huang Jingyun/Liu xinghua/Huang Wenhua. All rights reserved.
  * Licensed under the Apache License, Version 2.0
  */
 #include "chartpanel.h"
 #include "domain/region_model.h"
+#include "domain/polygon_model.h"
 #include "domain/timeline_model.h"
 #include "i18n.h"
 
 #include <QtCharts/QChart>
 #include <QtCharts/QLineSeries>
 #include <QtCharts/QValueAxis>
+#include <QtCharts/QLegendMarker>
+#include <QtCharts/QAbstractSeries>
 #include <QMouseEvent>
 #include <QWheelEvent>
 #include <QTimer>
@@ -39,33 +42,61 @@ ChartPanel::ChartPanel(QWidget *parent)
     setRenderHint(QPainter::Antialiasing);
     setRubberBand(QChartView::NoRubberBand);
     setDragMode(QGraphicsView::NoDrag);
+    setBackgroundBrush(QBrush(QColor(40, 40, 40)));
+    setFocusPolicy(Qt::NoFocus);  // 防止图表窃取键盘焦点导致快捷键失效
 
     m_chart = new QChart();
-    m_chart->setTitle(lang("亮度变化曲线", "Luminance Over Time"));
+    m_chart->setMargins(QMargins(2, 35, 2, 2));
     m_chart->legend()->setVisible(true);
     m_chart->legend()->setAlignment(Qt::AlignBottom);
-    m_chart->setBackgroundBrush(QBrush(QColor(245, 245, 245)));
+    m_chart->legend()->setLabelColor(QColor(0xF5, 0xF0, 0xE8));
+    m_chart->setBackgroundBrush(QBrush(QColor(40, 40, 40)));
 
     connect(m_chart, &QChart::plotAreaChanged, this, &ChartPanel::updateTimeLabelPositions);
     connect(m_chart, &QChart::plotAreaChanged, this, &ChartPanel::updateLabelItems);
+    connect(m_chart, &QChart::plotAreaChanged, this, &ChartPanel::updateABMarkers);
+    connect(m_chart, &QChart::plotAreaChanged, this, [this](const QRectF &area) {
+        emit plotAreaUpdated(area);
+    });
 
     m_axisX = new QValueAxis();
-    m_axisX->setTitleText("Time");
     m_axisX->setLabelFormat("%.0f");
-    m_axisX->setLabelsVisible(false); // we draw custom HH:MM:SS labels manually
+    m_axisX->setLabelsVisible(false);
+    m_axisX->setTitleBrush(QBrush(QColor(0xF5, 0xF0, 0xE8)));
+    m_axisX->setLabelsColor(QColor(0xF5, 0xF0, 0xE8));
+    m_axisX->setGridLineVisible(false);
 
     m_axisY = new QValueAxis();
-    m_axisY->setTitleText("Brightness (Y avg)");
+    m_axisY->setTitleText(lang("亮度 (Y均值)", "Brightness (Y avg)"));
     m_axisY->setRange(0, 255);
+    m_axisY->setTitleBrush(QBrush(QColor(0xF5, 0xF0, 0xE8)));
+    m_axisY->setLabelsColor(QColor(0xF5, 0xF0, 0xE8));
+    m_axisY->setGridLineVisible(false);
 
     m_chart->addAxis(m_axisX, Qt::AlignBottom);
     m_chart->addAxis(m_axisY, Qt::AlignLeft);
 
+    // v0.3: Forward X-axis range changes as a signal (for spectrogram sync)
+    connect(m_axisX, &QValueAxis::rangeChanged, this, [this](qreal min, qreal max) {
+        emit xAxisRangeChanged(min, max);
+        updateCursorPosition();
+        updateTimeLabels();
+        updateTimeLabelPositions();
+        updateLabelItems();
+    });
+
+    // Update A/B markers when axis range changes (zoom/pan/fit)
+    connect(m_axisX, &QValueAxis::rangeChanged, this, [this](qreal, qreal) {
+        updateABMarkers();
+    });
+
     setChart(m_chart);
+
+    // Legend click to toggle series visibility (connect after series are added in rebuildSeries)
 
     m_cursorLine = new QGraphicsLineItem(m_chart);
     m_cursorLine->setZValue(CURSOR_Z_VALUE);
-    QPen cursorPen(QColor(0, 255, 255)); // cyan
+    QPen cursorPen(QColor(0xFF, 0x98, 0x1C)); // orange
     cursorPen.setWidth(2);
     cursorPen.setStyle(Qt::DashLine);
     m_cursorLine->setPen(cursorPen);
@@ -74,15 +105,54 @@ ChartPanel::ChartPanel(QWidget *parent)
     // Time label above cursor line
     m_cursorTimeBg = new QGraphicsRectItem(m_chart);
     m_cursorTimeBg->setZValue(CURSOR_Z_VALUE);
-    m_cursorTimeBg->setBrush(QBrush(QColor(30, 30, 30, 200)));
+    m_cursorTimeBg->setBrush(QBrush(QColor(60, 60, 60, 220)));
     m_cursorTimeBg->setPen(Qt::NoPen);
     m_cursorTimeBg->setVisible(false);
 
     m_cursorTimeLabel = new QGraphicsSimpleTextItem(m_chart);
     m_cursorTimeLabel->setZValue(CURSOR_Z_VALUE + 1);
     m_cursorTimeLabel->setFont(fontMono(9));
-    m_cursorTimeLabel->setBrush(QBrush(QColor(200, 220, 255)));
+    m_cursorTimeLabel->setBrush(QBrush(QColor(0xF5, 0xF0, 0xE8)));
     m_cursorTimeLabel->setVisible(false);
+
+    m_cursorDataLabel = new QGraphicsSimpleTextItem(m_chart);
+    m_cursorDataLabel->setZValue(CURSOR_Z_VALUE + 1);
+    m_cursorDataLabel->setFont(fontMono(9));
+    m_cursorDataLabel->setBrush(QBrush(QColor(0xF5, 0xF0, 0xE8)));
+    m_cursorDataLabel->setVisible(false);
+
+    // A/B region markers
+    QPen penA(QColor(0xF4, 0x43, 0x36)); // red
+    penA.setWidth(2);
+    m_lineA = new QGraphicsLineItem(m_chart);
+    m_lineA->setPen(penA);
+    m_lineA->setZValue(CURSOR_Z_VALUE - 1);
+    m_lineA->setVisible(false);
+
+    QPen penB(QColor(0x21, 0x96, 0xF3)); // blue
+    penB.setWidth(2);
+    m_lineB = new QGraphicsLineItem(m_chart);
+    m_lineB->setPen(penB);
+    m_lineB->setZValue(CURSOR_Z_VALUE - 1);
+    m_lineB->setVisible(false);
+
+    m_labelAText = new QGraphicsSimpleTextItem("A", m_chart);
+    m_labelAText->setFont(fontMono(10, QFont::Bold));
+    m_labelAText->setBrush(QBrush(QColor(0xF4, 0x43, 0x36)));
+    m_labelAText->setZValue(CURSOR_Z_VALUE);
+    m_labelAText->setVisible(false);
+
+    m_labelBText = new QGraphicsSimpleTextItem("B", m_chart);
+    m_labelBText->setFont(fontMono(10, QFont::Bold));
+    m_labelBText->setBrush(QBrush(QColor(0x21, 0x96, 0xF3)));
+    m_labelBText->setZValue(CURSOR_Z_VALUE);
+    m_labelBText->setVisible(false);
+
+    m_abHighlight = new QGraphicsRectItem(m_chart);
+    m_abHighlight->setBrush(QBrush(QColor(33, 150, 243, 25)));
+    m_abHighlight->setPen(Qt::NoPen);
+    m_abHighlight->setZValue(0);
+    m_abHighlight->setVisible(false);
 
     setContextMenuPolicy(Qt::CustomContextMenu);
     connect(this, &QWidget::customContextMenuRequested, this, [this](const QPoint &pos) {
@@ -96,6 +166,32 @@ ChartPanel::ChartPanel(QWidget *parent)
         QAction *autoYAction = menu.addAction(m_yAxisAutoRange ?
             lang("禁用 Y轴自动范围", "Disable Auto Y") :
             lang("启用 Y轴自动范围", "Enable Auto Y"));
+        menu.addSeparator();
+        qint64 cursorTime = m_cursorTimeMs;
+        QAction *addLabelAction = menu.addAction(lang("添加标签", "Add Label"));
+        // Find nearest label to cursor for undo
+        int nearestIdx = -1;
+        qint64 nearestDist = LLONG_MAX;
+        for (int i = 0; i < m_labels.size(); ++i) {
+            qint64 dist = qAbs(m_labels[i].timeMs - cursorTime);
+            if (dist < nearestDist) {
+                nearestDist = dist;
+                nearestIdx = i;
+            }
+        }
+        QAction *undoLabelAction = menu.addAction(lang("删除光标处标签", "Delete Label at Cursor"));
+        undoLabelAction->setEnabled(nearestIdx >= 0 && nearestDist < 5000);  // within 5s
+        QAction *setAAction = menu.addAction(lang("设置 A 点", "Set Point A"));
+        QAction *setBAction = menu.addAction(lang("设置 B 点", "Set Point B"));
+        QAction *clearABAction = menu.addAction(lang("清除 A/B 区域", "Clear A/B Region"));
+        clearABAction->setEnabled(isABRegionSet());
+        menu.addSeparator();
+        QAction *loopAction = menu.addAction(m_abLoop ?
+            lang("关闭循环", "Disable Loop") :
+            lang("开启循环", "Enable Loop"));
+        loopAction->setEnabled(isABRegionSet());
+        QAction *zoomABAction = menu.addAction(lang("缩放到 A-B 区域", "Zoom to A-B Region"));
+        zoomABAction->setEnabled(isABRegionSet());
         QAction *chosen = menu.exec(mapToGlobal(pos));
         if (chosen == fitAllAction) {
             fitAll();
@@ -111,6 +207,23 @@ ChartPanel::ChartPanel(QWidget *parent)
                 return;
             if (m_yAxisAutoRange)
                 updateYAxisRange();
+        } else if (chosen == addLabelAction) {
+            addLabelAtTime(cursorTime);
+        } else if (chosen == undoLabelAction) {
+            if (nearestIdx >= 0) {
+                m_labels.removeAt(nearestIdx);
+                updateLabelItems();
+            }
+        } else if (chosen == setAAction) {
+            setPointA(cursorTime);
+        } else if (chosen == setBAction) {
+            setPointB(cursorTime);
+        } else if (chosen == clearABAction) {
+            clearAB();
+        } else if (chosen == loopAction) {
+            setABLoop(!m_abLoop);
+        } else if (chosen == zoomABAction) {
+            zoomToABRegion();
         }
     });
 }
@@ -161,6 +274,19 @@ void ChartPanel::setRegionModel(RegionModel *model)
     }
 }
 
+void ChartPanel::setPolygonModel(PolygonModel *model)
+{
+    if (m_polygonModel) {
+        disconnect(m_polygonModel, nullptr, this, nullptr);
+    }
+    m_polygonModel = model;
+    if (m_polygonModel) {
+        connect(m_polygonModel, &PolygonModel::polygonsChanged,
+                this, &ChartPanel::onRegionsChanged);
+        rebuildSeries();
+    }
+}
+
 void ChartPanel::setTimelineModel(TimelineModel *model)
 {
     if (m_timelineModel) {
@@ -186,11 +312,23 @@ qint64 ChartPanel::cursorTime() const
     return m_cursorTimeMs;
 }
 
+QRectF ChartPanel::plotArea() const
+{
+    return m_chart->plotArea();
+}
+
 void ChartPanel::setDuration(qint64 durationMs)
 {
     m_durationMs = durationMs;
     if (m_durationMs > 0) {
-        m_axisX->setRange(0, m_durationMs);
+        // Bug fix: If analysis data already exists, refresh the chart to ensure
+        // the X range covers both the new duration and the data extent.
+        // This handles the case where onDurationChanged fires after onDataReplaced.
+        if (m_timelineModel && !m_timelineModel->snapshot().isEmpty()) {
+            onDataReplaced();
+        } else {
+            m_axisX->setRange(0, m_durationMs);
+        }
     }
     updateTimeLabels();
 }
@@ -222,14 +360,32 @@ void ChartPanel::onDataReplaced()
         return;
 
     AnalysisSnapshot snapshot = m_timelineModel->snapshot();
-    if (snapshot.isEmpty())
+    qDebug() << "[onDataReplaced] isEmpty:" << snapshot.isEmpty()
+             << "hasAudio:" << snapshot.hasAudio()
+             << "timestamps:" << snapshot.timestamps.size()
+             << "volume:" << snapshot.audio.volume.size()
+             << "spectrogram:" << snapshot.audio.spectrogram.size()
+             << "durationMs:" << m_durationMs;
+    // Need either timestamps (luminance) or audio data to proceed
+    if (snapshot.isEmpty() && !snapshot.hasAudio())
         return;
 
     if (m_durationMs > 0) {
-        m_axisX->setRange(0, m_durationMs);
-    } else {
+        // Bug fix: Ensure X range covers both video duration AND data extent.
+        // VLC may report a slightly different duration than the actual frame
+        // timestamps from analysis. Use the larger of the two to prevent the
+        // brightness curve from not reaching the right edge of the chart.
+        qreal dataMax = snapshot.isEmpty() ? 0 : qreal(snapshot.timestamps.last());
+        qreal xMax = qMax(qreal(m_durationMs), dataMax);
+        if (xMax < 1000) xMax = 1000;
+        m_axisX->setRange(0, xMax);
+    } else if (!snapshot.isEmpty()) {
         qreal xMax = qMax(qreal(snapshot.timestamps.last()), qreal(1000));
         m_axisX->setRange(0, xMax);
+    } else if (snapshot.hasAudio()) {
+        // Audio-only: set X-axis from audio duration
+        qint64 audioDur = snapshot.audio.durationMs();
+        m_axisX->setRange(0, qMax(audioDur, qint64(1000)));
     }
 
     // Use direct synchronous update for series data.
@@ -238,8 +394,14 @@ void ChartPanel::onDataReplaced()
     qint64 xMin = static_cast<qint64>(m_axisX->min());
     qint64 xMax = static_cast<qint64>(m_axisX->max());
 
-    for (int i = 0; i < m_seriesList.size() && i < snapshot.regionCount(); ++i) {
+    for (int i = 0; i < m_seriesList.size(); ++i) {
         QLineSeries *series = m_seriesList[i];
+        // Bug fix: When luminance data is cleared (e.g. ROI change) but audio
+        // remains, snapshot.regionCount() is 0. Clear all luminance series.
+        if (i >= snapshot.regionCount() || snapshot.isEmpty()) {
+            series->clear();
+            continue;
+        }
         QVector<QPointF> pts = snapshot.pointsForViewport(i, xMin, xMax, 5000);
         if (pts.isEmpty()) {
             series->clear();
@@ -256,6 +418,38 @@ void ChartPanel::onDataReplaced()
         }
     }
 
+    // v0.3: Update volume series
+    if (m_volumeSeries && snapshot.hasAudio()) {
+        QVector<QPointF> volPts = snapshot.audio.volumePointsForViewport(
+            xMin, xMax);
+        // 转换为 dB 刻度: dB = 20 * log10(linear)
+        qreal minDb = 0;
+        for (auto &pt : volPts) {
+            qreal linear = pt.y();
+            qreal db = (linear > 0.0001) ? 20.0 * std::log10(linear) : -80.0;
+            db = qBound(-80.0, db, 0.0);
+            pt.setY(db);
+            if (db < minDb) minDb = db;
+        }
+        m_volumeSeries->replace(volPts);
+        // 动态设置音量 Y 轴范围：顶部 0，底部为实际最低点 + 5% margin
+        if (!volPts.isEmpty()) {
+            qreal rangeBottom = qMax(minDb * 1.05, -80.0);
+            if (rangeBottom > -1.0) rangeBottom = -1.0;  // 至少 1 dB 范围
+            m_axisYVolume->setRange(rangeBottom, 0);
+        }
+    } else if (m_volumeSeries) {
+        m_volumeSeries->clear();
+    }
+
+    // Toggle Volume legend/axis visibility based on audio presence
+    if (m_volumeSeries) {
+        bool hasAudio = snapshot.hasAudio();
+        m_volumeSeries->setVisible(hasAudio);
+        if (m_axisYVolume)
+            m_axisYVolume->setVisible(hasAudio);
+    }
+
     updateYAxisRange();
     updateTimeLabels();
     updateTimeLabelPositions();
@@ -268,6 +462,14 @@ void ChartPanel::onDataCleared()
     for (auto *series : m_seriesList) {
         series->clear();
     }
+    // v0.3: Clear volume series
+    if (m_volumeSeries) {
+        m_volumeSeries->clear();
+        m_volumeSeries->setVisible(false);
+    }
+    if (m_axisYVolume)
+        m_axisYVolume->setVisible(false);
+
     if (m_durationMs > 0) {
         m_axisX->setRange(0, m_durationMs);
     } else {
@@ -359,16 +561,34 @@ void ChartPanel::rebuildSeries()
     }
     m_seriesList.clear();
 
+    // v0.3: Remove old volume series
+    if (m_volumeSeries) {
+        m_chart->removeSeries(m_volumeSeries);
+        delete m_volumeSeries;
+        m_volumeSeries = nullptr;
+    }
+
     if (!m_regionModel)
         return;
 
-    int count = m_regionModel->regionCount();
-    for (int i = 0; i < count; ++i) {
+    int rectCount = m_regionModel->regionCount();
+    int polyCount = m_polygonModel ? m_polygonModel->polygonCount() : 0;
+    int totalCount = rectCount + polyCount;
+
+    for (int i = 0; i < totalCount; ++i) {
         auto *series = new QLineSeries();
-        series->setName(QString("Region %1").arg(i + 1));
-        QPen pen(RegionModel::regionColor(i));
-        pen.setWidth(2);
-        series->setPen(pen);
+        if (i < rectCount) {
+            series->setName(QString(lang("区域 %1", "Region %1")).arg(i + 1));
+            QPen pen(RegionModel::regionColor(i));
+            pen.setWidth(2);
+            series->setPen(pen);
+        } else {
+            int pi = i - rectCount;
+            series->setName(QString(lang("多边形 %1", "Polygon %1")).arg(pi + 1));
+            QPen pen(PolygonModel::polygonColor(pi));
+            pen.setWidth(2);
+            series->setPen(pen);
+        }
 
         m_chart->addSeries(series);
         series->attachAxis(m_axisX);
@@ -376,8 +596,54 @@ void ChartPanel::rebuildSeries()
         m_seriesList.append(series);
     }
 
-    if (m_timelineModel && !m_timelineModel->snapshot().isEmpty())
-        onDataReplaced();
+    // v0.3: Create volume series
+    m_volumeSeries = new QLineSeries();
+    m_volumeSeries->setName(lang("音量", "Volume"));
+    QPen volumePen(QColor(76, 175, 80, 180));  // Green semi-transparent
+    volumePen.setWidth(1);
+    m_volumeSeries->setPen(volumePen);
+
+    if (!m_axisYVolume) {
+        m_axisYVolume = new QValueAxis();
+        m_axisYVolume->setRange(-80, 0);
+        m_axisYVolume->setTitleText(lang("音量 (dB)", "Volume (dB)"));
+        m_axisYVolume->setLabelFormat("%.0f");
+        m_axisYVolume->setLabelsVisible(true);
+        m_axisYVolume->setTitleBrush(QBrush(QColor(0xF5, 0xF0, 0xE8)));
+        m_axisYVolume->setLabelsColor(QColor(0xF5, 0xF0, 0xE8));
+        m_axisYVolume->setGridLineVisible(false);
+        m_chart->addAxis(m_axisYVolume, Qt::AlignRight);
+    }
+
+    m_chart->addSeries(m_volumeSeries);
+    m_volumeSeries->attachAxis(m_axisX);
+    m_volumeSeries->attachAxis(m_axisYVolume);
+
+    // Hide Volume legend/axis if no audio data yet
+    bool hasAudio = m_timelineModel ? m_timelineModel->snapshot().hasAudio() : false;
+    m_volumeSeries->setVisible(hasAudio);
+    if (m_axisYVolume)
+        m_axisYVolume->setVisible(hasAudio);
+
+    // Connect legend markers to toggle series visibility on click
+    // Legend text always visible; only icon color block toggles transparent/solid
+    for (QLegendMarker *marker : m_chart->legend()->markers()) {
+        QLineSeries *ls = qobject_cast<QLineSeries*>(marker->series());
+        QColor color = ls ? ls->pen().color() : QColor(0xF5, 0xF0, 0xE8);
+        connect(marker, &QLegendMarker::clicked, this, [marker, color]() {
+            bool vis = !marker->series()->isVisible();
+            marker->series()->setVisible(vis);
+            marker->setVisible(true);  // Force marker always visible
+            marker->setBrush(vis ? QBrush(color) : Qt::transparent);
+            marker->setLabelBrush(QBrush(QColor(0xF5, 0xF0, 0xE8)));
+        });
+    }
+
+    if (m_timelineModel) {
+        auto snap = m_timelineModel->snapshot();
+        if (!snap.isEmpty() || snap.hasAudio())
+            onDataReplaced();
+    }
 }
 
 /// @brief 计算时间步长：目标6-8个标签可见
@@ -476,10 +742,10 @@ void ChartPanel::updateTimeLabels()
         if (tVideo > static_cast<qint64>(visibleMax))
             break;
 
-        QString text = formatTimeMs(tReal);
+        QString text = formatTimeHMS(tReal);
         auto *item = new QGraphicsSimpleTextItem(text, m_chart);
         item->setFont(fontSans(9));
-        item->setBrush(QBrush(Qt::black));
+        item->setBrush(QBrush(QColor(0xF5, 0xF0, 0xE8)));
         item->setZValue(LABEL_Z_VALUE);
         m_timeLabelItems.append(item);
         m_labelVideoTimes.append(tVideo);
@@ -487,7 +753,7 @@ void ChartPanel::updateTimeLabels()
         // Major tick mark
         if (m_showTickMarks) {
             auto *tick = new QGraphicsLineItem(m_chart);
-            tick->setPen(QPen(QColor(120, 120, 120), 2));
+            tick->setPen(QPen(QColor(180, 180, 180), 2));
             qreal x = mapTimeToX(tVideo);
             tick->setLine(x, bottom, x, bottom + 10);
             tick->setZValue(LABEL_Z_VALUE - 1);
@@ -511,7 +777,7 @@ void ChartPanel::updateTimeLabels()
                         break;
 
                     auto *tick = new QGraphicsLineItem(m_chart);
-                    tick->setPen(QPen(QColor(180, 180, 180), 1));
+                    tick->setPen(QPen(QColor(140, 140, 140), 1));
                     qreal x = mapTimeToX(tMinorVideo);
                     tick->setLine(x, bottom, x, bottom + 5);
                     tick->setZValue(LABEL_Z_VALUE - 2);
@@ -524,16 +790,16 @@ void ChartPanel::updateTimeLabels()
     // --- Start time label at left edge (black, bold, larger) ---
     {
         qint64 startReal = static_cast<qint64>(visibleMin) + offset;
-        QString text = formatTimeMs(startReal);
+        QString text = formatTimeHMS(startReal);
         auto *item = new QGraphicsSimpleTextItem(text, m_chart);
         item->setFont(fontMono(10, QFont::Bold));
-        item->setBrush(QBrush(Qt::black));
+        item->setBrush(QBrush(QColor(0xF5, 0xF0, 0xE8)));
         item->setZValue(LABEL_Z_VALUE + 2);
         m_startTimeLabel = item;
 
         if (m_showTickMarks) {
             auto *tick = new QGraphicsLineItem(m_chart);
-            tick->setPen(QPen(QColor(80, 80, 80), 2));
+            tick->setPen(QPen(QColor(160, 160, 160), 2));
             tick->setLine(plotArea.left(), bottom, plotArea.left(), bottom + 12);
             tick->setZValue(LABEL_Z_VALUE);
             m_tickMarkItems.append(tick);
@@ -543,16 +809,16 @@ void ChartPanel::updateTimeLabels()
     // --- End time label at right edge (black, bold, larger) ---
     {
         qint64 endReal = static_cast<qint64>(visibleMax) + offset;
-        QString text = formatTimeMs(endReal);
+        QString text = formatTimeHMS(endReal);
         auto *item = new QGraphicsSimpleTextItem(text, m_chart);
         item->setFont(fontMono(10, QFont::Bold));
-        item->setBrush(QBrush(Qt::black));
+        item->setBrush(QBrush(QColor(0xF5, 0xF0, 0xE8)));
         item->setZValue(LABEL_Z_VALUE + 2);
         m_endTimeLabel = item;
 
         if (m_showTickMarks) {
             auto *tick = new QGraphicsLineItem(m_chart);
-            tick->setPen(QPen(QColor(80, 80, 80), 2));
+            tick->setPen(QPen(QColor(160, 160, 160), 2));
             tick->setLine(plotArea.right(), bottom, plotArea.right(), bottom + 12);
             tick->setZValue(LABEL_Z_VALUE);
             m_tickMarkItems.append(tick);
@@ -619,9 +885,11 @@ void ChartPanel::resizeEvent(QResizeEvent *event)
 
 void ChartPanel::fitAll()
 {
-    if (m_durationMs > 0)
-        m_axisX->setRange(0, m_durationMs);
-    else if (m_timelineModel && !m_timelineModel->snapshot().isEmpty())
+    if (m_durationMs > 0) {
+        qreal dataMax = (m_timelineModel && !m_timelineModel->snapshot().isEmpty())
+            ? qreal(m_timelineModel->snapshot().timestamps.last()) : 0;
+        m_axisX->setRange(0, qMax(qreal(m_durationMs), dataMax));
+    } else if (m_timelineModel && !m_timelineModel->snapshot().isEmpty())
         m_axisX->setRange(0, m_timelineModel->snapshot().timestamps.last());
     else
         m_axisX->setRange(0, 1000);
@@ -635,9 +903,11 @@ void ChartPanel::fitAll()
 
 void ChartPanel::fitAllX()
 {
-    if (m_durationMs > 0)
-        m_axisX->setRange(0, m_durationMs);
-    else if (m_timelineModel && !m_timelineModel->snapshot().isEmpty())
+    if (m_durationMs > 0) {
+        qreal dataMax = (m_timelineModel && !m_timelineModel->snapshot().isEmpty())
+            ? qreal(m_timelineModel->snapshot().timestamps.last()) : 0;
+        m_axisX->setRange(0, qMax(qreal(m_durationMs), dataMax));
+    } else if (m_timelineModel && !m_timelineModel->snapshot().isEmpty())
         m_axisX->setRange(0, m_timelineModel->snapshot().timestamps.last());
     else
         m_axisX->setRange(0, 1000);
@@ -649,6 +919,21 @@ void ChartPanel::fitAllX()
 }
 
 QString ChartPanel::formatTimeMs(qint64 ms)
+{
+    if (ms < 0) ms = 0;
+    int totalSeconds = static_cast<int>(ms / 1000);
+    int hours = totalSeconds / 3600;
+    int minutes = (totalSeconds % 3600) / 60;
+    int seconds = totalSeconds % 60;
+    int millis = static_cast<int>(ms % 1000);
+    return QString("%1:%2:%3.%4")
+        .arg(hours, 2, 10, QChar('0'))
+        .arg(minutes, 2, 10, QChar('0'))
+        .arg(seconds, 2, 10, QChar('0'))
+        .arg(millis, 3, 10, QChar('0'));
+}
+
+QString ChartPanel::formatTimeHMS(qint64 ms)
 {
     if (ms < 0) ms = 0;
     int totalSeconds = static_cast<int>(ms / 1000);
@@ -674,6 +959,7 @@ void ChartPanel::updateCursorPosition()
     if (x + 0.5 < plotArea.left() || x - 0.5 > plotArea.right() || !m_axisX) {
         m_cursorLine->setVisible(false);
         if (m_cursorTimeLabel) m_cursorTimeLabel->setVisible(false);
+        if (m_cursorDataLabel) m_cursorDataLabel->setVisible(false);
         if (m_cursorTimeBg) m_cursorTimeBg->setVisible(false);
         return;
     }
@@ -681,24 +967,71 @@ void ChartPanel::updateCursorPosition()
     m_cursorLine->setVisible(true);
     m_cursorLine->setLine(x, plotArea.top(), x, plotArea.bottom());
 
-    // Show time label above cursor line
+    // Show two-line info label above cursor line
     if (m_cursorTimeLabel) {
+        // Line 1: time
         qint64 displayTime = m_cursorTimeMs + m_startTimeOfDayMs;
         m_cursorTimeLabel->setText(formatTimeMs(displayTime));
-        QRectF textRect = m_cursorTimeLabel->boundingRect();
-        qreal labelX = x - textRect.width() / 2;
-        qreal labelY = plotArea.top() - textRect.height() - 8;
-
-        // Clamp to plot area bounds
-        labelX = qBound(plotArea.left(), labelX, plotArea.right() - textRect.width());
-        labelY = qMax(labelY, plotArea.top() - textRect.height() - 12);
-
-        m_cursorTimeLabel->setPos(labelX, labelY);
         m_cursorTimeLabel->setVisible(true);
 
-        // Background rect
+        // Line 2: region luminance + volume
+        bool hasData = false;
+        if (m_timelineModel) {
+            AnalysisSnapshot snap = m_timelineModel->snapshot();
+            if (!snap.isEmpty()) {
+                int idx = snap.indexAtTime(m_cursorTimeMs);
+                if (idx >= 0 && idx < snap.pointCount()) {
+                    QStringList parts;
+                    int rectCount = m_regionModel ? m_regionModel->regionCount() : 0;
+                    for (int i = 0; i < snap.regionCount(); ++i) {
+                        if (i >= snap.values.size() || snap.values[i].isEmpty() || idx >= snap.values[i].size())
+                            continue;
+                        qreal val = snap.values[i][idx];
+                        if (i < rectCount)
+                            parts << QString("R%1:%2").arg(i + 1).arg(static_cast<int>(val));
+                        else
+                            parts << QString("P%1:%2").arg(i - rectCount + 1).arg(static_cast<int>(val));
+                    }
+                    // Append volume in dB
+                    if (snap.hasAudio()) {
+                        int volIdx = static_cast<int>(m_cursorTimeMs / snap.audio.safeTimeResolutionMs());
+                        if (volIdx >= 0 && volIdx < snap.audio.volume.size()) {
+                            qreal linear = snap.audio.volume[volIdx];
+                            qreal db = (linear > 0.0001) ? 20.0 * std::log10(linear) : -80.0;
+                            parts << QString("%1dB").arg(static_cast<int>(qBound(-80.0, db, 0.0)));
+                        }
+                    }
+                    if (!parts.isEmpty()) {
+                        m_cursorDataLabel->setText(parts.join("  "));
+                        m_cursorDataLabel->setVisible(true);
+                        hasData = true;
+                    }
+                }
+            }
+        }
+        if (!hasData)
+            m_cursorDataLabel->setVisible(false);
+
+        QRectF timeRect = m_cursorTimeLabel->boundingRect();
+        QRectF dataRect = hasData ? m_cursorDataLabel->boundingRect() : QRectF();
+        qreal maxW = hasData ? qMax(timeRect.width(), dataRect.width()) : timeRect.width();
+        qreal totalH = hasData ? (timeRect.height() + dataRect.height()) : timeRect.height();
+
+        // Left-aligned at cursor x, above plot area
+        qreal labelX = x;
+        qreal labelY = plotArea.top() - totalH - 10;
+
+        // Clamp to plot area bounds
+        labelX = qBound(plotArea.left(), labelX, plotArea.right() - maxW);
+        labelY = qMax(labelY, plotArea.top() - totalH - 14);
+
+        m_cursorTimeLabel->setPos(labelX, labelY);
+        if (hasData)
+            m_cursorDataLabel->setPos(labelX, labelY + timeRect.height());
+
+        // Background rect covering both lines
         if (m_cursorTimeBg) {
-            QRectF bgRect(labelX - 3, labelY - 1, textRect.width() + 6, textRect.height() + 2);
+            QRectF bgRect(labelX - 3, labelY - 1, maxW + 6, totalH + 2);
             m_cursorTimeBg->setRect(bgRect);
             m_cursorTimeBg->setVisible(true);
         }
@@ -967,4 +1300,99 @@ void ChartPanel::mouseReleaseEvent(QMouseEvent *event)
         unsetCursor();
     }
     QChartView::mouseReleaseEvent(event);
+}
+
+// =============================================================================
+// A/B Region Playback
+// =============================================================================
+
+void ChartPanel::setPointA(qint64 timeMs)
+{
+    m_abPointA = timeMs;
+    if (m_abPointB >= 0 && m_abPointA > m_abPointB)
+        qSwap(m_abPointA, m_abPointB);
+    if (isABRegionSet() && !m_abLoop) {
+        m_abLoop = true;
+    }
+    updateABMarkers();
+    emit abRegionChanged();
+    if (isABRegionSet())
+        zoomToABRegion();
+}
+
+void ChartPanel::setPointB(qint64 timeMs)
+{
+    m_abPointB = timeMs;
+    if (m_abPointA >= 0 && m_abPointA > m_abPointB)
+        qSwap(m_abPointA, m_abPointB);
+    if (isABRegionSet() && !m_abLoop) {
+        m_abLoop = true;
+    }
+    updateABMarkers();
+    emit abRegionChanged();
+    if (isABRegionSet())
+        zoomToABRegion();
+}
+
+void ChartPanel::clearAB()
+{
+    m_abPointA = -1;
+    m_abPointB = -1;
+    m_abLoop = false;
+    updateABMarkers();
+    emit abRegionChanged();
+    fitAllX();
+}
+
+void ChartPanel::setABLoop(bool loop)
+{
+    m_abLoop = loop;
+    updateABMarkers();
+    emit abRegionChanged();
+}
+
+void ChartPanel::zoomToABRegion()
+{
+    if (!isABRegionSet())
+        return;
+    qint64 a = qMin(m_abPointA, m_abPointB);
+    qint64 b = qMax(m_abPointA, m_abPointB);
+    qint64 margin = qMax<qint64>((b - a) / 20, 100);
+    m_axisX->setRange(a - margin, b + margin);
+    updateTimeLabels();
+    updateTimeLabelPositions();
+    updateCursorPosition();
+    updateYAxisRange();
+    updateLabelItems();
+}
+
+void ChartPanel::updateABMarkers()
+{
+    QRectF pa = m_chart->plotArea();
+    bool hasA = m_abPointA >= 0;
+    bool hasB = m_abPointB >= 0;
+
+    m_lineA->setVisible(hasA);
+    m_labelAText->setVisible(hasA);
+    if (hasA) {
+        qreal x = mapTimeToX(m_abPointA);
+        m_lineA->setLine(x, pa.top(), x, pa.bottom());
+        m_labelAText->setPos(x + 3, pa.top() + 2);
+    }
+
+    m_lineB->setVisible(hasB);
+    m_labelBText->setVisible(hasB);
+    if (hasB) {
+        qreal x = mapTimeToX(m_abPointB);
+        m_lineB->setLine(x, pa.top(), x, pa.bottom());
+        m_labelBText->setPos(x + 3, pa.top() + 2);
+    }
+
+    bool hasRegion = isABRegionSet();
+    m_abHighlight->setVisible(hasRegion);
+    if (hasRegion) {
+        qreal xA = mapTimeToX(m_abPointA);
+        qreal xB = mapTimeToX(m_abPointB);
+        m_abHighlight->setRect(qMin(xA, xB), pa.top(), qAbs(xB - xA), pa.height());
+    }
 }

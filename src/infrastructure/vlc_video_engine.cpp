@@ -3,7 +3,7 @@
  * @brief libVLC 视频引擎实现：加载/播放/暂停/跳转/帧回调
  * @author Huang Jingyun, Liu xinghua, Huang Wenhua
  * @date 2026-05-31
- * @version 0.2
+ * @version 0.3
  *
  * Copyright 2026 Huang Jingyun/Liu xinghua/Huang Wenhua. All rights reserved.
  * Licensed under the Apache License, Version 2.0
@@ -361,6 +361,9 @@ void VlcVideoEngine::seek(qint64 timeMs)
     libvlc_media_player_set_time(m_mediaPlayer,
                                  static_cast<libvlc_time_t>(timeMs));
 
+    // Immediately emit positionChanged so cursor updates without waiting for poll
+    emit positionChanged(timeMs);
+
     // Paused: VLC needs a brief play→pause cycle to display the seeked frame.
     if (s == PlaybackState::Paused) {
         libvlc_media_player_play(m_mediaPlayer);
@@ -453,6 +456,14 @@ void VlcVideoEngine::onPollPosition()
     if (dur > 0 && dur != m_lastReportedDuration) {
         m_lastReportedDuration = dur;
         emit durationChanged(dur);
+    }
+
+    // v0.3: Detect "near end" as fallback for Ended state
+    // Some VLC versions skip libvlc_Ended and go directly to Stopped
+    if (dur > 0 && t > 0 && t >= dur - 200) {
+        m_pollTimer->stop();
+        emit stateChanged(PlaybackState::Ended);
+        return;
     }
 }
 
