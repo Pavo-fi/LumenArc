@@ -166,6 +166,9 @@ private:
     void updateABMarkers();
     void zoomToABRegion();
 
+    // Guard flag: prevents onDataReplaced() from calling rebuildSeries() recursively
+    bool m_rebuilding = false;
+
     static constexpr qreal CURSOR_Z_VALUE = 100.0;
     static constexpr qreal LABEL_Z_VALUE = 50.0;
     static constexpr qreal USER_LABEL_Z_VALUE = 75.0;

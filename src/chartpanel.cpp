@@ -366,7 +366,6 @@ void ChartPanel::onDataReplaced()
         return;
 
     // If series list is empty, a deferred rebuildSeries() will handle everything.
-    // Don't try to update non-existent series.
     if (m_seriesList.isEmpty())
         return;
 
@@ -380,6 +379,15 @@ void ChartPanel::onDataReplaced()
     // Need either timestamps (luminance) or audio data to proceed
     if (snapshot.isEmpty() && !snapshot.hasAudio())
         return;
+
+    // When dataEntries count doesn't match series count, series colors may be
+    // stale (e.g., after analysis completes with new data). Rebuild series to
+    // refresh colors, then return (rebuildSeries calls onDataReplaced internally).
+    if (!m_rebuilding && !snapshot.dataEntries.isEmpty()
+        && snapshot.dataEntries.size() != m_seriesList.size()) {
+        rebuildSeries();
+        return;
+    }
 
     if (m_durationMs > 0) {
         // Bug fix: Ensure X range covers both video duration AND data extent.
@@ -566,6 +574,8 @@ void ChartPanel::updateLabelItems()
 
 void ChartPanel::rebuildSeries()
 {
+    m_rebuilding = true;
+
     for (auto *series : m_seriesList) {
         m_chart->removeSeries(series);
         delete series;
@@ -684,6 +694,8 @@ void ChartPanel::rebuildSeries()
         if (!snap.isEmpty() || snap.hasAudio())
             onDataReplaced();
     }
+
+    m_rebuilding = false;
 }
 
 /// @brief 计算时间步长：目标6-8个标签可见
