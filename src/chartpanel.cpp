@@ -351,12 +351,23 @@ void ChartPanel::setAutoYRange(bool enabled)
 
 void ChartPanel::onRegionsChanged()
 {
-    rebuildSeries();
+    // Defer rebuildSeries to after the current signal chain completes.
+    // This prevents rebuildSeries from running with unstable data state
+    // (e.g., after removeRegionData shifts values[] but before all signals settle).
+    QTimer::singleShot(0, this, [this]() {
+        if (m_regionModel)
+            rebuildSeries();
+    });
 }
 
 void ChartPanel::onDataReplaced()
 {
     if (!m_timelineModel)
+        return;
+
+    // If series list is empty, a deferred rebuildSeries() will handle everything.
+    // Don't try to update non-existent series.
+    if (m_seriesList.isEmpty())
         return;
 
     AnalysisSnapshot snapshot = m_timelineModel->snapshot();
