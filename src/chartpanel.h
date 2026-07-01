@@ -166,6 +166,14 @@ private:
     void updateABMarkers();
     void zoomToABRegion();
 
+    // Mapping from series index to data index (by roiId matching)
+    struct SeriesMapping {
+        DataEntry::Type type = DataEntry::Rect;
+        int roiId = -1;
+        int dataIndex = -1;  // index into snapshot.values[], -1 = no data
+    };
+    QVector<SeriesMapping> m_seriesMapping;
+
     // Guard flag: prevents onDataReplaced() from calling rebuildSeries() recursively
     bool m_rebuilding = false;
 

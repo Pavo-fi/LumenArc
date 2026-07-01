@@ -413,13 +413,14 @@ void ChartPanel::onDataReplaced()
 
     for (int i = 0; i < m_seriesList.size(); ++i) {
         QLineSeries *series = m_seriesList[i];
-        // Bug fix: When luminance data is cleared (e.g. ROI change) but audio
-        // remains, snapshot.regionCount() is 0. Clear all luminance series.
-        if (i >= snapshot.regionCount() || snapshot.isEmpty()) {
+        // Use dataIndex from SeriesMapping to access correct data entry
+        // (series order may differ from values[] order after ROI deletion/addition)
+        int dataIdx = (i < m_seriesMapping.size()) ? m_seriesMapping[i].dataIndex : -1;
+        if (dataIdx < 0 || dataIdx >= snapshot.regionCount() || snapshot.isEmpty()) {
             series->clear();
             continue;
         }
-        QVector<QPointF> pts = snapshot.pointsForViewport(i, xMin, xMax, 5000);
+        QVector<QPointF> pts = snapshot.pointsForViewport(dataIdx, xMin, xMax, 5000);
         if (pts.isEmpty()) {
             series->clear();
         } else {
@@ -603,7 +604,8 @@ void ChartPanel::rebuildSeries()
     }
 
     // Build merged entries: ROI model as skeleton, dataEntries matched by roiId
-    QVector<DataEntry> mergedEntries;
+    // Each entry records the index into snapshot.values[] for correct data mapping
+    m_seriesMapping.clear();
     for (int i = 0; i < rectCount; ++i) {
         int roiId = m_regionModel->roiIdAt(i);
         int dataIdx = -1;
@@ -615,10 +617,7 @@ void ChartPanel::rebuildSeries()
                 }
             }
         }
-        if (dataIdx >= 0)
-            mergedEntries.append(snap.dataEntries[dataIdx]);
-        else
-            mergedEntries.append({DataEntry::Rect, roiId});
+        m_seriesMapping.append({DataEntry::Rect, roiId, dataIdx});
     }
     for (int i = 0; i < polyCount; ++i) {
         int roiId = m_polygonModel->roiIdAt(i);
@@ -631,17 +630,13 @@ void ChartPanel::rebuildSeries()
                 }
             }
         }
-        if (dataIdx >= 0)
-            mergedEntries.append(snap.dataEntries[dataIdx]);
-        else
-            mergedEntries.append({DataEntry::Polygon, roiId});
+        m_seriesMapping.append({DataEntry::Polygon, roiId, dataIdx});
     }
 
     int rectCounter = 0, polyCounter = 0;
     for (int i = 0; i < totalCount; ++i) {
         auto *series = new QLineSeries();
-        const DataEntry &entry = mergedEntries[i];
-        if (entry.type == DataEntry::Rect) {
+        if (m_seriesMapping[i].type == DataEntry::Rect) {
             series->setName(QString(lang("区域 %1", "Region %1")).arg(rectCounter + 1));
             QPen pen(RegionModel::regionColor(rectCounter));
             pen.setWidth(2);
