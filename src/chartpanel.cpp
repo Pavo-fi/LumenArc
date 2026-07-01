@@ -597,7 +597,7 @@ void ChartPanel::rebuildSeries()
     int rectCounter = 0, polyCounter = 0;
     for (int i = 0; i < totalCount; ++i) {
         auto *series = new QLineSeries();
-        if (hasDataEntries) {
+        if (hasDataEntries && i < snap.dataEntries.size()) {
             // Use DataEntry metadata for correct type/color
             const DataEntry &entry = snap.dataEntries[i];
             if (entry.type == DataEntry::Rect) {
