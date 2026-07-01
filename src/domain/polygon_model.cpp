@@ -48,6 +48,7 @@ void PolygonModel::clearPolygons()
     QWriteLocker lock(&m_lock);
     m_polygons.clear();
     m_roiIds.clear();
+    m_nextRoiId = 1;
     lock.unlock();
     emit polygonsChanged();
 }

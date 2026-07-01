@@ -52,6 +52,7 @@ void RegionModel::clearRegions()
     QWriteLocker lock(&m_lock);
     m_regions.clear();
     m_roiIds.clear();
+    m_nextRoiId = 1;
     lock.unlock();
     emit regionsChanged();
 }

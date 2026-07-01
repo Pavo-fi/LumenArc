@@ -2006,6 +2006,7 @@ void MainWindow::onAnalysisFinished(const AnalysisSnapshot &snapshot)
         AudioData audioToUse = snapshot.hasAudio() ? snapshot.audio : existing.audio;
         m_timelineModel->setData(QVector<qint64>(snapshot.timestamps),
                                  QVector<QVector<qreal>>(snapshot.values),
+                                 QVector<DataEntry>(snapshot.dataEntries),
                                  audioToUse);
         // Update spectrogram only if new audio arrived; otherwise keep existing
         if (snapshot.hasAudio() && m_spectrogramEnhanced) {
