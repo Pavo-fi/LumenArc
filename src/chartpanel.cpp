@@ -588,21 +588,24 @@ void ChartPanel::rebuildSeries()
         totalCount = rectCount + polyCount;
     }
 
+    int rectCounter = 0, polyCounter = 0;
     for (int i = 0; i < totalCount; ++i) {
         auto *series = new QLineSeries();
         if (hasDataEntries) {
             // Use DataEntry metadata for correct type/color
             const DataEntry &entry = snap.dataEntries[i];
             if (entry.type == DataEntry::Rect) {
-                series->setName(QString(lang("区域 %1", "Region %1")).arg(i + 1));
-                QPen pen(RegionModel::regionColor(i));
+                series->setName(QString(lang("区域 %1", "Region %1")).arg(rectCounter + 1));
+                QPen pen(RegionModel::regionColor(rectCounter));
                 pen.setWidth(2);
                 series->setPen(pen);
+                rectCounter++;
             } else {
-                series->setName(QString(lang("多边形 %1", "Polygon %1")).arg(i + 1));
-                QPen pen(PolygonModel::polygonColor(i));
+                series->setName(QString(lang("多边形 %1", "Polygon %1")).arg(polyCounter + 1));
+                QPen pen(PolygonModel::polygonColor(polyCounter));
                 pen.setWidth(2);
                 series->setPen(pen);
+                polyCounter++;
             }
         } else {
             // No data entries: use ROI model counts
@@ -1013,6 +1016,7 @@ void ChartPanel::updateCursorPosition()
                 int idx = snap.indexAtTime(m_cursorTimeMs);
                 if (idx >= 0 && idx < snap.pointCount()) {
                     QStringList parts;
+                    int rectLabel = 0, polyLabel = 0;
                     for (int i = 0; i < snap.regionCount(); ++i) {
                         if (i >= snap.values.size() || snap.values[i].isEmpty() || idx >= snap.values[i].size())
                             continue;
@@ -1020,15 +1024,15 @@ void ChartPanel::updateCursorPosition()
                         // Use DataEntry for R/P labeling if available
                         if (i < snap.dataEntries.size()) {
                             if (snap.dataEntries[i].type == DataEntry::Rect)
-                                parts << QString("R%1:%2").arg(i + 1).arg(static_cast<int>(val));
+                                parts << QString("R%1:%2").arg(++rectLabel).arg(static_cast<int>(val));
                             else
-                                parts << QString("P%1:%2").arg(i + 1).arg(static_cast<int>(val));
+                                parts << QString("P%1:%2").arg(++polyLabel).arg(static_cast<int>(val));
                         } else {
                             int rectCount = m_regionModel ? m_regionModel->regionCount() : 0;
                             if (i < rectCount)
-                                parts << QString("R%1:%2").arg(i + 1).arg(static_cast<int>(val));
+                                parts << QString("R%1:%2").arg(++rectLabel).arg(static_cast<int>(val));
                             else
-                                parts << QString("P%1:%2").arg(i - rectCount + 1).arg(static_cast<int>(val));
+                                parts << QString("P%1:%2").arg(++polyLabel).arg(static_cast<int>(val));
                         }
                     }
                     // Append volume in dB

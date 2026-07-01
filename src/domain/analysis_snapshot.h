@@ -285,11 +285,21 @@ struct AnalysisSnapshot
 
         // Header: raw ms + formatted time + one column per ROI + volume
         out << "Time(ms),Time";
-        for (int r = 0; r < regions.size(); ++r) {
-            const QRect &rc = regions[r];
-            out << QString(",R%1_Brightness(x%2_y%3_%4x%5)")
-                       .arg(r + 1).arg(rc.x()).arg(rc.y())
-                       .arg(rc.width()).arg(rc.height());
+        int rectIdx = 0, polyIdx = 0;
+        for (int r = 0; r < values.size(); ++r) {
+            if (r < dataEntries.size() && dataEntries[r].type == DataEntry::Polygon) {
+                out << QString(",P%1_Brightness").arg(++polyIdx);
+            } else {
+                if (rectIdx < regions.size()) {
+                    const QRect &rc = regions[rectIdx];
+                    out << QString(",R%1_Brightness(x%2_y%3_%4x%5)")
+                               .arg(rectIdx + 1).arg(rc.x()).arg(rc.y())
+                               .arg(rc.width()).arg(rc.height());
+                } else {
+                    out << QString(",R%1_Brightness").arg(rectIdx + 1);
+                }
+                rectIdx++;
+            }
         }
         if (hasAudio())
             out << ",Volume";
