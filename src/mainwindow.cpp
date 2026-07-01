@@ -1390,6 +1390,8 @@ void MainWindow::openVideoFile(const QString &filePath)
 
         // No saved state, clear data and check for .vla cache
         m_regionModel->clearRegions();
+        m_polygonModel->clearPolygons();
+        m_guideLineModel->clearLines();
         m_timelineModel->clearData();
         if (m_spectrogramEnhanced)
             m_spectrogramEnhanced->clear();

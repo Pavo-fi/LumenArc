@@ -639,13 +639,13 @@ void ChartPanel::rebuildSeries()
         if (m_seriesMapping[i].type == DataEntry::Rect) {
             series->setName(QString(lang("区域 %1", "Region %1")).arg(rectCounter + 1));
             QPen pen(RegionModel::regionColor(rectCounter));
-            pen.setWidth(2);
+            pen.setWidth(1);
             series->setPen(pen);
             rectCounter++;
         } else {
             series->setName(QString(lang("多边形 %1", "Polygon %1")).arg(polyCounter + 1));
             QPen pen(PolygonModel::polygonColor(polyCounter));
-            pen.setWidth(2);
+            pen.setWidth(1);
             series->setPen(pen);
             polyCounter++;
         }
