@@ -380,11 +380,9 @@ void ChartPanel::onDataReplaced()
     if (snapshot.isEmpty() && !snapshot.hasAudio())
         return;
 
-    // When dataEntries count doesn't match series count, series colors may be
-    // stale (e.g., after analysis completes with new data). Rebuild series to
-    // refresh colors, then return (rebuildSeries calls onDataReplaced internally).
-    if (!m_rebuilding && !snapshot.dataEntries.isEmpty()
-        && snapshot.dataEntries.size() != m_seriesList.size()) {
+    // Always rebuild when dataEntries exist to ensure series names/colors
+    // match the latest data. The m_rebuilding flag prevents recursion.
+    if (!m_rebuilding && !snapshot.dataEntries.isEmpty()) {
         rebuildSeries();
         return;
     }
@@ -604,40 +602,57 @@ void ChartPanel::rebuildSeries()
         hasDataEntries = !snap.dataEntries.isEmpty();
     }
 
+    // Build merged entries: ROI model as skeleton, dataEntries matched by roiId
+    QVector<DataEntry> mergedEntries;
+    for (int i = 0; i < rectCount; ++i) {
+        int roiId = m_regionModel->roiIdAt(i);
+        int dataIdx = -1;
+        if (hasDataEntries) {
+            for (int j = 0; j < snap.dataEntries.size(); ++j) {
+                if (snap.dataEntries[j].type == DataEntry::Rect && snap.dataEntries[j].roiId == roiId) {
+                    dataIdx = j;
+                    break;
+                }
+            }
+        }
+        if (dataIdx >= 0)
+            mergedEntries.append(snap.dataEntries[dataIdx]);
+        else
+            mergedEntries.append({DataEntry::Rect, roiId});
+    }
+    for (int i = 0; i < polyCount; ++i) {
+        int roiId = m_polygonModel->roiIdAt(i);
+        int dataIdx = -1;
+        if (hasDataEntries) {
+            for (int j = 0; j < snap.dataEntries.size(); ++j) {
+                if (snap.dataEntries[j].type == DataEntry::Polygon && snap.dataEntries[j].roiId == roiId) {
+                    dataIdx = j;
+                    break;
+                }
+            }
+        }
+        if (dataIdx >= 0)
+            mergedEntries.append(snap.dataEntries[dataIdx]);
+        else
+            mergedEntries.append({DataEntry::Polygon, roiId});
+    }
+
     int rectCounter = 0, polyCounter = 0;
     for (int i = 0; i < totalCount; ++i) {
         auto *series = new QLineSeries();
-        if (hasDataEntries && i < snap.dataEntries.size()) {
-            // Use DataEntry metadata for correct type/color
-            const DataEntry &entry = snap.dataEntries[i];
-            if (entry.type == DataEntry::Rect) {
-                series->setName(QString(lang("区域 %1", "Region %1")).arg(rectCounter + 1));
-                QPen pen(RegionModel::regionColor(rectCounter));
-                pen.setWidth(2);
-                series->setPen(pen);
-                rectCounter++;
-            } else {
-                series->setName(QString(lang("多边形 %1", "Polygon %1")).arg(polyCounter + 1));
-                QPen pen(PolygonModel::polygonColor(polyCounter));
-                pen.setWidth(2);
-                series->setPen(pen);
-                polyCounter++;
-            }
+        const DataEntry &entry = mergedEntries[i];
+        if (entry.type == DataEntry::Rect) {
+            series->setName(QString(lang("区域 %1", "Region %1")).arg(rectCounter + 1));
+            QPen pen(RegionModel::regionColor(rectCounter));
+            pen.setWidth(2);
+            series->setPen(pen);
+            rectCounter++;
         } else {
-            // No data entries: use ROI model counts
-            int rectCount = m_regionModel->regionCount();
-            if (i < rectCount) {
-                series->setName(QString(lang("区域 %1", "Region %1")).arg(i + 1));
-                QPen pen(RegionModel::regionColor(i));
-                pen.setWidth(2);
-                series->setPen(pen);
-            } else {
-                int pi = i - rectCount;
-                series->setName(QString(lang("多边形 %1", "Polygon %1")).arg(pi + 1));
-                QPen pen(PolygonModel::polygonColor(pi));
-                pen.setWidth(2);
-                series->setPen(pen);
-            }
+            series->setName(QString(lang("多边形 %1", "Polygon %1")).arg(polyCounter + 1));
+            QPen pen(PolygonModel::polygonColor(polyCounter));
+            pen.setWidth(2);
+            series->setPen(pen);
+            polyCounter++;
         }
 
         m_chart->addSeries(series);
