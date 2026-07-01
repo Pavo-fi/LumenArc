@@ -1047,3 +1047,46 @@ cmake -B build -S . -G "Visual Studio 17 2022" -A x64
 cmake --build build --config Release
 → LumenArc.exe 编译成功，0 错误
 ```
+
+---
+
+## 2026-07-01：v0.5 DataEntry 数据索引重构 + 交互优化
+
+### 一、DataEntry 元数据系统
+
+**问题**：`values[]` 数组用位置索引映射 ROI，删除/新增 ROI 后索引错位，导致曲线颜色混乱、数据错位。
+
+**方案**：引入 `DataEntry{type, roiId}` 元数据，通过 roiId 精确匹配 ROI 和数据。
+
+| 文件 | 变更 |
+|------|------|
+| `region_model.h/cpp` | 自增 roiId 计数器 + `roiIdAt()` + `findIndexByRoiId()` |
+| `polygon_model.h/cpp` | 同上 |
+| `analysis_snapshot.h` | 新增 `DataEntry` 结构体 + `dataEntries` 成员 |
+| `timeline_model.h/cpp` | 新增 `removeRegionDataByRoiId()` + 4 参数 `setData` |
+| `python_analysis_engine.h/cpp` | 传递 roiId 到 JSON + 构建 dataEntries |
+| `analyze_video.py` | 透传 roi_id |
+| `chartpanel.h/cpp` | SeriesMapping + roiId 匹配合并策略 |
+| `mainwindow.cpp` | polygonRemoved/polygonAdjustmentFinished 连接 |
+
+### 二、ChartPanel SeriesMapping
+
+**问题**：`rebuildSeries()` 的 `mergedEntries` 按 model 顺序排列，但 `values[]` 按旧 dataEntries 顺序排列，导致新画的矩形"抢"了多边形的数据。
+
+**方案**：`SeriesMapping` 结构体记录每个 series 对应的 `dataIndex`（在 values[] 中的正确位置），`onDataReplaced()` 用 `dataIndex` 访问数据。
+
+### 三、交互优化
+
+| 功能 | 说明 |
+|------|------|
+| 曲线线宽 | 从 2 减为 1（减细 30%） |
+| 切换视频清除 | openVideoFile 无缓存路径添加 clearPolygons/clearLines |
+| 快捷键速查 | 帮助菜单 → 25% 透明弹窗，深色主题表格布局 |
+| 模式悬浮提示 | 多边形/辅助线按钮 tooltip 显示详细操作说明 |
+
+### 四、已知遗留
+
+| 项目 | 说明 |
+|------|------|
+| cursor tooltip 索引 | `updateCursorPosition` 仍用 `snap.values[i]` 直接访问，可能与 series 顺序不一致 |
+| RegionShape 统一类型 | rect/polygon 仍由独立模型管理，未统一 |

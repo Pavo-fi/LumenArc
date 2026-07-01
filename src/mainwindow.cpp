@@ -68,6 +68,10 @@
 #include <QPainter>
 #include <QPropertyAnimation>
 #include <QEasingCurve>
+#include <QDialog>
+#include <QTableWidget>
+#include <QHeaderView>
+#include <QLabel>
 
 /// @brief 构造主窗口：初始化引擎/组件/连接信号槽
 MainWindow::MainWindow(QWidget *parent)
@@ -532,50 +536,76 @@ void MainWindow::createMenus()
 
     helpMenu->addSeparator();
     helpMenu->addAction(lang("快捷键速查", "Keyboard Shortcuts"), this, [this]() {
-        QString shortcuts = lang(
-            "播放/暂停    �格格 / K\n"
-            "前进一帧    →\n"
-            "后退一帧    ←\n"
-            "音量增大    ↑\n"
-            "音量减小    ↓\n"
-            "加速一档    C / L\n"
-            "减速一档    X / J\n"
-            "恢复 1x    Z\n"
-            "添加标签    N\n"
-            "设置 A 点    A\n"
-            "设置 B 点    B\n"
-            "切换 A/B 循环    L\n"
-            "删除选中 ROI    Delete\n"
-            "打开视频    Ctrl+O\n"
-            "保存分析结果    Ctrl+S\n"
-            "关闭放大镜    Esc\n"
-            "切换多边形模式    P\n"
-            "切换辅助线模式    G",
-            "Play/Pause    Space / K\n"
-            "Next Frame    →\n"
-            "Prev Frame    ←\n"
-            "Volume Up    ↑\n"
-            "Volume Down    ↓\n"
-            "Speed Up    C / L\n"
-            "Slow Down    X / J\n"
-            "Reset 1x    Z\n"
-            "Add Label    N\n"
-            "Set A Point    A\n"
-            "Set B Point    B\n"
-            "Toggle A/B Loop    L\n"
-            "Delete ROI    Delete\n"
-            "Open Video    Ctrl+O\n"
-            "Save Analysis    Ctrl+S\n"
-            "Close Magnifier    Esc\n"
-            "Polygon Mode    P\n"
-            "Guide Line Mode    G"
-        );
-        QMessageBox *dlg = new QMessageBox(this);
+        struct Shortcut { QString key; QString desc; };
+        QVector<Shortcut> shortcuts;
+        if (g_language == LangChinese) {
+            shortcuts = {
+                {"Space / K", "播放 / 暂停"}, {"← / →", "后退 / 前进一帧"},
+                {"↑ / ↓", "音量增大 / 减小"}, {"C / L", "加速一档"}, {"X / J", "减速一档"},
+                {"Z", "恢复 1x 倍速"}, {"N", "在当前位置添加标签"},
+                {"A", "设置 A 点"}, {"B", "设置 B 点"}, {"L", "切换 A/B 循环"},
+                {"P", "进入多边形模式"}, {"G", "进入辅助线模式"},
+                {"Delete", "删除选中的 ROI / 辅助线"}, {"Esc", "关闭放大镜 / 退出当前模式"},
+                {"Ctrl+O", "打开视频文件"}, {"Ctrl+S", "保存分析结果"},
+            };
+        } else {
+            shortcuts = {
+                {"Space / K", "Play / Pause"}, {"← / →", "Prev / Next Frame"},
+                {"↑ / ↓", "Volume Up / Down"}, {"C / L", "Speed Up"}, {"X / J", "Slow Down"},
+                {"Z", "Reset to 1x"}, {"N", "Add Label at Current Position"},
+                {"A", "Set A Point"}, {"B", "Set B Point"}, {"L", "Toggle A/B Loop"},
+                {"P", "Enter Polygon Mode"}, {"G", "Enter Guide Line Mode"},
+                {"Delete", "Delete Selected ROI / Guide Line"}, {"Esc", "Close Magnifier / Exit Mode"},
+                {"Ctrl+O", "Open Video"}, {"Ctrl+S", "Save Analysis"},
+            };
+        }
+
+        QDialog *dlg = new QDialog(this);
         dlg->setWindowTitle(lang("快捷键速查", "Keyboard Shortcuts"));
-        dlg->setText(shortcuts);
-        dlg->setIcon(QMessageBox::Information);
-        dlg->setStandardButtons(QMessageBox::Ok);
         dlg->setWindowOpacity(0.75);
+        dlg->setFixedSize(420, 520);
+        dlg->setStyleSheet("QDialog { background: #1e1e2e; }");
+
+        QVBoxLayout *layout = new QVBoxLayout(dlg);
+        layout->setContentsMargins(16, 16, 16, 16);
+        layout->setSpacing(8);
+
+        QLabel *title = new QLabel(lang("⌨ 快捷键速查", "⌨ Keyboard Shortcuts"));
+        title->setStyleSheet("color: #cdd6f4; font-size: 15px; font-weight: bold; padding: 4px 0;");
+        layout->addWidget(title);
+
+        QTableWidget *table = new QTableWidget(shortcuts.size(), 2, dlg);
+        table->horizontalHeader()->setVisible(false);
+        table->verticalHeader()->setVisible(false);
+        table->setShowGrid(false);
+        table->setEditTriggers(QAbstractItemView::NoEditTriggers);
+        table->setSelectionMode(QAbstractItemView::NoSelection);
+        table->setFocusPolicy(Qt::NoFocus);
+        table->horizontalHeader()->setSectionResizeMode(0, QHeaderView::ResizeToContents);
+        table->horizontalHeader()->setSectionResizeMode(1, QHeaderView::Stretch);
+        table->setColumnWidth(0, 130);
+        table->setStyleSheet(
+            "QTableWidget { background: #1e1e2e; border: none; color: #cdd6f4; font-size: 12px; }"
+            "QTableWidget::item { padding: 4px 8px; border-bottom: 1px solid #313244; }"
+            "QHeaderView::section { background: #1e1e2e; border: none; }"
+        );
+        for (int i = 0; i < shortcuts.size(); ++i) {
+            QTableWidgetItem *keyItem = new QTableWidgetItem(shortcuts[i].key);
+            keyItem->setForeground(QBrush(QColor("#89b4fa")));
+            keyItem->setFont(QFont("Consolas", 11, QFont::Bold));
+            table->setItem(i, 0, keyItem);
+            QTableWidgetItem *descItem = new QTableWidgetItem(shortcuts[i].desc);
+            descItem->setForeground(QBrush(QColor("#bac2de")));
+            table->setItem(i, 1, descItem);
+        }
+        table->setRowHeight(shortcuts.size(), 0);
+        layout->addWidget(table);
+
+        QLabel *hint = new QLabel(lang("按 Esc 或点击 ✕ 关闭", "Press Esc or click ✕ to close"));
+        hint->setStyleSheet("color: #585b70; font-size: 11px; padding: 4px 0;");
+        hint->setAlignment(Qt::AlignCenter);
+        layout->addWidget(hint);
+
         dlg->exec();
     });
 
@@ -767,13 +797,37 @@ void MainWindow::createToolBar()
     m_rectModeBtn->setChecked(true);
 
     m_polygonModeBtn = new QPushButton(lang("多边形", "Polygon"), this);
-    m_polygonModeBtn->setToolTip(lang("多边形ROI模式 (P)", "Polygon ROI Mode (P)"));
+    m_polygonModeBtn->setToolTip(lang(
+        "多边形 ROI 模式 (P)\n"
+        "· 单击添加顶点\n"
+        "· 双击闭合多边形\n"
+        "· 右键取消绘制\n"
+        "· Esc 退出模式",
+        "Polygon ROI Mode (P)\n"
+        "· Click to add vertex\n"
+        "· Double-click to close\n"
+        "· Right-click to cancel\n"
+        "· Esc to exit mode"));
     m_polygonModeBtn->setFixedHeight(30);
     m_polygonModeBtn->setStyleSheet(modeBtnStyle);
     m_polygonModeBtn->setCheckable(true);
 
     m_guideLineBtn = new QPushButton(lang("辅助线", "Guide"), this);
-    m_guideLineBtn->setToolTip(lang("辅助线模式 (G)", "Guide Line Mode (G)"));
+    m_guideLineBtn->setToolTip(lang(
+        "辅助线模式 (G)\n"
+        "· 左键拖拽绘制辅助线\n"
+        "· Shift 约束水平/垂直\n"
+        "· 左键点击线体：移动整条线\n"
+        "· 左键拖拽端点：调整位置\n"
+        "· 右键点击：删除\n"
+        "· Esc 退出模式",
+        "Guide Line Mode (G)\n"
+        "· Left-drag to draw\n"
+        "· Shift constrains H/V\n"
+        "· Click line: move\n"
+        "· Drag endpoint: resize\n"
+        "· Right-click: delete\n"
+        "· Esc to exit mode"));
     m_guideLineBtn->setFixedHeight(30);
     m_guideLineBtn->setStyleSheet(modeBtnStyle);
     m_guideLineBtn->setCheckable(true);
