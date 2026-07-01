@@ -531,6 +531,55 @@ void MainWindow::createMenus()
     });
 
     helpMenu->addSeparator();
+    helpMenu->addAction(lang("快捷键速查", "Keyboard Shortcuts"), this, [this]() {
+        QString shortcuts = lang(
+            "播放/暂停    �格格 / K\n"
+            "前进一帧    →\n"
+            "后退一帧    ←\n"
+            "音量增大    ↑\n"
+            "音量减小    ↓\n"
+            "加速一档    C / L\n"
+            "减速一档    X / J\n"
+            "恢复 1x    Z\n"
+            "添加标签    N\n"
+            "设置 A 点    A\n"
+            "设置 B 点    B\n"
+            "切换 A/B 循环    L\n"
+            "删除选中 ROI    Delete\n"
+            "打开视频    Ctrl+O\n"
+            "保存分析结果    Ctrl+S\n"
+            "关闭放大镜    Esc\n"
+            "切换多边形模式    P\n"
+            "切换辅助线模式    G",
+            "Play/Pause    Space / K\n"
+            "Next Frame    →\n"
+            "Prev Frame    ←\n"
+            "Volume Up    ↑\n"
+            "Volume Down    ↓\n"
+            "Speed Up    C / L\n"
+            "Slow Down    X / J\n"
+            "Reset 1x    Z\n"
+            "Add Label    N\n"
+            "Set A Point    A\n"
+            "Set B Point    B\n"
+            "Toggle A/B Loop    L\n"
+            "Delete ROI    Delete\n"
+            "Open Video    Ctrl+O\n"
+            "Save Analysis    Ctrl+S\n"
+            "Close Magnifier    Esc\n"
+            "Polygon Mode    P\n"
+            "Guide Line Mode    G"
+        );
+        QMessageBox *dlg = new QMessageBox(this);
+        dlg->setWindowTitle(lang("快捷键速查", "Keyboard Shortcuts"));
+        dlg->setText(shortcuts);
+        dlg->setIcon(QMessageBox::Information);
+        dlg->setStandardButtons(QMessageBox::Ok);
+        dlg->setWindowOpacity(0.75);
+        dlg->exec();
+    });
+
+    helpMenu->addSeparator();
     helpMenu->addAction(lang("关于", "&About"), this, [this]() {
         AboutDialog dlg(this);
         dlg.exec();
