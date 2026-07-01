@@ -571,21 +571,16 @@ void ChartPanel::rebuildSeries()
     if (!m_regionModel)
         return;
 
-    // Determine series count: use dataEntries if available, otherwise fall back to ROI models
-    int totalCount = 0;
+    // Always use ROI model count for series count (dataEntries may be stale after deletion)
+    int rectCount = m_regionModel->regionCount();
+    int polyCount = m_polygonModel ? m_polygonModel->polygonCount() : 0;
+    int totalCount = rectCount + polyCount;
+
     AnalysisSnapshot snap;
     bool hasDataEntries = false;
     if (m_timelineModel) {
         snap = m_timelineModel->snapshot();
-        if (!snap.dataEntries.isEmpty()) {
-            totalCount = snap.dataEntries.size();
-            hasDataEntries = true;
-        }
-    }
-    if (!hasDataEntries) {
-        int rectCount = m_regionModel->regionCount();
-        int polyCount = m_polygonModel ? m_polygonModel->polygonCount() : 0;
-        totalCount = rectCount + polyCount;
+        hasDataEntries = !snap.dataEntries.isEmpty();
     }
 
     int rectCounter = 0, polyCounter = 0;
