@@ -545,8 +545,10 @@ void MainWindow::createMenus()
                 {"Z", "恢复 1x 倍速"}, {"N", "在当前位置添加标签"},
                 {"A", "设置 A 点"}, {"B", "设置 B 点"}, {"L", "切换 A/B 循环"},
                 {"P", "进入多边形模式"}, {"G", "进入辅助线模式"},
-                {"Delete", "删除选中的 ROI / 辅助线"}, {"Esc", "关闭放大镜 / 退出当前模式"},
-                {"Ctrl+O", "打开视频文件"}, {"Ctrl+S", "保存分析结果"},
+                {"Delete", "删除选中的 ROI / 辅助线"},
+                {"右键", "删除鼠标下的 ROI / 辅助线（无需先选中）"},
+                {"Esc", "关闭放大镜 / 退出当前模式"},
+                {"Ctrl+S", "保存分析结果"},
             };
         } else {
             shortcuts = {
@@ -555,8 +557,10 @@ void MainWindow::createMenus()
                 {"Z", "Reset to 1x"}, {"N", "Add Label at Current Position"},
                 {"A", "Set A Point"}, {"B", "Set B Point"}, {"L", "Toggle A/B Loop"},
                 {"P", "Enter Polygon Mode"}, {"G", "Enter Guide Line Mode"},
-                {"Delete", "Delete Selected ROI / Guide Line"}, {"Esc", "Close Magnifier / Exit Mode"},
-                {"Ctrl+O", "Open Video"}, {"Ctrl+S", "Save Analysis"},
+                {"Delete", "Delete Selected ROI / Guide Line"},
+                {"Right-click", "Delete ROI / Guide Line under cursor (no selection needed)"},
+                {"Esc", "Close Magnifier / Exit Mode"},
+                {"Ctrl+S", "Save Analysis"},
             };
         }
 
