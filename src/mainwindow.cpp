@@ -953,6 +953,8 @@ void MainWindow::setupConnections()
             this, &MainWindow::onMagnifierWheelZoom);
     connect(overlay, &OverlayWidget::magnifierPanRequested, this, [this](QPoint delta) {
         if (m_magnifier) {
+            if (m_magnifier->isinvertPan())
+                delta = -delta;
             QPoint newPos = m_magnifier->cursorPosition() + delta;
             m_magnifier->updateCursorPosition(newPos);
         }
