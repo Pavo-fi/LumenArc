@@ -1958,10 +1958,17 @@ void MainWindow::showVideoContextMenu(const QPoint &pos)
     } else {
         if (m_magnifier) {
             menu.addAction(lang("关闭放大镜", "Close Magnifier"));
-        }
-        QAction *chosen = menu.exec(m_videoWidget->overlay()->mapToGlobal(pos));
-        if (m_magnifier && chosen && chosen->text() == lang("关闭放大镜", "Close Magnifier")) {
-            removeMagnifier();
+            QAction *invertAction = menu.addAction(lang("反向平移", "Invert Pan"));
+            invertAction->setCheckable(true);
+            invertAction->setChecked(m_magnifier->isinvertPan());
+            QAction *chosen = menu.exec(m_videoWidget->overlay()->mapToGlobal(pos));
+            if (m_magnifier && chosen && chosen->text() == lang("关闭放大镜", "Close Magnifier")) {
+                removeMagnifier();
+            } else if (chosen == invertAction) {
+                m_magnifier->setInvertPan(invertAction->isChecked());
+            }
+        } else {
+            menu.exec(m_videoWidget->overlay()->mapToGlobal(pos));
         }
     }
 }

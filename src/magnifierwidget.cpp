@@ -234,6 +234,8 @@ MagnifierWidget::MagnifierWidget(QWidget *parent)
                 this, &MagnifierWidget::onInternalOverlayWheelZoom);
         connect(m_overlay, &OverlayWidget::magnifierPanRequested,
                 this, [this](QPoint delta) {
+            if (m_invertPan)
+                delta = -delta;
             QPoint newCenter = m_cursorPos + delta;
             newCenter.setX(qBound(0, newCenter.x(), m_videoWidth - 1));
             newCenter.setY(qBound(0, newCenter.y(), m_videoHeight - 1));

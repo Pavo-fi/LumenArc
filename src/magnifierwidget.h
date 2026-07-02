@@ -65,6 +65,10 @@ public:
     /// @brief 获取内部 overlay（用于信号连接）
     OverlayWidget *overlay() const { return m_overlay; }
 
+    /// @brief 反向平移模式（中键拖拽方向取反）
+    void setInvertPan(bool invert) { m_invertPan = invert; }
+    bool isinvertPan() const { return m_invertPan; }
+
 private slots:
     void onInternalOverlayWheelZoom(int delta, QPoint videoPos);
     void onInternalOverlayCursorMoved(QPoint videoPos);
@@ -86,6 +90,7 @@ private:
     int m_snapshotBrightness = 0;
     int m_snapshotContrast = 0;
     int m_snapshotOpacity = 0;
+    bool m_invertPan = false;
 
     void recalcSourceRect();
 
