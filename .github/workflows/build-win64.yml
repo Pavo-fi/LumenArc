@@ -1,0 +1,66 @@
+name: Build Win64
+
+on:
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+jobs:
+  build-windows:
+    runs-on: windows-2022
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Qt 6
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: '6.8.0'
+          host: 'windows'
+          target: 'desktop'
+          arch: 'win64_msvc2022_64'
+          modules: 'qtcharts'
+
+      - name: Install VLC SDK
+        run: |
+          echo "VLC_SDK_PATH=${{ github.workspace }}\vlc_extracted\vlc-3.0.21" >> $env:GITHUB_ENV
+          choco install vlc -y --no-progress
+          echo "VLC_BIN_PATH=C:\Program Files\VideoLAN\VLC" >> $env:GITHUB_ENV
+        shell: pwsh
+
+      - name: Bundle Python (Windows)
+        run: |
+          $pyVer = "3.12.8"
+          $pyUrl = "https://www.python.org/ftp/python/$pyVer/python-$pyVer-embed-amd64.zip"
+          Write-Host "Downloading Python $pyVer embeddable..."
+          Invoke-WebRequest -Uri $pyUrl -OutFile "python-embed.zip"
+          Expand-Archive -Path "python-embed.zip" -DestinationPath "build\Release\python"
+          Remove-Item "python-embed.zip"
+
+          $pthFile = "build\Release\python\python312._pth"
+          Set-Content -Path $pthFile -Value "python312.zip`n.`nimport site" -NoNewline
+
+          $targetDir = "${{ github.workspace }}\build\Release\python\Lib\site-packages"
+          python -m pip install opencv-python-headless numpy --target "$targetDir" --no-warn-script-location
+          Write-Host "Python bundled successfully"
+        shell: pwsh
+
+      - name: Configure CMake
+        run: cmake -B build -S . -G "Visual Studio 17 2022" -A x64 -DCMAKE_BUILD_TYPE=Release
+        shell: bash
+
+      - name: Build
+        run: cmake --build build --config Release
+        shell: bash
+
+      - name: Create Windows package
+        run: |
+          Copy-Item "setup_python_deps.bat" "build\Release\" -ErrorAction SilentlyContinue
+          Compress-Archive -Path "build\Release\*" -DestinationPath "LumenArc-win64.zip"
+        shell: pwsh
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: LumenArc-win64
+          path: LumenArc-win64.zip
