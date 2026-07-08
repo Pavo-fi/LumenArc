@@ -103,7 +103,7 @@ private:
     void updateLabelItems();
     void fitAll();
     void fitAllX();
-    static qint64 computeTimeStep(qint64 durationMs);
+    static qint64 computeTimeStep(qint64 durationMs, int plotWidthPx = 800);
 
     qint64 mapXToTime(qreal x) const;
     qreal mapTimeToX(qint64 timeMs) const;

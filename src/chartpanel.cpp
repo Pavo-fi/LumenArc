@@ -709,13 +709,19 @@ void ChartPanel::rebuildSeries()
 }
 
 /// @brief 计算时间步长：目标6-8个标签可见
-qint64 ChartPanel::computeTimeStep(qint64 durationMs)
+qint64 ChartPanel::computeTimeStep(qint64 durationMs, int plotWidthPx)
 {
     if (durationMs <= 0)
         return 60000;
 
-    // Aim for roughly 6-8 labels across the duration
+    // Target: one major tick every ~100px
+    const int targetPxPerTick = 100;
+    int numTicks = qMax(2, plotWidthPx / targetPxPerTick);
+    qint64 rawStep = durationMs / numTicks;
+
+    // Snap to nearest "nice" step from candidates
     const qint64 candidates[] = {
+        500,      // 0.5s
         1000,     // 1s
         2000,     // 2s
         5000,     // 5s
@@ -733,9 +739,8 @@ qint64 ChartPanel::computeTimeStep(qint64 durationMs)
         21600000  // 6h
     };
 
-    qint64 target = durationMs / 6;
     for (qint64 step : candidates) {
-        if (step >= target)
+        if (step >= rawStep)
             return step;
     }
     return candidates[sizeof(candidates) / sizeof(candidates[0]) - 1];
@@ -784,7 +789,7 @@ void ChartPanel::updateTimeLabels()
     if (visibleDurationMs <= 0)
         return;
 
-    qint64 step = computeTimeStep(visibleDurationMs);
+    qint64 step = computeTimeStep(visibleDurationMs, static_cast<int>(plotArea.width()));
     qint64 offset = m_startTimeOfDayMs;
     qreal bottom = plotArea.bottom();
 
@@ -824,10 +829,10 @@ void ChartPanel::updateTimeLabels()
     }
 
     // --- Minor tick marks (ruler-style sub-divisions) ---
-    if (m_showTickMarks && step > 1000) {
+    if (m_showTickMarks) {
         int minorDivisions = 4;
         qint64 minorStep = step / minorDivisions;
-        if (minorStep >= 500) {
+        if (minorStep >= 1) {
             // Draw minor ticks between each pair of major ticks
             for (qint64 tReal = firstLabel; tReal < lastLabel; tReal += step) {
                 for (int m = 1; m < minorDivisions; ++m) {
@@ -913,7 +918,8 @@ void ChartPanel::updateTimeLabelPositions()
         endRect = QRectF(x, bottom + 10, textRect.width(), textRect.height());
     }
 
-    // Position regular time labels, hiding any that collide with start/end labels
+    // Position regular time labels, hiding any that collide with start/end labels or adjacent labels
+    QRectF lastVisibleRect;
     for (int i = 0; i < m_timeLabelItems.size(); ++i) {
         qreal x = mapTimeToX(m_labelVideoTimes[i]);
         qreal y = bottom + 10;
@@ -921,11 +927,13 @@ void ChartPanel::updateTimeLabelPositions()
         QRectF textRect = m_timeLabelItems[i]->boundingRect();
         QRectF labelRect(x - textRect.width() / 2, y, textRect.width(), textRect.height());
 
-        // Check collision with start or end label
+        // Check collision with start, end, and previous visible label
         bool collides = false;
         if (!startRect.isNull() && labelRect.intersects(startRect))
             collides = true;
         if (!endRect.isNull() && labelRect.intersects(endRect))
+            collides = true;
+        if (!lastVisibleRect.isNull() && labelRect.intersects(lastVisibleRect))
             collides = true;
 
         if (collides) {
@@ -933,6 +941,7 @@ void ChartPanel::updateTimeLabelPositions()
         } else {
             m_timeLabelItems[i]->setPos(x - textRect.width() / 2, y);
             m_timeLabelItems[i]->setVisible(true);
+            lastVisibleRect = labelRect;
         }
     }
 }
