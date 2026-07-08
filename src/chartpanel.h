@@ -72,6 +72,13 @@ public:
     qint64 abPointA() const { return m_abPointA; }
     qint64 abPointB() const { return m_abPointB; }
 
+    // Chart guide lines
+    void addHorizontalGuideLine(qreal yValue, const QColor &color = QColor(255, 255, 0, 180));
+    void addVerticalGuideLine(qreal xTimeMs, const QColor &color = QColor(0, 255, 255, 180));
+    void removeChartGuideLine(int index);
+    void clearChartGuideLines();
+    int chartGuideLineCount() const { return m_chartGuideLines.size(); }
+
 signals:
     void seekRequested(qint64 timeMs);
     /// v0.3: Emitted when X-axis range changes (for spectrogram sync)
@@ -173,6 +180,22 @@ private:
         int dataIndex = -1;  // index into snapshot.values[], -1 = no data
     };
     QVector<SeriesMapping> m_seriesMapping;
+
+    // Chart guide lines (horizontal at Y value, vertical at X time)
+    struct ChartGuideLine {
+        enum Orientation { Horizontal, Vertical };
+        Orientation orientation;
+        qreal value;  // Y value for horizontal, X time (ms) for vertical
+        QColor color;
+        QGraphicsLineItem *lineItem = nullptr;
+        QGraphicsSimpleTextItem *labelItem = nullptr;
+    };
+    QVector<ChartGuideLine> m_chartGuideLines;
+    int m_hoveredGuideLine = -1;
+    int m_draggingGuideLine = -1;
+    qreal m_dragGuideLineStartValue = 0;
+    void drawChartGuideLines();
+    int hitTestChartGuideLine(const QPoint &pos) const;
 
     // Guard flag: prevents onDataReplaced() from calling rebuildSeries() recursively
     bool m_rebuilding = false;

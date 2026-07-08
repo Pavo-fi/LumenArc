@@ -167,6 +167,13 @@ ChartPanel::ChartPanel(QWidget *parent)
             lang("禁用 Y轴自动范围", "Disable Auto Y") :
             lang("启用 Y轴自动范围", "Enable Auto Y"));
         menu.addSeparator();
+        // Chart guide lines
+        QAction *addHGuideAction = menu.addAction(lang("添加水平辅助线", "Add Horizontal Guide"));
+        QAction *addVGuideAction = menu.addAction(lang("添加垂直辅助线", "Add Vertical Guide"));
+        int nearGuideIdx = hitTestChartGuideLine(pos);
+        QAction *delGuideAction = menu.addAction(lang("删除此处辅助线", "Delete Guide Here"));
+        delGuideAction->setEnabled(nearGuideIdx >= 0);
+        menu.addSeparator();
         qint64 cursorTime = m_cursorTimeMs;
         QAction *addLabelAction = menu.addAction(lang("添加标签", "Add Label"));
         // Find nearest label to cursor for undo
@@ -224,12 +231,30 @@ ChartPanel::ChartPanel(QWidget *parent)
             setABLoop(!m_abLoop);
         } else if (chosen == zoomABAction) {
             zoomToABRegion();
+        } else if (chosen == addHGuideAction) {
+            bool ok;
+            qreal val = QInputDialog::getDouble(this,
+                lang("添加水平辅助线", "Add Horizontal Guide"),
+                lang("Y 值 (亮度)", "Y value (brightness)"),
+                m_axisY ? (m_axisY->min() + m_axisY->max()) / 2 : 128,
+                m_axisY ? m_axisY->min() : 0,
+                m_axisY ? m_axisY->max() : 255,
+                1, &ok);
+            if (ok)
+                addHorizontalGuideLine(val);
+        } else if (chosen == addVGuideAction) {
+            addVerticalGuideLine(static_cast<qreal>(cursorTime));
+        } else if (chosen == delGuideAction) {
+            if (nearGuideIdx >= 0)
+                removeChartGuideLine(nearGuideIdx);
         }
     });
 }
 
 ChartPanel::~ChartPanel()
 {
+    clearChartGuideLines();
+
     for (auto *item : m_timeLabelItems) {
         if (item->scene()) item->scene()->removeItem(item);
         delete item;
@@ -892,6 +917,7 @@ void ChartPanel::updateTimeLabels()
         }
     }
 
+    drawChartGuideLines();
     updateTimeLabelPositions();
 }
 
@@ -1273,6 +1299,14 @@ void ChartPanel::mousePressEvent(QMouseEvent *event)
         QPointF chartPos = m_chart->mapFromScene(mapToScene(event->pos()));
         QRectF plotArea = m_chart->plotArea();
 
+        // Guide line drag start
+        int guideIdx = hitTestChartGuideLine(event->pos());
+        if (guideIdx >= 0) {
+            m_draggingGuideLine = guideIdx;
+            m_dragGuideLineStartValue = m_chartGuideLines[guideIdx].value;
+            return;
+        }
+
         qreal cursorX = mapTimeToX(m_cursorTimeMs);
         if (qAbs(chartPos.x() - cursorX) < 10 && plotArea.contains(chartPos)) {
             m_draggingCursor = true;
@@ -1358,10 +1392,39 @@ void ChartPanel::mouseMoveEvent(QMouseEvent *event)
     QPointF chartPos = m_chart->mapFromScene(mapToScene(event->pos()));
     qreal cursorX = mapTimeToX(m_cursorTimeMs);
     QRectF plotArea = m_chart->plotArea();
-    if (plotArea.contains(chartPos) && qAbs(chartPos.x() - cursorX) < 10) {
-        setCursor(Qt::SizeHorCursor);
-    } else {
-        unsetCursor();
+
+    // Guide line drag
+    if (m_draggingGuideLine >= 0) {
+        auto &gl = m_chartGuideLines[m_draggingGuideLine];
+        if (gl.orientation == ChartGuideLine::Horizontal) {
+            if (m_axisY) {
+                qreal normalized = (plotArea.bottom() - chartPos.y()) / plotArea.height();
+                gl.value = m_axisY->min() + normalized * (m_axisY->max() - m_axisY->min());
+            }
+        } else {
+            gl.value = static_cast<qreal>(mapXToTime(clampX(chartPos.x())));
+        }
+        drawChartGuideLines();
+        return;
+    }
+
+    // Guide line hover detection
+    int oldHover = m_hoveredGuideLine;
+    m_hoveredGuideLine = hitTestChartGuideLine(event->pos());
+    if (m_hoveredGuideLine != oldHover) {
+        drawChartGuideLines();
+        if (m_hoveredGuideLine >= 0) {
+            setCursor(m_chartGuideLines[m_hoveredGuideLine].orientation == ChartGuideLine::Horizontal
+                      ? Qt::SizeVerCursor : Qt::SizeHorCursor);
+        }
+    }
+
+    if (m_hoveredGuideLine < 0) {
+        if (plotArea.contains(chartPos) && qAbs(chartPos.x() - cursorX) < 10) {
+            setCursor(Qt::SizeHorCursor);
+        } else {
+            unsetCursor();
+        }
     }
 
     QChartView::mouseMoveEvent(event);
@@ -1372,6 +1435,11 @@ void ChartPanel::mouseReleaseEvent(QMouseEvent *event)
     if ((event->button() == Qt::MiddleButton ||
          event->button() == Qt::LeftButton) && m_isPanning) {
         m_isPanning = false;
+        unsetCursor();
+        return;
+    }
+    if (event->button() == Qt::LeftButton && m_draggingGuideLine >= 0) {
+        m_draggingGuideLine = -1;
         unsetCursor();
         return;
     }
@@ -1475,4 +1543,117 @@ void ChartPanel::updateABMarkers()
         qreal xB = mapTimeToX(m_abPointB);
         m_abHighlight->setRect(qMin(xA, xB), pa.top(), qAbs(xB - xA), pa.height());
     }
+}
+
+// =============================================================================
+// Chart Guide Lines
+// =============================================================================
+
+void ChartPanel::addHorizontalGuideLine(qreal yValue, const QColor &color)
+{
+    ChartGuideLine gl;
+    gl.orientation = ChartGuideLine::Horizontal;
+    gl.value = yValue;
+    gl.color = color;
+    gl.lineItem = new QGraphicsLineItem(m_chart);
+    gl.lineItem->setPen(QPen(color, 1, Qt::DashLine));
+    gl.lineItem->setZValue(LABEL_Z_VALUE - 3);
+    gl.labelItem = new QGraphicsSimpleTextItem(QString::number(yValue, 'f', 1), m_chart);
+    gl.labelItem->setFont(fontSans(8));
+    gl.labelItem->setBrush(QBrush(color));
+    gl.labelItem->setZValue(LABEL_Z_VALUE - 2);
+    m_chartGuideLines.append(gl);
+    drawChartGuideLines();
+}
+
+void ChartPanel::addVerticalGuideLine(qreal xTimeMs, const QColor &color)
+{
+    ChartGuideLine gl;
+    gl.orientation = ChartGuideLine::Vertical;
+    gl.value = xTimeMs;
+    gl.color = color;
+    gl.lineItem = new QGraphicsLineItem(m_chart);
+    gl.lineItem->setPen(QPen(color, 1, Qt::DashLine));
+    gl.lineItem->setZValue(LABEL_Z_VALUE - 3);
+    gl.labelItem = new QGraphicsSimpleTextItem(formatTimeMs(xTimeMs + m_startTimeOfDayMs), m_chart);
+    gl.labelItem->setFont(fontSans(8));
+    gl.labelItem->setBrush(QBrush(color));
+    gl.labelItem->setZValue(LABEL_Z_VALUE - 2);
+    m_chartGuideLines.append(gl);
+    drawChartGuideLines();
+}
+
+void ChartPanel::removeChartGuideLine(int index)
+{
+    if (index < 0 || index >= m_chartGuideLines.size())
+        return;
+    auto &gl = m_chartGuideLines[index];
+    if (gl.lineItem) {
+        if (gl.lineItem->scene()) gl.lineItem->scene()->removeItem(gl.lineItem);
+        delete gl.lineItem;
+    }
+    if (gl.labelItem) {
+        if (gl.labelItem->scene()) gl.labelItem->scene()->removeItem(gl.labelItem);
+        delete gl.labelItem;
+    }
+    m_chartGuideLines.removeAt(index);
+}
+
+void ChartPanel::clearChartGuideLines()
+{
+    for (int i = m_chartGuideLines.size() - 1; i >= 0; --i)
+        removeChartGuideLine(i);
+}
+
+void ChartPanel::drawChartGuideLines()
+{
+    QRectF pa = m_chart->plotArea();
+    if (pa.width() < 10)
+        return;
+
+    for (int i = 0; i < m_chartGuideLines.size(); ++i) {
+        auto &gl = m_chartGuideLines[i];
+        if (gl.orientation == ChartGuideLine::Horizontal) {
+            qreal y = gl.value;
+            // Map Y value to widget coordinates
+            if (m_axisY) {
+                qreal yMin = m_axisY->min();
+                qreal yMax = m_axisY->max();
+                if (yMax > yMin) {
+                    qreal normalized = (y - yMin) / (yMax - yMin);
+                    qreal widgetY = pa.bottom() - normalized * pa.height();
+                    gl.lineItem->setLine(pa.left(), widgetY, pa.right(), widgetY);
+                    gl.labelItem->setPos(pa.right() + 3, widgetY - 8);
+                }
+            }
+        } else {
+            qreal x = mapTimeToX(static_cast<qint64>(gl.value));
+            gl.lineItem->setLine(x, pa.top(), x, pa.bottom());
+            gl.labelItem->setPos(x + 3, pa.top() + 2);
+        }
+        bool hovered = (i == m_hoveredGuideLine);
+        QPen pen(gl.color, hovered ? 2 : 1, Qt::DashLine);
+        gl.lineItem->setPen(pen);
+    }
+}
+
+int ChartPanel::hitTestChartGuideLine(const QPoint &pos) const
+{
+    const int hitRadius = 5;
+    for (int i = 0; i < m_chartGuideLines.size(); ++i) {
+        const auto &gl = m_chartGuideLines[i];
+        if (!gl.lineItem || !gl.lineItem->isVisible())
+            continue;
+        QLineF line = gl.lineItem->line();
+        if (gl.orientation == ChartGuideLine::Horizontal) {
+            if (qAbs(pos.y() - line.y1()) <= hitRadius &&
+                pos.x() >= line.x1() && pos.x() <= line.x2())
+                return i;
+        } else {
+            if (qAbs(pos.x() - line.x1()) <= hitRadius &&
+                pos.y() >= line.y1() && pos.y() <= line.y2())
+                return i;
+        }
+    }
+    return -1;
 }
