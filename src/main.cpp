@@ -34,11 +34,11 @@ static QPixmap createSplashPixmap(const QString &statusText, int progress = 30)
     p.setRenderHint(QPainter::Antialiasing);
     p.setRenderHint(QPainter::SmoothPixmapTransform);
 
-    // --- Background: lightchaser.jpg ---
+    // --- Background: lightchaser.jpg (try embedded resource first, then filesystem)
     QStringList searchPaths = {
+        ":/lightchaser.jpg",
         QCoreApplication::applicationDirPath() + "/lightchaser.jpg",
-        QDir::currentPath() + "/lightchaser.jpg",
-        QDir::homePath() + "/Desktop/lightchaser.jpg"
+        QDir::currentPath() + "/lightchaser.jpg"
     };
     bool bgLoaded = false;
     for (const QString &path : searchPaths) {

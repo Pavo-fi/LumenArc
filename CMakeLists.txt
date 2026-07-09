@@ -132,6 +132,7 @@ set(SOURCES
     src/domain/timeline_model.cpp
     src/infrastructure/vlc_video_engine.cpp
     src/infrastructure/python_analysis_engine.cpp
+    src/resources.qrc
 )
 
 # Windows resource file (not needed on macOS)

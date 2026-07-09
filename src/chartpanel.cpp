@@ -390,10 +390,6 @@ void ChartPanel::onDataReplaced()
     if (!m_timelineModel)
         return;
 
-    // If series list is empty, a deferred rebuildSeries() will handle everything.
-    if (m_seriesList.isEmpty())
-        return;
-
     AnalysisSnapshot snapshot = m_timelineModel->snapshot();
     qDebug() << "[onDataReplaced] isEmpty:" << snapshot.isEmpty()
              << "hasAudio:" << snapshot.hasAudio()
@@ -404,6 +400,34 @@ void ChartPanel::onDataReplaced()
     // Need either timestamps (luminance) or audio data to proceed
     if (snapshot.isEmpty() && !snapshot.hasAudio())
         return;
+
+    // If no luminance series exist, only continue when audio is present
+    if (m_seriesList.isEmpty()) {
+        if (!snapshot.hasAudio())
+            return;
+        // Create volume series lazily for audio-only display
+        if (!m_volumeSeries) {
+            m_volumeSeries = new QLineSeries();
+            m_volumeSeries->setName(lang("音量", "Volume"));
+            QPen volumePen(QColor(76, 175, 80, 180));
+            volumePen.setWidth(1);
+            m_volumeSeries->setPen(volumePen);
+            if (!m_axisYVolume) {
+                m_axisYVolume = new QValueAxis();
+                m_axisYVolume->setRange(-80, 0);
+                m_axisYVolume->setTitleText(lang("音量 (dB)", "Volume (dB)"));
+                m_axisYVolume->setLabelFormat("%.0f");
+                m_axisYVolume->setLabelsVisible(true);
+                m_axisYVolume->setTitleBrush(QBrush(QColor(0xF5, 0xF0, 0xE8)));
+                m_axisYVolume->setLabelsColor(QColor(0xF5, 0xF0, 0xE8));
+                m_axisYVolume->setGridLineVisible(false);
+                m_chart->addAxis(m_axisYVolume, Qt::AlignRight);
+            }
+            m_chart->addSeries(m_volumeSeries);
+            m_volumeSeries->attachAxis(m_axisX);
+            m_volumeSeries->attachAxis(m_axisYVolume);
+        }
+    }
 
     // Always rebuild when dataEntries exist to ensure series names/colors
     // match the latest data. The m_rebuilding flag prevents recursion.
