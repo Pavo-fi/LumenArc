@@ -56,6 +56,7 @@ jobs:
       - name: Create Windows package
         run: |
           Copy-Item "setup_python_deps.bat" "build\Release\" -ErrorAction SilentlyContinue
+          Copy-Item "lightchaser.jpg" "build\Release\" -ErrorAction SilentlyContinue
           Compress-Archive -Path "build\Release\*" -DestinationPath "LumenArc-${{ github.ref_name }}-win64.zip"
         shell: pwsh
 
@@ -65,92 +66,12 @@ jobs:
           name: windows-release
           path: LumenArc-${{ github.ref_name }}-win64.zip
 
-  build-macos-arm64:
-    runs-on: macos-latest
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Install Qt 6 via Homebrew
-        run: |
-          brew install qt@6
-          echo "QT6_DIR=$(brew --prefix qt@6)" >> $GITHUB_ENV
-        shell: bash
-
-      - name: Install VLC
-        run: brew install vlc
-        shell: bash
-
-      - name: Configure CMake
-        run: cmake -B build -S . -DCMAKE_BUILD_TYPE=Release
-        shell: bash
-
-      - name: Build
-        run: cmake --build build --config Release
-        shell: bash
-
-      - name: Bundle Python (ARM64)
-        run: |
-          curl -L "https://github.com/astral-sh/python-build-standalone/releases/download/20260602/cpython-3.12.13+20260602-aarch64-apple-darwin-install_only_stripped.tar.gz" -o python.tar.gz
-
-          # Find the correct .app path
-          APP_PATH=""
-          for p in "build/Release/LumenArc.app" "build/LumenArc.app"; do
-            if [ -d "$p" ]; then
-              APP_PATH="$p"
-              break
-            fi
-          done
-          if [ -z "$APP_PATH" ]; then
-            echo "ERROR: LumenArc.app not found!"
-            find build -name "LumenArc.app" -type d 2>/dev/null
-            exit 1
-          fi
-          echo "Found app at: $APP_PATH"
-
-          PYTHON_DIR="$APP_PATH/Contents/MacOS/python"
-          mkdir -p "$PYTHON_DIR"
-          tar xzf python.tar.gz -C .
-          # Check what was extracted
-          echo "Extracted contents:"
-          ls -la python/
-          # Move Python files to the app bundle
-          cp -R python/* "$PYTHON_DIR/"
-          rm -rf python python.tar.gz
-
-          "$PYTHON_DIR/bin/python3" -m pip install opencv-python-headless numpy --no-warn-script-location
-          echo "ARM64 Python bundled successfully"
-          file "$PYTHON_DIR/bin/python3"
-        shell: bash
-
-      - name: Create macOS DMG
-        run: |
-          APP_PATH=""
-          for p in "build/Release/LumenArc.app" "build/LumenArc.app"; do
-            if [ -d "$p" ]; then
-              APP_PATH="$p"
-              break
-            fi
-          done
-          DMG_NAME="LumenArc-${{ github.ref_name }}-mac-arm64.dmg"
-          hdiutil create -volname "LumenArc" -srcfolder "$APP_PATH" -ov -format UDZO "$DMG_NAME"
-        shell: bash
-
-      - name: Upload macOS ARM64 artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: macos-arm64-release
-          path: LumenArc-${{ github.ref_name }}-mac-arm64.dmg
-
   create-release:
-    needs: [build-windows, build-macos-arm64]
+    needs: [build-windows]
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
       - name: Download all artifacts
         uses: actions/download-artifact@v4
         with:
@@ -161,16 +82,16 @@ jobs:
         with:
           files: |
             ./artifacts/windows-release/LumenArc-${{ github.ref_name }}-win64.zip
-            ./artifacts/macos-arm64-release/LumenArc-${{ github.ref_name }}-mac-arm64.dmg
           body: |
-            追光者 Lumen Arc ${{ github.ref_name }} 更新。支持 Windows 和 macOS，内置 Python 分析环境，开箱即用。
+            追光者 Lumen Arc ${{ github.ref_name }} 更新。内置 Python 分析环境，开箱即用。
 
-            ## 更新内容
-            - 系统名称更新为「火灾调查视频分析工具」
+            ## 更新内容 (v0.5.1)
+            - 修复：无 ROI 时点击音频分析，音量曲线不显示的问题
+            - 修复：启动页 lightchaser.jpg 背景图丢失的问题（嵌入为 Qt 资源）
+            - 修复：切换回视频 A 后分析曲线丢失的问题
 
             ## 下载说明
             - **Windows**: `LumenArc-${{ github.ref_name }}-win64.zip` — 解压后双击 LumenArc.exe 运行
-            - **macOS (Apple Silicon)**: `LumenArc-${{ github.ref_name }}-mac-arm64.dmg` — 适用于 M1/M2/M3/M4 芯片 Mac
           generate_release_notes: false
           draft: false
           prerelease: false
