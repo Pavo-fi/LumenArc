@@ -28,7 +28,7 @@ jobs:
           echo "VLC_BIN_PATH=C:\Program Files\VideoLAN\VLC" >> $env:GITHUB_ENV
         shell: pwsh
 
-      - name: Bundle Python (Windows)
+      - name: Bundle Python 3.12 embeddable
         run: |
           $pyVer = "3.12.8"
           $pyUrl = "https://www.python.org/ftp/python/$pyVer/python-$pyVer-embed-amd64.zip"
@@ -37,12 +37,31 @@ jobs:
           Expand-Archive -Path "python-embed.zip" -DestinationPath "build\Release\python"
           Remove-Item "python-embed.zip"
 
+          # Enable site packages in ._pth file
           $pthFile = "build\Release\python\python312._pth"
           Set-Content -Path $pthFile -Value "python312.zip`n.`nimport site" -NoNewline
 
-          $targetDir = "${{ github.workspace }}\build\Release\python\Lib\site-packages"
-          python -m pip install opencv-python-headless numpy --target "$targetDir" --no-warn-script-location
+          # Bootstrap pip into embedded Python
+          Invoke-WebRequest -Uri "https://bootstrap.pypa.io/get-pip.py" -OutFile "build\Release\python\get-pip.py"
+          & "build\Release\python\python.exe" "build\Release\python\get-pip.py" --no-warn-script-location
+          Remove-Item "build\Release\python\get-pip.py"
+
+          # Install packages using embedded Python (correct version)
+          & "build\Release\python\python.exe" -m pip install opencv-python-headless numpy --target "build\Release\python\Lib\site-packages" --no-warn-script-location
+
+          # Cleanup pip/setuptools to reduce size
+          Remove-Item "build\Release\python\Lib\site-packages\pip" -Recurse -Force -ErrorAction SilentlyContinue
+          Remove-Item "build\Release\python\Lib\site-packages\pip-*" -Recurse -Force -ErrorAction SilentlyContinue
+          Remove-Item "build\Release\python\Lib\site-packages\setuptools*" -Recurse -Force -ErrorAction SilentlyContinue
+          Remove-Item "build\Release\python\Lib\site-packages\_distutils_hack" -Recurse -Force -ErrorAction SilentlyContinue
+          Remove-Item "build\Release\python\Lib\site-packages\pkg_resources" -Recurse -Force -ErrorAction SilentlyContinue
+
           Write-Host "Python bundled successfully"
+        shell: pwsh
+
+      - name: Verify Python works
+        run: |
+          & "build\Release\python\python.exe" -c "import cv2; import numpy; print(f'OK: cv2={cv2.__version__}, numpy={numpy.__version__}')"
         shell: pwsh
 
       - name: Configure CMake
