@@ -96,6 +96,7 @@ jobs:
           # Copy extra files
           Copy-Item "setup_python_deps.bat" "build\Release\" -ErrorAction SilentlyContinue
           Copy-Item "lightchaser.jpg" "build\Release\" -ErrorAction SilentlyContinue
+          Copy-Item "追光者 Lumen Arc v0.5 Beta — 操作手册.pdf" "build\Release\" -ErrorAction SilentlyContinue
 
           # Create zip
           Compress-Archive -Path "build\Release\*" -DestinationPath "LumenArc-win64.zip"
