@@ -72,6 +72,25 @@ jobs:
         run: cmake --build build --config Release
         shell: bash
 
+      - name: Download ffmpeg
+        run: |
+          $ffmpegUrl = "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip"
+          Write-Host "Downloading ffmpeg..."
+          Invoke-WebRequest -Uri $ffmpegUrl -OutFile "ffmpeg.zip"
+          Expand-Archive -Path "ffmpeg.zip" -DestinationPath "ffmpeg_temp" -Force
+          New-Item -ItemType Directory -Path "build\Release\ffmpeg" -Force | Out-Null
+          $ffmpegExe = Get-ChildItem -Path "ffmpeg_temp" -Recurse -Filter "ffmpeg.exe" | Select-Object -First 1
+          if ($ffmpegExe) {
+            Copy-Item -Path $ffmpegExe.FullName -Destination "build\Release\ffmpeg\ffmpeg.exe" -Force
+            Write-Host "ffmpeg copied to build\Release\ffmpeg\ffmpeg.exe"
+          } else {
+            Write-Error "ffmpeg.exe not found in downloaded archive"
+            exit 1
+          }
+          Remove-Item -Path "ffmpeg.zip" -Force
+          Remove-Item -Path "ffmpeg_temp" -Recurse -Force
+        shell: pwsh
+
       - name: Create Windows package
         run: |
           Copy-Item "setup_python_deps.bat" "build\Release\" -ErrorAction SilentlyContinue
