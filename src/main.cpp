@@ -90,7 +90,7 @@ static QPixmap createSplashPixmap(const QString &statusText, int progress = 30)
     QFont verFont = fontMono(10);
     p.setFont(verFont);
     p.setPen(QColor(255, 255, 240, 150));
-    p.drawText(QRect(60, 198, W - 120, 22), Qt::AlignLeft | Qt::AlignVCenter, "v0.5 beta");
+    p.drawText(QRect(60, 216, W - 120, 22), Qt::AlignLeft | Qt::AlignVCenter, "v0.5 beta");
 
     // --- Progress bar background ---
     int barX = 60;
@@ -114,6 +114,13 @@ static QPixmap createSplashPixmap(const QString &statusText, int progress = 30)
     p.setFont(statusFont);
     p.setPen(QColor(255, 255, 240, 170));
     p.drawText(QRect(60, 365, barW, 28), Qt::AlignLeft | Qt::AlignVCenter, statusText);
+
+    // --- Copyright notice (below subtitle, above version) ---
+    QString copyrightText = QString::fromUtf8("\xe5\xb9\xbf\xe4\xb8\x9c\xe7\x9c\x81\xe7\x81\xab\xe8\xb0\x83\xe6\x8a\x80\xe6\x9c\xaf\xe4\xb8\xad\xe5\xbf\x83\xe5\x87\xba\xe5\x93\x81");
+    QFont copyFont = fontSans(11);
+    p.setFont(copyFont);
+    p.setPen(QColor(255, 255, 240, 200));
+    p.drawText(QRect(60, 188, W - 120, 28), Qt::AlignLeft | Qt::AlignVCenter, copyrightText);
 
     p.end();
     return pixmap;
