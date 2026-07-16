@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(LumenArc VERSION 0.5.0 LANGUAGES CXX)
+project(LumenArc VERSION 0.52 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -271,6 +271,18 @@ if(WIN32)
                 "${FFMPEG_SRC}"
                 "$<TARGET_FILE_DIR:${PROJECT_NAME}>/ffmpeg"
             COMMENT "Copying ffmpeg..."
+        )
+    endif()
+
+    # Copy system runtime DLLs for compatibility with stripped Windows systems
+    set(SYSDLLS_SRC "${CMAKE_CURRENT_SOURCE_DIR}/portable/sysdlls")
+    if(EXISTS "${SYSDLLS_SRC}/vcruntime140_1.dll" AND EXISTS "${SYSDLLS_SRC}/dxgi.dll")
+        file(GLOB SYSDLLS "${SYSDLLS_SRC}/*.dll")
+        add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                ${SYSDLLS}
+                "$<TARGET_FILE_DIR:${PROJECT_NAME}>"
+            COMMENT "Copying system runtime DLLs for compatibility..."
         )
     endif()
 

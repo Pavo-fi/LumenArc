@@ -11,7 +11,11 @@ vlc_extracted/
 vlc_sdk/
 
 # Portable distribution files
-portable/
+portable/*
+
+# Keep bundled system DLLs for Windows 10 compatibility
+!portable/sysdlls/
+!portable/sysdlls/*.dll
 
 # Python cache
 __pycache__/
@@ -40,6 +44,9 @@ Thumbs.db
 *.pdb
 *.ilk
 *.exp
+
+# But keep bundled system DLLs for Windows 10 compatibility
+!portable/sysdlls/*.dll
 
 # CMake user settings
 CMakeUserPresets.json
