@@ -1111,15 +1111,15 @@ void ChartPanel::updateCursorPosition()
                         // Use DataEntry for R/P labeling if available
                         if (i < snap.dataEntries.size()) {
                             if (snap.dataEntries[i].type == DataEntry::Rect)
-                                parts << QString("R%1:%2").arg(++rectLabel).arg(static_cast<int>(val));
+                                parts << QString("R%1:%2").arg(++rectLabel).arg(QString::number(val, 'f', 2));
                             else
-                                parts << QString("P%1:%2").arg(++polyLabel).arg(static_cast<int>(val));
+                                parts << QString("P%1:%2").arg(++polyLabel).arg(QString::number(val, 'f', 2));
                         } else {
                             int rectCount = m_regionModel ? m_regionModel->regionCount() : 0;
                             if (i < rectCount)
-                                parts << QString("R%1:%2").arg(++rectLabel).arg(static_cast<int>(val));
+                                parts << QString("R%1:%2").arg(++rectLabel).arg(QString::number(val, 'f', 2));
                             else
-                                parts << QString("P%1:%2").arg(++polyLabel).arg(static_cast<int>(val));
+                                parts << QString("P%1:%2").arg(++polyLabel).arg(QString::number(val, 'f', 2));
                         }
                     }
                     // Append volume in dB
@@ -1128,7 +1128,7 @@ void ChartPanel::updateCursorPosition()
                         if (volIdx >= 0 && volIdx < snap.audio.volume.size()) {
                             qreal linear = snap.audio.volume[volIdx];
                             qreal db = (linear > 0.0001) ? 20.0 * std::log10(linear) : -80.0;
-                            parts << QString("%1dB").arg(static_cast<int>(qBound(-80.0, db, 0.0)));
+                            parts << QString("%1dB").arg(QString::number(qBound(-80.0, db, 0.0), 'f', 1));
                         }
                     }
                     if (!parts.isEmpty()) {
