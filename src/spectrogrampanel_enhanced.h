@@ -83,7 +83,7 @@ private:
     qreal m_viewXMin = 0;
     qreal m_viewXMax = 0;
     double m_viewYMin = 20.0;
-    double m_viewYMax = 8000.0;
+    double m_viewYMax = 12000.0;
     qreal m_minValue = -5.5;
     qreal m_maxValue = 5.0;
     bool m_yRangeInitialized = false;

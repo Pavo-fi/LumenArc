@@ -900,6 +900,31 @@ void ChartPanel::updateTimeLabels()
                     m_tickMarkItems.append(tick);
                 }
             }
+
+            // --- Micro tick marks (4 subdivisions between each minor tick) ---
+            int microDivisions = 4;
+            qint64 microStep = minorStep / microDivisions;
+            if (microStep >= 1) {
+                for (qint64 tReal = firstLabel; tReal < lastLabel; tReal += step) {
+                    for (int mi = 1; mi < minorDivisions * microDivisions; ++mi) {
+                        if (mi % microDivisions == 0)
+                            continue; // skip positions that coincide with minor ticks
+                        qint64 tMicro = tReal + mi * microStep;
+                        qint64 tMicroVideo = tMicro - offset;
+                        if (tMicroVideo < static_cast<qint64>(visibleMin))
+                            continue;
+                        if (tMicroVideo > static_cast<qint64>(visibleMax))
+                            break;
+
+                        auto *tick = new QGraphicsLineItem(m_chart);
+                        tick->setPen(QPen(QColor(100, 100, 100), 1));
+                        qreal x = mapTimeToX(tMicroVideo);
+                        tick->setLine(x, bottom, x, bottom + 3);
+                        tick->setZValue(LABEL_Z_VALUE - 3);
+                        m_tickMarkItems.append(tick);
+                    }
+                }
+            }
         }
     }
 
@@ -1635,6 +1660,22 @@ void ChartPanel::drawChartGuideLines()
     if (pa.width() < 10)
         return;
 
+    // Clean up old delta labels
+    for (auto *item : m_chartGuideLineDeltaLabels) {
+        if (item && item->scene()) item->scene()->removeItem(item);
+        delete item;
+    }
+    m_chartGuideLineDeltaLabels.clear();
+
+    // Collect horizontal guide Y values
+    QVector<QPair<int, qreal>> horizontalGuides;
+    for (int i = 0; i < m_chartGuideLines.size(); ++i) {
+        if (m_chartGuideLines[i].orientation == ChartGuideLine::Horizontal)
+            horizontalGuides.append(qMakePair(i, m_chartGuideLines[i].value));
+    }
+    std::sort(horizontalGuides.begin(), horizontalGuides.end(),
+              [](const QPair<int, qreal> &a, const QPair<int, qreal> &b) { return a.second < b.second; });
+
     for (int i = 0; i < m_chartGuideLines.size(); ++i) {
         auto &gl = m_chartGuideLines[i];
         if (gl.orientation == ChartGuideLine::Horizontal) {
@@ -1658,6 +1699,33 @@ void ChartPanel::drawChartGuideLines()
         bool hovered = (i == m_hoveredGuideLine);
         QPen pen(gl.color, hovered ? 2 : 1, Qt::DashLine);
         gl.lineItem->setPen(pen);
+    }
+
+    // Draw delta labels between adjacent horizontal guide lines
+    if (m_axisY && horizontalGuides.size() >= 2) {
+        qreal yMin = m_axisY->min();
+        qreal yMax = m_axisY->max();
+        if (yMax > yMin) {
+            QColor deltaColor(0xFF, 0x98, 0x1C); // orange
+            for (int i = 1; i < horizontalGuides.size(); ++i) {
+                qreal yLow = horizontalGuides[i - 1].second;
+                qreal yHigh = horizontalGuides[i].second;
+                qreal delta = yHigh - yLow;
+                qreal yMid = (yLow + yHigh) / 2.0;
+                qreal normalized = (yMid - yMin) / (yMax - yMin);
+                qreal widgetY = pa.bottom() - normalized * pa.height();
+
+                auto *deltaLabel = new QGraphicsSimpleTextItem(
+                    QString("△%1").arg(QString::number(delta, 'f', 1)), m_chart);
+                deltaLabel->setFont(fontSans(8));
+                deltaLabel->setBrush(QBrush(deltaColor));
+                deltaLabel->setZValue(LABEL_Z_VALUE - 2);
+                // Position near left edge, vertically centered between the two guides
+                deltaLabel->setPos(pa.left() + 4, widgetY - deltaLabel->boundingRect().height() / 2);
+                deltaLabel->setVisible(true);
+                m_chartGuideLineDeltaLabels.append(deltaLabel);
+            }
+        }
     }
 }
 

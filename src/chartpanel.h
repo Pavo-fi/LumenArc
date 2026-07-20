@@ -191,6 +191,7 @@ private:
         QGraphicsSimpleTextItem *labelItem = nullptr;
     };
     QVector<ChartGuideLine> m_chartGuideLines;
+    QVector<QGraphicsSimpleTextItem *> m_chartGuideLineDeltaLabels; // delta labels between horizontal guides
     int m_hoveredGuideLine = -1;
     int m_draggingGuideLine = -1;
     qreal m_dragGuideLineStartValue = 0;

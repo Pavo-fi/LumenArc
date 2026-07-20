@@ -593,7 +593,7 @@ void SpectrogramPanelEnhanced::setSpectrogramData(const AudioData &audio)
                 m_viewYMax = nyquist;
             } else {
                 m_viewYMin = 0;
-                m_viewYMax = qMin(8000.0, nyquist);
+                m_viewYMax = qMin(12000.0, nyquist);
             }
             m_yRangeInitialized = true;
         }
@@ -706,7 +706,7 @@ void SpectrogramPanelEnhanced::wheelEvent(QWheelEvent *event)
         }
 
         double nyquist = m_audioData.sampleRate / 2.0;
-        double yMaxLimit = (m_freqScale == FreqScale::Logarithmic) ? nyquist : 8000.0;
+        double yMaxLimit = (m_freqScale == FreqScale::Logarithmic) ? nyquist : 12000.0;
         if (m_freqScale == FreqScale::Logarithmic) {
             newMin = qBound(20.0, newMin, nyquist / 2);
             newMax = qBound(20.0, newMax, yMaxLimit);
@@ -817,7 +817,7 @@ void SpectrogramPanelEnhanced::mouseMoveEvent(QMouseEvent *event)
         int heatH = height() - TOP_MARGIN - BOTTOM_MARGIN;
         if (heatH > 0) {
             double nyquist = m_audioData.sampleRate / 2.0;
-            double yMaxLimit = (m_freqScale == FreqScale::Logarithmic) ? nyquist : 8000.0;
+            double yMaxLimit = (m_freqScale == FreqScale::Logarithmic) ? nyquist : 12000.0;
 
             if (m_freqScale == FreqScale::Logarithmic) {
                 // Log-scale pan: multiplicative shift
@@ -942,7 +942,7 @@ void SpectrogramPanelEnhanced::mouseDoubleClickEvent(QMouseEvent *event)
             m_viewYMax = nyquist;
         } else {
             m_viewYMin = 0;
-            m_viewYMax = qMin(8000.0, nyquist);
+            m_viewYMax = qMin(12000.0, nyquist);
         }
         update();
         event->accept();

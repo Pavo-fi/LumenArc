@@ -233,7 +233,7 @@ def _cleanup_temp_files():
             pass
     _temp_files.clear()
 
-def extract_audio(video_path, ffmpeg_path, sr=16000):
+def extract_audio(video_path, ffmpeg_path, sr=24000):
     """Extract audio as WAV using ffmpeg. Returns path to temp WAV file."""
     import atexit
     import signal
@@ -258,7 +258,7 @@ def extract_audio(video_path, ffmpeg_path, sr=16000):
     return tmp.name
 
 
-def compute_spectrogram(audio, sr=16000, n_fft=1280, hop_length=512, progress_callback=None):
+def compute_spectrogram(audio, sr=24000, n_fft=1920, hop_length=512, progress_callback=None):
     """STFT spectrogram with log scale. Returns [freq_bins, time_frames]."""
     window = np.hanning(n_fft)
     n_frames = 1 + (len(audio) - n_fft) // hop_length
@@ -279,7 +279,7 @@ def compute_spectrogram(audio, sr=16000, n_fft=1280, hop_length=512, progress_ca
     return spectrogram, spec_min, spec_max
 
 
-def compute_volume(audio, sr=16000, frame_length=2048, hop_length=512, progress_callback=None):
+def compute_volume(audio, sr=24000, frame_length=2048, hop_length=512, progress_callback=None):
     """RMS volume normalized to 0-1."""
     volumes = []
     total = max(1, (len(audio) - frame_length) // hop_length)
@@ -299,7 +299,7 @@ def compute_volume(audio, sr=16000, frame_length=2048, hop_length=512, progress_
     return volumes.tolist()
 
 
-def reduce_noise_spectral(audio, sr=16000, n_fft=1280, hop_length=512, strength=1.0):
+def reduce_noise_spectral(audio, sr=24000, n_fft=1920, hop_length=512, strength=1.0):
     """Spectral gating noise reduction using numpy only."""
     window = np.hanning(n_fft)
     n_frames = 1 + (len(audio) - n_fft) // hop_length
@@ -347,7 +347,7 @@ def reduce_noise_spectral(audio, sr=16000, n_fft=1280, hop_length=512, strength=
     return audio_clean
 
 
-def analyze_audio(video_path, ffmpeg_path, sr=16000, n_fft=1280, hop_length=512, noise_reduction=0):
+def analyze_audio(video_path, ffmpeg_path, sr=24000, n_fft=1920, hop_length=512, noise_reduction=0):
     """Full audio analysis: extract + spectrogram + volume. Returns dict or None."""
     # Phase 1/4: Extract audio (0-20%)
     print("PROGRESS:1|4|20.0", file=sys.stderr, flush=True)
@@ -563,10 +563,10 @@ def analyze_multi_videos(video_paths, rois, ffmpeg, processes=1):
         result["audio"] = {
             "volume": merged_vol,
             "spectrogram": merged_spec if merged_spec is not None else [],
-            "sample_rate": 44100,
+            "sample_rate": 24000,
             "hop_length": 512,
-            "n_fft": 2048,
-            "time_resolution_ms": round(1000.0 * 512 / 44100, 1),
+            "n_fft": 1920,
+            "time_resolution_ms": round(1000.0 * 512 / 24000, 1),
         }
 
     return result
