@@ -497,6 +497,9 @@ void FfmpegVideoEngine::handleSeek(qint64 timeMs)
 
 void FfmpegVideoEngine::processVideoPacket(AVPacket *pkt)
 {
+    // 高倍速（>=4x）：只解码参考帧，降低解码压力（非参考帧丢弃不断链）
+    m_vdec->skip_frame = (m_rate.load() >= 4.0f) ? AVDISCARD_NONREF : AVDISCARD_DEFAULT;
+
     // 送包；EAGAIN 说明解码器内部队列满，先排干再重试
     while (!m_quit.load()) {
         int ret = avcodec_send_packet(m_vdec, pkt);
@@ -528,10 +531,16 @@ bool FfmpegVideoEngine::drainDecoder()
             m_discardBeforeRelMs = -1;
             bool playing = m_state.load() == static_cast<int>(PlaybackState::Playing);
 
+            bool show = true;
             if (playing) {
-                paceUntil(relMs);
+                show = paceUntil(relMs);
                 playing = m_state.load() == static_cast<int>(PlaybackState::Playing)
                           && !hasPendingCommand();
+            }
+
+            if (playing && !show) {
+                av_frame_unref(frame);   // 倍速追帧：丢弃过晚的帧
+                continue;
             }
 
             if (playing || m_stepOnce) {
@@ -550,7 +559,7 @@ bool FfmpegVideoEngine::drainDecoder()
     return gotFrame;
 }
 
-void FfmpegVideoEngine::paceUntil(qint64 ptsRelMs)
+bool FfmpegVideoEngine::paceUntil(qint64 ptsRelMs)
 {
     if (!m_monotonic.isValid())
         m_monotonic.start();
@@ -561,9 +570,9 @@ void FfmpegVideoEngine::paceUntil(qint64 ptsRelMs)
 
     while (!m_quit.load()) {
         if (m_state.load() != static_cast<int>(PlaybackState::Playing))
-            return;
+            return true;
         if (hasPendingCommand())
-            return;       // 有命令（seek 等）待处理，立即返回主循环
+            return true;  // 有命令（seek 等）待处理，立即返回主循环
 
         if (audioMaster) {
             // 新鲜度检查：音频时钟必须真的在前进（靠音频包持续喂入维持）。
@@ -577,7 +586,7 @@ void FfmpegVideoEngine::paceUntil(qint64 ptsRelMs)
             if (fresh) {
                 qint64 delay = ptsRelMs - ac;
                 if (delay <= 10)
-                    return;   // 到点或落后：立即显示（丢帧追齐留待 N4）
+                    return true;  // 到点或落后：显示（丢帧追齐由系统时钟路径处理）
                 if (delay <= 250) {
                     QThread::msleep(static_cast<unsigned long>(qMin<qint64>(delay, 10)));
                     continue;
@@ -590,19 +599,24 @@ void FfmpegVideoEngine::paceUntil(qint64 ptsRelMs)
             m_clockBasePtsMs = ptsRelMs;
             m_clockBaseElapsed = m_monotonic.elapsed();
             m_clockValid = true;
-            return;
+            return true;
         }
 
         float r = m_rate.load();
         qint64 dueElapsed = static_cast<qint64>((ptsRelMs - m_clockBasePtsMs) / r);
         qint64 delay = dueElapsed - (m_monotonic.elapsed() - m_clockBaseElapsed);
-        if (delay <= 0)
-            return;
+        if (delay <= 0) {
+            // 倍速播放解码跟不上：丢弃落后超过一帧间隔的帧以追赶时钟
+            if (r > 1.0f && delay < -40.0 / r)
+                return false;
+            return true;
+        }
         if (delay > 5000)
             delay = 5000; // PTS 跳变保护
 
         QThread::msleep(static_cast<unsigned long>(qMin<qint64>(delay, 10)));
     }
+    return true;
 }
 
 void FfmpegVideoEngine::displayFrame(AVFrame *frame)

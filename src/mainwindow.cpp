@@ -18,6 +18,7 @@
 #include "infrastructure/ivideo_engine.h"
 #include "infrastructure/ianalysis_engine.h"
 #include "infrastructure/vlc_video_engine.h"
+#include "infrastructure/ffmpeg_video_engine.h"
 #include "infrastructure/python_analysis_engine.h"
 #include "magnifierwidget.h"
 #include "snapshotoverlay.h"
@@ -68,6 +69,7 @@
 #include <QPainter>
 #include <QPropertyAnimation>
 #include <QEasingCurve>
+#include <QActionGroup>
 #include <QDialog>
 #include <QTableWidget>
 #include <QHeaderView>
@@ -87,7 +89,15 @@ MainWindow::MainWindow(QWidget *parent)
     m_timelineModel = new TimelineModel(this);
     m_stateManager = new VideoStateManager(this);
 
-    m_videoEngine = new VlcVideoEngine(this);
+    // 播放引擎选择（QSettings 持久化，默认 FFmpeg；VLC 保留为后备）
+    {
+        QSettings engineSettings("LumenArc", "LumenArc");
+        QString engineName = engineSettings.value("videoEngine", "ffmpeg").toString();
+        if (engineName == "vlc")
+            m_videoEngine = new VlcVideoEngine(this);
+        else
+            m_videoEngine = new FfmpegVideoEngine(this);
+    }
 
     m_videoWidget = new VideoWidget(this);
     m_videoWidget->setVideoEngine(m_videoEngine);
@@ -509,6 +519,32 @@ void MainWindow::createMenus()
 
     QMenu *exportMenu = menuBar()->addMenu(lang("导出(&X)", "&Export"));
     exportMenu->addAction(lang("导出为 CSV(&C)...", "Export to &CSV..."), this, &MainWindow::onExportCsv);
+
+    // Settings menu
+    QMenu *settingsMenu = menuBar()->addMenu(lang("设置(&S)", "&Settings"));
+    QMenu *engineMenu = settingsMenu->addMenu(lang("播放内核（重启生效）", "Playback Engine (restart required)"));
+    QActionGroup *engineGroup = new QActionGroup(this);
+    QAction *ffmpegAction = engineMenu->addAction("FFmpeg");
+    QAction *vlcAction = engineMenu->addAction("VLC");
+    for (QAction *a : {ffmpegAction, vlcAction}) {
+        a->setCheckable(true);
+        engineGroup->addAction(a);
+    }
+    {
+        QSettings s("LumenArc", "LumenArc");
+        QString cur = s.value("videoEngine", "ffmpeg").toString();
+        (cur == "vlc" ? vlcAction : ffmpegAction)->setChecked(true);
+    }
+    connect(ffmpegAction, &QAction::triggered, this, [this]() {
+        QSettings s("LumenArc", "LumenArc");
+        s.setValue("videoEngine", "ffmpeg");
+        showOperationStatus(lang("播放内核将在重启后切换为 FFmpeg", "Engine will switch to FFmpeg after restart"));
+    });
+    connect(vlcAction, &QAction::triggered, this, [this]() {
+        QSettings s("LumenArc", "LumenArc");
+        s.setValue("videoEngine", "vlc");
+        showOperationStatus(lang("播放内核将在重启后切换为 VLC", "Engine will switch to VLC after restart"));
+    });
 
     // Help menu
     QMenu *helpMenu = menuBar()->addMenu(lang("帮助(&H)", "&Help"));
@@ -1875,7 +1911,10 @@ void MainWindow::adjustSpeed(float delta)
 
     m_speedBtn->setText(speedText);
     m_videoEngine->setRate(m_currentSpeed);
-    showOperationStatus(QString(lang("倍速 %1", "Speed %1")).arg(speedText));
+    QString speedStatus = QString(lang("倍速 %1", "Speed %1")).arg(speedText);
+    if (qAbs(m_currentSpeed - 1.0f) > 0.01f && !m_videoEngine->supportsRateAudio())
+        speedStatus += lang("（音频已静音）", " (audio muted)");
+    showOperationStatus(speedStatus);
 }
 
 void MainWindow::updatePlaybackButtons()

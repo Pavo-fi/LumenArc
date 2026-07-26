@@ -56,6 +56,9 @@ public:
     virtual void setRate(float rate) = 0;
     virtual float rate() const = 0;
 
+    /// 倍速时是否支持音频输出（不支持的引擎在 rate!=1.0 时应静音并在 UI 明示）
+    virtual bool supportsRateAudio() const { return true; }
+
 signals:
     void frameReady(const QImage &image);
     void positionChanged(qint64 timeMs);

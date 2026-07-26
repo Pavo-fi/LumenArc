@@ -183,6 +183,65 @@ int main(int argc, char *argv[])
                 printf("[ OK ] audio pipeline %ds (%lld bytes)\n", seconds, audioBytes);
             }
         }
+    } else if (scenario == "step") {
+        // 逐帧步进语义：暂停态连续 seek +1 帧，断言严格单调前进且落点精确
+        float fps = engine.fps();
+        qint64 frameMs = static_cast<qint64>(1000.0f / fps);
+        qint64 base = rec.duration / 2;
+        engine.seek(base);
+        pumpFor(500);
+        int steps = args.size() > 3 ? args[3].toInt() : 30;
+        qint64 prevPos = -1;
+        for (int i = 0; i < steps; ++i) {
+            qint64 target = base + (i + 1) * frameMs;
+            int before = rec.frameCount;
+            engine.seek(target);
+            QElapsedTimer guard; guard.start();
+            while (rec.frameCount == before && guard.elapsed() < 5000)
+                pumpFor(20);
+            if (rec.frameCount == before) {
+                printf("[FAIL] step %d: no frame after seek %lldms\n", i + 1, target);
+                failures++;
+                break;
+            }
+            if (rec.lastPos <= prevPos) {
+                printf("[FAIL] step %d: position not monotonic (%lld <= %lld)\n",
+                       i + 1, rec.lastPos, prevPos);
+                failures++;
+                break;
+            }
+            if (qAbs(rec.lastPos - target) > frameMs) {
+                printf("[FAIL] step %d: landed %lld target %lld\n",
+                       i + 1, rec.lastPos, target);
+                failures++;
+                break;
+            }
+            prevPos = rec.lastPos;
+        }
+        if (failures == 0)
+            printf("[ OK ] frame stepping %d steps (frame=%lldms)\n", steps, frameMs);
+    } else if (scenario == "rate") {
+        // 倍速：2x 播放 3s 墙钟，位置应前进约 6s；0.5x 应前进约 1.5s
+        struct RateCase { float rate; int wallSec; double minAdv; double maxAdv; };
+        QVector<RateCase> cases = {{2.0f, 3, 4000, 7500}, {0.5f, 3, 1000, 2200}};
+        for (const auto &c : cases) {
+            engine.seek(0);
+            pumpFor(400);
+            engine.setRate(c.rate);
+            engine.play();
+            pumpFor(c.wallSec * 1000);
+            engine.pause();
+            engine.setRate(1.0f);
+            double advanced = static_cast<double>(rec.lastPos);
+            printf("[info] rate %.2fx %ds wall: advanced %.0fms (expect %.0f-%.0f)\n",
+                   c.rate, c.wallSec, advanced, c.minAdv, c.maxAdv);
+            if (advanced < c.minAdv || advanced > c.maxAdv) {
+                printf("[FAIL] rate %.2fx position advance out of range\n", c.rate);
+                failures++;
+            }
+        }
+        if (failures == 0)
+            printf("[ OK ] rate cases\n");
     } else {
         printf("[FAIL] unknown scenario %s\n", qPrintable(scenario));
         return 1;

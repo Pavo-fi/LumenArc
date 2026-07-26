@@ -59,6 +59,7 @@ public:
     void setVolume(int vol) override;
     void setRate(float rate) override;
     float rate() const override;
+    bool supportsRateAudio() const override { return false; } // 一期：倍速静音
 
 private:
     enum class Command { None, Play, Pause, Stop, Seek };
@@ -75,7 +76,7 @@ private:
     qint64 audioClockMs() const;              // 音频主时钟（相对毫秒）
     bool drainDecoder();                      // 返回是否取到帧
     void displayFrame(AVFrame *frame);
-    void paceUntil(qint64 ptsRelMs);          // 按时钟节奏等待（可被命令打断）
+    bool paceUntil(qint64 ptsRelMs);          // true=显示该帧；false=过晚丢弃（倍速追帧）
     void postCommand(Command cmd, qint64 arg = 0);
     bool hasPendingCommand();
     qint64 ptsToRelMs(int64_t pts) const;
