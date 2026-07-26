@@ -167,6 +167,7 @@ set(SOURCES
     src/domain/guide_line_model.cpp
     src/domain/timeline_model.cpp
     src/infrastructure/vlc_video_engine.cpp
+    src/infrastructure/ffmpeg_video_engine.cpp
     src/infrastructure/python_analysis_engine.cpp
     src/resources.qrc
 )
@@ -199,7 +200,25 @@ set(HEADERS
     src/infrastructure/ivideo_engine.h
     src/infrastructure/ianalysis_engine.h
     src/infrastructure/vlc_video_engine.h
+    src/infrastructure/ffmpeg_video_engine.h
     src/infrastructure/python_analysis_engine.h
+)
+
+# --- Headless engine test harness ---
+add_executable(lumenarc_engine_test
+    tests/engine_test_main.cpp
+    src/infrastructure/ivideo_engine.h
+    src/infrastructure/ffmpeg_video_engine.h
+    src/infrastructure/ffmpeg_video_engine.cpp
+)
+target_include_directories(lumenarc_engine_test PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+    ${FFMPEG_INCLUDE_DIR}
+)
+target_link_libraries(lumenarc_engine_test PRIVATE
+    Qt6::Core
+    Qt6::Gui
+    ${FFMPEG_LIBRARIES}
 )
 
 # --- Platform-specific executable ---
