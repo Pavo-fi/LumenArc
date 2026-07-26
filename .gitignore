@@ -1,0 +1,62 @@
+# Build directories
+build/
+build_mac/
+Release/
+Debug/
+MinSizeRel/
+RelWithDebInfo/
+
+# VLC extracted (can be downloaded)
+vlc_extracted/
+vlc_sdk/
+
+# Portable distribution files
+portable/*
+
+# Keep bundled system DLLs for Windows 10 compatibility
+!portable/sysdlls/
+!portable/sysdlls/*.dll
+
+# Python cache
+__pycache__/
+*.pyc
+
+# IDE files
+.vs/
+.vscode/
+.idea/
+*.user
+*.suo
+*.sln.docstates
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# macOS app bundle (build output)
+*.app
+*.dmg
+
+# Windows installer
+*.exe
+*.dll
+*.lib
+*.pdb
+*.ilk
+*.exp
+
+# But keep bundled system DLLs for Windows 10 compatibility
+!portable/sysdlls/*.dll
+
+# CMake user settings
+CMakeUserPresets.json
+
+# Compiled files
+*.obj
+*.o
+*.res
+*.tlog
+*.log
+*.lastbuildstate
+*.recipe
+*.filelist

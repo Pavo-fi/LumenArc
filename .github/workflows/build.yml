@@ -1,0 +1,137 @@
+name: Build and Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build-windows:
+    runs-on: windows-2022
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Qt 6
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: '6.8.0'
+          host: 'windows'
+          target: 'desktop'
+          arch: 'win64_msvc2022_64'
+          modules: 'qtcharts'
+
+      - name: Install VLC SDK
+        run: |
+          echo "VLC_SDK_PATH=${{ github.workspace }}\vlc_extracted\vlc-3.0.21" >> $env:GITHUB_ENV
+          choco install vlc -y --no-progress
+          echo "VLC_BIN_PATH=C:\Program Files\VideoLAN\VLC" >> $env:GITHUB_ENV
+        shell: pwsh
+
+      - name: Bundle Python 3.12 embeddable
+        run: |
+          $pyVer = "3.12.8"
+          $pyUrl = "https://www.python.org/ftp/python/$pyVer/python-$pyVer-embed-amd64.zip"
+          Write-Host "Downloading Python $pyVer embeddable..."
+          Invoke-WebRequest -Uri $pyUrl -OutFile "python-embed.zip"
+          Expand-Archive -Path "python-embed.zip" -DestinationPath "build\Release\python"
+          Remove-Item "python-embed.zip"
+
+          # Enable site packages in ._pth file
+          $pthFile = "build\Release\python\python312._pth"
+          Set-Content -Path $pthFile -Value "python312.zip`n.`nimport site" -NoNewline
+
+          # Bootstrap pip into embedded Python
+          Invoke-WebRequest -Uri "https://bootstrap.pypa.io/get-pip.py" -OutFile "build\Release\python\get-pip.py"
+          & "build\Release\python\python.exe" "build\Release\python\get-pip.py" --no-warn-script-location
+          Remove-Item "build\Release\python\get-pip.py"
+
+          # Install packages using embedded Python (correct version)
+          & "build\Release\python\python.exe" -m pip install opencv-python-headless numpy --target "build\Release\python\Lib\site-packages" --no-warn-script-location
+
+          # Cleanup pip/setuptools to reduce size
+          Remove-Item "build\Release\python\Lib\site-packages\pip" -Recurse -Force -ErrorAction SilentlyContinue
+          Remove-Item "build\Release\python\Lib\site-packages\pip-*" -Recurse -Force -ErrorAction SilentlyContinue
+          Remove-Item "build\Release\python\Lib\site-packages\setuptools*" -Recurse -Force -ErrorAction SilentlyContinue
+          Remove-Item "build\Release\python\Lib\site-packages\_distutils_hack" -Recurse -Force -ErrorAction SilentlyContinue
+          Remove-Item "build\Release\python\Lib\site-packages\pkg_resources" -Recurse -Force -ErrorAction SilentlyContinue
+
+          Write-Host "Python bundled successfully"
+        shell: pwsh
+
+      - name: Verify Python works
+        run: |
+          & "build\Release\python\python.exe" -c "import cv2; import numpy; print(f'OK: cv2={cv2.__version__}, numpy={numpy.__version__}')"
+        shell: pwsh
+
+      - name: Configure CMake
+        run: cmake -B build -S . -G "Visual Studio 17 2022" -A x64 -DCMAKE_BUILD_TYPE=Release
+        shell: bash
+
+      - name: Build
+        run: cmake --build build --config Release
+        shell: bash
+
+      - name: Download ffmpeg
+        run: |
+          $ffmpegUrl = "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip"
+          Write-Host "Downloading ffmpeg..."
+          Invoke-WebRequest -Uri $ffmpegUrl -OutFile "ffmpeg.zip"
+          Expand-Archive -Path "ffmpeg.zip" -DestinationPath "ffmpeg_temp" -Force
+          New-Item -ItemType Directory -Path "build\Release\ffmpeg" -Force | Out-Null
+          $ffmpegExe = Get-ChildItem -Path "ffmpeg_temp" -Recurse -Filter "ffmpeg.exe" | Select-Object -First 1
+          if ($ffmpegExe) {
+            Copy-Item -Path $ffmpegExe.FullName -Destination "build\Release\ffmpeg\ffmpeg.exe" -Force
+            Write-Host "ffmpeg copied to build\Release\ffmpeg\ffmpeg.exe"
+          } else {
+            Write-Error "ffmpeg.exe not found in downloaded archive"
+            exit 1
+          }
+          Remove-Item -Path "ffmpeg.zip" -Force
+          Remove-Item -Path "ffmpeg_temp" -Recurse -Force
+        shell: pwsh
+
+      - name: Create Windows package
+        run: |
+          Copy-Item "setup_python_deps.bat" "build\Release\" -ErrorAction SilentlyContinue
+          Copy-Item "lightchaser.jpg" "build\Release\" -ErrorAction SilentlyContinue
+          Copy-Item "追光者 Lumen Arc v0.5 Beta — 操作手册.pdf" "build\Release\" -ErrorAction SilentlyContinue
+          Compress-Archive -Path "build\Release\*" -DestinationPath "LumenArc-${{ github.ref_name }}-win64.zip"
+        shell: pwsh
+
+      - name: Upload Windows artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-release
+          path: LumenArc-${{ github.ref_name }}-win64.zip
+
+  create-release:
+    needs: [build-windows]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: ./artifacts
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            ./artifacts/windows-release/LumenArc-${{ github.ref_name }}-win64.zip
+          body: |
+            追光者 Lumen Arc ${{ github.ref_name }} 更新。内置 Python 分析环境，开箱即用。
+
+            ## 更新内容 (v0.52)
+            - 新增：打包系统运行时 DLL，增加对精简版 Windows 10 设备的兼容性
+            - 修复：无 ROI 时点击音频分析，音量曲线不显示的问题
+            - 修复：启动页 lightchaser.jpg 背景图丢失的问题（嵌入为 Qt 资源）
+            - 修复：切换回视频 A 后分析曲线丢失的问题
+
+            ## 下载说明
+            - **Windows**: `LumenArc-${{ github.ref_name }}-win64.zip` — 解压后双击 LumenArc.exe 运行
+          generate_release_notes: false
+          draft: false
+          prerelease: false
