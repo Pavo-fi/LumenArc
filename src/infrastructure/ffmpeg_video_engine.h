@@ -119,6 +119,7 @@ private:
     qint64 m_clockBaseElapsed = 0;  // 时钟基准对应的单调时钟
     QElapsedTimer m_monotonic;      // 工作线程持久单调时钟
     bool m_eof = false;
+    bool m_drainedAtEof = false;    // EOF 时解码器是否已冲空（frame threading 滞留帧）
 
     // --- 音频面（仅工作线程访问，计数器为原子供诊断读取） ---
     AVCodecContext *m_adec = nullptr;

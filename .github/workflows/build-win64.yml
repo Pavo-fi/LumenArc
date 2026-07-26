@@ -102,6 +102,20 @@ jobs:
           & "build\Release\python\python.exe" -c "import cv2; import numpy; print(f'OK: cv2={cv2.__version__}, numpy={numpy.__version__}')"
         shell: pwsh
 
+      - name: Run engine self-tests
+        run: |
+          New-Item -ItemType Directory -Path "build\testdata" -Force | Out-Null
+          & "build\Release\ffmpeg\ffmpeg.exe" -y -v error -f lavfi -i "testsrc=duration=15:size=640x360:rate=25" -f lavfi -i "sine=frequency=440:duration=15" -c:v libx264 -preset fast -c:a aac "build\testdata\test_clip.mp4"
+          & "build\Release\lumenarc_engine_test.exe" seek-matrix "build\testdata\test_clip.mp4"
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          & "build\Release\lumenarc_engine_test.exe" play "build\testdata\test_clip.mp4" 3
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          & "build\Release\lumenarc_engine_test.exe" audio "build\testdata\test_clip.mp4" 3
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          & "build\Release\lumenarc_engine_test.exe" step "build\testdata\test_clip.mp4" 10
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+        shell: pwsh
+
       - name: Create portable package
         run: |
           # Copy extra files

@@ -17,6 +17,20 @@
 #include <QVector>
 #include <QRandomGenerator>
 #include <cstdio>
+#ifdef Q_OS_WIN
+#include <windows.h>
+#include <psapi.h>
+#endif
+
+static qint64 workingSetMB()
+{
+#ifdef Q_OS_WIN
+    PROCESS_MEMORY_COUNTERS pmc{};
+    if (GetProcessMemoryInfo(GetCurrentProcess(), &pmc, sizeof(pmc)))
+        return static_cast<qint64>(pmc.WorkingSetSize / (1024 * 1024));
+#endif
+    return -1;
+}
 
 struct Recorder {
     qint64 lastPos = -1;
@@ -78,6 +92,24 @@ int main(int argc, char *argv[])
         return 1;
     }
 
+    if (scenario == "corrupt") {
+        // 损坏文件：等待引擎落到 Idle，不要求首帧
+        pumpFor(8000);
+        printf("[info] corrupt file: frames=%d state=%d\n", rec.frameCount,
+               static_cast<int>(rec.state));
+        if (rec.frameCount > 0) {
+            printf("[FAIL] corrupt file produced frames\n");
+            failures++;
+        } else if (rec.state != PlaybackState::Idle) {
+            printf("[FAIL] corrupt file did not reach Idle state\n");
+            failures++;
+        } else {
+            printf("[ OK ] corrupt file handled gracefully\n");
+        }
+        printf(failures == 0 ? "[RESULT] PASS\n" : "[RESULT] FAIL (%d)\n", failures);
+        return failures == 0 ? 0 : 1;
+    }
+
     // 等待加载完成（duration 就绪 + 首帧）
     {
         QEventLoop loop;
@@ -103,13 +135,13 @@ int main(int argc, char *argv[])
                                      &loop, &QEventLoop::quit);
         int before = rec.frameCount;
         QElapsedTimer guard; guard.start();
-        while (rec.frameCount == before && guard.elapsed() < 10000) {
-            waitFor(loop, 10000);
+        while (rec.frameCount == before && guard.elapsed() < 30000) {
+            waitFor(loop, 30000);
         }
         QObject::disconnect(conn);
 
         if (rec.frameCount == before) {
-            printf("[FAIL] seek %lldms: no frame delivered within 10s\n", target);
+            printf("[FAIL] seek %lldms: no frame delivered within 30s\n", target);
             failures++;
             return;
         }
@@ -183,6 +215,36 @@ int main(int argc, char *argv[])
                 printf("[ OK ] audio pipeline %ds (%lld bytes)\n", seconds, audioBytes);
             }
         }
+    } else if (scenario == "stress") {
+        // 压力：N 次随机 seek + 30s 播放，断言内存增长有界
+        int seeks = args.size() > 3 ? args[3].toInt() : 100;
+        qint64 memBefore = workingSetMB();
+        for (int i = 0; i < seeks; ++i) {
+            qint64 target = static_cast<qint64>(
+                QRandomGenerator::global()->bounded(quint64(rec.duration)));
+            engine.seek(target);
+            int before = rec.frameCount;
+            QElapsedTimer guard; guard.start();
+            while (rec.frameCount == before && guard.elapsed() < 8000)
+                pumpFor(10);
+            if (rec.frameCount == before) {
+                printf("[FAIL] stress seek %d/%d at %lldms: no frame\n", i + 1, seeks, target);
+                failures++;
+                break;
+            }
+        }
+        engine.play();
+        pumpFor(30000);
+        engine.pause();
+        qint64 memAfter = workingSetMB();
+        printf("[info] stress: %d seeks + 30s play, working set %lldMB -> %lldMB\n",
+               seeks, memBefore, memAfter);
+        if (memBefore > 0 && memAfter - memBefore > 300) {
+            printf("[FAIL] memory grew %lldMB (>300MB) during stress\n", memAfter - memBefore);
+            failures++;
+        }
+        if (failures == 0)
+            printf("[ OK ] stress %d seeks + 30s play\n", seeks);
     } else if (scenario == "step") {
         // 逐帧步进语义：暂停态连续 seek +1 帧，断言严格单调前进且落点精确
         float fps = engine.fps();

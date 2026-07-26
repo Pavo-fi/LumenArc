@@ -309,6 +309,13 @@ void FfmpegVideoEngine::workerMain()
         // --- 解复用 ---
         int ret = av_read_frame(m_fmt, pkt);
         if (ret == AVERROR_EOF) {
+            // 先冲空解码器：frame threading 会滞留最后 N 帧（含文件末尾 seek 的目标帧）
+            if (!m_drainedAtEof) {
+                avcodec_send_packet(m_vdec, nullptr);
+                drainDecoder();
+                m_drainedAtEof = true;
+                continue;
+            }
             if (m_stepOnce) {
                 m_stepOnce = false;      // seek 到末尾之外：无帧可显示
             } else {
@@ -318,6 +325,7 @@ void FfmpegVideoEngine::workerMain()
             }
             continue;
         }
+        m_drainedAtEof = false;
         if (ret < 0) {
             if (m_quit.load())
                 break;
