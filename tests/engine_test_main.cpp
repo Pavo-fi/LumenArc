@@ -160,6 +160,29 @@ int main(int argc, char *argv[])
         } else {
             printf("[ OK ] playback %ds\n", seconds);
         }
+    } else if (scenario == "audio") {
+        int seconds = args.size() > 3 ? args[3].toInt() : 5;
+        engine.seek(0);
+        pumpFor(500);
+        engine.play();
+        pumpFor(seconds * 1000);
+        engine.pause();
+        qint64 audioBytes = engine.audioBytesWritten();
+        printf("[info] audio %ds: bytesWritten=%lld volume=%d\n",
+               seconds, audioBytes, engine.volume());
+        if (audioBytes <= 0) {
+            printf("[FAIL] no audio bytes decoded\n");
+            failures++;
+        } else {
+            // 音量设置/读取断言
+            engine.setVolume(42);
+            if (engine.volume() != 42) {
+                printf("[FAIL] volume set/get mismatch\n");
+                failures++;
+            } else {
+                printf("[ OK ] audio pipeline %ds (%lld bytes)\n", seconds, audioBytes);
+            }
+        }
     } else {
         printf("[FAIL] unknown scenario %s\n", qPrintable(scenario));
         return 1;

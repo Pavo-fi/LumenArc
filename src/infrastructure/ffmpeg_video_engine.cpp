@@ -11,12 +11,17 @@
 #include "ffmpeg_video_engine.h"
 #include <QDebug>
 #include <QElapsedTimer>
+#include <QAudioSink>
+#include <QAudioDevice>
+#include <QAudioFormat>
+#include <QMediaDevices>
 
 extern "C" {
 #include <libavformat/avformat.h>
 #include <libavcodec/avcodec.h>
 #include <libavutil/avutil.h>
 #include <libswscale/swscale.h>
+#include <libswresample/swresample.h>
 }
 
 FfmpegVideoEngine::FfmpegVideoEngine(QObject *parent)
@@ -78,7 +83,130 @@ int FfmpegVideoEngine::videoWidth() const { return m_width.load(); }
 int FfmpegVideoEngine::videoHeight() const { return m_height.load(); }
 float FfmpegVideoEngine::fps() const { return m_fps > 0.0f ? m_fps.load() : 30.0f; }
 int FfmpegVideoEngine::volume() const { return m_volume.load(); }
-void FfmpegVideoEngine::setVolume(int vol) { m_volume = qBound(0, vol, 100); }
+void FfmpegVideoEngine::setVolume(int vol)
+{
+    m_volume = qBound(0, vol, 100);   // 原子量，播放面随音频包应用
+}
+
+// ---------------------------------------------------------------------------
+// 音频输出（仅工作线程调用）
+// ---------------------------------------------------------------------------
+
+bool FfmpegVideoEngine::ensureAudioOutput()
+{
+    if (m_sink)
+        return true;
+    if (!m_adec)
+        return false;
+
+    QAudioDevice device = QMediaDevices::defaultAudioOutput();
+    if (device.isNull())
+        return false;
+
+    m_outSampleRate = m_adec->sample_rate > 0 ? m_adec->sample_rate : 44100;
+    m_outChannels = qBound(1, m_adec->ch_layout.nb_channels, 2);
+
+    QAudioFormat fmt;
+    fmt.setSampleRate(m_outSampleRate);
+    fmt.setChannelCount(m_outChannels);
+    fmt.setSampleFormat(QAudioFormat::Int16);
+    if (!device.isFormatSupported(fmt)) {
+        fmt = device.preferredFormat();
+        m_outSampleRate = fmt.sampleRate();
+        m_outChannels = fmt.channelCount();
+    }
+
+    // 重采样器：解码帧格式 → 输出格式
+    AVChannelLayout outLayout;
+    av_channel_layout_default(&outLayout, m_outChannels);
+    if (swr_alloc_set_opts2(&m_swr, &outLayout, AV_SAMPLE_FMT_S16, m_outSampleRate,
+                            &m_adec->ch_layout, m_adec->sample_fmt,
+                            m_adec->sample_rate, 0, nullptr) < 0 || !m_swr)
+        return false;
+    av_channel_layout_uninit(&outLayout);
+    if (swr_init(m_swr) < 0) {
+        swr_free(&m_swr);
+        return false;
+    }
+
+    int bytesPerSec = m_outSampleRate * m_outChannels * 2;
+    m_sink = new QAudioSink(device, fmt);
+    m_sink->setBufferSize(bytesPerSec);              // 1s 设备缓冲
+    m_sink->setVolume(m_volume.load() / 100.0f);
+    // 推模式：工作线程无 Qt 事件循环，拉模式的设备回调不会被驱动
+    m_sinkIo = m_sink->start();
+    m_audioSinkOk = (m_sinkIo != nullptr);
+    return m_audioSinkOk.load();
+}
+
+void FfmpegVideoEngine::suspendAudio()
+{
+    if (m_sink)
+        m_sink->suspend();
+}
+
+void FfmpegVideoEngine::resumeAudio()
+{
+    if (m_sink)
+        m_sink->resume();
+}
+
+qint64 FfmpegVideoEngine::audioClockMs() const
+{
+    if (!m_sink || m_outSampleRate <= 0)
+        return 0;
+    qint64 bytesPerSec = static_cast<qint64>(m_outSampleRate) * m_outChannels * 2;
+    qint64 buffered = m_sink->bufferSize() - m_sink->bytesFree();
+    qint64 playedMs = (m_audioBytesWritten.load() - buffered) * 1000 / bytesPerSec;
+    return m_audioBaseRelMs + qMax<qint64>(0, playedMs);
+}
+
+void FfmpegVideoEngine::processAudioPacket(AVPacket *pkt)
+{
+    if (!m_adec)
+        return;
+
+    // rate != 1.0：一期音频静音，解码直接丢弃
+    if (qAbs(m_rate.load() - 1.0f) > 0.01f)
+        return;
+
+    if (!ensureAudioOutput())
+        return;
+
+    m_sink->setVolume(m_volume.load() / 100.0f);  // 音量原子量随包应用
+
+    if (avcodec_send_packet(m_adec, pkt) < 0)
+        return;
+
+    AVFrame *frame = av_frame_alloc();
+    while (avcodec_receive_frame(m_adec, frame) >= 0) {
+        int outSamples = swr_get_out_samples(m_swr, frame->nb_samples);
+        if (outSamples > 0) {
+            QByteArray out(outSamples * m_outChannels * 2, Qt::Uninitialized);
+            uint8_t *outBuf[1] = { reinterpret_cast<uint8_t *>(out.data()) };
+            int converted = swr_convert(m_swr, outBuf, outSamples,
+                                        const_cast<const uint8_t **>(frame->extended_data),
+                                        frame->nb_samples);
+            if (converted > 0) {
+                qint64 bytes = static_cast<qint64>(converted) * m_outChannels * 2;
+                // 背压：设备缓冲满则短暂等待（播放面自然节流）
+                int guard = 0;
+                while (m_sink->bytesFree() < bytes && guard++ < 100
+                       && !m_quit.load()
+                       && m_state.load() == static_cast<int>(PlaybackState::Playing)
+                       && !hasPendingCommand()) {
+                    QThread::msleep(2);
+                }
+                if (m_sinkIo)
+                    m_sinkIo->write(out.constData(), bytes);
+                m_audioBytesWritten += bytes;
+            }
+        }
+        av_frame_unref(frame);
+    }
+    av_frame_free(&frame);
+}
+
 float FfmpegVideoEngine::rate() const { return m_rate.load(); }
 
 void FfmpegVideoEngine::setRate(float rate)
@@ -149,17 +277,20 @@ void FfmpegVideoEngine::workerMain()
                     handleSeek(0);   // EOF 后重播：从头开始
                 m_clockValid = false;
                 m_state = static_cast<int>(PlaybackState::Playing);
+                resumeAudio();
                 emit stateChanged(PlaybackState::Playing);
                 break;
             case Command::Pause:
                 if (m_state.load() == static_cast<int>(PlaybackState::Playing)) {
                     m_state = static_cast<int>(PlaybackState::Paused);
+                    suspendAudio();
                     emit stateChanged(PlaybackState::Paused);
                 }
                 break;
             case Command::Stop:
                 handleSeek(0);
                 m_state = static_cast<int>(PlaybackState::Stopped);
+                suspendAudio();
                 emit stateChanged(PlaybackState::Stopped);
                 break;
             case Command::Seek:
@@ -202,6 +333,9 @@ void FfmpegVideoEngine::workerMain()
 
         if (pkt->stream_index == m_vstream)
             processVideoPacket(pkt);
+        else if (pkt->stream_index == m_astream &&
+                 m_state.load() == static_cast<int>(PlaybackState::Playing))
+            processAudioPacket(pkt);
         av_packet_unref(pkt);
     }
 
@@ -260,6 +394,25 @@ bool FfmpegVideoEngine::openFile(const QString &filePath)
             ? av_rescale_q(startPts, vs->time_base, AVRational{1, 1000})
             : 0;
 
+    // --- 音频流（可选）：解码器 + 重采样器，输出端惰性创建 ---
+    m_astream = av_find_best_stream(m_fmt, AVMEDIA_TYPE_AUDIO, -1, -1, nullptr, 0);
+    if (m_astream >= 0) {
+        AVStream *as = m_fmt->streams[m_astream];
+        const AVCodec *acodec = avcodec_find_decoder(as->codecpar->codec_id);
+        if (acodec) {
+            m_adec = avcodec_alloc_context3(acodec);
+            avcodec_parameters_to_context(m_adec, as->codecpar);
+            if (avcodec_open2(m_adec, acodec, nullptr) < 0) {
+                avcodec_free_context(&m_adec);
+                m_adec = nullptr;
+                m_astream = -1;
+            }
+        } else {
+            m_astream = -1;
+        }
+    }
+    m_audioMaster = (m_astream >= 0);
+
     m_discardBeforeRelMs = -1;
     m_stepOnce = false;
     m_eof = false;
@@ -272,6 +425,14 @@ bool FfmpegVideoEngine::openFile(const QString &filePath)
 
 void FfmpegVideoEngine::closeFile()
 {
+    if (m_sink) { m_sink->stop(); delete m_sink; m_sink = nullptr; }
+    m_sinkIo = nullptr;
+    if (m_swr) { swr_free(&m_swr); m_swr = nullptr; }
+    if (m_adec) { avcodec_free_context(&m_adec); m_adec = nullptr; }
+    m_astream = -1;
+    m_audioMaster = false;
+    m_audioSinkOk = false;
+    m_audioBytesWritten = 0;
     if (m_sws) { sws_freeContext(m_sws); m_sws = nullptr; }
     m_swsW = m_swsH = 0; m_swsFmt = -1;
     if (m_vdec) { avcodec_free_context(&m_vdec); m_vdec = nullptr; }
@@ -312,6 +473,14 @@ void FfmpegVideoEngine::handleSeek(qint64 timeMs)
         av_seek_frame(m_fmt, -1, ts, AVSEEK_FLAG_BACKWARD);
 
     avcodec_flush_buffers(m_vdec);
+    if (m_adec)
+        avcodec_flush_buffers(m_adec);
+    if (m_sink) {
+        m_sink->reset();               // 丢弃设备内残余音频
+        m_sinkIo = m_sink->start();    // 重置后重新进入推模式
+    }
+    m_audioBytesWritten = 0;
+    m_audioBaseRelMs = timeMs;
 
     // seek 落点可能早于目标（关键帧），解码后丢弃早于目标的帧（容差半帧）
     qint64 halfFrame = m_fps > 0.0f ? static_cast<qint64>(500.0f / m_fps.load()) : 20;
@@ -385,11 +554,37 @@ void FfmpegVideoEngine::paceUntil(qint64 ptsRelMs)
 {
     if (!m_monotonic.isValid())
         m_monotonic.start();
+
+    // 音频主时钟模式（rate==1.0 且有可用音轨）：视频帧等待音频时钟
+    bool audioMaster = m_audioMaster && m_audioSinkOk.load()
+                       && qAbs(m_rate.load() - 1.0f) < 0.01f;
+
     while (!m_quit.load()) {
         if (m_state.load() != static_cast<int>(PlaybackState::Playing))
             return;
         if (hasPendingCommand())
             return;       // 有命令（seek 等）待处理，立即返回主循环
+
+        if (audioMaster) {
+            // 新鲜度检查：音频时钟必须真的在前进（靠音频包持续喂入维持）。
+            // 停滞则说明缓冲未建立或欠载，立即回退系统时钟，防止单线程管线死锁。
+            qint64 ac = audioClockMs();
+            if (ac > m_lastAudioPlayedMs + 20) {
+                m_lastAudioPlayedMs = ac;
+                m_lastAudioProgressElapsed = m_monotonic.elapsed();
+            }
+            bool fresh = (m_monotonic.elapsed() - m_lastAudioProgressElapsed) < 500;
+            if (fresh) {
+                qint64 delay = ptsRelMs - ac;
+                if (delay <= 10)
+                    return;   // 到点或落后：立即显示（丢帧追齐留待 N4）
+                if (delay <= 250) {
+                    QThread::msleep(static_cast<unsigned long>(qMin<qint64>(delay, 10)));
+                    continue;
+                }
+            }
+            audioMaster = false;  // 回退系统时钟
+        }
 
         if (!m_clockValid) {
             m_clockBasePtsMs = ptsRelMs;

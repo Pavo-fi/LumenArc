@@ -27,8 +27,11 @@
 struct AVFormatContext;
 struct AVCodecContext;
 struct SwsContext;
+struct SwrContext;
 struct AVPacket;
 struct AVFrame;
+class QAudioSink;
+class QIODevice;
 
 class FfmpegVideoEngine : public IVideoEngine
 {
@@ -65,12 +68,23 @@ private:
     void closeFile();                         // 工作线程内调用
     void handleSeek(qint64 timeMs);           // 工作线程内调用
     void processVideoPacket(AVPacket *pkt);   // 送包 + 排干解码器
+    void processAudioPacket(AVPacket *pkt);   // 音频解码 → 重采样 → 环形缓冲
+    bool ensureAudioOutput();                 // 惰性创建 QAudioSink（工作线程内）
+    void suspendAudio();
+    void resumeAudio();
+    qint64 audioClockMs() const;              // 音频主时钟（相对毫秒）
     bool drainDecoder();                      // 返回是否取到帧
     void displayFrame(AVFrame *frame);
     void paceUntil(qint64 ptsRelMs);          // 按时钟节奏等待（可被命令打断）
     void postCommand(Command cmd, qint64 arg = 0);
     bool hasPendingCommand();
     qint64 ptsToRelMs(int64_t pts) const;
+
+public:
+    /// 诊断/测试用：本次 seek 以来写入音频缓冲的字节数
+    qint64 audioBytesWritten() const { return m_audioBytesWritten.load(); }
+
+private:
 
     // --- 控制面（UI 线程读写，经锁/原子保护） ---
     mutable QMutex m_cmdMutex;
@@ -104,4 +118,19 @@ private:
     qint64 m_clockBaseElapsed = 0;  // 时钟基准对应的单调时钟
     QElapsedTimer m_monotonic;      // 工作线程持久单调时钟
     bool m_eof = false;
+
+    // --- 音频面（仅工作线程访问，计数器为原子供诊断读取） ---
+    AVCodecContext *m_adec = nullptr;
+    SwrContext *m_swr = nullptr;
+    QAudioSink *m_sink = nullptr;
+    QIODevice *m_sinkIo = nullptr;  // 推模式输出设备
+    int m_astream = -1;
+    int m_outSampleRate = 0;
+    int m_outChannels = 0;
+    bool m_audioMaster = false;     // 有可用音轨且 rate==1.0 时音频为主时钟
+    std::atomic<qint64> m_audioBytesWritten{0};
+    qint64 m_audioBaseRelMs = 0;    // 本次 seek 后音频写入基点（相对毫秒）
+    std::atomic<bool> m_audioSinkOk{false};
+    qint64 m_lastAudioPlayedMs = -1;      // 上次观测到的音频时钟值
+    qint64 m_lastAudioProgressElapsed = 0;// 音频时钟上次前进对应的单调时钟
 };
