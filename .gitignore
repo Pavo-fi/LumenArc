@@ -10,6 +10,9 @@ RelWithDebInfo/
 vlc_extracted/
 vlc_sdk/
 
+# FFmpeg SDK (can be downloaded, see setup_deps.py / CI)
+third_party/ffmpeg/
+
 # Portable distribution files
 portable/*
 

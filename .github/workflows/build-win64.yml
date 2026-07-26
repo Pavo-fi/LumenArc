@@ -19,7 +19,7 @@ jobs:
           host: 'windows'
           target: 'desktop'
           arch: 'win64_msvc2022_64'
-          modules: 'qtcharts'
+          modules: 'qtcharts qtmultimedia'
 
       - name: Install VLC SDK
         run: |
@@ -35,6 +35,17 @@ jobs:
       - name: Build
         run: cmake --build build --config Release
         shell: bash
+
+      - name: Download FFmpeg SDK (LGPL shared)
+        run: |
+          $url = "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-lgpl-shared.zip"
+          Invoke-WebRequest -Uri $url -OutFile "ffmpeg-sdk.zip"
+          Expand-Archive -Path "ffmpeg-sdk.zip" -DestinationPath "ffmpeg-sdk-temp" -Force
+          $inner = Get-ChildItem "ffmpeg-sdk-temp" -Directory | Select-Object -First 1
+          New-Item -ItemType Directory -Path "third_party" -Force | Out-Null
+          Move-Item $inner.FullName "third_party\ffmpeg" -Force
+          Remove-Item "ffmpeg-sdk.zip", "ffmpeg-sdk-temp" -Recurse -Force
+        shell: pwsh
 
       - name: Download ffmpeg
         run: |

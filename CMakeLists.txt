@@ -14,7 +14,43 @@ endif()
 
 # --- Qt6 ---
 set(CMAKE_PREFIX_PATH "${CMAKE_PREFIX_PATH};$ENV{QT6_DIR}")
-find_package(Qt6 REQUIRED COMPONENTS Widgets Charts)
+find_package(Qt6 REQUIRED COMPONENTS Widgets Charts Multimedia)
+
+# --- FFmpeg (LGPL shared build: bin/ include/ lib/) ---
+set(FFMPEG_SDK_PATH "" CACHE PATH "Path to FFmpeg SDK root (contains include/ and lib/)")
+if(NOT FFMPEG_SDK_PATH AND DEFINED ENV{FFMPEG_SDK_PATH})
+    set(FFMPEG_SDK_PATH "$ENV{FFMPEG_SDK_PATH}")
+endif()
+if(NOT FFMPEG_SDK_PATH AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/third_party/ffmpeg/include/libavformat/avformat.h")
+    set(FFMPEG_SDK_PATH "${CMAKE_CURRENT_SOURCE_DIR}/third_party/ffmpeg")
+endif()
+
+set(FFMPEG_INCLUDE_DIR)
+set(FFMPEG_LIBRARIES)
+if(FFMPEG_SDK_PATH AND EXISTS "${FFMPEG_SDK_PATH}/include/libavformat/avformat.h")
+    set(FFMPEG_INCLUDE_DIR "${FFMPEG_SDK_PATH}/include")
+    foreach(comp avformat avcodec avutil swscale swresample)
+        if(WIN32)
+            set(libfile "${FFMPEG_SDK_PATH}/lib/${comp}.lib")
+        else()
+            set(libfile "${FFMPEG_SDK_PATH}/lib/lib${comp}.so")
+        endif()
+        if(EXISTS "${libfile}")
+            list(APPEND FFMPEG_LIBRARIES "${libfile}")
+        endif()
+    endforeach()
+endif()
+if(NOT FFMPEG_INCLUDE_DIR OR NOT FFMPEG_LIBRARIES)
+    message(FATAL_ERROR
+        "FFmpeg SDK not found. Set FFMPEG_SDK_PATH to the FFmpeg root\n"
+        "(the folder containing include/libavformat/avformat.h and lib/).\n"
+        "Download the LGPL shared build from:\n"
+        "  https://github.com/BtbN/FFmpeg-Builds/releases (ffmpeg-master-latest-win64-lgpl-shared.zip)\n"
+        "and extract it to third_party/ffmpeg."
+    )
+endif()
+message(STATUS "FFmpeg include: ${FFMPEG_INCLUDE_DIR}")
+message(STATUS "FFmpeg libraries: ${FFMPEG_LIBRARIES}")
 
 # --- libVLC ---
 set(VLC_SDK_PATH "" CACHE PATH "Path to VLC SDK root (contains include/ and lib/)")
@@ -193,13 +229,16 @@ endif()
 target_include_directories(${PROJECT_NAME} PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src
     ${VLC_INCLUDE_DIR}
+    ${FFMPEG_INCLUDE_DIR}
 )
 
 target_link_libraries(${PROJECT_NAME} PRIVATE
     Qt6::Widgets
     Qt6::Charts
     Qt6::OpenGL
+    Qt6::Multimedia
     ${VLC_LIBRARY}
+    ${FFMPEG_LIBRARIES}
 )
 
 # Platform-specific libraries
@@ -251,6 +290,19 @@ if(WIN32)
                     "${VLC_PLUGINS_SRC}"
                     "$<TARGET_FILE_DIR:${PROJECT_NAME}>/plugins"
                 COMMENT "Copying VLC plugins..."
+            )
+        endif()
+    endif()
+
+    # Copy FFmpeg runtime DLLs
+    if(FFMPEG_SDK_PATH AND EXISTS "${FFMPEG_SDK_PATH}/bin")
+        file(GLOB FFMPEG_DLLS "${FFMPEG_SDK_PATH}/bin/av*.dll" "${FFMPEG_SDK_PATH}/bin/sw*.dll")
+        if(FFMPEG_DLLS)
+            add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                    ${FFMPEG_DLLS}
+                    "$<TARGET_FILE_DIR:${PROJECT_NAME}>"
+                COMMENT "Copying FFmpeg DLLs..."
             )
         endif()
     endif()
