@@ -86,6 +86,8 @@ public:
     qint64 audioBytesWritten() const { return m_audioBytesWritten.load(); }
     /// 诊断/测试用：音频主时钟（相对毫秒）
     qint64 audioClockMs() const;
+    /// 诊断/测试用：是否存在可用音轨
+    bool hasAudio() const { return m_astream >= 0; }
 
 private:
 
@@ -136,6 +138,10 @@ private:
     qint64 m_audioBaseRelMs = -1;   // 首个写入样本的 PTS（相对毫秒），-1=未锚定
     qint64 m_audioDiscardBeforeRelMs = -1; // seek 后丢弃早于该相对 PTS 的音频
     std::atomic<bool> m_audioSinkOk{false};
-    qint64 m_lastAudioPlayedMs = -1;      // 上次观测到的音频时钟值
     qint64 m_lastAudioProgressElapsed = 0;// 音频时钟上次前进对应的单调时钟
+    qint64 m_audioFrameMs = 64;           // 音频帧时长估算（AAC 1024样本）
+    // --- 音频时钟平滑（低通滤波，消除低采样率阶梯卡顿） ---
+    qint64 m_smoothAudioClock = -1;       // 平滑时钟基准（-1=未锚定）
+    qint64 m_smoothClockElapsed = 0;      // 平滑基准对应的单调时钟
+    qint64 m_lastRawAudioClock = -1;      // 上次原始时钟观测值
 };

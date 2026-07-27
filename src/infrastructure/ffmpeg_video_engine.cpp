@@ -136,6 +136,8 @@ bool FfmpegVideoEngine::ensureAudioOutput()
     // 推模式：工作线程无 Qt 事件循环，拉模式的设备回调不会被驱动
     m_sinkIo = m_sink->start();
     m_audioSinkOk = (m_sinkIo != nullptr);
+    // 音频帧时长估算：AAC 固定 1024 样本/帧（8kHz=128ms，16kHz=64ms，44.1k≈23ms）
+    m_audioFrameMs = qMax<qint64>(1, 1024 * 1000 / m_adec->sample_rate);
     return m_audioSinkOk.load();
 }
 
@@ -153,12 +155,11 @@ void FfmpegVideoEngine::resumeAudio()
 
 qint64 FfmpegVideoEngine::audioClockMs() const
 {
-    if (!m_sink || m_outSampleRate <= 0 || m_audioBaseRelMs < 0)
+    if (!m_sink || m_audioBaseRelMs < 0)
         return 0;
-    qint64 bytesPerSec = static_cast<qint64>(m_outSampleRate) * m_outChannels * 2;
-    qint64 buffered = m_sink->bufferSize() - m_sink->bytesFree();
-    qint64 playedMs = (m_audioBytesWritten.load() - buffered) * 1000 / bytesPerSec;
-    return m_audioBaseRelMs + qMax<qint64>(0, playedMs);
+    // 推模式下"写入量-缓冲量"会随 demux 速度漂移（runaway 反馈），
+    // 唯一可信的已播放度量是设备自身时钟 elapsedUSecs()。
+    return m_audioBaseRelMs + m_sink->elapsedUSecs() / 1000;
 }
 
 void FfmpegVideoEngine::processAudioPacket(AVPacket *pkt)
@@ -532,6 +533,8 @@ void FfmpegVideoEngine::handleSeek(qint64 timeMs)
     }
     m_audioBytesWritten = 0;
     m_audioBaseRelMs = -1;   // 等待首个写入样本锚定
+    m_smoothAudioClock = -1; // 重建平滑时钟
+    m_lastRawAudioClock = -1;
 
     // seek 落点可能早于目标（关键帧），解码后丢弃早于目标的帧（容差半帧）
     qint64 halfFrame = m_fps > 0.0f ? static_cast<qint64>(500.0f / m_fps.load()) : 20;
@@ -628,13 +631,33 @@ bool FfmpegVideoEngine::paceUntil(qint64 ptsRelMs)
 
         if (audioMaster) {
             // 新鲜度检查：音频时钟必须真的在前进（靠音频包持续喂入维持）。
-            // 停滞则说明缓冲未建立或欠载，立即回退系统时钟，防止单线程管线死锁。
-            qint64 ac = audioClockMs();
-            if (ac > m_lastAudioPlayedMs + 20) {
-                m_lastAudioPlayedMs = ac;
-                m_lastAudioProgressElapsed = m_monotonic.elapsed();
+            // 阈值随音频帧时长放宽（8kHz AAC 一帧 128ms，固定阈值会误判停滞）。
+            qint64 rawAc = audioClockMs();
+            qint64 now = m_monotonic.elapsed();
+            if (rawAc != m_lastRawAudioClock) {
+                m_lastRawAudioClock = rawAc;
+                m_lastAudioProgressElapsed = now;
             }
-            bool fresh = (m_monotonic.elapsed() - m_lastAudioProgressElapsed) < 500;
+            qint64 staleThreshold = qMax<qint64>(500, 4 * m_audioFrameMs);
+            bool fresh = (now - m_lastAudioProgressElapsed) < staleThreshold;
+
+            // 低通平滑：观测值阶梯前进（一个音频帧一步）， pacing 需要连续时钟。
+            // 估计 = 平滑基准 + 墙钟增量；新观测按 1/4 增益渐进校正，大漂移直接重置。
+            if (m_smoothAudioClock < 0) {
+                m_smoothAudioClock = rawAc;
+                m_smoothClockElapsed = now;
+            } else {
+                qint64 estimate = m_smoothAudioClock + (now - m_smoothClockElapsed);
+                qint64 drift = rawAc - estimate;
+                if (qAbs(drift) > 300) {
+                    m_smoothAudioClock = rawAc;
+                } else if (drift != 0) {
+                    m_smoothAudioClock += drift / 4;
+                }
+                m_smoothClockElapsed = now;
+            }
+            qint64 ac = m_smoothAudioClock + (now - m_smoothClockElapsed);
+
             if (fresh) {
                 qint64 delay = ptsRelMs - ac;
                 if (delay <= 10)

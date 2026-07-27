@@ -17,6 +17,7 @@
 #include <QVector>
 #include <QRandomGenerator>
 #include <cstdio>
+#include <cmath>
 #ifdef Q_OS_WIN
 #include <windows.h>
 #include <psapi.h>
@@ -202,7 +203,9 @@ int main(int argc, char *argv[])
         qint64 audioBytes = engine.audioBytesWritten();
         printf("[info] audio %ds: bytesWritten=%lld volume=%d\n",
                seconds, audioBytes, engine.volume());
-        if (audioBytes <= 0) {
+        if (!engine.hasAudio()) {
+            printf("[ OK ] no audio stream (skipped)\n");
+        } else if (audioBytes <= 0) {
             printf("[FAIL] no audio bytes decoded\n");
             failures++;
         } else {
@@ -256,11 +259,9 @@ int main(int argc, char *argv[])
             pumpFor(500);
             qint64 v = rec.lastPos;
             qint64 a = engine.audioClockMs();
-            if (a > 0) {
+            if (a > 0 && i >= 3) {   // 跳过启动瞬态（音频时钟锚定前）
                 qint64 dev = qAbs(v - a);
                 maxDev = qMax(maxDev, dev);
-                printf("[info] avsync t=%.1fs video=%lld audio=%lld dev=%lldms\n",
-                       (i + 1) * 0.5, v, a, dev);
             }
         }
         engine.pause();
@@ -272,6 +273,48 @@ int main(int argc, char *argv[])
             failures++;
         } else {
             printf("[ OK ] avsync max deviation %lldms\n", maxDev);
+        }
+    } else if (scenario == "jitter") {
+        // 帧显示间隔抖动：低采样率音频时钟阶梯会导致卡顿，平滑后应收敛
+        engine.seek(rec.duration * 3 / 10);
+        pumpFor(500);
+        QVector<qint64> arrivals;
+        QElapsedTimer wall;
+        wall.start();
+        auto conn = QObject::connect(&engine, &IVideoEngine::frameReady,
+                                     &app, [&](const QImage &) {
+            arrivals.append(wall.elapsed());
+        });
+        engine.play();
+        pumpFor(1000);              // 跳过启动瞬态
+        arrivals.clear();
+        pumpFor(5000);
+        engine.pause();
+        QObject::disconnect(conn);
+
+        if (arrivals.size() < 20) {
+            printf("[FAIL] jitter: too few frames (%lld)\n", arrivals.size());
+            failures++;
+        } else {
+            QVector<qint64> intervals;
+            double sum = 0;
+            for (int i = 1; i < arrivals.size(); ++i) {
+                intervals.append(arrivals[i] - arrivals[i - 1]);
+                sum += intervals.last();
+            }
+            double mean = sum / intervals.size();
+            double var = 0;
+            for (qint64 iv : intervals)
+                var += (iv - mean) * (iv - mean);
+            double stdev = std::sqrt(var / intervals.size());
+            printf("[info] jitter: frames=%lld mean=%.1fms stdev=%.1fms (%.0f%%)\n",
+                   arrivals.size(), mean, stdev, stdev / mean * 100);
+            if (stdev > mean * 0.8) {
+                printf("[FAIL] jitter: stdev %.1fms > 80%% of mean %.1fms\n", stdev, mean);
+                failures++;
+            } else {
+                printf("[ OK ] jitter stdev %.0f%% of mean\n", stdev / mean * 100);
+            }
         }
     } else if (scenario == "step") {
         // 逐帧步进语义：暂停态连续 seek +1 帧，断言严格单调前进且落点精确
