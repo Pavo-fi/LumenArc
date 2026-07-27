@@ -26,6 +26,10 @@ extern "C" {
 #include <libswresample/swresample.h>
 }
 
+#ifdef Q_OS_WIN
+#include <dxgi.h>
+#endif
+
 // D3D11VA get_format 回调：优先硬解像素格式，否则回退软解
 static enum AVPixelFormat getHwFormatD3D11(AVCodecContext *, const enum AVPixelFormat *fmts)
 {
@@ -34,6 +38,31 @@ static enum AVPixelFormat getHwFormatD3D11(AVCodecContext *, const enum AVPixelF
             return AV_PIX_FMT_D3D11;
     }
     return fmts[0];
+}
+
+QVector<FfmpegVideoEngine::D3D11AdapterInfo> FfmpegVideoEngine::availableAdapters()
+{
+    QVector<D3D11AdapterInfo> out;
+#ifdef Q_OS_WIN
+    IDXGIFactory1 *factory = nullptr;
+    if (FAILED(CreateDXGIFactory1(IID_PPV_ARGS(&factory))) || !factory)
+        return out;
+    IDXGIAdapter1 *adapter = nullptr;
+    for (UINT i = 0; factory->EnumAdapters1(i, &adapter) != DXGI_ERROR_NOT_FOUND; ++i) {
+        if (!adapter)
+            continue;
+        DXGI_ADAPTER_DESC1 desc{};
+        adapter->GetDesc1(&desc);
+        adapter->Release();
+        if (desc.Flags & DXGI_ADAPTER_FLAG_SOFTWARE)
+            continue;   // 跳过 WARP 软适配器
+        out.append({static_cast<int>(i),
+                    QString::fromWCharArray(desc.Description),
+                    static_cast<qint64>(desc.DedicatedVideoMemory / (1024 * 1024))});
+    }
+    factory->Release();
+#endif
+    return out;
 }
 
 FfmpegVideoEngine::FfmpegVideoEngine(QObject *parent)
@@ -438,11 +467,40 @@ bool FfmpegVideoEngine::openFile(const QString &filePath)
 
     // D3D11VA 硬解（可选；任何一步失败都静默回退软解）
     m_hwActive = false;
+    m_hwAdapterName.clear();
     bool wantHw = false;
     int hwErr = 0;
     if (m_hwDecodeEnabled.load()) {
-        hwErr = av_hwdevice_ctx_create(&m_hwDeviceCtx, AV_HWDEVICE_TYPE_D3D11VA,
-                                       nullptr, nullptr, 0);
+        int idx = m_hwAdapterIndex.load();
+        QVector<D3D11AdapterInfo> ads = availableAdapters();
+        if (idx < 0 && !ads.isEmpty()) {
+            // 自动策略：偏好 Dedicated VRAM 最大者（独显）；
+            // 无独显的机器自然落到核显/集显，行为与原先一致
+            int best = 0;
+            for (int i = 1; i < ads.size(); ++i) {
+                if (ads[i].dedicatedVramMB > ads[best].dedicatedVramMB)
+                    best = i;
+            }
+            idx = ads[best].index;
+        }
+        if (idx >= 0) {
+            QByteArray dev = QByteArray::number(idx);
+            hwErr = av_hwdevice_ctx_create(&m_hwDeviceCtx, AV_HWDEVICE_TYPE_D3D11VA,
+                                           dev.constData(), nullptr, 0);
+            if (hwErr >= 0) {
+                for (const auto &a : ads)
+                    if (a.index == idx) { m_hwAdapterName = a.name; break; }
+            }
+        } else {
+            hwErr = av_hwdevice_ctx_create(&m_hwDeviceCtx, AV_HWDEVICE_TYPE_D3D11VA,
+                                           nullptr, nullptr, 0);
+        }
+        if (hwErr < 0 && idx >= 0) {
+            // 指定适配器失败：回退系统默认再试一次
+            hwErr = av_hwdevice_ctx_create(&m_hwDeviceCtx, AV_HWDEVICE_TYPE_D3D11VA,
+                                           nullptr, nullptr, 0);
+            m_hwAdapterName.clear();
+        }
         wantHw = (hwErr >= 0);
     }
     if (wantHw) {

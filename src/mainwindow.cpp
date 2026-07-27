@@ -99,6 +99,8 @@ MainWindow::MainWindow(QWidget *parent)
             auto *ffEngine = new FfmpegVideoEngine(this);
             ffEngine->setHardwareDecode(
                 engineSettings.value("hwDecode", true).toBool());
+            ffEngine->setHardwareAdapter(
+                engineSettings.value("hwAdapter", -1).toInt());
             m_videoEngine = ffEngine;
         }
     }
@@ -560,6 +562,28 @@ void MainWindow::createMenus()
         QSettings s("LumenArc", "LumenArc");
         s.setValue("hwDecode", on);
     });
+
+    // 硬解设备选择（自动=偏好独显；重启生效）
+    QMenu *adapterMenu = settingsMenu->addMenu(lang("硬解设备（重启生效）", "HW Decode Adapter (restart required)"));
+    QActionGroup *adapterGroup = new QActionGroup(this);
+    auto addAdapterAction = [this, adapterMenu, adapterGroup](const QString &title, int index, int current) {
+        QAction *a = adapterMenu->addAction(title);
+        a->setCheckable(true);
+        adapterGroup->addAction(a);
+        if (index == current)
+            a->setChecked(true);
+        connect(a, &QAction::triggered, this, [index]() {
+            QSettings s("LumenArc", "LumenArc");
+            s.setValue("hwAdapter", index);
+        });
+    };
+    {
+        QSettings s("LumenArc", "LumenArc");
+        int current = s.value("hwAdapter", -1).toInt();
+        addAdapterAction(lang("自动（偏好独显）", "Auto (prefer discrete GPU)"), -1, current);
+        for (const auto &ad : FfmpegVideoEngine::availableAdapters())
+            addAdapterAction(ad.name, ad.index, current);
+    }
 
     // Help menu
     QMenu *helpMenu = menuBar()->addMenu(lang("帮助(&H)", "&Help"));

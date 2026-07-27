@@ -68,6 +68,19 @@ public:
     /// 诊断/测试用：当前是否实际处于硬解路径
     bool hardwareDecodeActive() const { return m_hwActive.load(); }
 
+    // --- D3D11 适配器选择 ---
+    struct D3D11AdapterInfo {
+        int index;              // DXGI 枚举索引（传给 av_hwdevice_ctx_create）
+        QString name;           // 适配器描述名
+        qint64 dedicatedVramMB; // 专用显存（核显通常为 0 或很小）
+    };
+    /// 枚举本机可用 D3D11 适配器（跳过 WARP 软适配器）
+    static QVector<D3D11AdapterInfo> availableAdapters();
+    /// 选择硬解适配器：-1=自动（偏好独显），>=0=指定 DXGI 索引（下次 load 生效）
+    void setHardwareAdapter(int index) { m_hwAdapterIndex = index; }
+    /// 诊断/测试用：当前实际使用的适配器名（软解为空）
+    QString hardwareAdapterName() const { return m_hwAdapterName; }
+
 private:
     enum class Command { None, Play, Pause, Stop, Seek };
 
@@ -133,6 +146,8 @@ private:
     AVBufferRef *m_hwDeviceCtx = nullptr;   // D3D11VA 设备上下文（软解为 nullptr）
     std::atomic<bool> m_hwDecodeEnabled{true};
     std::atomic<bool> m_hwActive{false};    // 已确认收到硬解帧
+    std::atomic<int> m_hwAdapterIndex{-1};  // -1=自动（偏好独显）
+    QString m_hwAdapterName;                // 当前实际使用的适配器名
     qint64 m_discardBeforeRelMs = -1; // seek 后丢弃早于该相对 PTS 的帧
     qint64 m_demuxTargetRelMs = -1;   // 本次 seek 的 demux 目标（用于 margin 自适应）
     qint64 m_seekMarginMs = 2500;     // 无索引容器 seek 前移量（按实测误差自适应）

@@ -266,7 +266,9 @@ if(WIN32)
     target_link_libraries(${PROJECT_NAME} PRIVATE
         ws2_32
         winmm
+        dxgi
     )
+    target_link_libraries(lumenarc_engine_test PRIVATE dxgi)
 endif()
 
 # --- Windows deployment ---
@@ -377,10 +379,10 @@ if(WIN32)
     endif()
 
     # Copy user manual PDF
-    if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/追光�?Lumen Arc v0.5 Beta �?操作手册.pdf")
+    if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/追光�?Lumen Arc v0.5 Beta �?操作手册.pdf")
         add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
             COMMAND ${CMAKE_COMMAND} -E copy_if_different
-                "${CMAKE_CURRENT_SOURCE_DIR}/追光�?Lumen Arc v0.5 Beta �?操作手册.pdf"
+                "${CMAKE_CURRENT_SOURCE_DIR}/追光�?Lumen Arc v0.5 Beta �?操作手册.pdf"
                 "$<TARGET_FILE_DIR:${PROJECT_NAME}>"
             COMMENT "Copying user manual PDF..."
         )

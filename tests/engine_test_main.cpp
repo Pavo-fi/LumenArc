@@ -73,6 +73,50 @@ int main(int argc, char *argv[])
     QString file = args[2];
     int failures = 0;
 
+    if (scenario == "adapters") {
+        // 适配器对比：逐个适配器加载文件，报告硬解状态与 seek 追赶耗时
+        auto ads = FfmpegVideoEngine::availableAdapters();
+        printf("[info] %lld adapters:\n", ads.size());
+        for (const auto &ad : ads)
+            printf("  [%d] %s vram=%lldMB\n", ad.index, qPrintable(ad.name),
+                   ad.dedicatedVramMB);
+        for (const auto &ad : ads) {
+            FfmpegVideoEngine eng;
+            eng.setHardwareAdapter(ad.index);
+            int frames = 0;
+            qint64 dur = 0;
+            QObject::connect(&eng, &IVideoEngine::frameReady,
+                             &app, [&](const QImage &) { ++frames; });
+            QObject::connect(&eng, &IVideoEngine::durationChanged,
+                             &app, [&](qint64 d) { dur = d; });
+            eng.load(file);
+            QElapsedTimer guard; guard.start();
+            while (frames == 0 && guard.elapsed() < 30000)
+                pumpFor(50);
+            if (frames == 0) {
+                printf("[FAIL] adapter %d: no frame\n", ad.index);
+                failures++;
+                continue;
+            }
+            // 5 次 seek 追赶总耗时
+            QElapsedTimer t0; t0.start();
+            for (int i = 1; i <= 5; ++i) {
+                qint64 target = dur * i * 15 / 100;
+                int before = frames;
+                eng.seek(target);
+                QElapsedTimer g2; g2.start();
+                while (frames == before && g2.elapsed() < 15000)
+                    pumpFor(10);
+            }
+            printf("[info] adapter %d (%s): hwdec=%d name=%s 5 seeks %lldms\n",
+                   ad.index, qPrintable(ad.name),
+                   eng.hardwareDecodeActive() ? 1 : 0,
+                   qPrintable(eng.hardwareAdapterName()), t0.elapsed());
+        }
+        printf(failures == 0 ? "[RESULT] PASS\n" : "[RESULT] FAIL (%d)\n", failures);
+        return failures == 0 ? 0 : 1;
+    }
+
     FfmpegVideoEngine engine;
     Recorder rec;
     QObject::connect(&engine, &IVideoEngine::frameReady,
