@@ -153,7 +153,7 @@ void FfmpegVideoEngine::resumeAudio()
 
 qint64 FfmpegVideoEngine::audioClockMs() const
 {
-    if (!m_sink || m_outSampleRate <= 0)
+    if (!m_sink || m_outSampleRate <= 0 || m_audioBaseRelMs < 0)
         return 0;
     qint64 bytesPerSec = static_cast<qint64>(m_outSampleRate) * m_outChannels * 2;
     qint64 buffered = m_sink->bufferSize() - m_sink->bytesFree();
@@ -178,8 +178,24 @@ void FfmpegVideoEngine::processAudioPacket(AVPacket *pkt)
     if (avcodec_send_packet(m_adec, pkt) < 0)
         return;
 
+    const int inRate = m_adec->sample_rate > 0 ? m_adec->sample_rate : 44100;
     AVFrame *frame = av_frame_alloc();
     while (avcodec_receive_frame(m_adec, frame) >= 0) {
+        // --- seek 对齐：丢弃/裁剪早于目标的音频帧（F-A） ---
+        qint64 relMs = ptsToRelMsA(frame->best_effort_timestamp);
+        qint64 frameDurMs = frame->nb_samples * 1000 / inRate;
+        double skipFrac = 0.0;
+        if (relMs >= 0 && m_audioDiscardBeforeRelMs >= 0) {
+            if (relMs + frameDurMs <= m_audioDiscardBeforeRelMs) {
+                av_frame_unref(frame);
+                continue;                       // 整帧早于目标：丢弃
+            }
+            if (relMs < m_audioDiscardBeforeRelMs) {
+                skipFrac = static_cast<double>(m_audioDiscardBeforeRelMs - relMs)
+                           / frameDurMs;        // 部分重叠：按比例裁剪起始部分
+            }
+        }
+
         int outSamples = swr_get_out_samples(m_swr, frame->nb_samples);
         if (outSamples > 0) {
             QByteArray out(outSamples * m_outChannels * 2, Qt::Uninitialized);
@@ -189,17 +205,33 @@ void FfmpegVideoEngine::processAudioPacket(AVPacket *pkt)
                                         frame->nb_samples);
             if (converted > 0) {
                 qint64 bytes = static_cast<qint64>(converted) * m_outChannels * 2;
+                qint64 offset = 0;
+                if (skipFrac > 0.0) {
+                    qint64 align = static_cast<qint64>(m_outChannels) * 2;
+                    offset = (static_cast<qint64>(bytes * skipFrac) / align) * align;
+                    offset = qBound<qint64>(0, offset, bytes - align);
+                }
+
+                // 首个写入样本锚定音频时钟基点（F-A：声音与画面同一起点）
+                if (m_audioBaseRelMs < 0) {
+                    if (relMs >= 0)
+                        m_audioBaseRelMs = qMax<qint64>(relMs, m_audioDiscardBeforeRelMs);
+                    else
+                        m_audioBaseRelMs = qMax<qint64>(0, m_audioDiscardBeforeRelMs);
+                }
+
+                qint64 payload = bytes - offset;
                 // 背压：设备缓冲满则短暂等待（播放面自然节流）
                 int guard = 0;
-                while (m_sink->bytesFree() < bytes && guard++ < 100
+                while (m_sink->bytesFree() < payload && guard++ < 100
                        && !m_quit.load()
                        && m_state.load() == static_cast<int>(PlaybackState::Playing)
                        && !hasPendingCommand()) {
                     QThread::msleep(2);
                 }
                 if (m_sinkIo)
-                    m_sinkIo->write(out.constData(), bytes);
-                m_audioBytesWritten += bytes;
+                    m_sinkIo->write(out.constData() + offset, payload);
+                m_audioBytesWritten += payload;
             }
         }
         av_frame_unref(frame);
@@ -422,6 +454,8 @@ bool FfmpegVideoEngine::openFile(const QString &filePath)
     m_audioMaster = (m_astream >= 0);
 
     m_discardBeforeRelMs = -1;
+    m_audioDiscardBeforeRelMs = -1;
+    m_audioBaseRelMs = -1;
     m_stepOnce = false;
     m_eof = false;
     m_clockValid = false;
@@ -457,6 +491,15 @@ qint64 FfmpegVideoEngine::ptsToRelMs(int64_t pts) const
     return absMs - m_startPtsMs;
 }
 
+qint64 FfmpegVideoEngine::ptsToRelMsA(int64_t pts) const
+{
+    if (pts == AV_NOPTS_VALUE || !m_fmt || m_astream < 0)
+        return -1;
+    qint64 absMs = av_rescale_q(pts, m_fmt->streams[m_astream]->time_base,
+                                AVRational{1, 1000});
+    return absMs - m_startPtsMs;
+}
+
 void FfmpegVideoEngine::handleSeek(qint64 timeMs)
 {
     if (!m_fmt)
@@ -488,11 +531,12 @@ void FfmpegVideoEngine::handleSeek(qint64 timeMs)
         m_sinkIo = m_sink->start();    // 重置后重新进入推模式
     }
     m_audioBytesWritten = 0;
-    m_audioBaseRelMs = timeMs;
+    m_audioBaseRelMs = -1;   // 等待首个写入样本锚定
 
     // seek 落点可能早于目标（关键帧），解码后丢弃早于目标的帧（容差半帧）
     qint64 halfFrame = m_fps > 0.0f ? static_cast<qint64>(500.0f / m_fps.load()) : 20;
     m_discardBeforeRelMs = qMax<qint64>(0, timeMs - halfFrame);
+    m_audioDiscardBeforeRelMs = m_discardBeforeRelMs;
     m_eof = false;
     m_clockValid = false;
     m_positionMs = timeMs;

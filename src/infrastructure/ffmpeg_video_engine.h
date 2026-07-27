@@ -73,17 +73,19 @@ private:
     bool ensureAudioOutput();                 // 惰性创建 QAudioSink（工作线程内）
     void suspendAudio();
     void resumeAudio();
-    qint64 audioClockMs() const;              // 音频主时钟（相对毫秒）
     bool drainDecoder();                      // 返回是否取到帧
     void displayFrame(AVFrame *frame);
     bool paceUntil(qint64 ptsRelMs);          // true=显示该帧；false=过晚丢弃（倍速追帧）
     void postCommand(Command cmd, qint64 arg = 0);
     bool hasPendingCommand();
     qint64 ptsToRelMs(int64_t pts) const;
+    qint64 ptsToRelMsA(int64_t pts) const;    // 音频流时基换算
 
 public:
     /// 诊断/测试用：本次 seek 以来写入音频缓冲的字节数
     qint64 audioBytesWritten() const { return m_audioBytesWritten.load(); }
+    /// 诊断/测试用：音频主时钟（相对毫秒）
+    qint64 audioClockMs() const;
 
 private:
 
@@ -131,7 +133,8 @@ private:
     int m_outChannels = 0;
     bool m_audioMaster = false;     // 有可用音轨且 rate==1.0 时音频为主时钟
     std::atomic<qint64> m_audioBytesWritten{0};
-    qint64 m_audioBaseRelMs = 0;    // 本次 seek 后音频写入基点（相对毫秒）
+    qint64 m_audioBaseRelMs = -1;   // 首个写入样本的 PTS（相对毫秒），-1=未锚定
+    qint64 m_audioDiscardBeforeRelMs = -1; // seek 后丢弃早于该相对 PTS 的音频
     std::atomic<bool> m_audioSinkOk{false};
     qint64 m_lastAudioPlayedMs = -1;      // 上次观测到的音频时钟值
     qint64 m_lastAudioProgressElapsed = 0;// 音频时钟上次前进对应的单调时钟

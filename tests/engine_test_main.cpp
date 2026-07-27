@@ -245,6 +245,34 @@ int main(int argc, char *argv[])
         }
         if (failures == 0)
             printf("[ OK ] stress %d seeks + 30s play\n", seeks);
+    } else if (scenario == "avsync") {
+        // 音画同步：seek 到 50% 后播放 N 秒，每秒采样 视频PTS 与 音频时钟 的偏差
+        engine.seek(rec.duration / 2);
+        pumpFor(800);
+        engine.play();
+        int seconds = args.size() > 3 ? args[3].toInt() : 6;
+        qint64 maxDev = 0;
+        for (int i = 0; i < seconds * 2; ++i) {
+            pumpFor(500);
+            qint64 v = rec.lastPos;
+            qint64 a = engine.audioClockMs();
+            if (a > 0) {
+                qint64 dev = qAbs(v - a);
+                maxDev = qMax(maxDev, dev);
+                printf("[info] avsync t=%.1fs video=%lld audio=%lld dev=%lldms\n",
+                       (i + 1) * 0.5, v, a, dev);
+            }
+        }
+        engine.pause();
+        if (engine.audioBytesWritten() <= 0) {
+            printf("[FAIL] avsync: no audio decoded\n");
+            failures++;
+        } else if (maxDev > 300) {
+            printf("[FAIL] avsync: max deviation %lldms > 300ms\n", maxDev);
+            failures++;
+        } else {
+            printf("[ OK ] avsync max deviation %lldms\n", maxDev);
+        }
     } else if (scenario == "step") {
         // 逐帧步进语义：暂停态连续 seek +1 帧，断言严格单调前进且落点精确
         float fps = engine.fps();
