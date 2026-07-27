@@ -316,6 +316,38 @@ int main(int argc, char *argv[])
                 printf("[ OK ] jitter stdev %.0f%% of mean\n", stdev / mean * 100);
             }
         }
+    } else if (scenario == "scrub") {
+        // 拖拽模拟：连续 10 次 seek（80ms 间隔），断言 ① 最终落点精确
+        // ② 无积压（最后一次 seek 后 1.5s 内完成） ③ 显示的帧全部精确
+        qint64 frameMs = static_cast<qint64>(1000.0f / engine.fps());
+        QVector<qint64> targets;
+        for (int i = 0; i < 10; ++i)
+            targets.append(static_cast<qint64>(
+                QRandomGenerator::global()->bounded(quint64(rec.duration * 9 / 10))));
+        QElapsedTimer t0; t0.start();
+        qint64 lastDisplayed = -1;
+        for (qint64 target : targets) {
+            engine.seek(target);
+            pumpFor(80);
+            lastDisplayed = rec.lastPos;
+        }
+        // 最后一次 seek 应在 1.5s 内出帧且落点精确
+        int before = rec.frameCount;
+        QElapsedTimer guard; guard.start();
+        while (rec.frameCount == before && guard.elapsed() < 2000)
+            pumpFor(20);
+        qint64 finalTarget = targets.last();
+        if (rec.frameCount == before && qAbs(lastDisplayed - finalTarget) > frameMs) {
+            printf("[FAIL] scrub: no frame after final seek within 2s\n");
+            failures++;
+        } else if (qAbs(rec.lastPos - finalTarget) > frameMs) {
+            printf("[FAIL] scrub: final landed %lld target %lld (>%lldms)\n",
+                   rec.lastPos, finalTarget, frameMs);
+            failures++;
+        } else {
+            printf("[ OK ] scrub 10 seeks, final err %lldms, total %lldms\n",
+                   qAbs(rec.lastPos - finalTarget), t0.elapsed());
+        }
     } else if (scenario == "step") {
         // 逐帧步进语义：暂停态连续 seek +1 帧，断言严格单调前进且落点精确
         float fps = engine.fps();

@@ -117,6 +117,9 @@ private:
     qint64 m_startPtsMs = 0;        // 流起始 PTS（绝对），用于相对时间换算
     bool m_indexed = true;          // 容器是否有 seek 索引（PS/TS 无索引）
     qint64 m_discardBeforeRelMs = -1; // seek 后丢弃早于该相对 PTS 的帧
+    qint64 m_demuxTargetRelMs = -1;   // 本次 seek 的 demux 目标（用于 margin 自适应）
+    qint64 m_seekMarginMs = 2500;     // 无索引容器 seek 前移量（按实测误差自适应）
+    bool m_needMarginMeasure = false; // 本次 seek 后尚未测量落点误差
     bool m_stepOnce = false;        // 暂停态 seek 后显示一帧
     bool m_clockValid = false;
     qint64 m_clockBasePtsMs = 0;    // 时钟基准（相对毫秒）

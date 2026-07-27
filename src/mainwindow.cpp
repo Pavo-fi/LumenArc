@@ -2454,11 +2454,28 @@ void MainWindow::onPositionChanged(qint64 timeMs)
 
 void MainWindow::onSeekFromChart(qint64 timeMs)
 {
-    m_videoEngine->seek(timeMs);
-
-    // Directly sync both cursors without waiting for VLC callback
+    // 光标立即跟随（UI 响应）；实际 seek 节流：拖拽期间每 50ms 最多一次
+    // （leading），停止后补发最终值（trailing），避免 seek 队列积压
     m_chartPanel->setCursorTime(timeMs);
     m_spectrogramEnhanced->setCursorTime(timeMs);
+
+    m_pendingSeekMs = timeMs;
+    if (!m_seekThrottleTimer) {
+        m_seekThrottleTimer = new QTimer(this);
+        m_seekThrottleTimer->setSingleShot(true);
+        m_seekThrottleTimer->setInterval(50);
+        connect(m_seekThrottleTimer, &QTimer::timeout, this, [this]() {
+            if (m_pendingSeekMs != m_lastIssuedSeekMs && m_pendingSeekMs >= 0) {
+                m_lastIssuedSeekMs = m_pendingSeekMs;
+                m_videoEngine->seek(m_pendingSeekMs);
+            }
+        });
+    }
+    if (!m_seekThrottleTimer->isActive()) {
+        m_lastIssuedSeekMs = timeMs;
+        m_videoEngine->seek(timeMs);   // leading：立即响应首帧
+        m_seekThrottleTimer->start();
+    }
 }
 
 void MainWindow::updateTimeDisplay()

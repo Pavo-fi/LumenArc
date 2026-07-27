@@ -157,6 +157,9 @@ protected:
     QString m_currentVideoPath;
     qint64 m_trustedDurationMs = 0;   // 由 Python 分析引擎算出的真实时长
     qint64 m_currentDurationMs = 0;   // 校准后用于 UI 的权威时长
+    QTimer *m_seekThrottleTimer = nullptr;  // 拖拽 seek 节流（50ms leading+trailing）
+    qint64 m_pendingSeekMs = -1;
+    qint64 m_lastIssuedSeekMs = -1;
     QLabel *m_operationLabel = nullptr;   // 操作反馈标签（状态栏左侧）
     QLabel *m_statusLabel = nullptr;
     QProgressBar *m_progressBar = nullptr;

@@ -509,10 +509,12 @@ void FfmpegVideoEngine::handleSeek(qint64 timeMs)
     timeMs = qBound<qint64>(0, timeMs, m_durationMs > 0 ? m_durationMs.load() : timeMs);
 
     // 无索引容器的字节估算 seek 可能过冲到目标之后，无法回退修正；
-    // 故将 seek 目标前移一个 GOP 量级，随后解码丢弃到精确目标（见 drainDecoder）
+    // 故将 seek 目标前移（margin 按该文件历史落点误差自适应收缩），
+    // 随后解码丢弃到精确目标（见 drainDecoder）
     qint64 demuxTargetMs = timeMs;
     if (!m_indexed)
-        demuxTargetMs = qMax<qint64>(0, timeMs - 2500);
+        demuxTargetMs = qMax<qint64>(0, timeMs - m_seekMarginMs);
+    m_demuxTargetRelMs = demuxTargetMs;
     int64_t ts = static_cast<int64_t>(m_startPtsMs + demuxTargetMs) * 1000; // AV_TIME_BASE 微秒
 
     // 先按时间戳精确 seek（BACKWARD：落到目标之前的关键帧，再解码丢弃到目标）；
@@ -542,6 +544,7 @@ void FfmpegVideoEngine::handleSeek(qint64 timeMs)
     m_audioDiscardBeforeRelMs = m_discardBeforeRelMs;
     m_eof = false;
     m_clockValid = false;
+    m_needMarginMeasure = !m_indexed;
     m_positionMs = timeMs;
     emit positionChanged(timeMs);
 
@@ -580,7 +583,24 @@ bool FfmpegVideoEngine::drainDecoder()
 
         gotFrame = true;
         qint64 relMs = ptsToRelMs(frame->best_effort_timestamp);
+
+        // margin 自适应：测量 demux 落点与目标的偏差，动态收缩/扩大前移量
+        if (m_needMarginMeasure) {
+            m_needMarginMeasure = false;
+            qint64 err = relMs - m_demuxTargetRelMs;
+            if (err > 0)  // 落点过冲到 demux 目标之后：margin 不足，扩大
+                m_seekMarginMs = qMin<qint64>(6000, m_seekMarginMs + err + 1000);
+            else if (err < -3000)  // 落点过早：margin 过大，缓慢收缩
+                m_seekMarginMs = qMax<qint64>(1000, -err + 1000);
+        }
+
         bool discard = (m_discardBeforeRelMs >= 0 && relMs < m_discardBeforeRelMs);
+
+        // seek 追赶阶段被新命令打断：立即放弃旧追赶，最新目标胜出
+        if (discard && hasPendingCommand()) {
+            av_frame_unref(frame);
+            break;
+        }
 
         if (!discard) {
             m_discardBeforeRelMs = -1;
