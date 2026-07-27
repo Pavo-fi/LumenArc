@@ -283,6 +283,115 @@ void FfmpegVideoEngine::processAudioPacket(AVPacket *pkt)
 
 float FfmpegVideoEngine::rate() const { return m_rate.load(); }
 
+void FfmpegVideoEngine::setProxySource(const QString &proxyPath)
+{
+    m_pxPathPending = proxyPath;
+    m_pxReady = false;
+    postCommand(Command::None);   // 唤醒工作线程空闲分支去 openProxy
+}
+
+// ---------------------------------------------------------------------------
+// 拖拽预览代理（F-P2）：全 I 帧低分代理，暂停/拖拽 seek 秒出精确帧
+// ---------------------------------------------------------------------------
+
+void FfmpegVideoEngine::openProxy(const QString &path)
+{
+    closeProxy();
+    if (avformat_open_input(&m_pxFmt, path.toUtf8().constData(), nullptr, nullptr) < 0) {
+        m_pxFmt = nullptr;
+        return;
+    }
+    m_pxVstream = av_find_best_stream(m_pxFmt, AVMEDIA_TYPE_VIDEO, -1, -1, nullptr, 0);
+    if (m_pxVstream < 0) {
+        closeProxy();
+        return;
+    }
+    AVStream *vs = m_pxFmt->streams[m_pxVstream];
+    const AVCodec *codec = avcodec_find_decoder(vs->codecpar->codec_id);
+    if (!codec) {
+        closeProxy();
+        return;
+    }
+    m_pxDec = avcodec_alloc_context3(codec);
+    avcodec_parameters_to_context(m_pxDec, vs->codecpar);
+    if (avcodec_open2(m_pxDec, codec, nullptr) < 0) {
+        closeProxy();
+        return;
+    }
+    // 代理接管拖拽显示后，旧预读缓存失去意义
+    prefetchAbort();
+    m_pfPendingFromMs = -1;
+    m_frameCache.clear();
+    m_pxReady = true;
+}
+
+void FfmpegVideoEngine::closeProxy()
+{
+    if (m_pxSws) { sws_freeContext(m_pxSws); m_pxSws = nullptr; }
+    if (m_pxDec) { avcodec_free_context(&m_pxDec); m_pxDec = nullptr; }
+    if (m_pxFmt) { avformat_close_input(&m_pxFmt); m_pxFmt = nullptr; }
+    m_pxVstream = -1;
+    m_pxReady = false;
+}
+
+bool FfmpegVideoEngine::proxyDisplayFrame(qint64 timeMs)
+{
+    if (!m_pxReady || !m_pxFmt || !m_pxDec)
+        return false;
+
+    // 代理为全 I 帧 mp4（有索引，pts 从 0 起，与原片相对时间 1:1）
+    int64_t ts = static_cast<int64_t>(timeMs) * 1000;
+    if (avformat_seek_file(m_pxFmt, -1, INT64_MIN, ts, ts, AVSEEK_FLAG_BACKWARD) < 0)
+        av_seek_frame(m_pxFmt, -1, ts, AVSEEK_FLAG_BACKWARD);
+    avcodec_flush_buffers(m_pxDec);
+
+    qint64 halfFrame = m_fps > 0.0f ? static_cast<qint64>(500.0f / m_fps.load()) : 20;
+    AVPacket *pkt = av_packet_alloc();
+    AVFrame *frame = av_frame_alloc();
+    bool shown = false;
+
+    while (!shown && !m_quit.load() && !hasPendingCommand()) {
+        if (av_read_frame(m_pxFmt, pkt) < 0)
+            break;
+        if (pkt->stream_index == m_pxVstream
+            && avcodec_send_packet(m_pxDec, pkt) >= 0) {
+            while (avcodec_receive_frame(m_pxDec, frame) >= 0) {
+                qint64 relMs = av_rescale_q(frame->best_effort_timestamp,
+                                            m_pxFmt->streams[m_pxVstream]->time_base,
+                                            AVRational{1, 1000});
+                if (relMs >= timeMs - halfFrame) {
+                    // 与主管线相同的精确帧规则：首个 >= 目标-半帧 的帧
+                    if (!m_pxSws) {
+                        m_pxSws = sws_getContext(frame->width, frame->height,
+                            static_cast<AVPixelFormat>(frame->format),
+                            frame->width, frame->height, AV_PIX_FMT_RGB24,
+                            SWS_BILINEAR, nullptr, nullptr, nullptr);
+                    }
+                    if (m_pxSws) {
+                        QImage img(frame->width, frame->height, QImage::Format_RGB888);
+                        uint8_t *dst[4] = { img.bits(), nullptr, nullptr, nullptr };
+                        int ls[4] = { static_cast<int>(img.bytesPerLine()), 0, 0, 0 };
+                        sws_scale(m_pxSws, frame->data, frame->linesize, 0,
+                                  frame->height, dst, ls);
+                        m_positionMs = relMs;
+                        emit positionChanged(relMs);
+                        emit frameReady(img);
+                        shown = true;
+                    }
+                    av_frame_unref(frame);
+                    break;
+                }
+                av_frame_unref(frame);
+            }
+        }
+        av_packet_unref(pkt);
+    }
+
+    av_frame_free(&frame);
+    av_packet_free(&pkt);
+    return shown;
+}
+
 void FfmpegVideoEngine::setRate(float rate)
 {
     m_rate = rate > 0.0f ? rate : 1.0f;
@@ -338,7 +447,24 @@ void FfmpegVideoEngine::workerMain()
             if (m_pendingCmd == Command::None &&
                 m_state.load() != static_cast<int>(PlaybackState::Playing) &&
                 !m_stepOnce) {
-                // 空闲：先推进预读缓存，无预读工作才睡眠
+                // 空闲：代理路径打开待办 → 主管线沉淀补全 → 预读缓存 → 睡眠
+                if (!m_pxPathPending.isEmpty()) {
+                    QString path = m_pxPathPending;
+                    m_pxPathPending.clear();
+                    lock.unlock();
+                    openProxy(path);
+                    continue;
+                }
+                if (m_mainSeekPending
+                    && m_monotonic.isValid()
+                    && m_monotonic.elapsed() - m_lastSeekElapsed > 300) {
+                    // 沉淀：300ms 无新 seek，主管线精确 seek 补全分辨率
+                    m_mainSeekPending = false;
+                    qint64 pos = m_positionMs.load();
+                    lock.unlock();
+                    handleSeek(pos, true);   // 强制主管线，绕过代理分支
+                    continue;
+                }
                 if (m_pfPendingFromMs >= 0) {
                     lock.unlock();
                     prefetchStart(m_pfPendingFromMs);
@@ -359,6 +485,12 @@ void FfmpegVideoEngine::workerMain()
             switch (cmd) {
             case Command::Play:
                 prefetchAbort();
+                if (m_mainSeekPending) {
+                    // 拖拽后首次播放：主管线先追平到当前位置（全分辨率）
+                    m_mainSeekPending = false;
+                    qint64 pos = m_positionMs.load();
+                    handleSeek(pos, true);   // 强制主管线，绕过代理分支
+                }
                 if (m_eof)
                     handleSeek(0);   // EOF 后重播：从头开始
                 m_clockValid = false;
@@ -578,6 +710,9 @@ bool FfmpegVideoEngine::openFile(const QString &filePath)
 
 void FfmpegVideoEngine::closeFile()
 {
+    closeProxy();
+    m_pxPathPending.clear();
+    m_mainSeekPending = false;
     prefetchAbort();
     m_frameCache.clear();
     m_pfPendingFromMs = -1;
@@ -616,12 +751,27 @@ qint64 FfmpegVideoEngine::ptsToRelMsA(int64_t pts) const
     return absMs - m_startPtsMs;
 }
 
-void FfmpegVideoEngine::handleSeek(qint64 timeMs)
+void FfmpegVideoEngine::handleSeek(qint64 timeMs, bool forceMainPipeline)
 {
     if (!m_fmt)
         return;
 
     timeMs = qBound<qint64>(0, timeMs, m_durationMs > 0 ? m_durationMs.load() : timeMs);
+
+    // 代理路径（暂停/拖拽 seek）：代理立即出精确帧（低分辨率），
+    // 主管线 seek 推迟到沉淀（300ms 无新 seek）或 Play 时执行
+    if (!forceMainPipeline && m_pxReady
+        && m_state.load() != static_cast<int>(PlaybackState::Playing)) {
+        if (proxyDisplayFrame(timeMs)) {
+            m_mainSeekPending = true;
+            if (!m_monotonic.isValid())
+                m_monotonic.start();
+            m_lastSeekElapsed = m_monotonic.elapsed();
+            m_eof = false;
+            return;
+        }
+        // 代理解码失败：落回主管线路径
+    }
 
     // 无索引容器的字节估算 seek 可能过冲到目标之后，无法回退修正；
     // 故将 seek 目标前移（margin 按该文件历史落点误差自适应收缩），

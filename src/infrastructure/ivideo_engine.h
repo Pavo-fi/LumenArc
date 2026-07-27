@@ -59,6 +59,10 @@ public:
     /// 倍速时是否支持音频输出（不支持的引擎在 rate!=1.0 时应静音并在 UI 明示）
     virtual bool supportsRateAudio() const { return true; }
 
+    /// 设置拖拽预览代理源（全 I 帧低分代理，帧号与原片 1:1）。
+    /// 引擎在暂停/拖拽 seek 时用代理快速出精确帧；不支持的引擎忽略。
+    virtual void setProxySource(const QString &proxyPath) { Q_UNUSED(proxyPath) }
+
 signals:
     void frameReady(const QImage &image);
     void positionChanged(qint64 timeMs);

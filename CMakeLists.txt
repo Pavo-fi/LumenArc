@@ -168,6 +168,7 @@ set(SOURCES
     src/domain/timeline_model.cpp
     src/infrastructure/vlc_video_engine.cpp
     src/infrastructure/ffmpeg_video_engine.cpp
+    src/infrastructure/proxy_manager.cpp
     src/infrastructure/python_analysis_engine.cpp
     src/resources.qrc
 )
@@ -201,6 +202,7 @@ set(HEADERS
     src/infrastructure/ianalysis_engine.h
     src/infrastructure/vlc_video_engine.h
     src/infrastructure/ffmpeg_video_engine.h
+    src/infrastructure/proxy_manager.h
     src/infrastructure/python_analysis_engine.h
 )
 
@@ -209,7 +211,9 @@ add_executable(lumenarc_engine_test
     tests/engine_test_main.cpp
     src/infrastructure/ivideo_engine.h
     src/infrastructure/ffmpeg_video_engine.h
+    src/infrastructure/proxy_manager.h
     src/infrastructure/ffmpeg_video_engine.cpp
+    src/infrastructure/proxy_manager.cpp
 )
 target_include_directories(lumenarc_engine_test PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src

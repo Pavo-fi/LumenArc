@@ -81,13 +81,18 @@ public:
     /// 诊断/测试用：当前实际使用的适配器名（软解为空）
     QString hardwareAdapterName() const { return m_hwAdapterName; }
 
+    /// 设置拖拽预览代理源（下次 seek 生效）
+    void setProxySource(const QString &proxyPath) override;
+    /// 诊断/测试用：代理是否已就绪
+    bool proxyActive() const { return m_pxReady; }
+
 private:
     enum class Command { None, Play, Pause, Stop, Seek };
 
     void workerMain();                        // 工作线程主循环
     bool openFile(const QString &filePath);   // 工作线程内调用
     void closeFile();                         // 工作线程内调用
-    void handleSeek(qint64 timeMs);           // 工作线程内调用
+    void handleSeek(qint64 timeMs, bool forceMainPipeline = false); // 工作线程内调用
     void processVideoPacket(AVPacket *pkt);   // 送包 + 排干解码器
     void processAudioPacket(AVPacket *pkt);   // 音频解码 → 重采样 → 环形缓冲
     bool ensureAudioOutput();                 // 惰性创建 QAudioSink（工作线程内）
@@ -107,6 +112,11 @@ private:
     void prefetchAbort();
     bool tryDisplayFromCache(qint64 timeMs);  // seek 命中缓存立即出图
     void evictCache(qint64 centerMs);
+
+    // --- 拖拽预览代理（全 I 帧低分代理，帧号 1:1） ---
+    void openProxy(const QString &path);      // 工作线程内
+    void closeProxy();
+    bool proxyDisplayFrame(qint64 timeMs);    // 代理解码显示指定帧
 
 public:
     /// 诊断/测试用：本次 seek 以来写入音频缓冲的字节数
@@ -170,6 +180,16 @@ private:
     QMap<qint64, QImage> m_frameCache;  // relMs -> 1080p 缓存帧
     static constexpr qint64 CACHE_SPAN_MS = 2000;   // 预读覆盖 seek 点后 2s
     static constexpr int CACHE_MAX_FRAMES = 60;     // 内存上限（1080p≈6MB/帧）
+
+    // --- 拖拽预览代理（仅工作线程访问） ---
+    QString m_pxPathPending;            // setProxySource 挂起路径
+    AVFormatContext *m_pxFmt = nullptr;
+    AVCodecContext *m_pxDec = nullptr;
+    SwsContext *m_pxSws = nullptr;
+    int m_pxVstream = -1;
+    bool m_pxReady = false;
+    bool m_mainSeekPending = false;     // 代理已出图，主管线待沉淀补全分辨率
+    qint64 m_lastSeekElapsed = 0;       // 上次 seek 的单调时钟（沉淀计时）
 
     // --- 音频面（仅工作线程访问，计数器为原子供诊断读取） ---
     AVCodecContext *m_adec = nullptr;

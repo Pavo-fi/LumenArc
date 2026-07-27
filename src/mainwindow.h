@@ -23,6 +23,7 @@ class SnapshotOverlay;
 class PinnedWidget;
 class IVideoEngine;
 class IAnalysisEngine;
+class ProxyManager;
 class RegionModel;
 class PolygonModel;
 class GuideLineModel;
@@ -208,5 +209,7 @@ protected:
     SpectrogramPanel *m_spectrogramPanel = nullptr;
     SpectrogramPanelEnhanced *m_spectrogramEnhanced = nullptr;
     VideoStateManager *m_stateManager = nullptr;
+    ProxyManager *m_proxyManager = nullptr;   // 拖拽预览代理（F-P3）
+    QString m_proxyVideoPath;                 // 当前请求代理的视频
     AnalysisPhase m_analysisPhase = None;       // 当前分析阶段（进度条分离）
 };

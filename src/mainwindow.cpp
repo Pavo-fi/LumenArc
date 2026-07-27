@@ -19,6 +19,7 @@
 #include "infrastructure/ianalysis_engine.h"
 #include "infrastructure/vlc_video_engine.h"
 #include "infrastructure/ffmpeg_video_engine.h"
+#include "infrastructure/proxy_manager.h"
 #include "infrastructure/python_analysis_engine.h"
 #include "magnifierwidget.h"
 #include "snapshotoverlay.h"
@@ -485,6 +486,31 @@ MainWindow::MainWindow(QWidget *parent)
     pyEngine->setPythonExecutable(detectPythonPath());
     m_analysisEngine = pyEngine;
 
+    // 拖拽预览代理管理器（F-P3）
+    m_proxyManager = new ProxyManager(this);
+    connect(m_proxyManager, &ProxyManager::progressChanged,
+            this, [this](int pct) {
+        static int lastShown = -10;
+        if (pct >= 0 && pct - lastShown >= 10) {
+            lastShown = pct;
+            showOperationStatus(lang("预览代理生成中 %1%", "Generating preview proxy %1%").arg(pct));
+        }
+    });
+    connect(m_proxyManager, &ProxyManager::proxyReady,
+            this, [this](const QString &proxyPath) {
+        if (!m_proxyVideoPath.isEmpty() && m_proxyVideoPath == m_currentVideoPath) {
+            m_videoEngine->setProxySource(proxyPath);
+            showOperationStatus(lang("预览代理已就绪，拖拽可逐帧实时预览",
+                                     "Preview proxy ready - scrubbing is now real-time"));
+        }
+    });
+    connect(m_proxyManager, &ProxyManager::proxyFailed,
+            this, [this](const QString &error) {
+        Q_UNUSED(error);
+        showOperationStatus(lang("预览代理生成失败（不影响正常播放分析）",
+                                 "Proxy generation failed (playback/analysis unaffected)"));
+    });
+
     // Snapshot overlay (floating on video area)
     m_snapshotOverlay = new SnapshotOverlay(m_videoWidget);
     m_snapshotOverlay->hide();
@@ -561,6 +587,17 @@ void MainWindow::createMenus()
     connect(hwAction, &QAction::toggled, this, [](bool on) {
         QSettings s("LumenArc", "LumenArc");
         s.setValue("hwDecode", on);
+    });
+
+    QAction *proxyAction = settingsMenu->addAction(lang("拖拽预览代理（重文件后台生成）", "Scrub preview proxy (background generation)"));
+    proxyAction->setCheckable(true);
+    {
+        QSettings s("LumenArc", "LumenArc");
+        proxyAction->setChecked(s.value("proxyEnabled", true).toBool());
+    }
+    connect(proxyAction, &QAction::toggled, this, [](bool on) {
+        QSettings s("LumenArc", "LumenArc");
+        s.setValue("proxyEnabled", on);
     });
 
     // 硬解设备选择（自动=偏好独显；重启生效）
@@ -1574,6 +1611,26 @@ void MainWindow::openVideoFile(const QString &filePath)
     m_currentDurationMs = 0;  // 等待 durationChanged 校准
 
     if (m_videoEngine->load(filePath)) {
+        // 拖拽预览代理：重文件后台生成，就绪后拖拽逐帧实时预览
+        {
+            QSettings s("LumenArc", "LumenArc");
+            if (s.value("proxyEnabled", true).toBool()
+                && ProxyManager::needsProxy(filePath)) {
+                m_proxyVideoPath = filePath;
+                QString existing = m_proxyManager->existingProxy(filePath);
+                if (!existing.isEmpty()) {
+                    m_videoEngine->setProxySource(existing);
+                } else {
+                    m_proxyManager->requestProxy(filePath);
+                    showOperationStatus(lang("正在后台生成拖拽预览代理…",
+                                             "Generating scrub proxy in background..."));
+                }
+            } else {
+                m_proxyVideoPath.clear();
+                m_proxyManager->cancel();
+            }
+        }
+
         // Check if we have a saved state for this video (memory state takes priority)
         VideoState savedState;
         if (m_stateManager->restoreState(filePath, savedState)) {

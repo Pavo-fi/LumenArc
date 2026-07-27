@@ -10,6 +10,7 @@
  * 退出码 0 = 全部断言通过；1 = 有失败。
  */
 #include "infrastructure/ffmpeg_video_engine.h"
+#include "infrastructure/proxy_manager.h"
 #include <QCoreApplication>
 #include <QEventLoop>
 #include <QTimer>
@@ -73,8 +74,89 @@ int main(int argc, char *argv[])
     QString file = args[2];
     int failures = 0;
 
+    if (scenario == "proxy") {
+        // 代理全链路：生成代理 → 引擎接管 → 连续 seek 每次 <150ms 且帧号精确
+        ProxyManager pm;
+        QString proxyPath;
+        QObject::connect(&pm, &ProxyManager::proxyReady,
+                         &app, [&](const QString &p) { proxyPath = p; });
+        QObject::connect(&pm, &ProxyManager::proxyFailed,
+                         &app, [&](const QString &e) {
+            printf("[FAIL] proxyFailed: %s\n", qPrintable(e.left(300)));
+        });
+        QString existing = pm.existingProxy(file);
+        if (!existing.isEmpty()) {
+            proxyPath = existing;
+        } else {
+            QElapsedTimer tg; tg.start();
+            pm.requestProxy(file);
+            while (proxyPath.isEmpty() && tg.elapsed() < 600000)
+                pumpFor(100);
+            printf("[info] proxy generated in %lldms\n", tg.elapsed());
+        }
+        if (proxyPath.isEmpty()) {
+            printf("[FAIL] proxy generation timeout\n");
+            return 1;
+        }
+        printf("[info] proxy: %s\n", qPrintable(proxyPath));
+
+        FfmpegVideoEngine eng;
+        eng.setHardwareAdapter(-1);
+        eng.load(file);
+        pumpFor(1500);
+        eng.setProxySource(proxyPath);
+        pumpFor(1500);
+        if (!eng.proxyActive()) {
+            printf("[FAIL] proxy not active after setProxySource\n");
+            return 1;
+        }
+
+        int frames = 0, lastW = 0;
+        qint64 lastPos = -1, dur = eng.duration();
+        QObject::connect(&eng, &IVideoEngine::frameReady,
+                         &app, [&](const QImage &img) { ++frames; lastW = img.width(); });
+        QObject::connect(&eng, &IVideoEngine::positionChanged,
+                         &app, [&](qint64 t) { lastPos = t; });
+
+        qint64 frameMs = static_cast<qint64>(1000.0f / eng.fps());
+        qint64 maxSeekMs = 0;
+        for (int i = 0; i < 10; ++i) {
+            qint64 target = static_cast<qint64>(
+                QRandomGenerator::global()->bounded(quint64(dur * 9 / 10)));
+            int before = frames;
+            QElapsedTimer t0; t0.start();
+            eng.seek(target);
+            while (frames == before && t0.elapsed() < 3000)
+                pumpFor(10);
+            qint64 seekCost = t0.elapsed();
+            maxSeekMs = qMax(maxSeekMs, seekCost);
+            if (frames == before) {
+                printf("[FAIL] proxy seek %d: no frame in 3s\n", i + 1);
+                failures++;
+            } else if (qAbs(lastPos - target) > frameMs) {
+                printf("[FAIL] proxy seek %d: landed %lld target %lld\n",
+                       i + 1, lastPos, target);
+                failures++;
+            }
+        }
+        printf("[info] proxy seeks: max %lldms per seek\n", maxSeekMs);
+        if (maxSeekMs > 500) {   // 全 I 帧 960p 应远小于 150ms，留余量
+            printf("[FAIL] proxy seeks too slow (max %lldms)\n", maxSeekMs);
+            failures++;
+        }
+        // 沉淀后应升级为全分辨率帧
+        for (int i = 0; i < 4; ++i) {
+            pumpFor(500);
+            printf("[diag] settle t=%.1fs lastW=%d lastPos=%lld\n",
+                   (i + 1) * 0.5, lastW, lastPos);
+        }
+        if (failures == 0)
+            printf("[ OK ] proxy scenario\n");
+        printf(failures == 0 ? "[RESULT] PASS\n" : "[RESULT] FAIL (%d)\n", failures);
+        return failures == 0 ? 0 : 1;
+    }
+
     if (scenario == "adapters") {
-        // 适配器对比：逐个适配器加载文件，报告硬解状态与 seek 追赶耗时
         auto ads = FfmpegVideoEngine::availableAdapters();
         printf("[info] %lld adapters:\n", ads.size());
         for (const auto &ad : ads)
