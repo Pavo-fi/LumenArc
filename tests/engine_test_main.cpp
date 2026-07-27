@@ -122,9 +122,9 @@ int main(int argc, char *argv[])
             return 1;
         }
     }
-    printf("[setup] duration=%lldms fps=%.2f size=%dx%d firstFramePos=%lld\n",
+    printf("[setup] duration=%lldms fps=%.2f size=%dx%d firstFramePos=%lld hwdec=%d\n",
            rec.duration, engine.fps(), engine.videoWidth(), engine.videoHeight(),
-           rec.lastPos);
+           rec.lastPos, engine.hardwareDecodeActive() ? 1 : 0);
 
     auto checkSeek = [&](qint64 target, qint64 tol) {
         rec.positions.clear();

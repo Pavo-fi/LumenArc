@@ -20,8 +20,19 @@ extern "C" {
 #include <libavformat/avformat.h>
 #include <libavcodec/avcodec.h>
 #include <libavutil/avutil.h>
+#include <libavutil/hwcontext.h>
 #include <libswscale/swscale.h>
 #include <libswresample/swresample.h>
+}
+
+// D3D11VA get_format 回调：优先硬解像素格式，否则回退软解
+static enum AVPixelFormat getHwFormatD3D11(AVCodecContext *, const enum AVPixelFormat *fmts)
+{
+    for (const enum AVPixelFormat *p = fmts; *p != AV_PIX_FMT_NONE; ++p) {
+        if (*p == AV_PIX_FMT_D3D11)
+            return AV_PIX_FMT_D3D11;
+    }
+    return fmts[0];
 }
 
 FfmpegVideoEngine::FfmpegVideoEngine(QObject *parent)
@@ -412,9 +423,29 @@ bool FfmpegVideoEngine::openFile(const QString &filePath)
     m_vdec = avcodec_alloc_context3(codec);
     avcodec_parameters_to_context(m_vdec, vs->codecpar);
     m_vdec->thread_count = 0; // 自动
+
+    // D3D11VA 硬解（可选；任何一步失败都静默回退软解）
+    m_hwActive = false;
+    if (m_hwDecodeEnabled.load()
+        && av_hwdevice_ctx_create(&m_hwDeviceCtx, AV_HWDEVICE_TYPE_D3D11VA,
+                                  nullptr, nullptr, 0) >= 0) {
+        m_vdec->hw_device_ctx = av_buffer_ref(m_hwDeviceCtx);
+        m_vdec->get_format = &getHwFormatD3D11;
+    }
+
     if (avcodec_open2(m_vdec, codec, nullptr) < 0) {
-        qWarning() << "FfmpegVideoEngine: cannot open decoder";
-        return false;
+        // 硬解上下文打开失败：去掉硬解重试软解
+        if (m_vdec->hw_device_ctx) {
+            av_buffer_unref(&m_vdec->hw_device_ctx);
+            m_vdec->get_format = nullptr;
+            if (avcodec_open2(m_vdec, codec, nullptr) < 0) {
+                qWarning() << "FfmpegVideoEngine: cannot open decoder";
+                return false;
+            }
+        } else {
+            qWarning() << "FfmpegVideoEngine: cannot open decoder";
+            return false;
+        }
     }
 
     m_width = vs->codecpar->width;
@@ -479,6 +510,8 @@ void FfmpegVideoEngine::closeFile()
     if (m_sws) { sws_freeContext(m_sws); m_sws = nullptr; }
     m_swsW = m_swsH = 0; m_swsFmt = -1;
     if (m_vdec) { avcodec_free_context(&m_vdec); m_vdec = nullptr; }
+    if (m_hwDeviceCtx) { av_buffer_unref(&m_hwDeviceCtx); m_hwDeviceCtx = nullptr; }
+    m_hwActive = false;
     if (m_fmt) { avformat_close_input(&m_fmt); m_fmt = nullptr; }
     m_vstream = -1;
 }
@@ -716,27 +749,48 @@ bool FfmpegVideoEngine::paceUntil(qint64 ptsRelMs)
 
 void FfmpegVideoEngine::displayFrame(AVFrame *frame)
 {
-    // 帧格式/尺寸变化时重建 swscale 上下文
-    if (!m_sws || m_swsW != frame->width || m_swsH != frame->height
-        || m_swsFmt != frame->format) {
-        if (m_sws)
-            sws_freeContext(m_sws);
-        m_sws = sws_getContext(frame->width, frame->height,
-                               static_cast<AVPixelFormat>(frame->format),
-                               frame->width, frame->height, AV_PIX_FMT_RGB24,
-                               SWS_BILINEAR, nullptr, nullptr, nullptr);
-        if (!m_sws)
+    // 硬解帧需先回传 CPU（D3D11 纹理 → NV12 系统内存）
+    AVFrame *swFrame = nullptr;
+    const AVFrame *srcFrame = frame;
+    if (frame->format == AV_PIX_FMT_D3D11) {
+        m_hwActive = true;
+        swFrame = av_frame_alloc();
+        if (!swFrame || av_hwframe_transfer_data(swFrame, frame, 0) < 0) {
+            if (swFrame)
+                av_frame_free(&swFrame);
             return;
-        m_swsW = frame->width;
-        m_swsH = frame->height;
-        m_swsFmt = frame->format;
+        }
+        swFrame->best_effort_timestamp = frame->best_effort_timestamp;
+        srcFrame = swFrame;
     }
 
-    QImage img(frame->width, frame->height, QImage::Format_RGB888);
+    // 帧格式/尺寸变化时重建 swscale 上下文
+    if (!m_sws || m_swsW != srcFrame->width || m_swsH != srcFrame->height
+        || m_swsFmt != srcFrame->format) {
+        if (m_sws)
+            sws_freeContext(m_sws);
+        m_sws = sws_getContext(srcFrame->width, srcFrame->height,
+                               static_cast<AVPixelFormat>(srcFrame->format),
+                               srcFrame->width, srcFrame->height, AV_PIX_FMT_RGB24,
+                               SWS_BILINEAR, nullptr, nullptr, nullptr);
+        if (!m_sws) {
+            if (swFrame)
+                av_frame_free(&swFrame);
+            return;
+        }
+        m_swsW = srcFrame->width;
+        m_swsH = srcFrame->height;
+        m_swsFmt = srcFrame->format;
+    }
+
+    QImage img(srcFrame->width, srcFrame->height, QImage::Format_RGB888);
     uint8_t *dst[4] = { img.bits(), nullptr, nullptr, nullptr };
     int dstLinesize[4] = { static_cast<int>(img.bytesPerLine()), 0, 0, 0 };
-    sws_scale(m_sws, frame->data, frame->linesize, 0, frame->height,
+    sws_scale(m_sws, srcFrame->data, srcFrame->linesize, 0, srcFrame->height,
               dst, dstLinesize);
+
+    if (swFrame)
+        av_frame_free(&swFrame);
 
     qint64 relMs = ptsToRelMs(frame->best_effort_timestamp);
     m_positionMs = relMs;

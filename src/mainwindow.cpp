@@ -93,10 +93,14 @@ MainWindow::MainWindow(QWidget *parent)
     {
         QSettings engineSettings("LumenArc", "LumenArc");
         QString engineName = engineSettings.value("videoEngine", "ffmpeg").toString();
-        if (engineName == "vlc")
+        if (engineName == "vlc") {
             m_videoEngine = new VlcVideoEngine(this);
-        else
-            m_videoEngine = new FfmpegVideoEngine(this);
+        } else {
+            auto *ffEngine = new FfmpegVideoEngine(this);
+            ffEngine->setHardwareDecode(
+                engineSettings.value("hwDecode", true).toBool());
+            m_videoEngine = ffEngine;
+        }
     }
 
     m_videoWidget = new VideoWidget(this);
@@ -544,6 +548,17 @@ void MainWindow::createMenus()
         QSettings s("LumenArc", "LumenArc");
         s.setValue("videoEngine", "vlc");
         showOperationStatus(lang("播放内核将在重启后切换为 VLC", "Engine will switch to VLC after restart"));
+    });
+
+    QAction *hwAction = settingsMenu->addAction(lang("硬件解码（重启生效）", "Hardware Decoding (restart required)"));
+    hwAction->setCheckable(true);
+    {
+        QSettings s("LumenArc", "LumenArc");
+        hwAction->setChecked(s.value("hwDecode", true).toBool());
+    }
+    connect(hwAction, &QAction::toggled, this, [](bool on) {
+        QSettings s("LumenArc", "LumenArc");
+        s.setValue("hwDecode", on);
     });
 
     // Help menu

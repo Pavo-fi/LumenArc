@@ -30,6 +30,7 @@ struct SwsContext;
 struct SwrContext;
 struct AVPacket;
 struct AVFrame;
+struct AVBufferRef;
 class QAudioSink;
 class QIODevice;
 
@@ -60,6 +61,10 @@ public:
     void setRate(float rate) override;
     float rate() const override;
     bool supportsRateAudio() const override { return false; } // 一期：倍速静音
+    /// 启用/禁用硬件解码（下次 load 生效；失败自动回退软解）
+    void setHardwareDecode(bool enabled) { m_hwDecodeEnabled = enabled; }
+    /// 诊断/测试用：当前是否实际处于硬解路径
+    bool hardwareDecodeActive() const { return m_hwActive.load(); }
 
 private:
     enum class Command { None, Play, Pause, Stop, Seek };
@@ -116,6 +121,9 @@ private:
     int m_vstream = -1;
     qint64 m_startPtsMs = 0;        // 流起始 PTS（绝对），用于相对时间换算
     bool m_indexed = true;          // 容器是否有 seek 索引（PS/TS 无索引）
+    AVBufferRef *m_hwDeviceCtx = nullptr;   // D3D11VA 设备上下文（软解为 nullptr）
+    std::atomic<bool> m_hwDecodeEnabled{true};
+    std::atomic<bool> m_hwActive{false};    // 已确认收到硬解帧
     qint64 m_discardBeforeRelMs = -1; // seek 后丢弃早于该相对 PTS 的帧
     qint64 m_demuxTargetRelMs = -1;   // 本次 seek 的 demux 目标（用于 margin 自适应）
     qint64 m_seekMarginMs = 2500;     // 无索引容器 seek 前移量（按实测误差自适应）
