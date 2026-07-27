@@ -22,6 +22,8 @@
 #include <QMutex>
 #include <QWaitCondition>
 #include <QElapsedTimer>
+#include <QMap>
+#include <QImage>
 #include <atomic>
 
 struct AVFormatContext;
@@ -86,6 +88,13 @@ private:
     qint64 ptsToRelMs(int64_t pts) const;
     qint64 ptsToRelMsA(int64_t pts) const;    // 音频流时基换算
 
+    // --- 空闲预读缓存（第二 demux 上下文，与主管线零干扰） ---
+    void prefetchStart(qint64 fromRelMs);     // 工作线程内：建立预读上下文
+    void prefetchStep();                      // 工作线程内：每次解少量包
+    void prefetchAbort();
+    bool tryDisplayFromCache(qint64 timeMs);  // seek 命中缓存立即出图
+    void evictCache(qint64 centerMs);
+
 public:
     /// 诊断/测试用：本次 seek 以来写入音频缓冲的字节数
     qint64 audioBytesWritten() const { return m_audioBytesWritten.load(); }
@@ -135,6 +144,17 @@ private:
     QElapsedTimer m_monotonic;      // 工作线程持久单调时钟
     bool m_eof = false;
     bool m_drainedAtEof = false;    // EOF 时解码器是否已冲空（frame threading 滞留帧）
+
+    // --- 预读缓存（仅工作线程访问） ---
+    AVFormatContext *m_pfFmt = nullptr;
+    AVCodecContext *m_pfDec = nullptr;
+    SwsContext *m_swsPf = nullptr;
+    int m_pfVstream = -1;
+    qint64 m_pfPendingFromMs = -1;  // 待启动的预读起点（-1=无）
+    qint64 m_pfEndMs = -1;          // 预读覆盖终点
+    QMap<qint64, QImage> m_frameCache;  // relMs -> 1080p 缓存帧
+    static constexpr qint64 CACHE_SPAN_MS = 2000;   // 预读覆盖 seek 点后 2s
+    static constexpr int CACHE_MAX_FRAMES = 60;     // 内存上限（1080p≈6MB/帧）
 
     // --- 音频面（仅工作线程访问，计数器为原子供诊断读取） ---
     AVCodecContext *m_adec = nullptr;

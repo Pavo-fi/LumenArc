@@ -308,6 +308,17 @@ void FfmpegVideoEngine::workerMain()
             if (m_pendingCmd == Command::None &&
                 m_state.load() != static_cast<int>(PlaybackState::Playing) &&
                 !m_stepOnce) {
+                // 空闲：先推进预读缓存，无预读工作才睡眠
+                if (m_pfPendingFromMs >= 0) {
+                    lock.unlock();
+                    prefetchStart(m_pfPendingFromMs);
+                    continue;
+                }
+                if (m_pfFmt) {
+                    lock.unlock();
+                    prefetchStep();
+                    continue;
+                }
                 m_cmdCond.wait(&m_cmdMutex, 50);
             }
             Command cmd = m_pendingCmd;
@@ -317,6 +328,7 @@ void FfmpegVideoEngine::workerMain()
 
             switch (cmd) {
             case Command::Play:
+                prefetchAbort();
                 if (m_eof)
                     handleSeek(0);   // EOF 后重播：从头开始
                 m_clockValid = false;
@@ -499,6 +511,9 @@ bool FfmpegVideoEngine::openFile(const QString &filePath)
 
 void FfmpegVideoEngine::closeFile()
 {
+    prefetchAbort();
+    m_frameCache.clear();
+    m_pfPendingFromMs = -1;
     if (m_sink) { m_sink->stop(); delete m_sink; m_sink = nullptr; }
     m_sinkIo = nullptr;
     if (m_swr) { swr_free(&m_swr); m_swr = nullptr; }
@@ -581,9 +596,175 @@ void FfmpegVideoEngine::handleSeek(qint64 timeMs)
     m_positionMs = timeMs;
     emit positionChanged(timeMs);
 
-    // 非播放态：解码显示目标帧后停留
-    if (m_state.load() != static_cast<int>(PlaybackState::Playing))
+    // 非播放态：解码显示目标帧后停留；缓存命中则秒出精确帧，并安排空闲预读
+    if (m_state.load() != static_cast<int>(PlaybackState::Playing)) {
         m_stepOnce = true;
+        tryDisplayFromCache(timeMs);
+        m_pfPendingFromMs = timeMs;
+    }
+}
+
+// ---------------------------------------------------------------------------
+// 空闲预读缓存（F-D2）：独立第二 demux 上下文，解码 seek 点后 CACHE_SPAN_MS
+// 的帧为 1080p QImage 缓存；任何新命令立即中止。
+// ---------------------------------------------------------------------------
+
+void FfmpegVideoEngine::prefetchStart(qint64 fromRelMs)
+{
+    prefetchAbort();
+    if (m_pendingPath.isEmpty() || fromRelMs < 0)
+        return;
+
+    if (avformat_open_input(&m_pfFmt, m_pendingPath.toUtf8().constData(),
+                            nullptr, nullptr) < 0) {
+        m_pfFmt = nullptr;
+        return;
+    }
+    m_pfVstream = av_find_best_stream(m_pfFmt, AVMEDIA_TYPE_VIDEO, -1, -1, nullptr, 0);
+    if (m_pfVstream < 0) {
+        prefetchAbort();
+        return;
+    }
+    AVStream *vs = m_pfFmt->streams[m_pfVstream];
+    const AVCodec *codec = avcodec_find_decoder(vs->codecpar->codec_id);
+    if (!codec) {
+        prefetchAbort();
+        return;
+    }
+    m_pfDec = avcodec_alloc_context3(codec);
+    avcodec_parameters_to_context(m_pfDec, vs->codecpar);
+    if (avcodec_open2(m_pfDec, codec, nullptr) < 0) {
+        prefetchAbort();
+        return;
+    }
+
+    int64_t ts = static_cast<int64_t>(m_startPtsMs + fromRelMs) * 1000;
+    avformat_seek_file(m_pfFmt, -1, INT64_MIN, ts, ts, AVSEEK_FLAG_BACKWARD);
+    avcodec_flush_buffers(m_pfDec);
+    m_pfEndMs = fromRelMs + CACHE_SPAN_MS;
+    m_pfPendingFromMs = -1;
+}
+
+void FfmpegVideoEngine::prefetchStep()
+{
+    if (!m_pfFmt || !m_pfDec)
+        return;
+
+    AVPacket *pkt = av_packet_alloc();
+    AVFrame *frame = av_frame_alloc();
+    for (int n = 0; n < 4; ++n) {               // 每次最多处理 4 个包，保持响应
+        if (m_quit.load() || hasPendingCommand())
+            break;
+        int ret = av_read_frame(m_pfFmt, pkt);
+        if (ret < 0) {                          // EOF 或错误：冲空后结束预读
+            avcodec_send_packet(m_pfDec, nullptr);
+            while (avcodec_receive_frame(m_pfDec, frame) >= 0) {
+                qint64 relMs = 0;               // 尾部帧直接入缓存
+                AVStream *vs = m_pfFmt->streams[m_pfVstream];
+                relMs = av_rescale_q(frame->best_effort_timestamp,
+                                     vs->time_base, AVRational{1, 1000}) - m_startPtsMs;
+                if (relMs <= m_pfEndMs && !m_frameCache.contains(relMs)) {
+                    // 与主管线同规则缩放到 1080p
+                    int w = frame->width, h = frame->height;
+                    if (w > 1920) { h = h * 1920 / w; w = 1920; }
+                    if (!m_swsPf) {
+                        m_swsPf = sws_getContext(frame->width, frame->height,
+                            static_cast<AVPixelFormat>(frame->format),
+                            w, h, AV_PIX_FMT_RGB24, SWS_BILINEAR, nullptr, nullptr, nullptr);
+                    }
+                    if (m_swsPf) {
+                        QImage img(w, h, QImage::Format_RGB888);
+                        uint8_t *dst[4] = { img.bits(), nullptr, nullptr, nullptr };
+                        int ls[4] = { static_cast<int>(img.bytesPerLine()), 0, 0, 0 };
+                        sws_scale(m_swsPf, frame->data, frame->linesize, 0,
+                                  frame->height, dst, ls);
+                        if (m_frameCache.size() < CACHE_MAX_FRAMES)
+                            m_frameCache.insert(relMs, img);
+                    }
+                }
+                av_frame_unref(frame);
+            }
+            prefetchAbort();
+            break;
+        }
+        if (pkt->stream_index != m_pfVstream) {
+            av_packet_unref(pkt);
+            continue;
+        }
+        if (avcodec_send_packet(m_pfDec, pkt) >= 0) {
+            while (avcodec_receive_frame(m_pfDec, frame) >= 0) {
+                AVStream *vs = m_pfFmt->streams[m_pfVstream];
+                qint64 relMs = av_rescale_q(frame->best_effort_timestamp,
+                                            vs->time_base, AVRational{1, 1000}) - m_startPtsMs;
+                if (relMs > m_pfEndMs) {
+                    av_frame_unref(frame);
+                    prefetchAbort();
+                    av_packet_unref(pkt);
+                    av_frame_free(&frame);
+                    av_packet_free(&pkt);
+                    return;
+                }
+                if (!m_frameCache.contains(relMs)) {
+                    int w = frame->width, h = frame->height;
+                    if (w > 1920) { h = h * 1920 / w; w = 1920; }
+                    if (!m_swsPf) {
+                        m_swsPf = sws_getContext(frame->width, frame->height,
+                            static_cast<AVPixelFormat>(frame->format),
+                            w, h, AV_PIX_FMT_RGB24, SWS_BILINEAR, nullptr, nullptr, nullptr);
+                    }
+                    if (m_swsPf) {
+                        QImage img(w, h, QImage::Format_RGB888);
+                        uint8_t *dst[4] = { img.bits(), nullptr, nullptr, nullptr };
+                        int ls[4] = { static_cast<int>(img.bytesPerLine()), 0, 0, 0 };
+                        sws_scale(m_swsPf, frame->data, frame->linesize, 0,
+                                  frame->height, dst, ls);
+                        if (m_frameCache.size() < CACHE_MAX_FRAMES)
+                            m_frameCache.insert(relMs, img);
+                    }
+                }
+                av_frame_unref(frame);
+            }
+        }
+        av_packet_unref(pkt);
+    }
+    av_frame_free(&frame);
+    av_packet_free(&pkt);
+}
+
+void FfmpegVideoEngine::prefetchAbort()
+{
+    if (m_swsPf) { sws_freeContext(m_swsPf); m_swsPf = nullptr; }
+    if (m_pfDec) { avcodec_free_context(&m_pfDec); m_pfDec = nullptr; }
+    if (m_pfFmt) { avformat_close_input(&m_pfFmt); m_pfFmt = nullptr; }
+    m_pfVstream = -1;
+}
+
+bool FfmpegVideoEngine::tryDisplayFromCache(qint64 timeMs)
+{
+    if (m_frameCache.isEmpty())
+        return false;
+    // 与 drainDecoder 同规则：首个 >= timeMs - 半帧 的缓存帧即为精确帧
+    qint64 halfFrame = m_fps > 0.0f ? static_cast<qint64>(500.0f / m_fps.load()) : 20;
+    auto it = m_frameCache.lowerBound(timeMs - halfFrame);
+    if (it == m_frameCache.end() || it.key() > timeMs + halfFrame)
+        return false;
+    m_positionMs = it.key();
+    emit positionChanged(it.key());
+    emit frameReady(it.value());
+    evictCache(timeMs);
+    return true;
+}
+
+void FfmpegVideoEngine::evictCache(qint64 centerMs)
+{
+    // 保留中心前后窗口，超出丢弃（内存有界）
+    const qint64 keep = CACHE_SPAN_MS * 3;
+    for (auto it = m_frameCache.begin(); it != m_frameCache.end();) {
+        if (qAbs(it.key() - centerMs) > keep)
+            it = m_frameCache.erase(it);
+        else
+            ++it;
+    }
 }
 
 void FfmpegVideoEngine::processVideoPacket(AVPacket *pkt)
