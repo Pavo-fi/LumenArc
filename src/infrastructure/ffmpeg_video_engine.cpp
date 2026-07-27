@@ -20,6 +20,7 @@ extern "C" {
 #include <libavformat/avformat.h>
 #include <libavcodec/avcodec.h>
 #include <libavutil/avutil.h>
+#include <libavutil/pixdesc.h>
 #include <libavutil/hwcontext.h>
 #include <libswscale/swscale.h>
 #include <libswresample/swresample.h>
@@ -434,15 +435,23 @@ bool FfmpegVideoEngine::openFile(const QString &filePath)
     }
     m_vdec = avcodec_alloc_context3(codec);
     avcodec_parameters_to_context(m_vdec, vs->codecpar);
-    m_vdec->thread_count = 0; // 自动
 
     // D3D11VA 硬解（可选；任何一步失败都静默回退软解）
     m_hwActive = false;
-    if (m_hwDecodeEnabled.load()
-        && av_hwdevice_ctx_create(&m_hwDeviceCtx, AV_HWDEVICE_TYPE_D3D11VA,
-                                  nullptr, nullptr, 0) >= 0) {
+    bool wantHw = false;
+    int hwErr = 0;
+    if (m_hwDecodeEnabled.load()) {
+        hwErr = av_hwdevice_ctx_create(&m_hwDeviceCtx, AV_HWDEVICE_TYPE_D3D11VA,
+                                       nullptr, nullptr, 0);
+        wantHw = (hwErr >= 0);
+    }
+    if (wantHw) {
         m_vdec->hw_device_ctx = av_buffer_ref(m_hwDeviceCtx);
         m_vdec->get_format = &getHwFormatD3D11;
+        // hwaccel 与帧级多线程不兼容（会静默回退软解），硬解时单线程
+        m_vdec->thread_count = 1;
+    } else {
+        m_vdec->thread_count = 0; // 软解自动多线程
     }
 
     if (avcodec_open2(m_vdec, codec, nullptr) < 0) {
