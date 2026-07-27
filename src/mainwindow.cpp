@@ -1051,6 +1051,12 @@ void MainWindow::setupConnections()
 
     connect(m_chartPanel, &ChartPanel::seekRequested,
             this, &MainWindow::onSeekFromChart);
+    // 拖拽松手：退出 scrub 模式 + 最终精确 seek
+    connect(m_chartPanel, &ChartPanel::scrubEnded, this, [this]() {
+        m_videoEngine->setScrubMode(false);
+        qint64 pos = m_chartPanel->cursorTime();
+        m_videoEngine->seek(pos);
+    });
 
     connect(m_analysisEngine, &IAnalysisEngine::progressUpdated,
             this, &MainWindow::onAnalysisProgress);
@@ -2550,27 +2556,36 @@ void MainWindow::onPositionChanged(qint64 timeMs)
 
 void MainWindow::onSeekFromChart(qint64 timeMs)
 {
-    // 光标立即跟随（UI 响应）；实际 seek 节流：拖拽期间每 50ms 最多一次
-    // （leading），停止后补发最终值（trailing），避免 seek 队列积压
+    // 光标立即跟随（UI 响应）
     m_chartPanel->setCursorTime(timeMs);
     m_spectrogramEnhanced->setCursorTime(timeMs);
 
-    m_pendingSeekMs = timeMs;
-    if (!m_seekThrottleTimer) {
-        m_seekThrottleTimer = new QTimer(this);
-        m_seekThrottleTimer->setSingleShot(true);
-        m_seekThrottleTimer->setInterval(50);
-        connect(m_seekThrottleTimer, &QTimer::timeout, this, [this]() {
-            if (m_pendingSeekMs != m_lastIssuedSeekMs && m_pendingSeekMs >= 0) {
-                m_lastIssuedSeekMs = m_pendingSeekMs;
-                m_videoEngine->seek(m_pendingSeekMs);
-            }
-        });
-    }
-    if (!m_seekThrottleTimer->isActive()) {
-        m_lastIssuedSeekMs = timeMs;
-        m_videoEngine->seek(timeMs);   // leading：立即响应首帧
-        m_seekThrottleTimer->start();
+    // 代理就绪时 seek 仅需 ~10ms，不需节流——直接发 seek，60Hz 鼠标跟手
+    // 代理未就绪时走 50ms 节流，避免软解 seek 队列积压
+    if (m_chartPanel->isDraggingCursor()) {
+        // 拖拽中：进入 scrub 模式，seek 走 demuxer 重定向 + 连续解码
+        m_videoEngine->setScrubMode(true);
+        m_videoEngine->seek(timeMs);
+    } else {
+        // 点击/标签跳转：一次性 seek
+        m_videoEngine->setScrubMode(false);
+        m_pendingSeekMs = timeMs;
+        if (!m_seekThrottleTimer) {
+            m_seekThrottleTimer = new QTimer(this);
+            m_seekThrottleTimer->setSingleShot(true);
+            m_seekThrottleTimer->setInterval(50);
+            connect(m_seekThrottleTimer, &QTimer::timeout, this, [this]() {
+                if (m_pendingSeekMs != m_lastIssuedSeekMs && m_pendingSeekMs >= 0) {
+                    m_lastIssuedSeekMs = m_pendingSeekMs;
+                    m_videoEngine->seek(m_pendingSeekMs);
+                }
+            });
+        }
+        if (!m_seekThrottleTimer->isActive()) {
+            m_lastIssuedSeekMs = timeMs;
+            m_videoEngine->seek(timeMs);
+            m_seekThrottleTimer->start();
+        }
     }
 }
 

@@ -87,6 +87,8 @@ signals:
     void plotAreaUpdated(QRectF plotArea);
     /// Emitted when A/B region changes
     void abRegionChanged();
+    /// Emitted when cursor drag ends (Scrub → Paused transition)
+    void scrubEnded();
 
 public slots:
     void onRegionsChanged();

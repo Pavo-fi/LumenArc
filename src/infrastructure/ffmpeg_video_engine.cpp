@@ -441,12 +441,15 @@ void FfmpegVideoEngine::workerMain()
     int consecutiveErrors = 0;
 
     while (!m_quit.load()) {
+        // --- 状态标志 ---
+        bool isScrubbing = m_scrubMode.load();
+        bool isActive = (m_state.load() == static_cast<int>(PlaybackState::Playing))
+                        || isScrubbing || m_stepOnce;
+
         // --- 处理命令 ---
         {
             QMutexLocker lock(&m_cmdMutex);
-            if (m_pendingCmd == Command::None &&
-                m_state.load() != static_cast<int>(PlaybackState::Playing) &&
-                !m_stepOnce) {
+            if (m_pendingCmd == Command::None && !isActive) {
                 // 空闲：代理路径打开待办 → 主管线沉淀补全 → 预读缓存 → 睡眠
                 if (!m_pxPathPending.isEmpty()) {
                     QString path = m_pxPathPending;
@@ -458,11 +461,10 @@ void FfmpegVideoEngine::workerMain()
                 if (m_mainSeekPending
                     && m_monotonic.isValid()
                     && m_monotonic.elapsed() - m_lastSeekElapsed > 300) {
-                    // 沉淀：300ms 无新 seek，主管线精确 seek 补全分辨率
                     m_mainSeekPending = false;
                     qint64 pos = m_positionMs.load();
                     lock.unlock();
-                    handleSeek(pos, true);   // 强制主管线，绕过代理分支
+                    handleSeek(pos, true);
                     continue;
                 }
                 if (m_pfPendingFromMs >= 0) {
@@ -485,14 +487,10 @@ void FfmpegVideoEngine::workerMain()
             switch (cmd) {
             case Command::Play:
                 prefetchAbort();
-                if (m_mainSeekPending) {
-                    // 拖拽后首次播放：主管线先追平到当前位置（全分辨率）
-                    m_mainSeekPending = false;
-                    qint64 pos = m_positionMs.load();
-                    handleSeek(pos, true);   // 强制主管线，绕过代理分支
-                }
+                m_mainSeekPending = false;
+                handleSeek(m_positionMs.load(), true);
                 if (m_eof)
-                    handleSeek(0);   // EOF 后重播：从头开始
+                    handleSeek(0, true);
                 m_clockValid = false;
                 m_state = static_cast<int>(PlaybackState::Playing);
                 resumeAudio();
@@ -506,7 +504,8 @@ void FfmpegVideoEngine::workerMain()
                 }
                 break;
             case Command::Stop:
-                handleSeek(0);
+                m_mainSeekPending = false;
+                handleSeek(0, true);
                 m_state = static_cast<int>(PlaybackState::Stopped);
                 suspendAudio();
                 emit stateChanged(PlaybackState::Stopped);
@@ -521,13 +520,12 @@ void FfmpegVideoEngine::workerMain()
 
         if (m_quit.load())
             break;
-        if (m_state.load() != static_cast<int>(PlaybackState::Playing) && !m_stepOnce)
+        if (m_state.load() != static_cast<int>(PlaybackState::Playing) && !m_scrubMode.load() && !m_stepOnce)
             continue;
 
         // --- 解复用 ---
         int ret = av_read_frame(m_fmt, pkt);
         if (ret == AVERROR_EOF) {
-            // 先冲空解码器：frame threading 会滞留最后 N 帧（含文件末尾 seek 的目标帧）
             if (!m_drainedAtEof) {
                 avcodec_send_packet(m_vdec, nullptr);
                 drainDecoder();
@@ -535,7 +533,7 @@ void FfmpegVideoEngine::workerMain()
                 continue;
             }
             if (m_stepOnce) {
-                m_stepOnce = false;      // seek 到末尾之外：无帧可显示
+                m_stepOnce = false;
             } else {
                 m_eof = true;
                 m_state = static_cast<int>(PlaybackState::Ended);
@@ -547,7 +545,7 @@ void FfmpegVideoEngine::workerMain()
         if (ret < 0) {
             if (m_quit.load())
                 break;
-            if (++consecutiveErrors > 100) {   // 连续读错误：判为结束
+            if (++consecutiveErrors > 100) {
                 m_eof = true;
                 m_state = static_cast<int>(PlaybackState::Ended);
                 emit stateChanged(PlaybackState::Ended);
@@ -758,8 +756,27 @@ void FfmpegVideoEngine::handleSeek(qint64 timeMs, bool forceMainPipeline)
 
     timeMs = qBound<qint64>(0, timeMs, m_durationMs > 0 ? m_durationMs.load() : timeMs);
 
-    // 代理路径（暂停/拖拽 seek）：代理立即出精确帧（低分辨率），
-    // 主管线 seek 推迟到沉淀（300ms 无新 seek）或 Play 时执行
+    // --- 拖拽模式（Scrub）：代理路径或主管线 demuxer 重定向，播放循环连续解码 ---
+    if (m_scrubMode) {
+        if (!forceMainPipeline && m_pxReady) {
+            proxyDisplayFrame(timeMs);
+        } else {
+            scrubRedirectDemuxer(timeMs);
+        }
+        m_mainSeekPending = (m_pxReady && !forceMainPipeline);
+        m_stepOnce = false;
+        m_eof = false;
+        m_positionMs = timeMs;
+        emit positionChanged(timeMs);
+        if (!m_monotonic.isValid())
+            m_monotonic.start();
+        m_lastSeekElapsed = m_monotonic.elapsed();
+        return;
+    }
+
+    // --- 一次性 seek（非拖拽：点击/沉淀/播放启动） ---
+
+    // 代理路径：一次性 seek + 显示精确帧
     if (!forceMainPipeline && m_pxReady
         && m_state.load() != static_cast<int>(PlaybackState::Playing)) {
         if (proxyDisplayFrame(timeMs)) {
@@ -770,38 +787,10 @@ void FfmpegVideoEngine::handleSeek(qint64 timeMs, bool forceMainPipeline)
             m_eof = false;
             return;
         }
-        // 代理解码失败：落回主管线路径
     }
 
-    // 无索引容器的字节估算 seek 可能过冲到目标之后，无法回退修正；
-    // 故将 seek 目标前移（margin 按该文件历史落点误差自适应收缩），
-    // 随后解码丢弃到精确目标（见 drainDecoder）
-    qint64 demuxTargetMs = timeMs;
-    if (!m_indexed)
-        demuxTargetMs = qMax<qint64>(0, timeMs - m_seekMarginMs);
-    m_demuxTargetRelMs = demuxTargetMs;
-    int64_t ts = static_cast<int64_t>(m_startPtsMs + demuxTargetMs) * 1000; // AV_TIME_BASE 微秒
-
-    // 先按时间戳精确 seek（BACKWARD：落到目标之前的关键帧，再解码丢弃到目标）；
-    // 失败则字节估算兜底（无索引容器）
-    int ret = avformat_seek_file(m_fmt, -1, INT64_MIN, ts, ts, AVSEEK_FLAG_BACKWARD);
-    if (ret < 0)
-        ret = avformat_seek_file(m_fmt, -1, INT64_MIN, ts, INT64_MAX,
-                                 AVSEEK_FLAG_BYTE | AVSEEK_FLAG_BACKWARD);
-    if (ret < 0)
-        av_seek_frame(m_fmt, -1, ts, AVSEEK_FLAG_BACKWARD);
-
-    avcodec_flush_buffers(m_vdec);
-    if (m_adec)
-        avcodec_flush_buffers(m_adec);
-    if (m_sink) {
-        m_sink->reset();               // 丢弃设备内残余音频
-        m_sinkIo = m_sink->start();    // 重置后重新进入推模式
-    }
-    m_audioBytesWritten = 0;
-    m_audioBaseRelMs = -1;   // 等待首个写入样本锚定
-    m_smoothAudioClock = -1; // 重建平滑时钟
-    m_lastRawAudioClock = -1;
+    // 主管线 seek：demuxer 重定位 + flush
+    scrubRedirectDemuxer(timeMs);
 
     // seek 落点可能早于目标（关键帧），解码后丢弃早于目标的帧（容差半帧）
     qint64 halfFrame = m_fps > 0.0f ? static_cast<qint64>(500.0f / m_fps.load()) : 20;
@@ -813,12 +802,45 @@ void FfmpegVideoEngine::handleSeek(qint64 timeMs, bool forceMainPipeline)
     m_positionMs = timeMs;
     emit positionChanged(timeMs);
 
-    // 非播放态：解码显示目标帧后停留；缓存命中则秒出精确帧，并安排空闲预读
+    // 非播放态：解码显示目标帧后停留
     if (m_state.load() != static_cast<int>(PlaybackState::Playing)) {
         m_stepOnce = true;
         tryDisplayFromCache(timeMs);
         m_pfPendingFromMs = timeMs;
     }
+}
+
+void FfmpegVideoEngine::scrubRedirectDemuxer(qint64 timeMs)
+{
+    qint64 demuxTargetMs = timeMs;
+    if (!m_indexed)
+        demuxTargetMs = qMax<qint64>(0, timeMs - m_seekMarginMs);
+
+    m_demuxTargetRelMs = demuxTargetMs;
+    m_needMarginMeasure = !m_indexed;
+    int64_t ts = static_cast<int64_t>(m_startPtsMs + demuxTargetMs) * 1000;
+
+    int ret = avformat_seek_file(m_fmt, -1, INT64_MIN, ts, ts, AVSEEK_FLAG_BACKWARD);
+    if (ret < 0)
+        ret = avformat_seek_file(m_fmt, -1, INT64_MIN, ts, INT64_MAX,
+                                 AVSEEK_FLAG_BYTE | AVSEEK_FLAG_BACKWARD);
+    if (ret < 0)
+        av_seek_frame(m_fmt, -1, ts, AVSEEK_FLAG_BACKWARD);
+
+    avcodec_flush_buffers(m_vdec);
+    if (m_adec)
+        avcodec_flush_buffers(m_adec);
+    if (m_sink) {
+        m_sink->reset();
+        m_sinkIo = m_sink->start();
+    }
+    m_audioBytesWritten = 0;
+    m_audioBaseRelMs = -1;
+    m_smoothAudioClock = -1;
+    m_lastRawAudioClock = -1;
+    m_discardBeforeRelMs = -1;  // Scrub 模式不做丢弃追赶
+    m_audioDiscardBeforeRelMs = -1;
+    m_clockValid = false;
 }
 
 // ---------------------------------------------------------------------------
@@ -1036,6 +1058,7 @@ bool FfmpegVideoEngine::drainDecoder()
         if (!discard) {
             m_discardBeforeRelMs = -1;
             bool playing = m_state.load() == static_cast<int>(PlaybackState::Playing);
+            bool scrubbing = m_scrubMode.load();
 
             bool show = true;
             if (playing) {
@@ -1049,11 +1072,11 @@ bool FfmpegVideoEngine::drainDecoder()
                 continue;
             }
 
-            if (playing || m_stepOnce) {
+            if (playing || scrubbing || m_stepOnce) {
                 displayFrame(frame);
                 m_stepOnce = false;
                 av_frame_unref(frame);
-                break;    // 暂停态只显示一帧；播放态显示后处理下一个包
+                break;
             }
         }
         av_frame_unref(frame);

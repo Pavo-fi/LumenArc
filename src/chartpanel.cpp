@@ -1495,6 +1495,7 @@ void ChartPanel::mouseReleaseEvent(QMouseEvent *event)
     if (event->button() == Qt::LeftButton && m_draggingCursor) {
         m_draggingCursor = false;
         unsetCursor();
+        emit scrubEnded();
     }
     QChartView::mouseReleaseEvent(event);
 }

@@ -62,6 +62,10 @@ public:
     /// 设置拖拽预览代理源（全 I 帧低分代理，帧号与原片 1:1）。
     /// 引擎在暂停/拖拽 seek 时用代理快速出精确帧；不支持的引擎忽略。
     virtual void setProxySource(const QString &proxyPath) { Q_UNUSED(proxyPath) }
+    /// 代理是否已就绪（UI 用于判断拖拽 seek 是否无需节流）
+    virtual bool proxyActive() const { return false; }
+    /// 设置拖拽模式：拖拽中 seek 走 demuxer 重定向 + 连续解码；松手后走一次性精确 seek
+    virtual void setScrubMode(bool on) { Q_UNUSED(on) }
 
 signals:
     void frameReady(const QImage &image);

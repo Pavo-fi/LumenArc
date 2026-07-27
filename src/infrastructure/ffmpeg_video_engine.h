@@ -84,7 +84,9 @@ public:
     /// 设置拖拽预览代理源（下次 seek 生效）
     void setProxySource(const QString &proxyPath) override;
     /// 诊断/测试用：代理是否已就绪
-    bool proxyActive() const { return m_pxReady; }
+    bool proxyActive() const override { return m_pxReady; }
+    /// 拖拽模式：拖拽中 seek 走连续解码路径，松手走一次性精确 seek
+    void setScrubMode(bool on) override { m_scrubMode = on; }
 
 private:
     enum class Command { None, Play, Pause, Stop, Seek };
@@ -93,6 +95,7 @@ private:
     bool openFile(const QString &filePath);   // 工作线程内调用
     void closeFile();                         // 工作线程内调用
     void handleSeek(qint64 timeMs, bool forceMainPipeline = false); // 工作线程内调用
+    void scrubRedirectDemuxer(qint64 timeMs);  // Scrub 模式：主管线 demuxer 重定向
     void processVideoPacket(AVPacket *pkt);   // 送包 + 排干解码器
     void processAudioPacket(AVPacket *pkt);   // 音频解码 → 重采样 → 环形缓冲
     bool ensureAudioOutput();                 // 惰性创建 QAudioSink（工作线程内）
@@ -116,7 +119,7 @@ private:
     // --- 拖拽预览代理（全 I 帧低分代理，帧号 1:1） ---
     void openProxy(const QString &path);      // 工作线程内
     void closeProxy();
-    bool proxyDisplayFrame(qint64 timeMs);    // 代理解码显示指定帧
+    bool proxyDisplayFrame(qint64 timeMs);    // 一次性 seek+解码+显示
 
 public:
     /// 诊断/测试用：本次 seek 以来写入音频缓冲的字节数
@@ -189,6 +192,7 @@ private:
     int m_pxVstream = -1;
     bool m_pxReady = false;
     bool m_mainSeekPending = false;     // 代理已出图，主管线待沉淀补全分辨率
+    std::atomic<bool> m_scrubMode{false}; // 拖拽模式：seek 走连续解码路径
     qint64 m_lastSeekElapsed = 0;       // 上次 seek 的单调时钟（沉淀计时）
 
     // --- 音频面（仅工作线程访问，计数器为原子供诊断读取） ---

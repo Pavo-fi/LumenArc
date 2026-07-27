@@ -474,6 +474,27 @@ int main(int argc, char *argv[])
             printf("[ OK ] scrub 10 seeks, final err %lldms, total %lldms\n",
                    qAbs(rec.lastPos - finalTarget), t0.elapsed());
         }
+    } else if (scenario == "scrub-playback") {
+        // Scrub 连续解码模式：模拟拖拽期间帧应连续到达（不是每 seek 只出一帧）
+        engine.seek(0);
+        pumpFor(500);
+        int framesBefore = rec.frameCount;
+        // 模拟拖拽：设置 scrub 模式，连续 20 次 seek（30ms 间隔）
+        engine.setScrubMode(true);
+        for (int i = 1; i <= 20; ++i) {
+            engine.seek(rec.duration * i * 3 / 100);
+            pumpFor(30);
+        }
+        engine.setScrubMode(false);
+        int framesAfter = rec.frameCount;
+        int framesDuring = framesAfter - framesBefore;
+        printf("[info] scrub-playback: %d frames during 20 rapid seeks (~600ms)\n", framesDuring);
+        if (framesDuring < 10) {
+            printf("[FAIL] scrub-playback: too few frames (%d), expected continuous decode\n", framesDuring);
+            failures++;
+        } else {
+            printf("[ OK ] scrub-playback: %d continuous frames\n", framesDuring);
+        }
     } else if (scenario == "step") {
         // 逐帧步进语义：暂停态连续 seek +1 帧，断言严格单调前进且落点精确
         float fps = engine.fps();
