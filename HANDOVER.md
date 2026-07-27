@@ -1,8 +1,8 @@
-# LumenArc v1.2 工作交接文档
+# LumenArc v1.3 工作交接文档
 
 > 编制日期：2026-07-27
-> 最新标签：`v1.2.0-proxy`
-> 提交历史：`77c8e44`（v1.0 基线）→ `abd7b11`（N0）→ `ff4c9a4`（N1）→ `adb429b`（N2）→ `5bbb59b`（N3）→ `6b61a8d`（N4）→ `25efc66`（F-A）→ `d978496`（F-C）→ `f496680`（F-B'）→ `4447ca7`（F-D1）→ `66b2b8f`（F-D2）→ `0306427`（D3D11VA fix）→ `e812e0c`（dGPU selection）→ `f073804`（proxy chain）
+> 最新标签：`v1.3.0-scrub`
+> 提交历史：`77c8e44`→`abd7b11`→`ff4c9a4`→`adb429b`→`5bbb59b`→`6b61a8d`→`25efc66`→`d978496`→`f496680`→`4447ca7`→`66b2b8f`→`0306427`→`e812e0c`→`f073804`→`16a64de`→`d9cc07a`
 
 ---
 
@@ -232,6 +232,37 @@ Play 命令：
 
 独立于主管线：`m_pxFmt/m_pxDec/m_pxSws`，在工作线程 idle 打开。代理就绪后禁用 F-D2 预读缓存（二者功能重叠）。
 
+### 6.5 Scrub 模式（拖拽连续解码）
+
+**问题**：代理 seek 10ms 已经比 VLC 快，但 VLC 拖拽更顺滑——因为 VLC 的播放循环在 seek 期间不中断，帧持续输出。我们之前的 seek 是"停止一切 + 解一帧"模式。
+
+**解决**：`m_scrubMode` 标志（`std::atomic<bool>`），由 MainWindow 在拖拽期间设为 true，松手设为 false。
+
+```
+handleSeek(timeMs):
+    if (m_scrubMode):
+        // 拖拽模式：demuxer 重定位 + flush，播放循环继续
+        proxyDisplayFrame(timeMs) 或 scrubRedirectDemuxer(timeMs)
+        m_stepOnce = false
+        return  // 不停止，播放循环继续从新位置解码
+    else:
+        // 一次性 seek：demuxer 重定位 + flush + 追赶解码到精确帧
+        proxyDisplayFrame(timeMs) 或 scrubRedirectDemuxer + drainDecoder
+        m_stepOnce = true  // 显示一帧后等命令
+```
+
+**drainDecoder scrub 支持**：当 `m_scrubMode=true` 时，解码帧无需 paceUntil（以解码器极限速度出帧）。
+
+**MainWindow 集成**：
+- `onSeekFromChart`：拖拽中 + 代理就绪 → 直接 seek（无 50ms 节流）；拖拽中 + 无代理 → 直接 seek（demuxer 重定向也很快）
+- `scrubEnded`（ChartPanel mouseRelease）→ `setScrubMode(false)` + 最终精确 seek
+
+**性能**：
+- D17（PS HEVC 4K）：46 帧/600ms ≈ **77fps** 连续帧流
+- 4K H.264（D3D11VA）：25 帧/600ms ≈ **42fps** 连续帧流
+
+**关键洞察**：代理是优化（10ms vs 300ms seek），引擎架构（Scrub 模式连续解码）才是流畅拖拽的根本解。无代理时 Scrub 模式同样工作（软解 4K ~20fps，硬解 ~100fps）。
+
 ---
 
 ## 七、测试体系
@@ -330,6 +361,7 @@ POST_BUILD 自动：windeployqt（Qt DLLs）→ FFmpeg DLLs → analyze_video.py
 | v1.1.1-hwdec | D3D11VA 修复（thread_count=1） |
 | v1.1.2-dgpu | 独显自动选择（2.2x） |
 | v1.2.0-proxy | FCPX 级代理拖拽 |
+| v1.3.0-scrub | Scrub 连续解码（D17 77fps，真正 VLC 级流畅） |
 
 ---
 
