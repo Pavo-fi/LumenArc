@@ -1,8 +1,8 @@
 # LumenArc v1.3 工作交接文档
 
-> 编制日期：2026-07-27
-> 最新标签：`v1.3.0-scrub`
-> 提交历史：`77c8e44`→`abd7b11`→`ff4c9a4`→`adb429b`→`5bbb59b`→`6b61a8d`→`25efc66`→`d978496`→`f496680`→`4447ca7`→`66b2b8f`→`0306427`→`e812e0c`→`f073804`→`16a64de`→`d9cc07a`
+> 编制日期：2026-07-28
+> 最新标签：`v1.3.3-always-flush`
+> 提交历史：`77c8e44`→`abd7b11`→`ff4c9a4`→`adb429b`→`5bbb59b`→`6b61a8d`→`25efc66`→`d978496`→`f496680`→`4447ca7`→`66b2b8f`→`0306427`→`e812e0c`→`f073804`→`16a64de`→`d9cc07a`→`977cb96`→`f9141f8`→`9d1230a`
 
 ---
 
@@ -232,36 +232,70 @@ Play 命令：
 
 独立于主管线：`m_pxFmt/m_pxDec/m_pxSws`，在工作线程 idle 打开。代理就绪后禁用 F-D2 预读缓存（二者功能重叠）。
 
-### 6.5 Scrub 模式（拖拽连续解码）
+### 6.5 Scrub 模式（拖拽连续解码）—— 持续攻关中
 
-**问题**：代理 seek 10ms 已经比 VLC 快，但 VLC 拖拽更顺滑——因为 VLC 的播放循环在 seek 期间不中断，帧持续输出。我们之前的 seek 是"停止一切 + 解一帧"模式。
+**目标**：拖拽图表光标时，视频画面逐帧连续流动（如 VLC/FCPX），松手后精确落位。
 
-**解决**：`m_scrubMode` 标志（`std::atomic<bool>`），由 MainWindow 在拖拽期间设为 true，松手设为 false。
+#### 已尝试方案及结论
+
+| # | 方案 | 结果 | 教训 |
+|---|---|---|---|
+| 1 | **代理逐位置 seek**（每次 mouseMove → proxyDisplayFrame，节流 50ms） | 代理 seek 10ms，理论 20fps。用户反馈：**帧跳跃，不连续** | 每次 seek = 清空解码器 + 解码一帧 + break。帧与帧之间有 worker 循环延迟（等命令 + seek + 解码）。**不是"连续播放"，是"快速幻灯片"** |
+| 2 | **Scrub 模式 + 连续解码**（drainDecoder 在 scrub 模式不 break，持续出帧） | 测试程序：D17 59帧/600ms≈100fps。用户反馈：**依然跳跃** | 测试程序通过是因为 `frameReady` 信号被计数（测试不关心显示顺序）。**实际问题是每次 seek 都 flush 解码器 → 解码管线清空 → 只出一帧 → 等下一次 seek** |
+| 3 | **方向感知 flush**（前进不清空解码器，后退清空） | 测试：h265.mp4 seek-matrix 失败（落在下一 GOP）。用户反馈：**更差** | **frame-threading 下"不清空前进"不安全**：解码器内部有多线程帧队列，`avformat_seek_file` 重定向 demuxer 后解码器仍持有旧帧，`avcodec_receive_frame` 返回旧帧（乱序）。**所有帧都必须清空才能保证正确性** |
+| 4 | **始终清空**（代理和主管线都 flush） | 测试：24/24 全回归通过。用户反馈：**甚至更差** | 代理路径 `proxyDisplayFrame` = seek+flush+解码一帧+break → 帧与帧之间有完整 worker 循环延迟。**"清空"本身正确，但破坏了连续解码的前提** |
+| 5 | **proxyDisplayFrame + scrubDisplayNextPxFrame**（首次 seek+flush+显示，后续不 seek 连续解码） | 测试：D17 46帧/600ms。用户反馈：**依然跳跃** | `scrubDisplayNextPxFrame` 读代理解码器 → 代理解码器在 `proxyDisplayFrame` 后停在显示帧之后 → `scrubDisplayNextPxFrame` 继续读 → **每次 mouseMove 触发 `handleSeek` → 重新 `proxyDisplayFrame` → 重置解码器位置**。`scrubDisplayNextPxFrame` 永远不会被调用（handleSeek 先走了） |
+| 6 | **proxyRedirectSeek**（前进只重定向 demux，不清空解码器） | 测试：D17 60帧/600ms。用户反馈：**帧跳跃** | `proxyRedirectSeek` 不清空代理解码器 → 解码器内部仍有旧位置的帧 → `scrubDisplayNextPxFrame` 返回旧帧（错误位置） |
+
+#### 核心矛盾
+
+**"连续播放"和"seek 精确帧"在当前架构下是互斥的**：
+
+- **连续播放**：解码器不停，帧持续流出。需要解码器持续运行、管线不断流。
+- **seek 精确帧**：每次 mouseMove 要求显示"光标位置对应的帧"。需要 seek 到目标位置并解码显示。
+
+在 VLC/FCPX 中，这两个目标通过**极低延迟的 seek + 连续播放**实现：
+- VLC 的 seek 代价极低（~5ms），每次 slider 位置变化 → seek → 解码器立即出帧 → 显示。帧与帧之间的间隔 ≈ seek 延迟 ≈ 5ms，低于人眼感知，所以看起来连续。
+- 我们的 seek 代价：代理 ~10ms，主管线 ~30-100ms。帧间隔 > 16ms（60Hz 显示器刷新率），人眼可感知跳跃。
+
+**根本差距在于 seek 延迟**：
+- VLC seek 5ms → 200fps 显示 → 看起来连续
+- 我们 seek 10ms → 100fps 显示 → 测试程序看起来连续，但实际 UI 中 Qt 事件循环 + paint 合并 → 有效帧率 ~30-60fps → 用户感知跳跃
+
+#### 下一步方案（待实施）
+
+**方案 A：独立 Scrub 线程（绕过 worker 命令循环）**
+
+当前瓶颈：每次 seek 经过 worker 命令循环（锁 → 条件变量唤醒 → 处理 → 解码 → emit），总延迟 ~10-30ms。
+
+解决方案：**scrub 不经过 worker 命令循环**。MainWindow 拖拽时，启动一个独立的"Scrub 专用线程"：
 
 ```
-handleSeek(timeMs):
-    if (m_scrubMode):
-        // 拖拽模式：demuxer 重定位 + flush，播放循环继续
-        proxyDisplayFrame(timeMs) 或 scrubRedirectDemuxer(timeMs)
-        m_stepOnce = false
-        return  // 不停止，播放循环继续从新位置解码
-    else:
-        // 一次性 seek：demuxer 重定位 + flush + 追赶解码到精确帧
-        proxyDisplayFrame(timeMs) 或 scrubRedirectDemuxer + drainDecoder
-        m_stepOnce = true  // 显示一帧后等命令
+ScrubThread:
+    打开独立的代理上下文（或复用现有）
+    while scrubActive:
+        read next packet from proxy demux
+        decode
+        emit frameReady(img)   // 直接 emit，不经过 worker 命令循环
+        // 帧率 = 代理解码速度（~100fps），不受 worker 命令循环延迟影响
 ```
 
-**drainDecoder scrub 支持**：当 `m_scrubMode=true` 时，解码帧无需 paceUntil（以解码器极限速度出帧）。
+MainWindow 拖拽时：
+- 设置 `scrubTargetPos`（原子变量）
+- ScrubThread 每解码一帧，比较 `currentPos` 和 `scrubTargetPos`：
+  - 偏差 < 半帧：直接显示（连续播放）
+  - 偏差 > 1s：seek 代理到 `scrubTargetPos`（快速跳转）
+  - 偏差 100ms-1s：继续播放，下几帧内自然追上
 
-**MainWindow 集成**：
-- `onSeekFromChart`：拖拽中 + 代理就绪 → 直接 seek（无 50ms 节流）；拖拽中 + 无代理 → 直接 seek（demuxer 重定向也很快）
-- `scrubEnded`（ChartPanel mouseRelease）→ `setScrubMode(false)` + 最终精确 seek
+这实现了 VLC 的行为：**帧以解码速度连续流出，seek 只在偏差大时发生**。拖拽时看到的是连续运动，松手后精确 seek 到最终位置。
 
-**性能**：
-- D17（PS HEVC 4K）：46 帧/600ms ≈ **77fps** 连续帧流
-- 4K H.264（D3D11VA）：25 帧/600ms ≈ **42fps** 连续帧流
+**方案 B：不 seek，直接播放 + 定期同步（更简单）**
 
-**关键洞察**：代理是优化（10ms vs 300ms seek），引擎架构（Scrub 模式连续解码）才是流畅拖拽的根本解。无代理时 Scrub 模式同样工作（软解 4K ~20fps，硬解 ~100fps）。
+更简单的替代方案：拖拽时不 seek，而是**从当前代理位置持续播放**。MainWindow 定期把 `scrubTargetPos` 告诉 ScrubThread。ScrubThread 持续播放代理帧，偶尔（每 300ms 或偏差 >500ms 时）seek 一次同步到目标位置。
+
+这更接近 VLC 的行为：播放器持续播放，slider 只改变"要跳到哪里"的意图。
+
+**方案选择**：方案 B 更简单，但拖拽速度受限于代理播放速率（~100fps）。方案 A 更灵活（可变速）。建议先做方案 B 验证手感，再按需升级到方案 A。
 
 ---
 
