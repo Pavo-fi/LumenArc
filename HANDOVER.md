@@ -515,15 +515,23 @@ POST_BUILD 自动：windeployqt（Qt DLLs）→ FFmpeg DLLs → analyze_video.py
 
 ---
 
-## 十、下一步待做
+## 十、升级计划表
 
-1. **P2 架构拆分**：mainwindow.cpp → AnalysisController + VideoSessionManager + ProjectIO（行为冻结纯移动，预计 2 周）
-2. **P1a 任务化状态机**：分析功能走 TaskRegistry 注册（为 OCR 做准备）
-3. **P1b 通道化**：AnalysisSnapshot 改为通道字典 + .vla v7 格式
-4. **FFmpeg 分析引擎**（P3）：libav 原生亮度+音频分析，干掉 Python 依赖和 5000 帧上限
-5. **OCR 时间戳**：Python + RapidOCR，任务框架第二个租户
-6. **显示管线上 GPU**：QOpenGLWidget/Rhi 渲染消除每帧 CPU swscale，多视频 CPU 占用优化
-7. **稀疏 GOP 拖拽落点提速**：已研究（见 6.6.6）——D17 baseline profile 无 B 帧可跳，~108ms/10s GOP 已触 CPU 物理下限，无可行优化
+> 排序原则：性能项（GPU 管线）优先解锁硬件红利；P2 拆分属纯重构，宜插在功能冻结窗口；
+> P1a/P1b 是新分析类型的前置；P3 干掉 Python 依赖；P4 OCR 依赖任务框架。
+
+| 阶段 | 项目 | 内容 | 前置依赖 | 预估 | 价值 |
+|---|---|---|---|---|---|
+| ✅ v1.5 | 拖拽 VLC 路线 | 代理移除 + 追逐模型 + 有界队列（§6.6） | — | 已完成 | — |
+| **v1.6** | **GPU 显示管线** | D3D11 解码纹理零拷贝 → QRhi/OpenGL 渲染，shader 做 NV12→RGB；放大镜/截图叠加/预读缓存随同 GPU 化 | 无 | 1.5-2 周 | 显示 CPU 归零；4K 多视频、高刷屏解锁；GPU 功能前置 |
+| v1.7 | P1a 任务化状态机 | TaskRegistry，分析功能注册制（替代 AnalysisPhase 硬编码） | 无 | 3-5 天 | OCR 前置 |
+| v1.7 | P1b 通道化 | AnalysisSnapshot 改通道字典 + .vla v7 格式 | P1a | 1 周 | 新分析类型前置 |
+| v1.8 | P3 FFmpeg 分析引擎 | libav 原生亮度+音频分析，NVDEC 解码 + 显存下采样 | 可叠加 GPU 管线 | 1-2 周 | 干掉 Python 依赖与 5000 帧上限，分析提速至近实时 |
+| v1.9 | P4 OCR 时间戳 | Python + RapidOCR 自动识别监控时间戳，任务框架第二租户 | P1a | 1 周 | 自动对时 |
+| 择机 | **P2 MainWindow 拆分** | 上帝类（~2876 行）→ AnalysisController + VideoSessionManager + ProjectIO，行为冻结纯移动 | 无（建议插在两版本之间的功能冻结期） | 2 周 | 可维护性（R2/R3/R5 红线收口） |
+| 持续 | 小项清理 | SpectrogramPanel 死代码删除、qobject_cast 上移、roiId 跨模型冲突（RoiModel 合并） | 随 P1b/P2 | 零碎 | 技术债 |
+
+**已研究否决（§6.6.6）**：多线程硬解（FFmpeg 不存在）、GOP 分段并行解码（D17 无效）、skip_frame=NONREF（D17 baseline 零收益）——解码侧已触物理下限，不再投入。
 
 ---
 
