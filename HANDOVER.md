@@ -388,9 +388,25 @@ D17 4/20 是稀疏关键帧的物理极限（每次跨 GOP 需解码 ~240 帧，
 
 #### 6.6.5 遗留问题
 
-- D17（GOP=10s）拖拽若仍嫌比 VLC 慢：可实测单次落点毫秒数对比 VLC，优化空间在软解填充延迟（如 thread_count 限 8）或预读键帧窗口。
+- D17（GOP=10s）拖拽若仍嫌比 VLC 慢：可实测单次落点毫秒数对比 VLC。
 - NVENC 在用户机器全局不可用（驱动 API 13.0 < 13.1，需 ≥610.00 驱动）——代理删除后已无影响。
 - 已生成的代理缓存残留：`%LOCALAPPDATA%/LumenArc/LumenArc/cache/proxy/` 可手动清理。
+
+#### 6.6.6 研究结论："多线程硬解"是否存在？追赶还能更快吗？（catchup-bench 实验）
+
+**结论：多线程硬解在 FFmpeg 里不存在，且 D17 的追赶速度已触物理下限。**
+
+1. **硬解无法多线程**：hwaccel 与帧级多线程互斥（`thread_count` 强制 1，多线程会复制解码器状态而 hwaccel 上下文不支持）。硬解路径 = CPU 单线程 CABAC 熵解码 + GPU 固定电路（NVDEC/D3D11VA）做重建。实测硬解追赶 ~500-1000fps（1-2ms/帧），**比多线程软解 ~2300fps 还慢**——这就是自适应方案长追赶切软解的原因。GPU 解码电路想并行只能开多解码器实例按 GOP 分段（NVDEC 多会话），对 D17 无效（10s 一个关键帧，GOP 内无法分段），对密 GOP 文件无必要（已 20/20 跟手）。工程量大收益零，不做。
+2. **skip_frame=NONREF 实验**（追赶期丢非引用帧，位精确安全）：对 **D17 零收益**——实测 251 包两种模式都解 236 帧，说明 D17 的 h264 是 baseline profile（无 B 帧，每帧都是引用帧），一帧都省不了。D17 的"慢"是编码 profile 决定的：每个 GOP 必须解码全部 ~240 帧，÷ ~2300fps ≈ **~108ms 已是 20 线程 CPU 的物理下限**，VLC 同文件同量级。2h 文件 NONREF 能跳 72% 帧（有 B 帧）但实测 wall 几乎不变——其瓶颈在 demux 而非解码，且它已 20/20 跟手。
+3. **软解填充延迟实测仅 23-47ms**（首帧输出时间），非此前担心的 ~100ms。
+
+实验数据（`catchup-bench <file> <startMs> <spanMs>`，多线程软解，10s 跨度）：
+
+| 文件 | DEFAULT | NONREF | 填充 |
+|---|---|---|---|
+| D17 mp4 1440p | 108ms / 2324pkt/s | 100ms（跳 0 帧，baseline 无 B 帧） | 23ms |
+| 2h 明景 | 470ms / 511pkt/s | 457ms（跳 72% 帧但 demux 瓶颈） | 47ms |
+| D17 PS | 239ms / 1050pkt/s | 238ms（跳 0 帧） | 29ms |
 
 ---
 
@@ -414,6 +430,7 @@ D17 4/20 是稀疏关键帧的物理极限（每次跨 GOP 需解码 ~240 帧，
 | `corrupt <file>` | | 不崩溃，state=Idle |
 | `scrub <file>` | | 10 次连续 seek（80ms 间隔），最终落点精确 |
 | `scrub-playback <file>` | | 模拟真实拖拽（0.5% 步长×20 次，50ms 泵）：显示帧 100% 精确跟踪目标，最终落点 ≤16ms |
+| `catchup-bench <file> [startMs] [spanMs]` | | 追赶解码吞吐基准：skip_frame DEFAULT vs NONREF，首帧填充延迟（见 6.6.6） |
 | `adapters <file>` | | 逐适配器加载，报告 hwdec + seek 追赶耗时 |
 
 ### 7.2 测试矩阵（28 项 + D17 专项）
@@ -506,7 +523,7 @@ POST_BUILD 自动：windeployqt（Qt DLLs）→ FFmpeg DLLs → analyze_video.py
 4. **FFmpeg 分析引擎**（P3）：libav 原生亮度+音频分析，干掉 Python 依赖和 5000 帧上限
 5. **OCR 时间戳**：Python + RapidOCR，任务框架第二个租户
 6. **显示管线上 GPU**：QOpenGLWidget/Rhi 渲染消除每帧 CPU swscale，多视频 CPU 占用优化
-7. **稀疏 GOP 拖拽落点提速**：D17（GOP=10s）单次落点与 VLC 差距实测；候选：软解 thread_count 限 8 降填充延迟、关键帧窗口预读
+7. **稀疏 GOP 拖拽落点提速**：已研究（见 6.6.6）——D17 baseline profile 无 B 帧可跳，~108ms/10s GOP 已触 CPU 物理下限，无可行优化
 
 ---
 

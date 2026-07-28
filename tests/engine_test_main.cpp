@@ -10,6 +10,10 @@
  * 退出码 0 = 全部断言通过；1 = 有失败。
  */
 #include "infrastructure/ffmpeg_video_engine.h"
+extern "C" {
+#include <libavformat/avformat.h>
+#include <libavcodec/avcodec.h>
+}
 #include <QCoreApplication>
 #include <QEventLoop>
 #include <QTimer>
@@ -72,6 +76,69 @@ int main(int argc, char *argv[])
     QString scenario = args[1];
     QString file = args[2];
     int failures = 0;
+
+    if (scenario == "catchup-bench") {
+        // 追赶解码吞吐基准：seek 到 startMs 后连续解码 spanMs 视频，
+        // 对比 skip_frame 各模式（DEFAULT / NONREF 丢非引用帧）+ 首帧填充延迟
+        // 用法: catchup-bench <file> [startMs=20000] [spanMs=10000]
+        const qint64 startMs = args.size() > 3 ? args[3].toLongLong() : 20000;
+        const qint64 spanMs  = args.size() > 4 ? args[4].toLongLong() : 10000;
+        const struct { const char *name; AVDiscard d; } modes[] = {
+            {"DEFAULT", AVDISCARD_DEFAULT}, {"NONREF", AVDISCARD_NONREF},
+        };
+        for (const auto &md : modes) {
+            AVFormatContext *fmt = nullptr;
+            if (avformat_open_input(&fmt, file.toUtf8().constData(), nullptr, nullptr) < 0
+                || avformat_find_stream_info(fmt, nullptr) < 0) {
+                printf("[FAIL] open %s\n", qPrintable(file));
+                return 1;
+            }
+            int vs = av_find_best_stream(fmt, AVMEDIA_TYPE_VIDEO, -1, -1, nullptr, 0);
+            AVStream *st = fmt->streams[vs];
+            const AVCodec *codec = avcodec_find_decoder(st->codecpar->codec_id);
+            AVCodecContext *dec = avcodec_alloc_context3(codec);
+            avcodec_parameters_to_context(dec, st->codecpar);
+            dec->thread_count = 0;          // 与 m_scDec 相同：多线程软解
+            dec->pkt_timebase = st->time_base;
+            dec->skip_frame = md.d;
+            avcodec_open2(dec, codec, nullptr);
+            int64_t startPtsUs = fmt->start_time == AV_NOPTS_VALUE ? 0 : fmt->start_time;
+            avformat_seek_file(fmt, -1, INT64_MIN, startPtsUs + startMs * 1000,
+                               startPtsUs + startMs * 1000, AVSEEK_FLAG_BACKWARD);
+            avcodec_flush_buffers(dec);
+            AVPacket *pkt = av_packet_alloc();
+            AVFrame *fr = av_frame_alloc();
+            QElapsedTimer t; t.start();
+            int pkts = 0, frames = 0;
+            qint64 firstDtsMs = -1, fillMs = -1;
+            while (av_read_frame(fmt, pkt) >= 0) {
+                if (pkt->stream_index == vs) {
+                    qint64 dtsMs = av_rescale_q(pkt->dts == AV_NOPTS_VALUE ? pkt->pts : pkt->dts,
+                                                st->time_base, AVRational{1, 1000});
+                    if (firstDtsMs < 0)
+                        firstDtsMs = dtsMs;
+                    if (dtsMs - firstDtsMs > spanMs) { av_packet_unref(pkt); break; }
+                    ++pkts;
+                    if (avcodec_send_packet(dec, pkt) == 0)
+                        while (avcodec_receive_frame(dec, fr) >= 0) {
+                            ++frames;
+                            if (fillMs < 0)
+                                fillMs = t.elapsed();   // 首帧输出 = 管线填充延迟
+                            av_frame_unref(fr);
+                        }
+                }
+                av_packet_unref(pkt);
+            }
+            printf("[info] %-8s wall=%lldms pkts=%d decoded=%d (skipped %d) "
+                   "throughput=%.0f pkt/s fill=%lldms\n",
+                   md.name, t.elapsed(), pkts, frames, pkts - frames,
+                   pkts * 1000.0 / qMax<qint64>(1, t.elapsed()), fillMs);
+            av_frame_free(&fr); av_packet_free(&pkt);
+            avcodec_free_context(&dec); avformat_close_input(&fmt);
+        }
+        printf("[RESULT] PASS\n");
+        return 0;
+    }
 
     if (scenario == "adapters") {
         auto ads = FfmpegVideoEngine::availableAdapters();
