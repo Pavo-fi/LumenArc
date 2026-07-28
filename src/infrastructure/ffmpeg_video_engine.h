@@ -122,8 +122,7 @@ private:
     // --- 拖拽预览代理（全 I 帧低分代理，帧号 1:1） ---
     void openProxy(const QString &path);      // 工作线程内
     void closeProxy();
-    bool proxyDisplayFrame(qint64 timeMs);    // 一次性 seek+清空+解码+显示（后退/沉淀用）
-    void proxyRedirectSeek(qint64 timeMs);    // 前进：只重定向 demuxer，不清空解码器
+    bool proxyDisplayFrame(qint64 timeMs);    // 一次性 seek+清空+解码+显示
     bool scrubDisplayNextPxFrame();           // Scrub 连续解码：从代理 demux 当前位置解码下一帧
 
 public:
