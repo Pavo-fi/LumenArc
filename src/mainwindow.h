@@ -113,6 +113,7 @@ private:
     void updatePlaybackButtons();
     /// @brief 在状态栏左侧显示操作反馈（5秒后自动清除）
     void showOperationStatus(const QString &text);
+    void setProxyStatus(const QString &text, const QString &tooltip = QString());
     /// @brief 恢复分析状态（区域/时间偏移/标签/截图融合）
     void restoreAnalysisState(const QVector<QRect> &regions,
                                qint64 timeOffset,
@@ -164,6 +165,7 @@ protected:
     QLabel *m_operationLabel = nullptr;   // 操作反馈标签（状态栏左侧）
     QLabel *m_statusLabel = nullptr;
     QLabel *m_hwAdapterLabel = nullptr;   // 硬解适配器名称（状态栏右侧）
+    QLabel *m_proxyStatusLabel = nullptr; // 代理生成状态（状态栏右侧常驻）
     QProgressBar *m_progressBar = nullptr;
     QPushButton *m_cancelBtn = nullptr;
 

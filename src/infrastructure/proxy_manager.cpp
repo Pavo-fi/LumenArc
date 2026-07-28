@@ -21,6 +21,9 @@ extern "C" {
 #include <libavformat/avformat.h>
 }
 
+// NVENC 失效（驱动 API 版本不足等）会话级记忆：失败后不再白费每次转码的首次尝试
+static bool g_nvencBroken = false;
+
 ProxyManager::ProxyManager(QObject *parent) : QObject(parent) {}
 
 ProxyManager::~ProxyManager()
@@ -124,7 +127,13 @@ void ProxyManager::cancel()
 
 void ProxyManager::startTranscode(const QString &videoPath, const QString &outPath)
 {
-    // 优先 NVENC（GPU 编码，速度快数倍且不占 CPU），失败回退 CPU 编码
+    // 优先 NVENC（GPU 编码，速度快数倍且不占 CPU），失败回退 CPU 编码。
+    // NVENC 失效（驱动 API 版本不足等）本次会话记住，不再白费一次尝试。
+    if (g_nvencBroken) {
+        m_usedNvenc = false;
+        startWithEncoder(videoPath, outPath, false);
+        return;
+    }
     m_triedNvenc = true;
     startWithEncoder(videoPath, outPath, true);
 }
@@ -142,7 +151,7 @@ void ProxyManager::startWithEncoder(const QString &videoPath, const QString &out
         args << "-c:v" << "h264_nvenc" << "-preset" << "p1" << "-g" << "1";
     } else {
         args << "-c:v" << "libx264" << "-preset" << "ultrafast"
-             << "-threads" << "2" << "-g" << "1" << "-keyint_min" << "1"
+             << "-threads" << "4" << "-g" << "1" << "-keyint_min" << "1"
              << "-sc_threshold" << "0";
     }
     args << "-movflags" << "+faststart" << outPath;
@@ -197,8 +206,10 @@ void ProxyManager::onFinished(int exitCode)
     }
 
     if (m_usedNvenc && m_triedNvenc) {
-        // NVENC 失败（无 N 卡/驱动问题）：回退 CPU 编码重试
+        // NVENC 失败（无 N 卡/驱动 API 版本不足）：回退 CPU 编码重试，
+        // 本次会话后续任务直接用 CPU，不再白费一次 NVENC 尝试
         qWarning() << "ProxyManager: NVENC failed, fallback to libx264";
+        g_nvencBroken = true;
         QFile::remove(m_partPath);
         m_usedNvenc = false;
         startWithEncoder(m_videoPath, m_partPath, false);

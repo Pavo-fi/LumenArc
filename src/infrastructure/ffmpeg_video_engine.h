@@ -90,6 +90,7 @@ public:
     void setScrubMode(bool on) override {
         m_scrubMode = on;
         m_scrubTargetMs = -1;
+        m_chaseDecodePosMs = -1;
         m_cmdCond.wakeAll();   // 唤醒工作线程进入/退出 scrub 循环
     }
     /// 拖拽追逐目标（UI 拖拽高频调用，原子写入 + 唤醒，不经过命令队列）
@@ -206,7 +207,7 @@ private:
     bool m_mainSeekPending = false;     // 代理已出图，主管线待沉淀补全分辨率
     std::atomic<bool> m_scrubMode{false}; // 拖拽模式：seek 只写追逐目标
     std::atomic<qint64> m_scrubTargetMs{-1}; // 拖拽追逐目标（-1=无目标，UI 高频写入）
-    qint64 m_lastChaseShowElapsed = 0;      // 追逐追赶途中间帧限流（m_monotonic 时钟）
+    qint64 m_chaseDecodePosMs = -1;         // 追逐解码位置（含未显示帧，-1=未知）
     qint64 m_lastSeekElapsed = 0;       // 上次 seek 的单调时钟（沉淀计时）
 
     // --- 音频面（仅工作线程访问，计数器为原子供诊断读取） ---

@@ -504,7 +504,7 @@ bool FfmpegVideoEngine::scrubChaseMainFrame()
 
     const qint64 frameMs = m_fps > 0.0f ? static_cast<qint64>(1000.0f / m_fps.load()) : 40;
     const qint64 halfFrame = frameMs / 2;
-    constexpr qint64 SEEK_THRESHOLD_MS = 5000;  // 前进超阈值才 seek（小步前进连续解码追上更便宜）
+    constexpr qint64 SEEK_THRESHOLD_MS = 20000;  // 前进 <~2 GOP 解码直追比 seek 重启动便宜
 
     qint64 target = m_scrubTargetMs.load();
     if (target < 0) {
@@ -512,17 +512,21 @@ bool FfmpegVideoEngine::scrubChaseMainFrame()
         return false;
     }
 
-    const qint64 delta = target - m_positionMs.load();
+    // 追逐基准：解码位置（含未显示帧）优先于显示位置——防止追赶途中用陈旧
+    // 显示位置算 delta 导致每 30ms 重 seek（永远追不上移动中的目标）
+    const qint64 anchor = (m_chaseDecodePosMs >= 0) ? m_chaseDecodePosMs
+                                                    : m_positionMs.load();
+    const qint64 delta = target - anchor;
     if (delta > SEEK_THRESHOLD_MS || delta < -2 * frameMs) {
-        // 大跳/后退：主管线 seek + flush（与一次性 seek 同规则）
+        // 大跳/后退：主管线 seek + flush（落在上一个关键帧，下方解码追赶到目标窗口）
         // 追赶过滤由下方目标窗口完成，不走 drainDecoder 的 discard 路径
         scrubRedirectDemuxer(target);
+        m_chaseDecodePosMs = -1;
         m_needMarginMeasure = false;   // margin 测量在 drainDecoder，chase 不用，防陈旧测量
         m_eof = false;
         m_stepOnce = false;
         m_clockValid = false;
-        // 落到解码循环：从关键帧追赶，仅显示目标窗口内的帧
-    } else if (qAbs(delta) <= halfFrame) {
+    } else if (qAbs(target - m_positionMs.load()) <= halfFrame) {
         QThread::msleep(8);      // 已落位且目标未变：短睡避免空转
         return false;
     }
@@ -531,30 +535,9 @@ bool FfmpegVideoEngine::scrubChaseMainFrame()
     AVPacket *pkt = av_packet_alloc();
     AVFrame *frame = av_frame_alloc();
     bool shown = false;
-    bool retarget = false;      // 目标中途大幅后退，交外层重定位
-    if (!m_monotonic.isValid())
-        m_monotonic.start();
+    bool reseek = false;      // 目标大幅移动（后退或飞奔），交外层重定位
 
-    // 逐帧决策：0=继续解码 1=已精确落位 2=目标大幅后退需重定位
-    // 窗口内帧立即显示；追赶途中（落后目标）按 33ms 限流显示中间帧——
-    // FCPX 式"奔向光标"视觉反馈，稀疏关键帧（D17 GOP=10s）快拖时不黑屏
-    auto handleFrame = [&](AVFrame *f) -> int {
-        qint64 relMs = ptsToRelMs(f->best_effort_timestamp);
-        if (relMs > target + SEEK_THRESHOLD_MS)
-            return 2;
-        if (relMs >= target - halfFrame) {
-            displayFrame(f);
-            m_lastChaseShowElapsed = m_monotonic.elapsed();
-            return 1;
-        }
-        if (m_monotonic.elapsed() - m_lastChaseShowElapsed >= 33) {
-            displayFrame(f);
-            m_lastChaseShowElapsed = m_monotonic.elapsed();
-        }
-        return 0;
-    };
-
-    while (!shown && !retarget && !m_quit.load() && !hasPendingCommand()) {
+    while (!shown && !reseek && !m_quit.load() && !hasPendingCommand()) {
         target = m_scrubTargetMs.load();      // 追逐中目标持续移动，每包刷新
         if (target < 0)
             break;
@@ -562,10 +545,15 @@ bool FfmpegVideoEngine::scrubChaseMainFrame()
         if (ret == AVERROR_EOF) {
             avcodec_send_packet(m_vdec, nullptr);   // 冲空拿尾部帧
             while (avcodec_receive_frame(m_vdec, frame) >= 0) {
-                int r = handleFrame(frame);
+                qint64 relMs = ptsToRelMs(frame->best_effort_timestamp);
+                m_chaseDecodePosMs = relMs;
+                if (relMs >= target - halfFrame) {
+                    displayFrame(frame);
+                    shown = true;
+                }
                 av_frame_unref(frame);
-                if (r == 1) { shown = true; break; }
-                if (r == 2) { retarget = true; break; }
+                if (shown)
+                    break;
             }
             if (!shown)
                 QThread::msleep(10);              // 真 EOF：等新目标
@@ -582,11 +570,19 @@ bool FfmpegVideoEngine::scrubChaseMainFrame()
         }
         if (avcodec_send_packet(m_vdec, pkt) >= 0) {
             while (avcodec_receive_frame(m_vdec, frame) >= 0) {
-                int r = handleFrame(frame);
-                // 落后帧：解码但不显示（GOP 引用链必须逐帧过，省掉 sws+emit 即可）
+                qint64 relMs = ptsToRelMs(frame->best_effort_timestamp);
+                m_chaseDecodePosMs = relMs;   // 解码位置始终跟踪（含未显示帧）
+                if (qAbs(target - relMs) > SEEK_THRESHOLD_MS) {
+                    reseek = true;            // 目标飞奔远离，解码追不上 → 交外层重 seek
+                } else if (relMs >= target - halfFrame) {
+                    // 指哪播哪：只显示目标窗口帧；落后帧静默解码跳过（GOP 引用链
+                    // 必须逐帧过，但不做 sws/emit——绝不播放中间帧，避免快进感）
+                    displayFrame(frame);      // 含硬解回传/sws/positionChanged/frameReady
+                    shown = true;
+                }
                 av_frame_unref(frame);
-                if (r == 1) { shown = true; break; }
-                if (r == 2) { retarget = true; break; }
+                if (shown || reseek)
+                    break;
             }
         }
         av_packet_unref(pkt);

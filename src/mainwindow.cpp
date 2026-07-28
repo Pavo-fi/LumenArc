@@ -468,6 +468,8 @@ MainWindow::MainWindow(QWidget *parent)
     m_statusLabel = new QLabel(this);
     m_hwAdapterLabel = new QLabel(this);
     m_hwAdapterLabel->setStyleSheet("color: #888; font-size: 10px;");
+    m_proxyStatusLabel = new QLabel(this);
+    m_proxyStatusLabel->setStyleSheet("color: #888; font-size: 10px;");
     m_progressBar = new QProgressBar(this);
     m_progressBar->setMaximumWidth(200);
     m_progressBar->setRange(0, 100);
@@ -479,6 +481,7 @@ MainWindow::MainWindow(QWidget *parent)
     statusBar()->addWidget(m_operationLabel);  // 左侧：操作反馈
     statusBar()->addPermanentWidget(m_statusLabel);  // 右侧：分析状态
     statusBar()->addPermanentWidget(m_hwAdapterLabel);
+    statusBar()->addPermanentWidget(m_proxyStatusLabel);  // 代理状态常驻
     statusBar()->addPermanentWidget(m_progressBar);
     statusBar()->addPermanentWidget(m_cancelBtn);
     statusBar()->show();  // 确保状态栏可见
@@ -493,25 +496,22 @@ MainWindow::MainWindow(QWidget *parent)
     m_proxyManager = new ProxyManager(this);
     connect(m_proxyManager, &ProxyManager::progressChanged,
             this, [this](int pct) {
-        static int lastShown = -10;
-        if (pct >= 0 && pct - lastShown >= 10) {
-            lastShown = pct;
-            showOperationStatus(lang("预览代理生成中 %1%", "Generating preview proxy %1%").arg(pct));
-        }
+        setProxyStatus(lang("代理：生成中 %1%（期间可拖拽，就绪后更顺滑）",
+                            "Proxy: generating %1% (scrub works, smoother when ready)").arg(pct));
     });
     connect(m_proxyManager, &ProxyManager::proxyReady,
             this, [this](const QString &proxyPath) {
         if (!m_proxyVideoPath.isEmpty() && m_proxyVideoPath == m_currentVideoPath) {
             m_videoEngine->setProxySource(proxyPath);
-            showOperationStatus(lang("预览代理已就绪，拖拽可逐帧实时预览",
-                                     "Preview proxy ready - scrubbing is now real-time"));
+            setProxyStatus(lang("代理：已就绪，拖拽逐帧实时预览",
+                                "Proxy: ready - real-time scrub"));
         }
     });
     connect(m_proxyManager, &ProxyManager::proxyFailed,
             this, [this](const QString &error) {
-        Q_UNUSED(error);
-        showOperationStatus(lang("预览代理生成失败（不影响正常播放分析）",
-                                 "Proxy generation failed (playback/analysis unaffected)"));
+        setProxyStatus(lang("代理：生成失败（拖拽仍可用，大跳略慢）",
+                            "Proxy: failed (scrub still works, jumps slower)"),
+                       error.left(200));
     });
 
     // Snapshot overlay (floating on video area)
@@ -1629,14 +1629,19 @@ void MainWindow::openVideoFile(const QString &filePath)
                 QString existing = m_proxyManager->existingProxy(filePath);
                 if (!existing.isEmpty()) {
                     m_videoEngine->setProxySource(existing);
+                    setProxyStatus(lang("代理：已就绪，拖拽逐帧实时预览",
+                                        "Proxy: ready - real-time scrub"));
                 } else {
                     m_proxyManager->requestProxy(filePath);
-                    showOperationStatus(lang("正在后台生成拖拽预览代理…",
-                                             "Generating scrub proxy in background..."));
+                    setProxyStatus(lang("代理：生成中 0%（期间可拖拽，就绪后更顺滑）",
+                                        "Proxy: generating 0% (scrub works, smoother when ready)"));
                 }
             } else {
                 m_proxyVideoPath.clear();
                 m_proxyManager->cancel();
+                setProxyStatus(s.value("proxyEnabled", true).toBool()
+                    ? lang("代理：无需（本文件随机访问快）", "Proxy: not needed")
+                    : lang("代理：已禁用", "Proxy: disabled"));
             }
         }
 
@@ -2620,6 +2625,14 @@ QString MainWindow::formatTime(qint64 ms) const
 }
 
 /// @brief 在状态栏左侧显示操作反馈（2秒后自动清除）
+void MainWindow::setProxyStatus(const QString &text, const QString &tooltip)
+{
+    if (!m_proxyStatusLabel)
+        return;
+    m_proxyStatusLabel->setText(text);
+    m_proxyStatusLabel->setToolTip(tooltip);
+}
+
 void MainWindow::showOperationStatus(const QString &text)
 {
     m_operationLabel->setText(text);
