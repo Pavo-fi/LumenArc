@@ -44,7 +44,6 @@
 │ infrastructure/  引擎实现                         │
 │  IVideoEngine / IAnalysisEngine (接口能力完整)     │
 │  VlcVideoEngine / FfmpegVideoEngine / PythonEngine│
-│  ProxyManager                                     │
 └─────────────────────────────────────────────────┘
 依赖只允许向下。ui 可持有 domain 模型指针；app 协调一切；
 domain 和 infrastructure 之间只允许通过接口通信。
@@ -92,9 +91,9 @@ domain 和 infrastructure 之间只允许通过接口通信。
 UI线程 ──postCommand()──► 工作线程（workerMain 循环）
                             ├─ 处理命令
                             ├─ av_read_frame → processVideoPacket → drainDecoder → displayFrame
-                            │   └─ 代理解码（proxyDisplayFrame）→ m_mainSeekPending
+                            │   └─ scrub 追逐解码（scrubChaseMainFrame，拖拽时）
                             ├─ processAudioPacket → swr_convert → QAudioSink
-                            ├─ 空闲：沉淀升级 / 预读缓存 / 预读打开 / 等待
+                            ├─ 空闲：预读缓存 / 预读打开 / 等待
                             └─ 退出：closeFile
 ```
 
@@ -108,7 +107,9 @@ UI线程 ──postCommand()──► 工作线程（workerMain 循环）
 ### 4.2 接口能力（IVideoEngine 扩展）
 
 ```cpp
-virtual void setProxySource(const QString &proxyPath);     // 拖拽预览代理
+virtual void setScrubMode(bool enabled);                  // 拖拽追逐模式（原子目标）
+virtual void setScrubTarget(qint64 timeMs);               // 拖拽高频调用，免锁免命令
+virtual void ackFrame();                                  // UI 归还 frameReady 配额（有界队列）
 virtual void setHardwareDecode(bool enabled);               // 硬解开关
 virtual bool hardwareDecodeActive() const;                  // 诊断
 virtual void setHardwareAdapter(int index);                 // 适配器选择
@@ -147,8 +148,7 @@ frame threading 滞留最后 N 帧。修复：`avcodec_send_packet(m_vdec, NULL)
 | seek 精度 | ≤ 单帧（~20ms） |
 | D3D11VA（RTX 5080）5 次 seek 追赶 | 660ms（2.2x 优于核显） |
 | D3D11VA（AMD 核显）5 次 seek 追赶 | 1470ms |
-| 代理模式单次 seek | ≤10ms |
-| 沉淀升级到 4K | ~0.5s |
+| 多线程软解（thread_count=0）D17 1440p 追赶 | ~3140fps |
 
 ---
 
@@ -182,9 +182,12 @@ QAudioSink 推模式：不需事件循环（WASAPI 后端自行管理线程）�
 
 ---
 
-## 六、代理媒体系统（FCPX 式）
+## 六、拖拽预览：从代理系统到 VLC 路线（代理已于 567072a 整体移除）
 
-### 6.1 设计目标
+> **当前状态**：代理媒体系统（6.1-6.4）已整体删除（commit `567072a`，-866 行）。
+> 拖拽流畅性改走 VLC 路线（见 6.6）。以下 6.1-6.5 保留作历史记录与教训。
+
+### 6.1 设计目标（历史，已移除）
 
 拖拽时逐帧实时跟随（≤10ms/seek），帧位置精确（帧号与原片 1:1），分辨率降为 960p；沉淀 300ms 后自动回 4K 全分辨率；分析/放大镜/截图永远走原片（证据链不变）。
 
@@ -340,11 +343,62 @@ MainWindow 拖拽时：
 
 ---
 
+### 6.6 第二阶段：追逐模型推广、精确跟踪语义、最终砍掉代理走 VLC 路线（v1.4.x 系列）
+
+本节记录追逐模型落地后的完整迭代过程（2026-07-28，commits `4059b13` → `567072a`）。
+
+#### 6.6.1 迭代时间线
+
+| 阶段 | commit | 内容 | 结果/转折 |
+|---|---|---|---|
+| 追逐模型 | `4059b13` | 原子 `m_scrubTargetMs` + worker 追逐循环（见 6.5），代理文件拖拽 43-47 帧/600ms | 代理就绪后顺滑；**无代理文件仍是逐 seek 幻灯片** |
+| F1 主管线追逐 | `5a9577a` | `scrubChaseMainFrame()`：无代理文件也走追逐模型，主管线全分辨率连续解码 + 追赶中显示中间帧（catch-up display） | 测试全绿；**用户否决追赶显示**："不要快进感，要指哪打哪" |
+| 精确跟踪语义 | `f9b3794` | 只显示目标窗口帧（落后帧静默解码跳过，绝不显示）；`m_chaseDecodePosMs` 跟踪解码位置；前进阈值 20s；状态栏代理标签；NVENC 失败会话记忆 + x264 4 线程 | 手感语义对了，但 D17（GOP=10s）硬解追赶太慢 |
+| 自适应解码器 | `5f63a56` | 硬解先行 → 首帧实测追赶 >4s 切多线程软解重 seek；GOP 学习（`m_lastCatchupMs`）免二次试探；三级锚点防填充期 reseek 风暴；无索引阈值 `max(4s, 2×margin)` | 全文件测试最优（见 6.6.4 数据） |
+| **最终：砍代理** | `567072a` | 用户拍板"砍掉代理，直接对标 VLC"：删 ProxyManager 及全部代理代码（-866/+43）+ 三项 VLC 路线改进 | **当前架构** |
+
+#### 6.6.2 诊断发现（砍代理前的根因分析）
+
+1. **代理进度卡在 -1%**：`ProxyManager::requestProxy` 探测时长只调 `avformat_open_input`，FFmpeg 8 下不读包头 `fmt->duration` 常为 `AV_NOPTS_VALUE` → `srcDur<0` → 进度公式得负值。修法：探测加 `avformat_find_stream_info`。（已随代理删除而失效）
+2. **2h 文件代理"生成完找不到"**：47 分钟 D17 全 I 帧 960p 代理 ≈5.3GB，2h 文件代理 ≈10.4GB **超过 10GB LRU 上限**，生成完成的瞬间被 `enforceCacheLimit` 自己清掉。
+3. **慢拖卡死（几秒无帧后时间码猛跳）**：像素粒度 seek 风暴（2h 文件 1px ≈7s 视频 > 20s 阈值 → 每 1-2px 一次 seek），每次 seek 还重置 WASAPI sink（10-50ms 固定开销）。
+4. **VLC 对比**：VLC 语义与我们相同（指哪打哪，绝不播中间帧），但每次落点 ~100ms——多线程软解（thread_count=auto）、seek 不做硬解切换体操、不重置 sink、vout 队列有界化丢帧。
+
+#### 6.6.3 最终架构（commit 567072a）
+
+**删除**：ProxyManager（NVENC/libx264 转码、10GB LRU 缓存、.part muxer）、引擎代理上下文（m_pxFmt/m_pxDec/m_pxSws）、proxyDisplayFrame/scrubChasePxFrame、沉淀补全逻辑（m_mainSeekPending/forceMainPipeline）、UI 代理开关与状态标签、proxy/scrub-chase 测试场景。
+
+**VLC 路线三项改进**：
+1. **scrub seek 跳过音频 sink 重置**：`scrubRedirectDemuxer` 中 `if (m_sink && !m_scrubMode)` 才 reset+start（拖拽静音，每次 seek 省 10-50ms）。
+2. **frameReady 队列有界化（VLC vout 式）**：`displayFrame` 检查 `m_framesInFlight >= 2` 时丢帧（仍更新 positionChanged），防止 Qt 信号队列积压导致画面滞后/回放感；UI 侧 `VideoWidget::onFrameReady` 调新虚接口 `IVideoEngine::ackFrame()` 归还配额。**注意：任何 frameReady 消费者都必须 ack，否则 2 帧后永久丢帧**（无头测试 harness 已在 lambda 中补 ack）。
+3. **自适应追逐解码器**（实测最优，保留）：短追赶用硬解（thread_count=1 无管线填充延迟，24 帧 ≈24-48ms）；首帧实测追赶 >4s 切多线程软解重 seek（~3000fps 吞吐）；`m_lastCatchupMs` GOP 学习避免后续拖拽重复试探；`m_chaseSeekTargetMs` 三级锚点防软解填充期（~100ms 无帧输出）reseek 风暴。
+
+**曾尝试被否决的方案**：全程多线程软解（纯 VLC 路线）——2h 文件 20 次 0.5% 跳点 **0 帧落点**（50ms 泵周期内），软解管线填充延迟在短追赶场景是硬伤。硬解/软解自适应是实测平衡点。
+
+#### 6.6.4 验收数据（scrub-playback 场景：0.5% 步长 × 20 次，50ms 泵周期）
+
+| 文件 | GOP | 显示帧 | 跟踪率 | 落点误差 |
+|---|---|---|---|---|
+| 小文件 h264/4K | 密 | 20/20、36/36 | 100% | 0ms |
+| 明景拼接 2h | 1s | 20/20 | 100% | ≤16ms |
+| D17 PS（无索引） | 10s | 12/12 | 100% | 4ms |
+| D17 mp4 | **10s** | 4/4 | 100% | 4ms |
+
+D17 4/20 是稀疏关键帧的物理极限（每次跨 GOP 需解码 ~240 帧，VLC 在此文件同样跨不过去，只是单次落点更快）。全回归 24 项矩阵 + scrub/step/avsync/jitter/rate/corrupt 全绿。
+
+#### 6.6.5 遗留问题
+
+- D17（GOP=10s）拖拽若仍嫌比 VLC 慢：可实测单次落点毫秒数对比 VLC，优化空间在软解填充延迟（如 thread_count 限 8）或预读键帧窗口。
+- NVENC 在用户机器全局不可用（驱动 API 13.0 < 13.1，需 ≥610.00 驱动）——代理删除后已无影响。
+- 已生成的代理缓存残留：`%LOCALAPPDATA%/LumenArc/LumenArc/cache/proxy/` 可手动清理。
+
+---
+
 ## 七、测试体系
 
 ### 7.1 无头测试程序
 
-`lumenarc_engine_test.exe`（链接 FfmpegVideoEngine + ProxyManager，无需 GUI）：
+`lumenarc_engine_test.exe`（链接 FfmpegVideoEngine，无需 GUI）：
 
 | 场景 | 参数 | 验收 |
 |---|---|---|
@@ -359,8 +413,7 @@ MainWindow 拖拽时：
 | `stress <file> <seeks>` | | seek + 30s play，内存增长 < 300MB |
 | `corrupt <file>` | | 不崩溃，state=Idle |
 | `scrub <file>` | | 10 次连续 seek（80ms 间隔），最终落点精确 |
-| `scrub-chase <file>` | | 代理追逐模型：模拟 60 步×10ms 拖拽，前进 ≥20 帧且单调、后退 ≥15 帧、松手落点 ≤1 帧 |
-| `proxy <file>` | | 代理生成 → 连续 10 次 seek 每次 ≤150ms → 沉淀升级到全分辨率 |
+| `scrub-playback <file>` | | 模拟真实拖拽（0.5% 步长×20 次，50ms 泵）：显示帧 100% 精确跟踪目标，最终落点 ≤16ms |
 | `adapters <file>` | | 逐适配器加载，报告 hwdec + seek 追赶耗时 |
 
 ### 7.2 测试矩阵（28 项 + D17 专项）
@@ -371,7 +424,7 @@ MainWindow 拖拽时：
 
 ### 7.3 手工验收清单
 
-1. D17 拖拽手感（代理就绪后应逐帧实时跟随）
+1. 拖拽手感（慢拖全程顺滑不卡、快拖指哪打哪、松手帧精确；重点验证 D17 GOP=10s 与 2h 长文件）
 2. 音画同步听感（人声/环境声无漂移）
 3. 逐帧步进（←/→ 严格逐帧）
 4. 倍速（2x/4x/8x 流畅；1x 恢复音频）
@@ -436,8 +489,12 @@ POST_BUILD 自动：windeployqt（Qt DLLs）→ FFmpeg DLLs → analyze_video.py
 | v1.1.0-scrub | 音频对齐/时钟平滑/可中止 seek/预读缓存 |
 | v1.1.1-hwdec | D3D11VA 修复（thread_count=1） |
 | v1.1.2-dgpu | 独显自动选择（2.2x） |
-| v1.2.0-proxy | FCPX 级代理拖拽 |
+| v1.2.0-proxy | FCPX 级代理拖拽（已于 567072a 移除） |
 | v1.3.0-scrub | Scrub 连续解码（D17 77fps，真正 VLC 级流畅） |
+| v1.4.0-scrub-chase | 追逐模型（原子目标 + 连续解码，见 6.5） |
+| v1.4.1-scrub-precise | 精确跟踪语义（指哪打哪，无快进感）+ 主管线追逐 |
+| v1.4.2-adaptive-dec | 自适应追逐解码器（硬解短追赶/软解长追赶 + GOP 学习） |
+| v1.5.0-no-proxy | 代理系统整体移除，VLC 路线拖拽（567072a，见 6.6） |
 
 ---
 
@@ -449,6 +506,7 @@ POST_BUILD 自动：windeployqt（Qt DLLs）→ FFmpeg DLLs → analyze_video.py
 4. **FFmpeg 分析引擎**（P3）：libav 原生亮度+音频分析，干掉 Python 依赖和 5000 帧上限
 5. **OCR 时间戳**：Python + RapidOCR，任务框架第二个租户
 6. **显示管线上 GPU**：QOpenGLWidget/Rhi 渲染消除每帧 CPU swscale，多视频 CPU 占用优化
+7. **稀疏 GOP 拖拽落点提速**：D17（GOP=10s）单次落点与 VLC 差距实测；候选：软解 thread_count 限 8 降填充延迟、关键帧窗口预读
 
 ---
 
