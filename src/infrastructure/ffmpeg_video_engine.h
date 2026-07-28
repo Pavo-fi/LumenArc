@@ -85,10 +85,17 @@ public:
     void setProxySource(const QString &proxyPath) override;
     /// 诊断/测试用：代理是否已就绪
     bool proxyActive() const override { return m_pxReady; }
-    /// 拖拽模式：拖拽中 seek 走连续解码路径，松手走一次性精确 seek
+    /// 拖拽模式：拖拽中 seek 只写原子追逐目标（worker scrub 循环连续解码追赶）；
+    /// 松手走一次性精确 seek
     void setScrubMode(bool on) override {
         m_scrubMode = on;
-        if (!on) m_lastScrubPosMs = -1;
+        m_scrubTargetMs = -1;
+        m_cmdCond.wakeAll();   // 唤醒工作线程进入/退出 scrub 循环
+    }
+    /// 拖拽追逐目标（UI 拖拽高频调用，原子写入 + 唤醒，不经过命令队列）
+    void setScrubTarget(qint64 timeMs) override {
+        m_scrubTargetMs = timeMs;
+        m_cmdCond.wakeAll();
     }
 
 private:
@@ -123,7 +130,7 @@ private:
     void openProxy(const QString &path);      // 工作线程内
     void closeProxy();
     bool proxyDisplayFrame(qint64 timeMs);    // 一次性 seek+清空+解码+显示
-    bool scrubDisplayNextPxFrame();           // Scrub 连续解码：从代理 demux 当前位置解码下一帧
+    bool scrubChasePxFrame();                 // Scrub 追逐解码：围绕原子目标连续解码追赶
 
 public:
     /// 诊断/测试用：本次 seek 以来写入音频缓冲的字节数
@@ -196,8 +203,8 @@ private:
     int m_pxVstream = -1;
     bool m_pxReady = false;
     bool m_mainSeekPending = false;     // 代理已出图，主管线待沉淀补全分辨率
-    std::atomic<bool> m_scrubMode{false}; // 拖拽模式：seek 走连续解码路径
-    qint64 m_lastScrubPosMs = -1;       // 上次 scrub seek 位置（判断前进/后退）
+    std::atomic<bool> m_scrubMode{false}; // 拖拽模式：seek 只写追逐目标
+    std::atomic<qint64> m_scrubTargetMs{-1}; // 拖拽追逐目标（-1=无目标，UI 高频写入）
     qint64 m_lastSeekElapsed = 0;       // 上次 seek 的单调时钟（沉淀计时）
 
     // --- 音频面（仅工作线程访问，计数器为原子供诊断读取） ---

@@ -2570,12 +2570,11 @@ void MainWindow::onSeekFromChart(qint64 timeMs)
     m_chartPanel->setCursorTime(timeMs);
     m_spectrogramEnhanced->setCursorTime(timeMs);
 
-    // 代理就绪时 seek 仅需 ~10ms，不需节流——直接发 seek，60Hz 鼠标跟手
-    // 代理未就绪时走 50ms 节流，避免软解 seek 队列积压
+    // 拖拽中：scrub 追逐模式——只写原子目标，引擎 worker 连续解码追赶，
+    // 免节流免命令队列（mouseMove 不再产生 seek 命令，拖拽期间解码管线不断流）
     if (m_chartPanel->isDraggingCursor()) {
-        // 拖拽中：进入 scrub 模式，seek 走 demuxer 重定向 + 连续解码
         m_videoEngine->setScrubMode(true);
-        m_videoEngine->seek(timeMs);
+        m_videoEngine->setScrubTarget(timeMs);
     } else {
         // 点击/标签跳转：一次性 seek
         m_videoEngine->setScrubMode(false);

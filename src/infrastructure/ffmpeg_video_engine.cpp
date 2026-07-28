@@ -392,52 +392,100 @@ bool FfmpegVideoEngine::proxyDisplayFrame(qint64 timeMs)
     return shown;
 }
 
-bool FfmpegVideoEngine::scrubDisplayNextPxFrame()
+bool FfmpegVideoEngine::scrubChasePxFrame()
 {
     if (!m_pxFmt || !m_pxDec)
         return false;
 
+    const qint64 frameMs = m_fps > 0.0f ? static_cast<qint64>(1000.0f / m_fps.load()) : 40;
+    const qint64 halfFrame = frameMs / 2;
+    constexpr qint64 SEEK_THRESHOLD_MS = 500;  // 前进超阈值才重定位 demux（小步前进靠连续解码追上）
+    constexpr int SKIP_FLUSH_PACKETS = 4;      // 连续 demux 丢包超此数，补解码前 flush 防旧帧滞留
+
+    qint64 target = m_scrubTargetMs.load();
+    if (target < 0) {
+        QThread::msleep(10);     // 刚进入 scrub，尚无目标
+        return false;
+    }
+
+    const qint64 delta = target - m_positionMs.load();
+    if (delta > SEEK_THRESHOLD_MS || delta < -2 * frameMs) {
+        // 大跳/后退：代理为全 I 帧有索引 mp4，seek+flush 代价 ~毫秒级
+        int64_t ts = target * 1000;
+        if (avformat_seek_file(m_pxFmt, -1, INT64_MIN, ts, ts, AVSEEK_FLAG_BACKWARD) < 0)
+            av_seek_frame(m_pxFmt, -1, ts, AVSEEK_FLAG_BACKWARD);
+        avcodec_flush_buffers(m_pxDec);
+    } else if (qAbs(delta) <= halfFrame) {
+        QThread::msleep(8);      // 已落位且目标未变：短睡避免空转
+        return false;
+    }
+    // 其余：小幅前进 → 下方连续解码自然追上（不 seek、不 flush，管线不断流）
+
     AVPacket *pkt = av_packet_alloc();
     AVFrame *frame = av_frame_alloc();
     bool shown = false;
+    bool retarget = false;      // 目标中途大幅后退，交外层重定位
+    int skipped = 0;
 
-    // 从代理 demux 当前位置读取下一个 packet 并解码（不 seek，不 flush）
-    while (!shown && !m_quit.load()) {
-        if (av_read_frame(m_pxFmt, pkt) < 0)
-            break;  // 代理 EOF
+    while (!shown && !retarget && !m_quit.load() && !hasPendingCommand()) {
+        target = m_scrubTargetMs.load();      // 追逐中目标持续移动，每包刷新
+        if (target < 0)
+            break;
+        if (av_read_frame(m_pxFmt, pkt) < 0) {
+            QThread::msleep(10);              // 代理 EOF：等新目标
+            break;
+        }
         if (pkt->stream_index != m_pxVstream) {
             av_packet_unref(pkt);
             continue;
         }
+        // demux 级追赶：远落后目标的包不解码直接丢（全 I 帧无帧间依赖）
+        if (pkt->pts != AV_NOPTS_VALUE) {
+            qint64 pktMs = av_rescale_q(pkt->pts,
+                                        m_pxFmt->streams[m_pxVstream]->time_base,
+                                        AVRational{1, 1000});
+            if (pktMs < target - 2 * frameMs) {
+                av_packet_unref(pkt);
+                ++skipped;
+                continue;
+            }
+        }
+        if (skipped > SKIP_FLUSH_PACKETS)
+            avcodec_flush_buffers(m_pxDec);   // 大段跳过后清掉解码器滞留的跳段前旧帧
+        skipped = 0;
         if (avcodec_send_packet(m_pxDec, pkt) >= 0) {
             while (avcodec_receive_frame(m_pxDec, frame) >= 0) {
-                if (!m_pxSws) {
-                    m_pxSws = sws_getContext(frame->width, frame->height,
-                        static_cast<AVPixelFormat>(frame->format),
-                        frame->width, frame->height, AV_PIX_FMT_RGB24,
-                        SWS_BILINEAR, nullptr, nullptr, nullptr);
-                }
-                if (m_pxSws) {
-                    QImage img(frame->width, frame->height, QImage::Format_RGB888);
-                    uint8_t *dst[4] = { img.bits(), nullptr, nullptr, nullptr };
-                    int ls[4] = { static_cast<int>(img.bytesPerLine()), 0, 0, 0 };
-                    sws_scale(m_pxSws, frame->data, frame->linesize, 0,
-                              frame->height, dst, ls);
-                    qint64 relMs = av_rescale_q(frame->best_effort_timestamp,
-                                                m_pxFmt->streams[m_pxVstream]->time_base,
-                                                AVRational{1, 1000});
-                    m_positionMs = relMs;
-                    emit positionChanged(relMs);
-                    emit frameReady(img);
-                    shown = true;
+                qint64 relMs = av_rescale_q(frame->best_effort_timestamp,
+                                            m_pxFmt->streams[m_pxVstream]->time_base,
+                                            AVRational{1, 1000});
+                if (relMs > target + SEEK_THRESHOLD_MS) {
+                    retarget = true;          // 目标大幅后退，当前帧已无意义
+                } else if (relMs >= target - halfFrame) {
+                    // 与主管线相同的精确帧规则：首个 >= 目标-半帧 的帧
+                    if (!m_pxSws) {
+                        m_pxSws = sws_getContext(frame->width, frame->height,
+                            static_cast<AVPixelFormat>(frame->format),
+                            frame->width, frame->height, AV_PIX_FMT_RGB24,
+                            SWS_BILINEAR, nullptr, nullptr, nullptr);
+                    }
+                    if (m_pxSws) {
+                        QImage img(frame->width, frame->height, QImage::Format_RGB888);
+                        uint8_t *dst[4] = { img.bits(), nullptr, nullptr, nullptr };
+                        int ls[4] = { static_cast<int>(img.bytesPerLine()), 0, 0, 0 };
+                        sws_scale(m_pxSws, frame->data, frame->linesize, 0,
+                                  frame->height, dst, ls);
+                        m_positionMs = relMs;
+                        emit positionChanged(relMs);
+                        emit frameReady(img);
+                        shown = true;
+                    }
                 }
                 av_frame_unref(frame);
-                break;
+                if (shown || retarget)
+                    break;
             }
         }
         av_packet_unref(pkt);
-        if (hasPendingCommand())
-            break;  // 新 seek 命令到达，立即停止，让 worker 循环处理命令
     }
 
     av_frame_free(&frame);
@@ -576,9 +624,9 @@ void FfmpegVideoEngine::workerMain()
         if (m_state.load() != static_cast<int>(PlaybackState::Playing) && !m_scrubMode.load() && !m_stepOnce)
             continue;
 
-        // --- Scrub 代理连续解码：从代理 demux 当前位置解码下一帧（不 seek） ---
+        // --- Scrub 代理追逐解码：围绕原子目标连续解码（不经过命令队列） ---
         if (m_scrubMode.load() && m_pxReady) {
-            scrubDisplayNextPxFrame();
+            scrubChasePxFrame();
             continue;
         }
 
@@ -823,17 +871,18 @@ void FfmpegVideoEngine::handleSeek(qint64 timeMs, bool forceMainPipeline)
 
     timeMs = qBound<qint64>(0, timeMs, m_durationMs > 0 ? m_durationMs.load() : timeMs);
 
-    // --- 拖拽模式（Scrub）：代理路径或主管线 demuxer 重定向，播放循环连续解码 ---
+    // --- 拖拽模式（Scrub） ---
     if (m_scrubMode) {
-        m_lastScrubPosMs = timeMs;
-
-        if (!forceMainPipeline && m_pxReady) {
-            // 代理始终 seek+清空+显示（全 I 帧 flush ~0.1ms，忽略不计）
-            proxyDisplayFrame(timeMs);
-        } else {
-            scrubRedirectDemuxer(timeMs);
+        if (m_pxReady && !forceMainPipeline) {
+            // 追逐模型：只写原子目标，worker scrub 循环围绕它连续解码/demux 级
+            // 追赶——不再每个 mouseMove 都 seek+flush（"帧幻灯片"的根因）
+            m_scrubTargetMs = timeMs;
+            m_cmdCond.wakeAll();
+            return;
         }
-        m_mainSeekPending = (m_pxReady && !forceMainPipeline);
+        // 无代理：维持主管线逐 seek 重定向（≤1080p 有索引文件 seek 快，足够跟手）
+        scrubRedirectDemuxer(timeMs);
+        m_mainSeekPending = false;
         m_stepOnce = false;
         m_eof = false;
         m_positionMs = timeMs;
@@ -844,7 +893,7 @@ void FfmpegVideoEngine::handleSeek(qint64 timeMs, bool forceMainPipeline)
         return;
     }
 
-    m_lastScrubPosMs = -1;  // 非 scrub 模式，重置
+    m_scrubTargetMs = -1;  // 非 scrub 模式，重置追逐目标
 
     // --- 一次性 seek（非拖拽：点击/沉淀/播放启动） ---
 

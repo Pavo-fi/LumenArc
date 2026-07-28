@@ -64,8 +64,11 @@ public:
     virtual void setProxySource(const QString &proxyPath) { Q_UNUSED(proxyPath) }
     /// 代理是否已就绪（UI 用于判断拖拽 seek 是否无需节流）
     virtual bool proxyActive() const { return false; }
-    /// 设置拖拽模式：拖拽中 seek 走 demuxer 重定向 + 连续解码；松手走一次性精确 seek
+    /// 设置拖拽模式：拖拽中 seek 走追逐解码；松手走一次性精确 seek
     virtual void setScrubMode(bool on) { Q_UNUSED(on) }
+    /// 拖拽追逐目标（原子写入，免锁免节流）：拖拽期间 UI 高频调用；
+    /// 引擎 scrub 循环围绕该目标连续解码/demux 级追赶，而非每个位置 seek+flush。
+    virtual void setScrubTarget(qint64 timeMs) { Q_UNUSED(timeMs) }
     /// 当前使用的硬解适配器名称（软解返回空串）
     virtual QString hardwareAdapterName() const { return QString(); }
 

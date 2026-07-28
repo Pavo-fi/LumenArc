@@ -156,6 +156,107 @@ int main(int argc, char *argv[])
         return failures == 0 ? 0 : 1;
     }
 
+    if (scenario == "scrub-chase") {
+        // Scrub 追逐模型验收：代理就绪后模拟真实拖拽（连续写原子目标，不走 seek 命令），
+        // 断言 ① 拖拽期间大量不同帧流出（连续流动而非幻灯片）
+        // ② 显示位置与拖拽路径单调对应 ③ 松手后精确落位
+        ProxyManager pm;
+        QString proxyPath;
+        QObject::connect(&pm, &ProxyManager::proxyReady,
+                         &app, [&](const QString &p) { proxyPath = p; });
+        QObject::connect(&pm, &ProxyManager::proxyFailed,
+                         &app, [&](const QString &e) {
+            printf("[FAIL] proxyFailed: %s\n", qPrintable(e.left(300)));
+        });
+        proxyPath = pm.existingProxy(file);
+        if (proxyPath.isEmpty()) {
+            pm.requestProxy(file);
+            QElapsedTimer tg; tg.start();
+            while (proxyPath.isEmpty() && tg.elapsed() < 600000)
+                pumpFor(100);
+        }
+        if (proxyPath.isEmpty()) {
+            printf("[FAIL] proxy generation timeout\n");
+            return 1;
+        }
+
+        FfmpegVideoEngine eng;
+        int frames = 0;
+        qint64 lastPos = -1, dur = 0;
+        QVector<qint64> shownPositions;
+        QObject::connect(&eng, &IVideoEngine::frameReady,
+                         &app, [&](const QImage &) { ++frames; });
+        QObject::connect(&eng, &IVideoEngine::positionChanged,
+                         &app, [&](qint64 t) { lastPos = t; shownPositions.append(t); });
+        QObject::connect(&eng, &IVideoEngine::durationChanged,
+                         &app, [&](qint64 d) { dur = d; });
+        eng.load(file);
+        pumpFor(1500);
+        eng.setProxySource(proxyPath);
+        pumpFor(1500);
+        if (!eng.proxyActive()) {
+            printf("[FAIL] proxy not active\n");
+            return 1;
+        }
+        const qint64 frameMs = static_cast<qint64>(1000.0f / eng.fps());
+
+        // --- 前进拖拽：5% → 90%，60 步 × 10ms（模拟 600ms 快速扫过） ---
+        eng.setScrubMode(true);
+        int fwdBefore = frames;
+        int fwdBase = shownPositions.size();
+        for (int i = 1; i <= 60; ++i) {
+            eng.setScrubTarget(dur * (5 + i * 85 / 60) / 100);
+            pumpFor(10);
+        }
+        int fwdFrames = frames - fwdBefore;
+        // 单调性：允许个别回退（线程延迟帧），回退样本须 < 10%
+        int backsteps = 0;
+        for (int i = fwdBase + 1; i < shownPositions.size(); ++i)
+            if (shownPositions[i] < shownPositions[i - 1] - frameMs)
+                ++backsteps;
+        printf("[info] fwd drag: %d frames in ~600ms, backsteps=%d/%d\n",
+               fwdFrames, backsteps, shownPositions.size() - fwdBase);
+        if (fwdFrames < 20) {
+            printf("[FAIL] fwd drag too few frames (%d) - not flowing\n", fwdFrames);
+            failures++;
+        }
+        if (backsteps > (shownPositions.size() - fwdBase) / 10) {
+            printf("[FAIL] fwd drag not monotonic (%d backsteps)\n", backsteps);
+            failures++;
+        }
+
+        // --- 后退拖拽：90% → 10%，40 步 × 15ms ---
+        int bwdBefore = frames;
+        for (int i = 1; i <= 40; ++i) {
+            eng.setScrubTarget(dur * (90 - i * 80 / 40) / 100);
+            pumpFor(15);
+        }
+        int bwdFrames = frames - bwdBefore;
+        printf("[info] bwd drag: %d frames in ~600ms\n", bwdFrames);
+        if (bwdFrames < 15) {
+            printf("[FAIL] bwd drag too few frames (%d)\n", bwdFrames);
+            failures++;
+        }
+
+        // --- 松手：退出 scrub + 一次性精确 seek ---
+        eng.setScrubMode(false);
+        qint64 finalTarget = dur * 10 / 100;
+        int before = frames;
+        eng.seek(finalTarget);
+        QElapsedTimer guard; guard.start();
+        while (frames == before && guard.elapsed() < 3000)
+            pumpFor(20);
+        if (frames == before || qAbs(lastPos - finalTarget) > frameMs) {
+            printf("[FAIL] final landed %lld target %lld\n", lastPos, finalTarget);
+            failures++;
+        } else {
+            printf("[ OK ] scrub-chase: fwd %d / bwd %d frames, final err %lldms\n",
+                   fwdFrames, bwdFrames, qAbs(lastPos - finalTarget));
+        }
+        printf(failures == 0 ? "[RESULT] PASS\n" : "[RESULT] FAIL (%d)\n", failures);
+        return failures == 0 ? 0 : 1;
+    }
+
     if (scenario == "adapters") {
         auto ads = FfmpegVideoEngine::availableAdapters();
         printf("[info] %lld adapters:\n", ads.size());

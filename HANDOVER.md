@@ -232,11 +232,46 @@ Play 命令：
 
 独立于主管线：`m_pxFmt/m_pxDec/m_pxSws`，在工作线程 idle 打开。代理就绪后禁用 F-D2 预读缓存（二者功能重叠）。
 
-### 6.5 Scrub 模式（拖拽连续解码）—— 持续攻关中
+### 6.5 Scrub 模式（拖拽连续解码）—— ✅ 已解决（追逐模型）
 
 **目标**：拖拽图表光标时，视频画面逐帧连续流动（如 VLC/FCPX），松手后精确落位。
 
-#### 已尝试方案及结论
+#### 最终方案：原子目标 + 追逐循环（Chase Loop）
+
+**根因再诊断**：前 6 次失败的共同前提错误——"每次 mouseMove = 一条 seek 命令"。拖拽期间每秒 20 条 Seek 命令使 `hasPendingCommand()` 恒真，`scrubDisplayNextPxFrame` 的连续解码在结构上永远不可能运行（解码一帧→发现 pending→break→seek+flush→循环），本质是"快速幻灯片"。瓶颈不是 seek 延迟，是**输入模型**。
+
+**关键洞察**：g=1 全 I 帧代理帧间零依赖——"前进到下一帧"只是读下一个 packet，不需要 seek/flush；且 packet 自带 PTS，落后目标的包可**不解码直接丢**（demux 级追赶，微秒级/包）。
+
+**实现**（`v1.4.0-scrub-chase`）：
+```
+MainWindow 拖拽:  engine->setScrubTarget(ms)   // std::atomic store + wakeAll，免锁免节流免命令
+Worker scrub 分支: scrubChasePxFrame() 循环：
+    target = m_scrubTargetMs.load()     // 每包刷新，目标持续移动
+    |delta| > 500ms 或后退 >2帧 → seek+flush（全 I 帧有索引，~ms 级）
+    已落位且目标未变 → 睡 8ms（光标静止不空转）
+    否则 av_read_frame 连续读：
+        pkt.pts < target-2帧 → unref 直接丢（demux 级追赶，不解码）
+        连续丢包 >4 → flush 一次（防解码器滞留跳段前旧帧）
+        只解码目标附近的帧，显示首个 >= target-半帧 的帧
+        relMs > target+500ms → retarget（目标中途大幅后退，交外层 seek）
+```
+
+- **拖拽期间 `m_pendingCmd` 恒为 None** → `hasPendingCommand()` 恒假 → 连续解码第一次真正跑起来；
+- 前进追逐全程**零 seek 零 flush**，管线不断流；真命令（Play/Stop/退出 scrub）仍由 hasPendingCommand 逃逸；
+- 无代理文件（≤1080p 有索引）维持逐 seek 主管线路径（seek 本来快）；
+- 松手逻辑不变：退出 scrub → 代理一次性精确帧 → 300ms 沉淀回全分辨率。
+
+**验收**（新场景 `scrub-chase`，模拟 60 步×10ms 真实拖拽）：
+| 指标 | 结果 |
+|---|---|
+| 前进拖拽 600ms 显示不同帧 | 43-47 帧（~72fps，0 回退，严格单调） |
+| 后退拖拽 600ms 显示不同帧 | 38-39 帧 |
+| 松手落点误差 | 0ms（≤单帧） |
+| 全回归 | 24 项矩阵 + scrub/step/avsync/jitter/rate/stress/proxy 全绿 |
+
+**新验收指标**（替代旧的"600ms 帧数"——旧指标与用户手感脱节）：拖拽期间每秒实际显示的、与光标路径单调对应的不同帧数 ≥ 40；后退同理。
+
+#### 历史：已尝试方案及结论（保留教训）
 
 | # | 方案 | 结果 | 教训 |
 |---|---|---|---|
@@ -247,7 +282,7 @@ Play 命令：
 | 5 | **proxyDisplayFrame + scrubDisplayNextPxFrame**（首次 seek+flush+显示，后续不 seek 连续解码） | 测试：D17 46帧/600ms。用户反馈：**依然跳跃** | `scrubDisplayNextPxFrame` 读代理解码器 → 代理解码器在 `proxyDisplayFrame` 后停在显示帧之后 → `scrubDisplayNextPxFrame` 继续读 → **每次 mouseMove 触发 `handleSeek` → 重新 `proxyDisplayFrame` → 重置解码器位置**。`scrubDisplayNextPxFrame` 永远不会被调用（handleSeek 先走了） |
 | 6 | **proxyRedirectSeek**（前进只重定向 demux，不清空解码器） | 测试：D17 60帧/600ms。用户反馈：**帧跳跃** | `proxyRedirectSeek` 不清空代理解码器 → 解码器内部仍有旧位置的帧 → `scrubDisplayNextPxFrame` 返回旧帧（错误位置） |
 
-#### 核心矛盾
+#### 历史方案的核心矛盾（已被追逐模型化解）
 
 **"连续播放"和"seek 精确帧"在当前架构下是互斥的**：
 
@@ -262,7 +297,11 @@ Play 命令：
 - VLC seek 5ms → 200fps 显示 → 看起来连续
 - 我们 seek 10ms → 100fps 显示 → 测试程序看起来连续，但实际 UI 中 Qt 事件循环 + paint 合并 → 有效帧率 ~30-60fps → 用户感知跳跃
 
-#### 下一步方案（待实施）
+**教训**："连续播放"和"seek 精确帧"并非互斥——只要输入模型改为"原子目标 + 围绕目标的连续解码"，二者自然统一。瓶颈从来不在 seek 延迟，而在每条 mouseMove 都经过锁+条件变量+flush 的命令循环。
+
+~~**下一步方案（待实施）**~~（已废弃，见上方最终方案）
+
+<details><summary>废弃的方案 A/B 存档</summary>
 
 **方案 A：独立 Scrub 线程（绕过 worker 命令循环）**
 
@@ -297,6 +336,8 @@ MainWindow 拖拽时：
 
 **方案选择**：方案 B 更简单，但拖拽速度受限于代理播放速率（~100fps）。方案 A 更灵活（可变速）。建议先做方案 B 验证手感，再按需升级到方案 A。
 
+</details>
+
 ---
 
 ## 七、测试体系
@@ -318,6 +359,7 @@ MainWindow 拖拽时：
 | `stress <file> <seeks>` | | seek + 30s play，内存增长 < 300MB |
 | `corrupt <file>` | | 不崩溃，state=Idle |
 | `scrub <file>` | | 10 次连续 seek（80ms 间隔），最终落点精确 |
+| `scrub-chase <file>` | | 代理追逐模型：模拟 60 步×10ms 拖拽，前进 ≥20 帧且单调、后退 ≥15 帧、松手落点 ≤1 帧 |
 | `proxy <file>` | | 代理生成 → 连续 10 次 seek 每次 ≤150ms → 沉淀升级到全分辨率 |
 | `adapters <file>` | | 逐适配器加载，报告 hwdec + seek 追赶耗时 |
 
