@@ -19,7 +19,6 @@
 #include "infrastructure/ianalysis_engine.h"
 #include "infrastructure/vlc_video_engine.h"
 #include "infrastructure/ffmpeg_video_engine.h"
-#include "infrastructure/proxy_manager.h"
 #include "infrastructure/python_analysis_engine.h"
 #include "magnifierwidget.h"
 #include "snapshotoverlay.h"
@@ -468,8 +467,6 @@ MainWindow::MainWindow(QWidget *parent)
     m_statusLabel = new QLabel(this);
     m_hwAdapterLabel = new QLabel(this);
     m_hwAdapterLabel->setStyleSheet("color: #888; font-size: 10px;");
-    m_proxyStatusLabel = new QLabel(this);
-    m_proxyStatusLabel->setStyleSheet("color: #888; font-size: 10px;");
     m_progressBar = new QProgressBar(this);
     m_progressBar->setMaximumWidth(200);
     m_progressBar->setRange(0, 100);
@@ -481,7 +478,6 @@ MainWindow::MainWindow(QWidget *parent)
     statusBar()->addWidget(m_operationLabel);  // 左侧：操作反馈
     statusBar()->addPermanentWidget(m_statusLabel);  // 右侧：分析状态
     statusBar()->addPermanentWidget(m_hwAdapterLabel);
-    statusBar()->addPermanentWidget(m_proxyStatusLabel);  // 代理状态常驻
     statusBar()->addPermanentWidget(m_progressBar);
     statusBar()->addPermanentWidget(m_cancelBtn);
     statusBar()->show();  // 确保状态栏可见
@@ -491,28 +487,6 @@ MainWindow::MainWindow(QWidget *parent)
     auto *pyEngine = new PythonAnalysisEngine(this);
     pyEngine->setPythonExecutable(detectPythonPath());
     m_analysisEngine = pyEngine;
-
-    // 拖拽预览代理管理器（F-P3）
-    m_proxyManager = new ProxyManager(this);
-    connect(m_proxyManager, &ProxyManager::progressChanged,
-            this, [this](int pct) {
-        setProxyStatus(lang("代理：生成中 %1%（期间可拖拽，就绪后更顺滑）",
-                            "Proxy: generating %1% (scrub works, smoother when ready)").arg(pct));
-    });
-    connect(m_proxyManager, &ProxyManager::proxyReady,
-            this, [this](const QString &proxyPath) {
-        if (!m_proxyVideoPath.isEmpty() && m_proxyVideoPath == m_currentVideoPath) {
-            m_videoEngine->setProxySource(proxyPath);
-            setProxyStatus(lang("代理：已就绪，拖拽逐帧实时预览",
-                                "Proxy: ready - real-time scrub"));
-        }
-    });
-    connect(m_proxyManager, &ProxyManager::proxyFailed,
-            this, [this](const QString &error) {
-        setProxyStatus(lang("代理：生成失败（拖拽仍可用，大跳略慢）",
-                            "Proxy: failed (scrub still works, jumps slower)"),
-                       error.left(200));
-    });
 
     // Snapshot overlay (floating on video area)
     m_snapshotOverlay = new SnapshotOverlay(m_videoWidget);
@@ -590,17 +564,6 @@ void MainWindow::createMenus()
     connect(hwAction, &QAction::toggled, this, [](bool on) {
         QSettings s("LumenArc", "LumenArc");
         s.setValue("hwDecode", on);
-    });
-
-    QAction *proxyAction = settingsMenu->addAction(lang("拖拽预览代理（重文件后台生成）", "Scrub preview proxy (background generation)"));
-    proxyAction->setCheckable(true);
-    {
-        QSettings s("LumenArc", "LumenArc");
-        proxyAction->setChecked(s.value("proxyEnabled", true).toBool());
-    }
-    connect(proxyAction, &QAction::toggled, this, [](bool on) {
-        QSettings s("LumenArc", "LumenArc");
-        s.setValue("proxyEnabled", on);
     });
 
     // 硬解设备选择（自动=偏好独显；重启生效）
@@ -1620,31 +1583,6 @@ void MainWindow::openVideoFile(const QString &filePath)
     m_currentDurationMs = 0;  // 等待 durationChanged 校准
 
     if (m_videoEngine->load(filePath)) {
-        // 拖拽预览代理：重文件后台生成，就绪后拖拽逐帧实时预览
-        {
-            QSettings s("LumenArc", "LumenArc");
-            if (s.value("proxyEnabled", true).toBool()
-                && ProxyManager::needsProxy(filePath)) {
-                m_proxyVideoPath = filePath;
-                QString existing = m_proxyManager->existingProxy(filePath);
-                if (!existing.isEmpty()) {
-                    m_videoEngine->setProxySource(existing);
-                    setProxyStatus(lang("代理：已就绪，拖拽逐帧实时预览",
-                                        "Proxy: ready - real-time scrub"));
-                } else {
-                    m_proxyManager->requestProxy(filePath);
-                    setProxyStatus(lang("代理：生成中 0%（期间可拖拽，就绪后更顺滑）",
-                                        "Proxy: generating 0% (scrub works, smoother when ready)"));
-                }
-            } else {
-                m_proxyVideoPath.clear();
-                m_proxyManager->cancel();
-                setProxyStatus(s.value("proxyEnabled", true).toBool()
-                    ? lang("代理：无需（本文件随机访问快）", "Proxy: not needed")
-                    : lang("代理：已禁用", "Proxy: disabled"));
-            }
-        }
-
         // Check if we have a saved state for this video (memory state takes priority)
         VideoState savedState;
         if (m_stateManager->restoreState(filePath, savedState)) {
@@ -2625,14 +2563,6 @@ QString MainWindow::formatTime(qint64 ms) const
 }
 
 /// @brief 在状态栏左侧显示操作反馈（2秒后自动清除）
-void MainWindow::setProxyStatus(const QString &text, const QString &tooltip)
-{
-    if (!m_proxyStatusLabel)
-        return;
-    m_proxyStatusLabel->setText(text);
-    m_proxyStatusLabel->setToolTip(tooltip);
-}
-
 void MainWindow::showOperationStatus(const QString &text)
 {
     m_operationLabel->setText(text);

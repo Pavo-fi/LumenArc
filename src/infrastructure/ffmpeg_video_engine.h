@@ -81,10 +81,6 @@ public:
     /// 诊断/测试用：当前实际使用的适配器名（软解为空）
     QString hardwareAdapterName() const override { return m_hwAdapterName; }
 
-    /// 设置拖拽预览代理源（下次 seek 生效）
-    void setProxySource(const QString &proxyPath) override;
-    /// 诊断/测试用：代理是否已就绪
-    bool proxyActive() const override { return m_pxReady; }
     /// 拖拽模式：拖拽中 seek 只写原子追逐目标（worker scrub 循环连续解码追赶）；
     /// 松手走一次性精确 seek
     void setScrubMode(bool on) override {
@@ -99,6 +95,8 @@ public:
         m_scrubTargetMs = timeMs;
         m_cmdCond.wakeAll();
     }
+    /// UI 已消费一帧（有界化 frameReady 队列配额归还）
+    void ackFrame() override { --m_framesInFlight; }
 
 private:
     enum class Command { None, Play, Pause, Stop, Seek };
@@ -106,7 +104,7 @@ private:
     void workerMain();                        // 工作线程主循环
     bool openFile(const QString &filePath);   // 工作线程内调用
     void closeFile();                         // 工作线程内调用
-    void handleSeek(qint64 timeMs, bool forceMainPipeline = false); // 工作线程内调用
+    void handleSeek(qint64 timeMs);          // 工作线程内调用
     void scrubRedirectDemuxer(qint64 timeMs);  // Scrub 模式：主管线 demuxer 重定向
     void processVideoPacket(AVPacket *pkt);   // 送包 + 排干解码器
     void processAudioPacket(AVPacket *pkt);   // 音频解码 → 重采样 → 环形缓冲
@@ -128,13 +126,9 @@ private:
     bool tryDisplayFromCache(qint64 timeMs);  // seek 命中缓存立即出图
     void evictCache(qint64 centerMs);
 
-    // --- 拖拽预览代理（全 I 帧低分代理，帧号 1:1） ---
-    void openProxy(const QString &path);      // 工作线程内
-    void closeProxy();
-    bool proxyDisplayFrame(qint64 timeMs);    // 一次性 seek+清空+解码+显示
-    bool scrubChasePxFrame();                 // Scrub 追逐解码（代理）：围绕原子目标连续解码追赶
-    bool scrubChaseMainFrame();               // Scrub 追逐解码（主管线）：无代理时全分辨率连续解码追赶
-    bool ensureScrubDecoder();                // 惰性创建 scrub 专用多线程软解上下文（长追赶吞吐优先）
+    // --- Scrub 追逐解码（VLC 路线：多线程软解 + 低固定开销 seek，无代理） ---
+    bool scrubChaseMainFrame();               // Scrub 追逐解码：围绕原子目标连续解码追赶
+    bool ensureScrubDecoder();                // 惰性创建 scrub 专用多线程软解上下文（VLC 式追赶）
 
 public:
     /// 诊断/测试用：本次 seek 以来写入音频缓冲的字节数
@@ -167,7 +161,6 @@ private:
     AVFormatContext *m_fmt = nullptr;
     AVCodecContext *m_vdec = nullptr;
     AVCodecContext *m_scDec = nullptr;  // scrub 长追赶专用软解上下文（多线程吞吐优先）
-    AVCodecContext *m_chaseDec = nullptr; // 本次追逐当前使用的解码器（seek 时按追赶长度选择）
     SwsContext *m_sws = nullptr;
     int m_swsW = 0, m_swsH = 0, m_swsFmt = -1;
     int m_vstream = -1;
@@ -201,20 +194,14 @@ private:
     static constexpr qint64 CACHE_SPAN_MS = 2000;   // 预读覆盖 seek 点后 2s
     static constexpr int CACHE_MAX_FRAMES = 60;     // 内存上限（1080p≈6MB/帧）
 
-    // --- 拖拽预览代理（仅工作线程访问） ---
-    QString m_pxPathPending;            // setProxySource 挂起路径
-    AVFormatContext *m_pxFmt = nullptr;
-    AVCodecContext *m_pxDec = nullptr;
-    SwsContext *m_pxSws = nullptr;
-    int m_pxVstream = -1;
-    bool m_pxReady = false;
-    bool m_mainSeekPending = false;     // 代理已出图，主管线待沉淀补全分辨率
+    // --- Scrub 追逐状态（仅工作线程访问，目标为原子供 UI 高频写入） ---
     std::atomic<bool> m_scrubMode{false}; // 拖拽模式：seek 只写追逐目标
     std::atomic<qint64> m_scrubTargetMs{-1}; // 拖拽追逐目标（-1=无目标，UI 高频写入）
+    std::atomic<int> m_framesInFlight{0};   // 已 emit 未被 UI 消费的帧数（有界化丢帧）
     qint64 m_chaseDecodePosMs = -1;         // 追逐解码位置（含未显示帧，-1=未知）
     qint64 m_chaseSeekTargetMs = -1;        // 本次追逐 seek 的目标（decodePos 未知时的追逐基准）
-    qint64 m_lastCatchupMs = 0;             // 上次实测 seek 追赶长度（学习 GOP，免二次 seek）
-    qint64 m_lastSeekElapsed = 0;       // 上次 seek 的单调时钟（沉淀计时）
+    AVCodecContext *m_chaseDec = nullptr;   // 本次追逐当前解码器（seek 时选，decode-through 沿用）
+    qint64 m_lastCatchupMs = 0;             // 上次实测 seek 追赶长度（学习 GOP，长则直接软解）
 
     // --- 音频面（仅工作线程访问，计数器为原子供诊断读取） ---
     AVCodecContext *m_adec = nullptr;

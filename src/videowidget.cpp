@@ -1182,6 +1182,8 @@ void VideoWidget::onFrameReady(const QImage &image)
 {
     // No deep copy: QImage is implicitly shared and m_frameImage is only read afterwards.
     m_frameImage = image;
+    if (m_engine)
+        m_engine->ackFrame();   // 归还配额（引擎有界化丢帧）
     updateOverlayGeometry();
     update();
     if (m_overlay)

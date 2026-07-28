@@ -59,16 +59,13 @@ public:
     /// 倍速时是否支持音频输出（不支持的引擎在 rate!=1.0 时应静音并在 UI 明示）
     virtual bool supportsRateAudio() const { return true; }
 
-    /// 设置拖拽预览代理源（全 I 帧低分代理，帧号与原片 1:1）。
-    /// 引擎在暂停/拖拽 seek 时用代理快速出精确帧；不支持的引擎忽略。
-    virtual void setProxySource(const QString &proxyPath) { Q_UNUSED(proxyPath) }
-    /// 代理是否已就绪（UI 用于判断拖拽 seek 是否无需节流）
-    virtual bool proxyActive() const { return false; }
     /// 设置拖拽模式：拖拽中 seek 走追逐解码；松手走一次性精确 seek
     virtual void setScrubMode(bool on) { Q_UNUSED(on) }
     /// 拖拽追逐目标（原子写入，免锁免节流）：拖拽期间 UI 高频调用；
     /// 引擎 scrub 循环围绕该目标连续解码/demux 级追赶，而非每个位置 seek+flush。
     virtual void setScrubTarget(qint64 timeMs) { Q_UNUSED(timeMs) }
+    /// UI 已消费一帧（有界化 frameReady 队列：引擎在积压时丢帧而不是排队，VLC 式）
+    virtual void ackFrame() {}
     /// 当前使用的硬解适配器名称（软解返回空串）
     virtual QString hardwareAdapterName() const { return QString(); }
 
