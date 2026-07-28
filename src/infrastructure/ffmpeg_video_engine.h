@@ -130,7 +130,8 @@ private:
     void openProxy(const QString &path);      // 工作线程内
     void closeProxy();
     bool proxyDisplayFrame(qint64 timeMs);    // 一次性 seek+清空+解码+显示
-    bool scrubChasePxFrame();                 // Scrub 追逐解码：围绕原子目标连续解码追赶
+    bool scrubChasePxFrame();                 // Scrub 追逐解码（代理）：围绕原子目标连续解码追赶
+    bool scrubChaseMainFrame();               // Scrub 追逐解码（主管线）：无代理时全分辨率连续解码追赶
 
 public:
     /// 诊断/测试用：本次 seek 以来写入音频缓冲的字节数
@@ -205,6 +206,7 @@ private:
     bool m_mainSeekPending = false;     // 代理已出图，主管线待沉淀补全分辨率
     std::atomic<bool> m_scrubMode{false}; // 拖拽模式：seek 只写追逐目标
     std::atomic<qint64> m_scrubTargetMs{-1}; // 拖拽追逐目标（-1=无目标，UI 高频写入）
+    qint64 m_lastChaseShowElapsed = 0;      // 追逐追赶途中间帧限流（m_monotonic 时钟）
     qint64 m_lastSeekElapsed = 0;       // 上次 seek 的单调时钟（沉淀计时）
 
     // --- 音频面（仅工作线程访问，计数器为原子供诊断读取） ---

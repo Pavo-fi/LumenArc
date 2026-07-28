@@ -212,6 +212,10 @@ void FfmpegVideoEngine::processAudioPacket(AVPacket *pkt)
     if (qAbs(m_rate.load() - 1.0f) > 0.01f)
         return;
 
+    // scrub 拖拽期间静音（追逐循环自行丢音频包，此处防其他路径漏入）
+    if (m_scrubMode.load())
+        return;
+
     if (!ensureAudioOutput())
         return;
 
@@ -493,6 +497,106 @@ bool FfmpegVideoEngine::scrubChasePxFrame()
     return shown;
 }
 
+bool FfmpegVideoEngine::scrubChaseMainFrame()
+{
+    if (!m_fmt || !m_vdec)
+        return false;
+
+    const qint64 frameMs = m_fps > 0.0f ? static_cast<qint64>(1000.0f / m_fps.load()) : 40;
+    const qint64 halfFrame = frameMs / 2;
+    constexpr qint64 SEEK_THRESHOLD_MS = 5000;  // 前进超阈值才 seek（小步前进连续解码追上更便宜）
+
+    qint64 target = m_scrubTargetMs.load();
+    if (target < 0) {
+        QThread::msleep(10);     // 刚进入 scrub，尚无目标
+        return false;
+    }
+
+    const qint64 delta = target - m_positionMs.load();
+    if (delta > SEEK_THRESHOLD_MS || delta < -2 * frameMs) {
+        // 大跳/后退：主管线 seek + flush（与一次性 seek 同规则）
+        // 追赶过滤由下方目标窗口完成，不走 drainDecoder 的 discard 路径
+        scrubRedirectDemuxer(target);
+        m_needMarginMeasure = false;   // margin 测量在 drainDecoder，chase 不用，防陈旧测量
+        m_eof = false;
+        m_stepOnce = false;
+        m_clockValid = false;
+        // 落到解码循环：从关键帧追赶，仅显示目标窗口内的帧
+    } else if (qAbs(delta) <= halfFrame) {
+        QThread::msleep(8);      // 已落位且目标未变：短睡避免空转
+        return false;
+    }
+    // 其余：小幅前进 → 下方连续解码自然追上（纯前进不 seek 不 flush，天然安全）
+
+    AVPacket *pkt = av_packet_alloc();
+    AVFrame *frame = av_frame_alloc();
+    bool shown = false;
+    bool retarget = false;      // 目标中途大幅后退，交外层重定位
+    if (!m_monotonic.isValid())
+        m_monotonic.start();
+
+    // 逐帧决策：0=继续解码 1=已精确落位 2=目标大幅后退需重定位
+    // 窗口内帧立即显示；追赶途中（落后目标）按 33ms 限流显示中间帧——
+    // FCPX 式"奔向光标"视觉反馈，稀疏关键帧（D17 GOP=10s）快拖时不黑屏
+    auto handleFrame = [&](AVFrame *f) -> int {
+        qint64 relMs = ptsToRelMs(f->best_effort_timestamp);
+        if (relMs > target + SEEK_THRESHOLD_MS)
+            return 2;
+        if (relMs >= target - halfFrame) {
+            displayFrame(f);
+            m_lastChaseShowElapsed = m_monotonic.elapsed();
+            return 1;
+        }
+        if (m_monotonic.elapsed() - m_lastChaseShowElapsed >= 33) {
+            displayFrame(f);
+            m_lastChaseShowElapsed = m_monotonic.elapsed();
+        }
+        return 0;
+    };
+
+    while (!shown && !retarget && !m_quit.load() && !hasPendingCommand()) {
+        target = m_scrubTargetMs.load();      // 追逐中目标持续移动，每包刷新
+        if (target < 0)
+            break;
+        int ret = av_read_frame(m_fmt, pkt);
+        if (ret == AVERROR_EOF) {
+            avcodec_send_packet(m_vdec, nullptr);   // 冲空拿尾部帧
+            while (avcodec_receive_frame(m_vdec, frame) >= 0) {
+                int r = handleFrame(frame);
+                av_frame_unref(frame);
+                if (r == 1) { shown = true; break; }
+                if (r == 2) { retarget = true; break; }
+            }
+            if (!shown)
+                QThread::msleep(10);              // 真 EOF：等新目标
+            break;
+        }
+        if (ret < 0) {
+            av_packet_unref(pkt);
+            QThread::msleep(5);                   // demux 错误：退避后交外层
+            break;
+        }
+        if (pkt->stream_index != m_vstream) {
+            av_packet_unref(pkt);                 // 音频/其他流：scrub 期间丢弃（静音拖拽）
+            continue;
+        }
+        if (avcodec_send_packet(m_vdec, pkt) >= 0) {
+            while (avcodec_receive_frame(m_vdec, frame) >= 0) {
+                int r = handleFrame(frame);
+                // 落后帧：解码但不显示（GOP 引用链必须逐帧过，省掉 sws+emit 即可）
+                av_frame_unref(frame);
+                if (r == 1) { shown = true; break; }
+                if (r == 2) { retarget = true; break; }
+            }
+        }
+        av_packet_unref(pkt);
+    }
+
+    av_frame_free(&frame);
+    av_packet_free(&pkt);
+    return shown;
+}
+
 void FfmpegVideoEngine::setRate(float rate)
 {
     m_rate = rate > 0.0f ? rate : 1.0f;
@@ -624,9 +728,13 @@ void FfmpegVideoEngine::workerMain()
         if (m_state.load() != static_cast<int>(PlaybackState::Playing) && !m_scrubMode.load() && !m_stepOnce)
             continue;
 
-        // --- Scrub 代理追逐解码：围绕原子目标连续解码（不经过命令队列） ---
-        if (m_scrubMode.load() && m_pxReady) {
-            scrubChasePxFrame();
+        // --- Scrub 追逐解码：围绕原子目标连续解码（代理在走代理 960p，
+        //     不在走主管线全分辨率——decode 速度足够，零等待零磁盘） ---
+        if (m_scrubMode.load()) {
+            if (m_pxReady)
+                scrubChasePxFrame();
+            else
+                scrubChaseMainFrame();
             continue;
         }
 
@@ -871,25 +979,12 @@ void FfmpegVideoEngine::handleSeek(qint64 timeMs, bool forceMainPipeline)
 
     timeMs = qBound<qint64>(0, timeMs, m_durationMs > 0 ? m_durationMs.load() : timeMs);
 
-    // --- 拖拽模式（Scrub） ---
+    // --- 拖拽模式（Scrub）：只写原子追逐目标，worker scrub 循环围绕它
+    //     连续解码追赶（代理/主管线路径由 worker 按 m_pxReady 自选）——
+    //     不再每个 mouseMove 都 seek+flush（"帧幻灯片"的根因） ---
     if (m_scrubMode) {
-        if (m_pxReady && !forceMainPipeline) {
-            // 追逐模型：只写原子目标，worker scrub 循环围绕它连续解码/demux 级
-            // 追赶——不再每个 mouseMove 都 seek+flush（"帧幻灯片"的根因）
-            m_scrubTargetMs = timeMs;
-            m_cmdCond.wakeAll();
-            return;
-        }
-        // 无代理：维持主管线逐 seek 重定向（≤1080p 有索引文件 seek 快，足够跟手）
-        scrubRedirectDemuxer(timeMs);
-        m_mainSeekPending = false;
-        m_stepOnce = false;
-        m_eof = false;
-        m_positionMs = timeMs;
-        emit positionChanged(timeMs);
-        if (!m_monotonic.isValid())
-            m_monotonic.start();
-        m_lastSeekElapsed = m_monotonic.elapsed();
+        m_scrubTargetMs = timeMs;
+        m_cmdCond.wakeAll();
         return;
     }
 
