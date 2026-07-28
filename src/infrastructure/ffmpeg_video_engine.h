@@ -86,7 +86,10 @@ public:
     /// 诊断/测试用：代理是否已就绪
     bool proxyActive() const override { return m_pxReady; }
     /// 拖拽模式：拖拽中 seek 走连续解码路径，松手走一次性精确 seek
-    void setScrubMode(bool on) override { m_scrubMode = on; }
+    void setScrubMode(bool on) override {
+        m_scrubMode = on;
+        if (!on) m_lastScrubPosMs = -1;
+    }
 
 private:
     enum class Command { None, Play, Pause, Stop, Seek };
@@ -119,7 +122,8 @@ private:
     // --- 拖拽预览代理（全 I 帧低分代理，帧号 1:1） ---
     void openProxy(const QString &path);      // 工作线程内
     void closeProxy();
-    bool proxyDisplayFrame(qint64 timeMs);    // 一次性 seek+解码+显示
+    bool proxyDisplayFrame(qint64 timeMs);    // 一次性 seek+清空+解码+显示（后退/沉淀用）
+    void proxyRedirectSeek(qint64 timeMs);    // 前进：只重定向 demuxer，不清空解码器
     bool scrubDisplayNextPxFrame();           // Scrub 连续解码：从代理 demux 当前位置解码下一帧
 
 public:
@@ -194,6 +198,7 @@ private:
     bool m_pxReady = false;
     bool m_mainSeekPending = false;     // 代理已出图，主管线待沉淀补全分辨率
     std::atomic<bool> m_scrubMode{false}; // 拖拽模式：seek 走连续解码路径
+    qint64 m_lastScrubPosMs = -1;       // 上次 scrub seek 位置（判断前进/后退）
     qint64 m_lastSeekElapsed = 0;       // 上次 seek 的单调时钟（沉淀计时）
 
     // --- 音频面（仅工作线程访问，计数器为原子供诊断读取） ---

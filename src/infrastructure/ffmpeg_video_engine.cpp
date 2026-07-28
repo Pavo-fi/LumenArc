@@ -392,6 +392,17 @@ bool FfmpegVideoEngine::proxyDisplayFrame(qint64 timeMs)
     return shown;
 }
 
+void FfmpegVideoEngine::proxyRedirectSeek(qint64 timeMs)
+{
+    // 前进 seek：只重定向代理 demuxer，不清空解码器
+    // 工作线程循环继续从新位置解码下一帧 → 帧连续
+    if (!m_pxFmt || !m_pxDec)
+        return;
+    int64_t ts = static_cast<int64_t>(timeMs) * 1000;
+    avformat_seek_file(m_pxFmt, -1, INT64_MIN, ts, ts, AVSEEK_FLAG_BACKWARD);
+    // 不清空解码器，不解码——工作线程继续从新位置出帧
+}
+
 bool FfmpegVideoEngine::scrubDisplayNextPxFrame()
 {
     if (!m_pxFmt || !m_pxDec)
@@ -825,10 +836,17 @@ void FfmpegVideoEngine::handleSeek(qint64 timeMs, bool forceMainPipeline)
 
     // --- 拖拽模式（Scrub）：代理路径或主管线 demuxer 重定向，播放循环连续解码 ---
     if (m_scrubMode) {
+        bool backward = (m_lastScrubPosMs >= 0 && timeMs < m_lastScrubPosMs - 100);
+        m_lastScrubPosMs = timeMs;
+
         if (!forceMainPipeline && m_pxReady) {
-            proxyDisplayFrame(timeMs);
+            if (backward) {
+                proxyDisplayFrame(timeMs);    // 后退：seek+清空+显示精确帧
+            } else {
+                proxyRedirectSeek(timeMs);    // 前进：只重定向 demux，不清空
+            }                                // 工作线程循环继续从新位置出帧
         } else {
-            scrubRedirectDemuxer(timeMs);
+            scrubRedirectDemuxer(timeMs);    // 主管线：前进不清空，后退清空
         }
         m_mainSeekPending = (m_pxReady && !forceMainPipeline);
         m_stepOnce = false;
@@ -840,6 +858,8 @@ void FfmpegVideoEngine::handleSeek(qint64 timeMs, bool forceMainPipeline)
         m_lastSeekElapsed = m_monotonic.elapsed();
         return;
     }
+
+    m_lastScrubPosMs = -1;  // 非 scrub 模式，重置
 
     // --- 一次性 seek（非拖拽：点击/沉淀/播放启动） ---
 
@@ -879,6 +899,11 @@ void FfmpegVideoEngine::handleSeek(qint64 timeMs, bool forceMainPipeline)
 
 void FfmpegVideoEngine::scrubRedirectDemuxer(qint64 timeMs)
 {
+    // 判断方向：后退需要清空解码器（有前向陈旧状态），前进不需要
+    // 有索引容器（MP4/MKV）：前进时 demuxer 落在关键帧，解码器无需清空即可正确解码
+    // 无索引容器（PS/TS）：demuxer 可能落点不精确，前后都清空保安全
+    bool backward = (m_lastScrubPosMs >= 0 && timeMs < m_lastScrubPosMs - 100);
+
     qint64 demuxTargetMs = timeMs;
     if (!m_indexed)
         demuxTargetMs = qMax<qint64>(0, timeMs - m_seekMarginMs);
@@ -894,18 +919,23 @@ void FfmpegVideoEngine::scrubRedirectDemuxer(qint64 timeMs)
     if (ret < 0)
         av_seek_frame(m_fmt, -1, ts, AVSEEK_FLAG_BACKWARD);
 
-    avcodec_flush_buffers(m_vdec);
-    if (m_adec)
-        avcodec_flush_buffers(m_adec);
-    if (m_sink) {
-        m_sink->reset();
-        m_sinkIo = m_sink->start();
+    // 无索引容器或后退 seek：清空解码器
+    // 有索引容器前进 seek：不清空，解码器继续出帧 → 帧连续
+    if (!m_indexed || backward) {
+        avcodec_flush_buffers(m_vdec);
+        if (m_adec)
+            avcodec_flush_buffers(m_adec);
+        if (m_sink) {
+            m_sink->reset();
+            m_sinkIo = m_sink->start();
+        }
+        m_audioBytesWritten = 0;
+        m_audioBaseRelMs = -1;
+        m_smoothAudioClock = -1;
+        m_lastRawAudioClock = -1;
     }
-    m_audioBytesWritten = 0;
-    m_audioBaseRelMs = -1;
-    m_smoothAudioClock = -1;
-    m_lastRawAudioClock = -1;
-    m_discardBeforeRelMs = -1;  // Scrub 模式不做丢弃追赶
+
+    m_discardBeforeRelMs = -1;
     m_audioDiscardBeforeRelMs = -1;
     m_clockValid = false;
 }
