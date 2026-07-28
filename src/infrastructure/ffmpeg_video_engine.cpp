@@ -28,6 +28,8 @@ extern "C" {
 
 #ifdef Q_OS_WIN
 #include <dxgi.h>
+#include <d3d11.h>
+#include <libavutil/hwcontext_d3d11va.h>
 #endif
 
 // D3D11VA get_format 回调：优先硬解像素格式，否则回退软解
@@ -68,6 +70,7 @@ QVector<FfmpegVideoEngine::D3D11AdapterInfo> FfmpegVideoEngine::availableAdapter
 FfmpegVideoEngine::FfmpegVideoEngine(QObject *parent)
     : IVideoEngine(parent)
 {
+    qRegisterMetaType<GpuFrameInfo>("GpuFrameInfo");   // 跨线程信号排队投递
 }
 
 FfmpegVideoEngine::~FfmpegVideoEngine()
@@ -286,6 +289,141 @@ void FfmpegVideoEngine::processAudioPacket(AVPacket *pkt)
 }
 
 float FfmpegVideoEngine::rate() const { return m_rate.load(); }
+
+bool FfmpegVideoEngine::setGpuFramesEnabled(bool on)
+{
+#ifdef Q_OS_WIN
+    m_gpuFramesWanted = on;
+    postCommand(Command::None);   // 唤醒工作线程评估
+    return true;
+#else
+    Q_UNUSED(on)
+    return false;
+#endif
+}
+
+#ifdef Q_OS_WIN
+// ---------------------------------------------------------------------------
+// GPU 零拷贝显示（实验，v1.6）：VideoProcessor NV12→BGRA → keyed-mutex 共享纹理
+// 生产方（工作线程）acquire 0 / release 1；消费方（UI/QRhi）acquire 1 / release 0。
+// 任何一步失败返回 false，displayFrame 回退 CPU 路径（兼容性红线）。
+// ---------------------------------------------------------------------------
+
+void FfmpegVideoEngine::releaseGpuPipeline()
+{
+    for (int i = 0; i < 2; ++i) {
+        m_gpuMutex[i].Reset();
+        m_gpuTex[i].Reset();
+        m_gpuHandle[i] = 0;
+    }
+    m_gpuVideoProc.Reset();
+    m_gpuVideoProcEnum.Reset();
+    m_gpuVideoCtx.Reset();
+    m_gpuVideoDev.Reset();
+    m_gpuW = m_gpuH = 0;
+}
+
+bool FfmpegVideoEngine::ensureGpuPipeline(int w, int h)
+{
+    if (m_gpuVideoProc && m_gpuW == w && m_gpuH == h)
+        return true;
+    releaseGpuPipeline();
+    if (!m_hwDeviceCtx)
+        return false;
+    auto *hwctx = reinterpret_cast<AVHWDeviceContext *>(m_hwDeviceCtx->data);
+    auto *d3d = static_cast<AVD3D11VADeviceContext *>(hwctx->hwctx);
+    if (!d3d || !d3d->device || !d3d->device_context)
+        return false;
+
+    if (FAILED(d3d->device->QueryInterface(IID_PPV_ARGS(&m_gpuVideoDev)))
+        || FAILED(d3d->device_context->QueryInterface(IID_PPV_ARGS(&m_gpuVideoCtx)))) {
+        releaseGpuPipeline();
+        return false;
+    }
+
+    D3D11_VIDEO_PROCESSOR_CONTENT_DESC cd{};
+    cd.InputFrameFormat = D3D11_VIDEO_FRAME_FORMAT_PROGRESSIVE;
+    cd.InputWidth = w;
+    cd.InputHeight = h;
+    cd.OutputWidth = w;
+    cd.OutputHeight = h;
+    cd.Usage = D3D11_VIDEO_USAGE_PLAYBACK_NORMAL;
+    if (FAILED(m_gpuVideoDev->CreateVideoProcessorEnumerator(&cd, &m_gpuVideoProcEnum))
+        || FAILED(m_gpuVideoDev->CreateVideoProcessor(m_gpuVideoProcEnum.Get(), 0,
+                                                      &m_gpuVideoProc))) {
+        releaseGpuPipeline();
+        return false;
+    }
+
+    for (int i = 0; i < 2; ++i) {
+        D3D11_TEXTURE2D_DESC td{};
+        td.Width = w;
+        td.Height = h;
+        td.MipLevels = 1;
+        td.ArraySize = 1;
+        td.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
+        td.SampleDesc = { 1, 0 };
+        td.Usage = D3D11_USAGE_DEFAULT;
+        td.BindFlags = D3D11_BIND_RENDER_TARGET;   // VideoProcessor 输出要求
+        td.MiscFlags = D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX;
+        if (FAILED(d3d->device->CreateTexture2D(&td, nullptr, &m_gpuTex[i]))) {
+            releaseGpuPipeline();
+            return false;
+        }
+        if (FAILED(m_gpuTex[i]->QueryInterface(IID_PPV_ARGS(&m_gpuMutex[i])))) {
+            releaseGpuPipeline();
+            return false;
+        }
+        Microsoft::WRL::ComPtr<IDXGIResource> res;
+        if (FAILED(m_gpuTex[i]->QueryInterface(IID_PPV_ARGS(&res)))
+            || FAILED(res->GetSharedHandle(reinterpret_cast<HANDLE *>(&m_gpuHandle[i])))) {
+            releaseGpuPipeline();
+            return false;
+        }
+    }
+    m_gpuW = w;
+    m_gpuH = h;
+    return true;
+}
+
+bool FfmpegVideoEngine::gpuBlitToShared(AVFrame *frame)
+{
+    if (!ensureGpuPipeline(frame->width, frame->height))
+        return false;
+    auto *hwctx = reinterpret_cast<AVHWDeviceContext *>(m_hwDeviceCtx->data);
+    auto *d3d = static_cast<AVD3D11VADeviceContext *>(hwctx->hwctx);
+
+    const int slot = (m_gpuSlot ^= 1);
+    if (FAILED(m_gpuMutex[slot]->AcquireSync(0, 500)))
+        return false;
+
+    bool ok = false;
+    ID3D11Texture2D *srcTex = reinterpret_cast<ID3D11Texture2D *>(frame->data[0]);
+    UINT srcSlice = static_cast<UINT>(reinterpret_cast<intptr_t>(frame->data[1]));
+
+    D3D11_VIDEO_PROCESSOR_INPUT_VIEW_DESC ivd{};
+    ivd.ViewDimension = D3D11_VPIV_DIMENSION_TEXTURE2D;
+    ivd.Texture2D.ArraySlice = srcSlice;
+    Microsoft::WRL::ComPtr<ID3D11VideoProcessorInputView> inView;
+    D3D11_VIDEO_PROCESSOR_OUTPUT_VIEW_DESC ovd{};
+    ovd.ViewDimension = D3D11_VPOV_DIMENSION_TEXTURE2D;
+    Microsoft::WRL::ComPtr<ID3D11VideoProcessorOutputView> outView;
+
+    if (SUCCEEDED(m_gpuVideoDev->CreateVideoProcessorInputView(
+            srcTex, m_gpuVideoProcEnum.Get(), &ivd, &inView))
+        && SUCCEEDED(m_gpuVideoDev->CreateVideoProcessorOutputView(
+            m_gpuTex[slot].Get(), m_gpuVideoProcEnum.Get(), &ovd, &outView))) {
+        D3D11_VIDEO_PROCESSOR_STREAM stream{};
+        stream.Enable = TRUE;
+        stream.pInputSurface = inView.Get();
+        ok = SUCCEEDED(m_gpuVideoCtx->VideoProcessorBlt(m_gpuVideoProc.Get(),
+                                                        outView.Get(), 0, 1, &stream));
+    }
+    m_gpuMutex[slot]->ReleaseSync(1);
+    return ok;
+}
+#endif // Q_OS_WIN
+
 bool FfmpegVideoEngine::ensureScrubDecoder()
 {
     if (m_scDec)
@@ -489,6 +627,20 @@ void FfmpegVideoEngine::workerMain()
         bool isScrubbing = m_scrubMode.load();
         bool isActive = (m_state.load() == static_cast<int>(PlaybackState::Playing))
                         || isScrubbing || m_stepOnce;
+
+#ifdef Q_OS_WIN
+        // --- GPU 零拷贝路径状态评估（工作线程权威）：
+        //     需 UI 请求 + 硬解设备存在；变化时通知 UI 切换显示路径 ---
+        {
+            bool can = m_gpuFramesWanted.load() && m_hwDeviceCtx != nullptr;
+            if (can != m_gpuFramesActive) {
+                m_gpuFramesActive = can;
+                if (!can)
+                    releaseGpuPipeline();
+                emit gpuFramesActiveChanged(can);
+            }
+        }
+#endif
 
         // --- 处理命令 ---
         {
@@ -749,6 +901,13 @@ bool FfmpegVideoEngine::openFile(const QString &filePath)
 
 void FfmpegVideoEngine::closeFile()
 {
+#ifdef Q_OS_WIN
+    if (m_gpuFramesActive) {
+        m_gpuFramesActive = false;
+        emit gpuFramesActiveChanged(false);
+    }
+    releaseGpuPipeline();
+#endif
     prefetchAbort();
     m_frameCache.clear();
     m_pfPendingFromMs = -1;
@@ -1212,6 +1371,27 @@ void FfmpegVideoEngine::displayFrame(AVFrame *frame)
         emit positionChanged(relMs);
         return;
     }
+
+#ifdef Q_OS_WIN
+    // GPU 零拷贝路径（实验，v1.6）：硬解帧 VideoProcessor→共享纹理，跳过回传/sws/QImage。
+    // 失败或软解帧自动回退下方 CPU 路径。播放中每 30 帧补发一帧 QImage（放大镜/钉图用），
+    // 暂停/步进帧全量发 QImage（截图/钉图的精确性不受影响）。
+    if (m_gpuFramesActive && frame->format == AV_PIX_FMT_D3D11 && gpuBlitToShared(frame)) {
+        m_positionMs = relMs;
+        ++m_framesInFlight;   // UI presenter 消费后 ackFrame()
+        emit positionChanged(relMs);
+        GpuFrameInfo info;
+        info.sharedHandle = m_gpuHandle[m_gpuSlot];
+        info.slot = m_gpuSlot;
+        info.size = QSize(m_gpuW, m_gpuH);
+        emit frameTextureReady(info);
+        bool wantCpuFrame = (m_state.load() != static_cast<int>(PlaybackState::Playing))
+                            || (++m_gpuFrameCounter % 30 == 0);
+        if (!wantCpuFrame)
+            return;
+        // 否则继续走下方 CPU 路径补发 QImage（两路各自计数/ack，互不影响）
+    }
+#endif
 
     // 硬解帧需先回传 CPU（D3D11 纹理 → NV12 系统内存）
     AVFrame *swFrame = nullptr;

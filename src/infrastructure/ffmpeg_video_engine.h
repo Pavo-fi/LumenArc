@@ -25,6 +25,15 @@
 #include <QMap>
 #include <QImage>
 #include <atomic>
+#ifdef Q_OS_WIN
+#include <wrl/client.h>
+struct ID3D11Texture2D;
+struct ID3D11VideoDevice;
+struct ID3D11VideoContext;
+struct ID3D11VideoProcessor;
+struct ID3D11VideoProcessorEnumerator;
+struct IDXGIKeyedMutex;
+#endif
 
 struct AVFormatContext;
 struct AVCodecContext;
@@ -80,6 +89,8 @@ public:
     void setHardwareAdapter(int index) { m_hwAdapterIndex = index; }
     /// 诊断/测试用：当前实际使用的适配器名（软解为空）
     QString hardwareAdapterName() const override { return m_hwAdapterName; }
+    /// 请求 GPU 零拷贝帧路径（实验，v1.6）：工作线程评估后 gpuFramesActiveChanged 确认
+    bool setGpuFramesEnabled(bool on) override;
 
     /// 拖拽模式：拖拽中 seek 只写原子追逐目标（worker scrub 循环连续解码追赶）；
     /// 松手走一次性精确 seek
@@ -167,6 +178,24 @@ private:
     qint64 m_startPtsMs = 0;        // 流起始 PTS（绝对），用于相对时间换算
     bool m_indexed = true;          // 容器是否有 seek 索引（PS/TS 无索引）
     AVBufferRef *m_hwDeviceCtx = nullptr;   // D3D11VA 设备上下文（软解为 nullptr）
+#ifdef Q_OS_WIN
+    // --- GPU 零拷贝显示（实验，v1.6）：VideoProcessor NV12→BGRA → keyed-mutex 共享纹理 ---
+    bool ensureGpuPipeline(int w, int h);   // 工作线程内惰性创建
+    bool gpuBlitToShared(AVFrame *frame);   // 工作线程内：解码纹理 → 共享 BGRA
+    void releaseGpuPipeline();
+    Microsoft::WRL::ComPtr<ID3D11VideoDevice> m_gpuVideoDev;
+    Microsoft::WRL::ComPtr<ID3D11VideoContext> m_gpuVideoCtx;
+    Microsoft::WRL::ComPtr<ID3D11VideoProcessor> m_gpuVideoProc;
+    Microsoft::WRL::ComPtr<ID3D11VideoProcessorEnumerator> m_gpuVideoProcEnum;
+    Microsoft::WRL::ComPtr<ID3D11Texture2D> m_gpuTex[2];
+    Microsoft::WRL::ComPtr<IDXGIKeyedMutex> m_gpuMutex[2];
+    quint64 m_gpuHandle[2] = {0, 0};
+    int m_gpuW = 0, m_gpuH = 0;
+    int m_gpuSlot = 0;
+    int m_gpuFrameCounter = 0;              // 低频 QImage 节流计数（放大镜/钉图用）
+#endif
+    std::atomic<bool> m_gpuFramesWanted{false};   // UI 请求（原子，跨线程）
+    bool m_gpuFramesActive = false;         // 工作线程内评估的实际状态
     std::atomic<bool> m_hwDecodeEnabled{true};
     std::atomic<bool> m_hwActive{false};    // 已确认收到硬解帧
     std::atomic<int> m_hwAdapterIndex{-1};  // -1=自动（偏好独显）

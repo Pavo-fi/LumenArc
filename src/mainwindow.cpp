@@ -566,6 +566,23 @@ void MainWindow::createMenus()
         s.setValue("hwDecode", on);
     });
 
+    // GPU 零拷贝显示（实验，v1.6）：即时生效，失败自动回退 CPU 路径
+    QAction *gpuDispAction = settingsMenu->addAction(lang("GPU 显示管线（实验）", "GPU Display Pipeline (experimental)"));
+    gpuDispAction->setCheckable(true);
+    {
+        QSettings s("LumenArc", "LumenArc");
+        gpuDispAction->setChecked(s.value("gpuDisplay", false).toBool());
+    }
+    connect(gpuDispAction, &QAction::toggled, this, [this](bool on) {
+        QSettings s("LumenArc", "LumenArc");
+        s.setValue("gpuDisplay", on);
+        if (m_videoWidget)
+            m_videoWidget->setGpuFramesEnabled(on);
+    });
+    // 启动时应用持久化状态
+    if (m_videoWidget && gpuDispAction->isChecked())
+        m_videoWidget->setGpuFramesEnabled(true);
+
     // 硬解设备选择（自动=偏好独显；重启生效）
     QMenu *adapterMenu = settingsMenu->addMenu(lang("硬解设备（重启生效）", "HW Decode Adapter (restart required)"));
     QActionGroup *adapterGroup = new QActionGroup(this);

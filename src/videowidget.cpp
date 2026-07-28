@@ -1160,7 +1160,57 @@ void VideoWidget::setVideoEngine(IVideoEngine *engine)
                 this, &VideoWidget::onFrameReady);
         connect(m_engine, &IVideoEngine::videoSizeChanged,
                 m_overlay, &OverlayWidget::setVideoSize);
+#ifdef Q_OS_WIN
+        connect(m_engine, &IVideoEngine::gpuFramesActiveChanged,
+                this, &VideoWidget::onGpuFramesActiveChanged);
+        if (m_gpuWanted)
+            applyGpuWanted();   // 换引擎后重新申请
+#endif
     }
+}
+
+void VideoWidget::setGpuFramesEnabled(bool on)
+{
+    m_gpuWanted = on;
+    applyGpuWanted();
+}
+
+void VideoWidget::applyGpuWanted()
+{
+#ifdef Q_OS_WIN
+    // 截图叠加激活时强制走 QImage 路径（叠加绘制在 QWidget 光栅层）
+    const bool want = m_gpuWanted && m_snapshot.isNull();
+    if (m_engine)
+        m_engine->setGpuFramesEnabled(want);
+    if (!want && m_gpuPresenter)
+        m_gpuPresenter->hide();
+#else
+    m_gpuWanted = false;
+#endif
+}
+
+void VideoWidget::onGpuFramesActiveChanged(bool active)
+{
+#ifdef Q_OS_WIN
+    m_gpuActive = active;
+    if (active) {
+        if (!m_gpuPresenter) {
+            m_gpuPresenter = new GpuVideoPresenter(this);
+            m_gpuPresenter->setEngine(m_engine);
+            m_gpuPresenter->lower();          // 垫在 overlay 之下
+            connect(m_engine, &IVideoEngine::frameTextureReady,
+                    m_gpuPresenter, &GpuVideoPresenter::setFrame);
+        }
+        m_gpuPresenter->setGeometry(videoDisplayRect());
+        m_gpuPresenter->show();
+    } else if (m_gpuPresenter) {
+        m_gpuPresenter->hide();
+        m_gpuPresenter->clearFrame();
+    }
+    update();
+#else
+    Q_UNUSED(active)
+#endif
 }
 
 void VideoWidget::setRegionModel(RegionModel *model)
@@ -1208,6 +1258,7 @@ void VideoWidget::setSnapshot(const QImage &snapshot, int brightness, int contra
     m_snapshotBrightness = brightness;
     m_snapshotContrast = contrast;
     m_snapshotOpacity = opacity;
+    applyGpuWanted();   // 截图叠加激活：回退 QImage 路径保证叠加绘制
     // Invalidate cache if parameters changed
     if (m_cachedBrightness != brightness || m_cachedContrast != contrast) {
         m_cachedBrightness = INT_MIN;
@@ -1223,6 +1274,7 @@ void VideoWidget::clearSnapshot()
     m_adjustedSnapshot = QImage();
     m_cachedBrightness = INT_MIN;
     m_cachedContrast = -999;
+    applyGpuWanted();   // 叠加解除：恢复 GPU 路径（若用户开启）
     update();
 }
 
@@ -1266,6 +1318,10 @@ void VideoWidget::updateOverlayGeometry()
         return;
     m_overlay->setGeometry(rect());
     m_overlay->setVideoDisplayRect(videoDisplayRect());
+#ifdef Q_OS_WIN
+    if (m_gpuPresenter && m_gpuPresenter->isVisible())
+        m_gpuPresenter->setGeometry(videoDisplayRect());
+#endif
 }
 
 /// @brief 绘制视频帧+截图叠加（含亮度对比度缓存）
@@ -1276,7 +1332,8 @@ void VideoWidget::paintEvent(QPaintEvent *event)
 
     painter.fillRect(rect(), QColor(10, 10, 10));
 
-    if (!m_frameImage.isNull()) {
+    // GPU 零拷贝激活时画面由 GpuVideoPresenter 子组件绘制，这里只画黑底
+    if (!m_frameImage.isNull() && !m_gpuActive) {
         QRect target = videoDisplayRect();
         painter.drawImage(target, m_frameImage);
 
@@ -1294,7 +1351,7 @@ void VideoWidget::paintEvent(QPaintEvent *event)
             painter.drawImage(target, m_adjustedSnapshot);
             painter.setOpacity(1.0);
         }
-    } else {
+    } else if (m_frameImage.isNull() && !m_gpuActive) {
         painter.setPen(Qt::gray);
         painter.drawText(rect(), Qt::AlignCenter, lang("未加载视频", "No video loaded"));
     }

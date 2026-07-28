@@ -22,6 +22,9 @@ class RegionModel;
 class PolygonModel;
 class GuideLineModel;
 #include "domain/guide_line.h"
+#ifdef Q_OS_WIN
+#include "gpuvideopresenter.h"
+#endif
 
 /**
  * @brief Overlay widget that sits on top of the video container.
@@ -186,14 +189,27 @@ public slots:
     QRect videoDisplayRect() const;
     void updateOverlayGeometry();
 
+public:
+    /// GPU 零拷贝显示开关（实验，v1.6）：转发引擎请求；实际生效经 gpuFramesActiveChanged
+    void setGpuFramesEnabled(bool on);
+    bool gpuFramesActive() const { return m_gpuActive; }
+
 protected:
     void paintEvent(QPaintEvent *event) override;
     void resizeEvent(QResizeEvent *event) override;
 
 private:
+    void onGpuFramesActiveChanged(bool active);
+    void applyGpuWanted();
+
     OverlayWidget *m_overlay = nullptr;
     QPointer<IVideoEngine> m_engine;
     QImage m_frameImage;
+#ifdef Q_OS_WIN
+    GpuVideoPresenter *m_gpuPresenter = nullptr;
+#endif
+    bool m_gpuWanted = false;   // 用户开关（设置菜单）
+    bool m_gpuActive = false;   // 引擎确认的实际状态
 
     // Snapshot fusion data
     QImage m_snapshot;

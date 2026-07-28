@@ -13,6 +13,16 @@
 
 #include <QObject>
 #include <QImage>
+#include <QSize>
+
+/// GPU 零拷贝帧信息（实验，v1.6）：引擎已在本机 GPU 完成解码+色彩转换，
+/// UI 侧直接导入共享纹理采样。sharedHandle 为同进程跨设备句柄（Win/D3D11
+/// keyed-mutex 纹理）；slot 为环形槽位（0..1）。软解/非 Windows 引擎不产生。
+struct GpuFrameInfo {
+    quint64 sharedHandle = 0;
+    int slot = 0;
+    QSize size;
+};
 
 enum class PlaybackState
 {
@@ -68,11 +78,20 @@ public:
     virtual void ackFrame() {}
     /// 当前使用的硬解适配器名称（软解返回空串）
     virtual QString hardwareAdapterName() const { return QString(); }
+    /// 请求 GPU 零拷贝帧路径（实验，v1.6）。返回 false=不支持（VLC 引擎/非 Windows）。
+    /// 真实状态经 gpuFramesActiveChanged 信号异步确认（工作线程内评估）。
+    virtual bool setGpuFramesEnabled(bool on) { Q_UNUSED(on) return false; }
 
 signals:
     void frameReady(const QImage &image);
+    /// GPU 零拷贝帧（实验）：激活时替代大部分 frameReady；UI 消费后须 ackFrame()
+    void frameTextureReady(const GpuFrameInfo &info);
+    /// GPU 帧路径实际生效状态（工作线程评估后发出）
+    void gpuFramesActiveChanged(bool active);
     void positionChanged(qint64 timeMs);
     void durationChanged(qint64 durationMs);
     void stateChanged(PlaybackState state);
     void videoSizeChanged(int w, int h);
 };
+
+Q_DECLARE_METATYPE(GpuFrameInfo)

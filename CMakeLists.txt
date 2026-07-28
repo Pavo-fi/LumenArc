@@ -15,6 +15,8 @@ endif()
 # --- Qt6 ---
 set(CMAKE_PREFIX_PATH "${CMAKE_PREFIX_PATH};$ENV{QT6_DIR}")
 find_package(Qt6 REQUIRED COMPONENTS Widgets Charts Multimedia)
+# ShaderTools（qsb）：GPU 显示管线（实验，v1.6）的运行时 shader 烘焙，缺失时禁用 GPU 路径
+find_package(Qt6 QUIET COMPONENTS ShaderTools)
 
 # --- FFmpeg (LGPL shared build: bin/ include/ lib/) ---
 set(FFMPEG_SDK_PATH "" CACHE PATH "Path to FFmpeg SDK root (contains include/ and lib/)")
@@ -152,6 +154,7 @@ set(SOURCES
     src/main.cpp
     src/mainwindow.cpp
     src/videowidget.cpp
+    src/gpuvideopresenter.cpp
     src/chartpanel.cpp
     src/magnifierwidget.cpp
     src/snapshotoverlay.cpp
@@ -180,6 +183,7 @@ endif()
 set(HEADERS
     src/mainwindow.h
     src/videowidget.h
+    src/gpuvideopresenter.h
     src/chartpanel.h
     src/magnifierwidget.h
     src/snapshotoverlay.h
@@ -257,18 +261,34 @@ target_link_libraries(${PROJECT_NAME} PRIVATE
     Qt6::Charts
     Qt6::OpenGL
     Qt6::Multimedia
+    Qt6::GuiPrivate          # QRhi（GPU 显示管线）
     ${VLC_LIBRARY}
     ${FFMPEG_LIBRARIES}
 )
 
+# GPU 显示管线 shader（qsb 烘焙为资源 :/shaders/*.qsb）
+if(Qt6ShaderTools_FOUND)
+    qt_add_shaders(${PROJECT_NAME} "video_shaders"
+        PREFIX "/shaders"
+        BASE "src/shaders"
+        FILES
+            src/shaders/video.vert
+            src/shaders/video.frag
+    )
+else()
+    message(WARNING "Qt6ShaderTools not found: GPU display pipeline shaders missing, presenter will stay inactive")
+endif()
+
 # Platform-specific libraries
 if(WIN32)
+    add_compile_definitions(NOMINMAX)   # d3d11.h→windows.h 的 min/max 宏会毒化 Qt 头
     target_link_libraries(${PROJECT_NAME} PRIVATE
         ws2_32
         winmm
         dxgi
+        d3d11
     )
-    target_link_libraries(lumenarc_engine_test PRIVATE dxgi)
+    target_link_libraries(lumenarc_engine_test PRIVATE dxgi d3d11)
 endif()
 
 # --- Windows deployment ---
