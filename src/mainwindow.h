@@ -163,6 +163,7 @@ protected:
     qint64 m_lastIssuedSeekMs = -1;
     QLabel *m_operationLabel = nullptr;   // 操作反馈标签（状态栏左侧）
     QLabel *m_statusLabel = nullptr;
+    QLabel *m_hwAdapterLabel = nullptr;   // 硬解适配器名称（状态栏右侧）
     QProgressBar *m_progressBar = nullptr;
     QPushButton *m_cancelBtn = nullptr;
 

@@ -79,7 +79,7 @@ public:
     /// 选择硬解适配器：-1=自动（偏好独显），>=0=指定 DXGI 索引（下次 load 生效）
     void setHardwareAdapter(int index) { m_hwAdapterIndex = index; }
     /// 诊断/测试用：当前实际使用的适配器名（软解为空）
-    QString hardwareAdapterName() const { return m_hwAdapterName; }
+    QString hardwareAdapterName() const override { return m_hwAdapterName; }
 
     /// 设置拖拽预览代理源（下次 seek 生效）
     void setProxySource(const QString &proxyPath) override;
@@ -120,6 +120,7 @@ private:
     void openProxy(const QString &path);      // 工作线程内
     void closeProxy();
     bool proxyDisplayFrame(qint64 timeMs);    // 一次性 seek+解码+显示
+    bool scrubDisplayNextPxFrame();           // Scrub 连续解码：从代理 demux 当前位置解码下一帧
 
 public:
     /// 诊断/测试用：本次 seek 以来写入音频缓冲的字节数

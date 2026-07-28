@@ -392,6 +392,59 @@ bool FfmpegVideoEngine::proxyDisplayFrame(qint64 timeMs)
     return shown;
 }
 
+bool FfmpegVideoEngine::scrubDisplayNextPxFrame()
+{
+    if (!m_pxFmt || !m_pxDec)
+        return false;
+
+    AVPacket *pkt = av_packet_alloc();
+    AVFrame *frame = av_frame_alloc();
+    bool shown = false;
+
+    // 从代理 demux 当前位置读取下一个 packet 并解码（不 seek，不 flush）
+    while (!shown && !m_quit.load()) {
+        if (av_read_frame(m_pxFmt, pkt) < 0)
+            break;  // 代理 EOF
+        if (pkt->stream_index != m_pxVstream) {
+            av_packet_unref(pkt);
+            continue;
+        }
+        if (avcodec_send_packet(m_pxDec, pkt) >= 0) {
+            while (avcodec_receive_frame(m_pxDec, frame) >= 0) {
+                if (!m_pxSws) {
+                    m_pxSws = sws_getContext(frame->width, frame->height,
+                        static_cast<AVPixelFormat>(frame->format),
+                        frame->width, frame->height, AV_PIX_FMT_RGB24,
+                        SWS_BILINEAR, nullptr, nullptr, nullptr);
+                }
+                if (m_pxSws) {
+                    QImage img(frame->width, frame->height, QImage::Format_RGB888);
+                    uint8_t *dst[4] = { img.bits(), nullptr, nullptr, nullptr };
+                    int ls[4] = { static_cast<int>(img.bytesPerLine()), 0, 0, 0 };
+                    sws_scale(m_pxSws, frame->data, frame->linesize, 0,
+                              frame->height, dst, ls);
+                    qint64 relMs = av_rescale_q(frame->best_effort_timestamp,
+                                                m_pxFmt->streams[m_pxVstream]->time_base,
+                                                AVRational{1, 1000});
+                    m_positionMs = relMs;
+                    emit positionChanged(relMs);
+                    emit frameReady(img);
+                    shown = true;
+                }
+                av_frame_unref(frame);
+                break;
+            }
+        }
+        av_packet_unref(pkt);
+        if (hasPendingCommand())
+            break;  // 新 seek 命令到达，立即停止，让 worker 循环处理命令
+    }
+
+    av_frame_free(&frame);
+    av_packet_free(&pkt);
+    return shown;
+}
+
 void FfmpegVideoEngine::setRate(float rate)
 {
     m_rate = rate > 0.0f ? rate : 1.0f;
@@ -523,6 +576,12 @@ void FfmpegVideoEngine::workerMain()
         if (m_state.load() != static_cast<int>(PlaybackState::Playing) && !m_scrubMode.load() && !m_stepOnce)
             continue;
 
+        // --- Scrub 代理连续解码：从代理 demux 当前位置解码下一帧（不 seek） ---
+        if (m_scrubMode.load() && m_pxReady) {
+            scrubDisplayNextPxFrame();
+            continue;
+        }
+
         // --- 解复用 ---
         int ret = av_read_frame(m_fmt, pkt);
         if (ret == AVERROR_EOF) {
@@ -603,33 +662,41 @@ bool FfmpegVideoEngine::openFile(const QString &filePath)
     if (m_hwDecodeEnabled.load()) {
         int idx = m_hwAdapterIndex.load();
         QVector<D3D11AdapterInfo> ads = availableAdapters();
+
+        // 自动策略：偏好 Dedicated VRAM 最大者（独显）
         if (idx < 0 && !ads.isEmpty()) {
-            // 自动策略：偏好 Dedicated VRAM 最大者（独显）；
-            // 无独显的机器自然落到核显/集显，行为与原先一致
             int best = 0;
-            for (int i = 1; i < ads.size(); ++i) {
+            for (int i = 1; i < ads.size(); ++i)
                 if (ads[i].dedicatedVramMB > ads[best].dedicatedVramMB)
                     best = i;
-            }
             idx = ads[best].index;
         }
-        if (idx >= 0) {
-            QByteArray dev = QByteArray::number(idx);
+
+        // 逐个适配器尝试创建 D3D11VA 设备上下文
+        QList<int> tryOrder;
+        if (idx >= 0)
+            tryOrder << idx;
+        for (const auto &a : ads)
+            if (!tryOrder.contains(a.index))
+                tryOrder << a.index;
+
+        for (int tryIdx : tryOrder) {
+            QByteArray dev = QByteArray::number(tryIdx);
             hwErr = av_hwdevice_ctx_create(&m_hwDeviceCtx, AV_HWDEVICE_TYPE_D3D11VA,
                                            dev.constData(), nullptr, 0);
             if (hwErr >= 0) {
                 for (const auto &a : ads)
-                    if (a.index == idx) { m_hwAdapterName = a.name; break; }
+                    if (a.index == tryIdx) { m_hwAdapterName = a.name; break; }
+                break;
             }
-        } else {
-            hwErr = av_hwdevice_ctx_create(&m_hwDeviceCtx, AV_HWDEVICE_TYPE_D3D11VA,
-                                           nullptr, nullptr, 0);
         }
-        if (hwErr < 0 && idx >= 0) {
-            // 指定适配器失败：回退系统默认再试一次
+
+        // 所有适配器都失败：最后尝试系统默认（无 device 参数）
+        if (hwErr < 0) {
             hwErr = av_hwdevice_ctx_create(&m_hwDeviceCtx, AV_HWDEVICE_TYPE_D3D11VA,
                                            nullptr, nullptr, 0);
-            m_hwAdapterName.clear();
+            if (hwErr >= 0)
+                m_hwAdapterName = "System default";
         }
         wantHw = (hwErr >= 0);
     }
@@ -1076,7 +1143,14 @@ bool FfmpegVideoEngine::drainDecoder()
                 displayFrame(frame);
                 m_stepOnce = false;
                 av_frame_unref(frame);
-                break;
+                if (scrubbing) {
+                    // Scrub 模式：显示后继续解码下一帧（连续出帧）
+                    // 新 seek 命令会 flush 解码器，打断此循环
+                    if (hasPendingCommand())
+                        break;
+                    continue;
+                }
+                break;    // 非 scrub：暂停态只显示一帧；播放态显示后处理下一个包
             }
         }
         av_frame_unref(frame);

@@ -466,6 +466,8 @@ MainWindow::MainWindow(QWidget *parent)
     m_operationLabel->setMinimumWidth(200);
     m_operationLabel->setStyleSheet("color: #F5F0E8;");
     m_statusLabel = new QLabel(this);
+    m_hwAdapterLabel = new QLabel(this);
+    m_hwAdapterLabel->setStyleSheet("color: #888; font-size: 10px;");
     m_progressBar = new QProgressBar(this);
     m_progressBar->setMaximumWidth(200);
     m_progressBar->setRange(0, 100);
@@ -476,6 +478,7 @@ MainWindow::MainWindow(QWidget *parent)
     m_cancelBtn->setVisible(false);
     statusBar()->addWidget(m_operationLabel);  // 左侧：操作反馈
     statusBar()->addPermanentWidget(m_statusLabel);  // 右侧：分析状态
+    statusBar()->addPermanentWidget(m_hwAdapterLabel);
     statusBar()->addPermanentWidget(m_progressBar);
     statusBar()->addPermanentWidget(m_cancelBtn);
     statusBar()->show();  // 确保状态栏可见
@@ -2527,6 +2530,13 @@ void MainWindow::onDurationChanged(qint64 durationMs)
     }
 
     updateTimeDisplay();
+
+    // 更新硬解适配器显示（引擎 openFile 后 adapterName 已确定）
+    QString adapter = m_videoEngine->hardwareAdapterName();
+    if (adapter.isEmpty())
+        m_hwAdapterLabel->setText(lang("软解", "SW decode"));
+    else
+        m_hwAdapterLabel->setText(adapter);
 }
 
 void MainWindow::onPositionChanged(qint64 timeMs)

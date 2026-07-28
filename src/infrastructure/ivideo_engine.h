@@ -64,8 +64,10 @@ public:
     virtual void setProxySource(const QString &proxyPath) { Q_UNUSED(proxyPath) }
     /// 代理是否已就绪（UI 用于判断拖拽 seek 是否无需节流）
     virtual bool proxyActive() const { return false; }
-    /// 设置拖拽模式：拖拽中 seek 走 demuxer 重定向 + 连续解码；松手后走一次性精确 seek
+    /// 设置拖拽模式：拖拽中 seek 走 demuxer 重定向 + 连续解码；松手走一次性精确 seek
     virtual void setScrubMode(bool on) { Q_UNUSED(on) }
+    /// 当前使用的硬解适配器名称（软解返回空串）
+    virtual QString hardwareAdapterName() const { return QString(); }
 
 signals:
     void frameReady(const QImage &image);
