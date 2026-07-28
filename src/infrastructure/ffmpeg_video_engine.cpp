@@ -497,6 +497,32 @@ bool FfmpegVideoEngine::scrubChasePxFrame()
     return shown;
 }
 
+bool FfmpegVideoEngine::ensureScrubDecoder()
+{
+    if (m_scDec)
+        return true;
+    if (!m_fmt || m_vstream < 0)
+        return false;
+    AVStream *vs = m_fmt->streams[m_vstream];
+    const AVCodec *codec = avcodec_find_decoder(vs->codecpar->codec_id);
+    if (!codec)
+        return false;
+    m_scDec = avcodec_alloc_context3(codec);
+    if (!m_scDec)
+        return false;
+    avcodec_parameters_to_context(m_scDec, vs->codecpar);
+    // 多线程软解：长 GOP 追赶吞吐优先（实测 D17 1440p ~3140fps）。
+    // 代价是管线填充延迟（~thread_count 帧 ≈100ms），短追赶反而不如硬解——
+    // 因此仅在索引估算追赶长度 >4s 时启用（见 scrubChaseMainFrame）
+    m_scDec->thread_count = 0;
+    m_scDec->pkt_timebase = vs->time_base;
+    if (avcodec_open2(m_scDec, codec, nullptr) < 0) {
+        avcodec_free_context(&m_scDec);
+        return false;
+    }
+    return true;
+}
+
 bool FfmpegVideoEngine::scrubChaseMainFrame()
 {
     if (!m_fmt || !m_vdec)
@@ -504,7 +530,10 @@ bool FfmpegVideoEngine::scrubChaseMainFrame()
 
     const qint64 frameMs = m_fps > 0.0f ? static_cast<qint64>(1000.0f / m_fps.load()) : 40;
     const qint64 halfFrame = frameMs / 2;
-    constexpr qint64 SEEK_THRESHOLD_MS = 20000;  // 前进 <~2 GOP 解码直追比 seek 重启动便宜
+    // 前进 decode-through 阈值：有索引文件 <~2 GOP 直追比 seek 重启动便宜；
+    // 无索引文件（PS/TS）直追无界，而 margin seek 有界（m_seekMarginMs），阈值收紧
+    const qint64 SEEK_THRESHOLD_MS = m_indexed ? 20000
+                                               : qMax<qint64>(4000, m_seekMarginMs * 2);
 
     qint64 target = m_scrubTargetMs.load();
     if (target < 0) {
@@ -512,16 +541,23 @@ bool FfmpegVideoEngine::scrubChaseMainFrame()
         return false;
     }
 
-    // 追逐基准：解码位置（含未显示帧）优先于显示位置——防止追赶途中用陈旧
-    // 显示位置算 delta 导致每 30ms 重 seek（永远追不上移动中的目标）
+    // 追逐基准：解码位置（含未显示帧）> 本次 seek 目标 > 显示位置。
+    // decodePos 未知（软解管线填充期无输出）时用 seek 目标——光标移动 <20s 时
+    // 继续当前追赶而非重 seek（防止填充期 decodePos 停滞导致的 reseek 风暴）
     const qint64 anchor = (m_chaseDecodePosMs >= 0) ? m_chaseDecodePosMs
-                                                    : m_positionMs.load();
+                        : (m_chaseSeekTargetMs >= 0) ? m_chaseSeekTargetMs
+                        : m_positionMs.load();
     const qint64 delta = target - anchor;
     if (delta > SEEK_THRESHOLD_MS || delta < -2 * frameMs) {
         // 大跳/后退：主管线 seek + flush（落在上一个关键帧，下方解码追赶到目标窗口）
         // 追赶过滤由下方目标窗口完成，不走 drainDecoder 的 discard 路径
-        scrubRedirectDemuxer(target);
+        scrubRedirectDemuxer(target);   // 内含 m_vdec/m_scDec flush
+        // 每次 seek 默认先上硬解（短追赶低延迟 1-2ms/帧）；若本文件已学习到过
+        // 长 GOP（上次实测追赶 >4s），直接用多线程软解，省去硬解尝试的二次 seek。
+        // 首个解码帧实测追赶长度，硬解且 >4s 时切软解重 seek（见下方解码循环）
+        m_chaseDec = (m_lastCatchupMs > 4000 && ensureScrubDecoder()) ? m_scDec : m_vdec;
         m_chaseDecodePosMs = -1;
+        m_chaseSeekTargetMs = target;
         m_needMarginMeasure = false;   // margin 测量在 drainDecoder，chase 不用，防陈旧测量
         m_eof = false;
         m_stepOnce = false;
@@ -531,6 +567,10 @@ bool FfmpegVideoEngine::scrubChaseMainFrame()
         return false;
     }
     // 其余：小幅前进 → 下方连续解码自然追上（纯前进不 seek 不 flush，天然安全）
+
+    // 解码器连续性：decode-through 必须沿用 seek 时选定的解码器（参考帧状态）
+    AVCodecContext *dec = m_chaseDec ? m_chaseDec : m_vdec;
+    bool catchupMeasured = false;   // 本调用内是否已实测过追赶长度
 
     AVPacket *pkt = av_packet_alloc();
     AVFrame *frame = av_frame_alloc();
@@ -543,8 +583,8 @@ bool FfmpegVideoEngine::scrubChaseMainFrame()
             break;
         int ret = av_read_frame(m_fmt, pkt);
         if (ret == AVERROR_EOF) {
-            avcodec_send_packet(m_vdec, nullptr);   // 冲空拿尾部帧
-            while (avcodec_receive_frame(m_vdec, frame) >= 0) {
+            avcodec_send_packet(dec, nullptr);   // 冲空拿尾部帧
+            while (avcodec_receive_frame(dec, frame) >= 0) {
                 qint64 relMs = ptsToRelMs(frame->best_effort_timestamp);
                 m_chaseDecodePosMs = relMs;
                 if (relMs >= target - halfFrame) {
@@ -568,9 +608,27 @@ bool FfmpegVideoEngine::scrubChaseMainFrame()
             av_packet_unref(pkt);                 // 音频/其他流：scrub 期间丢弃（静音拖拽）
             continue;
         }
-        if (avcodec_send_packet(m_vdec, pkt) >= 0) {
-            while (avcodec_receive_frame(m_vdec, frame) >= 0) {
+        if (avcodec_send_packet(dec, pkt) >= 0) {
+            while (avcodec_receive_frame(dec, frame) >= 0) {
                 qint64 relMs = ptsToRelMs(frame->best_effort_timestamp);
+                if (!catchupMeasured) {
+                    catchupMeasured = true;
+                    m_lastCatchupMs = target - relMs;   // 学习本文件 GOP 长度
+                    // 首帧实测追赶长度：>4s 且还在硬解 → 切多线程软解重 seek。
+                    // 硬解短追赶低延迟（1-2ms/帧），软解长追赶高吞吐（~3000fps
+                    // vs ~500-1000fps），一次额外 seek 代价 ≪ 长追赶节省
+                    if (dec == m_vdec && m_lastCatchupMs > 4000 && ensureScrubDecoder()) {
+                        av_frame_unref(frame);
+                        av_packet_unref(pkt);
+                        scrubRedirectDemuxer(target);   // flush 两个解码器
+                        m_chaseDec = m_scDec;
+                        dec = m_scDec;
+                        m_chaseDecodePosMs = -1;
+                        m_chaseSeekTargetMs = target;
+                        catchupMeasured = false;
+                        break;   // demux 已重定位，外层 while 继续读包喂软解
+                    }
+                }
                 m_chaseDecodePosMs = relMs;   // 解码位置始终跟踪（含未显示帧）
                 if (qAbs(target - relMs) > SEEK_THRESHOLD_MS) {
                     reseek = true;            // 目标飞奔远离，解码追不上 → 交外层重 seek
@@ -944,6 +1002,10 @@ void FfmpegVideoEngine::closeFile()
     if (m_sws) { sws_freeContext(m_sws); m_sws = nullptr; }
     m_swsW = m_swsH = 0; m_swsFmt = -1;
     if (m_vdec) { avcodec_free_context(&m_vdec); m_vdec = nullptr; }
+    if (m_scDec) { avcodec_free_context(&m_scDec); m_scDec = nullptr; }
+    m_chaseDec = nullptr;
+    m_lastCatchupMs = 0;
+    m_chaseSeekTargetMs = -1;
     if (m_hwDeviceCtx) { av_buffer_unref(&m_hwDeviceCtx); m_hwDeviceCtx = nullptr; }
     m_hwActive = false;
     if (m_fmt) { avformat_close_input(&m_fmt); m_fmt = nullptr; }
@@ -1041,6 +1103,8 @@ void FfmpegVideoEngine::scrubRedirectDemuxer(qint64 timeMs)
 
     // 始终清空解码器（frame-threading 下"不清空前进"会导致乱序帧）
     avcodec_flush_buffers(m_vdec);
+    if (m_scDec)
+        avcodec_flush_buffers(m_scDec);
     if (m_adec)
         avcodec_flush_buffers(m_adec);
     if (m_sink) {

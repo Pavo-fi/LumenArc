@@ -91,6 +91,7 @@ public:
         m_scrubMode = on;
         m_scrubTargetMs = -1;
         m_chaseDecodePosMs = -1;
+        m_chaseSeekTargetMs = -1;
         m_cmdCond.wakeAll();   // 唤醒工作线程进入/退出 scrub 循环
     }
     /// 拖拽追逐目标（UI 拖拽高频调用，原子写入 + 唤醒，不经过命令队列）
@@ -133,6 +134,7 @@ private:
     bool proxyDisplayFrame(qint64 timeMs);    // 一次性 seek+清空+解码+显示
     bool scrubChasePxFrame();                 // Scrub 追逐解码（代理）：围绕原子目标连续解码追赶
     bool scrubChaseMainFrame();               // Scrub 追逐解码（主管线）：无代理时全分辨率连续解码追赶
+    bool ensureScrubDecoder();                // 惰性创建 scrub 专用多线程软解上下文（长追赶吞吐优先）
 
 public:
     /// 诊断/测试用：本次 seek 以来写入音频缓冲的字节数
@@ -164,6 +166,8 @@ private:
     QString m_pendingPath;          // load() 传入，openFile 在工作线程使用
     AVFormatContext *m_fmt = nullptr;
     AVCodecContext *m_vdec = nullptr;
+    AVCodecContext *m_scDec = nullptr;  // scrub 长追赶专用软解上下文（多线程吞吐优先）
+    AVCodecContext *m_chaseDec = nullptr; // 本次追逐当前使用的解码器（seek 时按追赶长度选择）
     SwsContext *m_sws = nullptr;
     int m_swsW = 0, m_swsH = 0, m_swsFmt = -1;
     int m_vstream = -1;
@@ -208,6 +212,8 @@ private:
     std::atomic<bool> m_scrubMode{false}; // 拖拽模式：seek 只写追逐目标
     std::atomic<qint64> m_scrubTargetMs{-1}; // 拖拽追逐目标（-1=无目标，UI 高频写入）
     qint64 m_chaseDecodePosMs = -1;         // 追逐解码位置（含未显示帧，-1=未知）
+    qint64 m_chaseSeekTargetMs = -1;        // 本次追逐 seek 的目标（decodePos 未知时的追逐基准）
+    qint64 m_lastCatchupMs = 0;             // 上次实测 seek 追赶长度（学习 GOP，免二次 seek）
     qint64 m_lastSeekElapsed = 0;       // 上次 seek 的单调时钟（沉淀计时）
 
     // --- 音频面（仅工作线程访问，计数器为原子供诊断读取） ---
