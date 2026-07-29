@@ -484,7 +484,7 @@ THREADS8 在 D17 mp4 填充减半但 2h/PS 吞吐降 12-24%，得失相抵。解
 | AnalysisPhase 硬编码两阶段枚举 | 高 | 任务化状态机替代 |
 | AnalysisSnapshot 硬编码 luminance/audio 成员 | 高 | 通道化改造 |
 | RegionModel/PolygonModel 双模型复制 | 中 | 合并为 RoiModel（RegionShape 已有但未用） |
-| 旧版 SpectrogramPanel（死代码） | 低 | 删除 |
+| ~~旧版 SpectrogramPanel（死代码）~~ | ~~低~~ | ✅ 已删（V1.0 remake） |
 | i18n 为 lang(zh,en) 硬编码二选一 | 低 | 多语言需求时迁移 tr() |
 | 6 处 qobject_cast<PythonAnalysisEngine> | 中 | 接口上移到 IAnalysisEngine |
 | roiId 跨模型仍可能冲突（RoiModel 未合并前） | 中 | P1b |
@@ -563,6 +563,16 @@ POST_BUILD 自动：windeployqt（Qt DLLs）→ FFmpeg DLLs → analyze_video.py
 
 **已研究否决（§6.6.6）**：多线程硬解（FFmpeg 不存在）、GOP 分段并行解码（D17 无效）、skip_frame=NONREF（D17 baseline 零收益）——解码侧已触物理下限，不再投入。
 
----
+## 十一、V1.0 remake 文件夹（2026-07-29）
 
-*文档结束*
+`C:/code/LumenArc/V1.0 remake` 为本项目的干净重建副本（git clone + 死内容清理提交 `bad15ea`），
+已验证 fresh configure/build/冒烟测试通过。清理内容：
+
+- **死代码**：旧版 SpectrogramPanel（从未实例化，活体是 SpectrogramPanelEnhanced）
+- **死移植**：mac_port/ + build_mac.sh（Windows-only 项目，无 mac CI）
+- **历史文档**：DEVELOPMENT_PLAN_V0.3 / FIX_PLAN_V0.3 / REVIEW_REPORT_V0.3 / PROJECT_LOG.md（均已入 git 历史）
+- **过期手册**：v0.2/v0.5 PDF（MANUAL.md 为现行版）
+- **CI 修复**：两个 Windows 工作流补齐 qtmultimedia + qtshadertools 模块（build.yml 原缺 qtmultimedia）
+
+原文件夹 `LumenArc_v1.0` 保持原样未动。未拷贝内容：build/（可再生）、__pycache__、
+build/testdata（CI 生成的测试剪辑）。已拷贝：third_party/ffmpeg（160MB SDK）、vlc_extracted（185MB）。
