@@ -1727,13 +1727,15 @@ void ChartPanel::drawChartGuideLines()
                         gl.labelItem->setText(QString::number(y, 'f', 1));
                         gl.labelItem->setPos(pa.left() + 3, widgetY - 8);
                     }
-                    // 右标签 = 响度（右 Y 轴同一像素高度的等效值）；无音量轴时隐藏
+                    // 右标签 = 响度（右 Y 轴同一像素高度的等效值）；无音量轴时隐藏。
+                    // 绘制在图表内侧右对齐，避免遮挡右 Y 轴刻度数值
                     if (gl.labelItemRight) {
                         if (m_axisYVolume && m_axisYVolume->max() > m_axisYVolume->min()) {
                             qreal vol = m_axisYVolume->min()
                                         + normalized * (m_axisYVolume->max() - m_axisYVolume->min());
                             gl.labelItemRight->setText(QString::number(vol, 'f', 2));
-                            gl.labelItemRight->setPos(pa.right() + 3, widgetY - 8);
+                            gl.labelItemRight->setPos(pa.right() - gl.labelItemRight->boundingRect().width() - 3,
+                                                      widgetY - 8);
                             gl.labelItemRight->setVisible(true);
                         } else {
                             gl.labelItemRight->setVisible(false);
@@ -1760,6 +1762,7 @@ void ChartPanel::drawChartGuideLines()
         qreal yMax = m_axisY->max();
         if (yMax > yMin) {
             QColor deltaColor(0xFF, 0x98, 0x1C); // orange
+            const bool hasVol = m_axisYVolume && m_axisYVolume->max() > m_axisYVolume->min();
             for (int i = 1; i < horizontalGuides.size(); ++i) {
                 qreal yLow = horizontalGuides[i - 1].second;
                 qreal yHigh = horizontalGuides[i].second;
@@ -1768,15 +1771,33 @@ void ChartPanel::drawChartGuideLines()
                 qreal normalized = (yMid - yMin) / (yMax - yMin);
                 qreal widgetY = pa.bottom() - normalized * pa.height();
 
+                // 左侧：亮度差值 △（图表内侧左对齐）
                 auto *deltaLabel = new QGraphicsSimpleTextItem(
                     QString("△%1").arg(QString::number(delta, 'f', 1)), m_chart);
                 deltaLabel->setFont(fontSans(8));
                 deltaLabel->setBrush(QBrush(deltaColor));
                 deltaLabel->setZValue(LABEL_Z_VALUE - 2);
-                // Position near left edge, vertically centered between the two guides
                 deltaLabel->setPos(pa.left() + 4, widgetY - deltaLabel->boundingRect().height() / 2);
                 deltaLabel->setVisible(true);
                 m_chartGuideLineDeltaLabels.append(deltaLabel);
+
+                // 右侧：响度差值 ▲（图表内侧右对齐，dB 差取绝对值）
+                if (hasVol) {
+                    qreal vMin = m_axisYVolume->min();
+                    qreal vMax = m_axisYVolume->max();
+                    qreal normLow = (yLow - yMin) / (yMax - yMin);
+                    qreal normHigh = (yHigh - yMin) / (yMax - yMin);
+                    qreal volDelta = qAbs((normHigh - normLow) * (vMax - vMin));
+                    auto *volDeltaLabel = new QGraphicsSimpleTextItem(
+                        QString("▲%1").arg(QString::number(volDelta, 'f', 2)), m_chart);
+                    volDeltaLabel->setFont(fontSans(8));
+                    volDeltaLabel->setBrush(QBrush(deltaColor));
+                    volDeltaLabel->setZValue(LABEL_Z_VALUE - 2);
+                    volDeltaLabel->setPos(pa.right() - volDeltaLabel->boundingRect().width() - 3,
+                                          widgetY - volDeltaLabel->boundingRect().height() / 2);
+                    volDeltaLabel->setVisible(true);
+                    m_chartGuideLineDeltaLabels.append(volDeltaLabel);
+                }
             }
         }
     }
