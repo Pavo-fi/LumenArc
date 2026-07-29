@@ -576,3 +576,11 @@ POST_BUILD 自动：windeployqt（Qt DLLs）→ FFmpeg DLLs → analyze_video.py
 
 原文件夹 `LumenArc_v1.0` 保持原样未动。未拷贝内容：build/（可再生）、__pycache__、
 build/testdata（CI 生成的测试剪辑）。已拷贝：third_party/ffmpeg（160MB SDK）、vlc_extracted（185MB）。
+
+**运行时依赖已随包内置（2026-07-29，与 CI 打包一致，零手动安装）**：
+- `build/Release/python/`：Python 3.12.8 嵌入式 + opencv-python-headless + numpy
+  （python.org/pypa 下载，._pth 已启用 import site；已删 pip/setuptools 瘦身）
+- `build/Release/ffmpeg/ffmpeg.exe`：GPL 版（github 在本机被墙，从原文件夹复制，同 CI 来源）
+- 主程序优先使用内置 python（mainwindow.cpp `appDir + "/python/python.exe"`），无需 PATH/PYTHON_PATH
+- 端到端已验证：内置 python + analyze_video.py + 内置 ffmpeg 跑通亮度+音量+语谱图全分析
+- 注意：重新 cmake --build 不会清除这两项（非 CMake 部署项）；clean 重建后需重跑本节步骤
