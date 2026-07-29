@@ -162,7 +162,6 @@ set(SOURCES
     src/i18n.cpp
     src/aboutdialog.cpp
     src/videolistpanel.cpp
-    src/spectrogrampanel.cpp
     src/spectrogrampanel_enhanced.cpp
     src/videostatemanager.cpp
     src/domain/region_model.cpp
@@ -191,7 +190,6 @@ set(HEADERS
     src/i18n.h
     src/aboutdialog.h
     src/videolistpanel.h
-    src/spectrogrampanel.h
     src/spectrogrampanel_enhanced.h
     src/videostatemanager.h
     src/domain/analysis_snapshot.h

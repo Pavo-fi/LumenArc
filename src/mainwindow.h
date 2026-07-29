@@ -33,7 +33,6 @@ class QDockWidget;
 class QProgressBar;
 class QSlider;
 class VideoListPanel;
-class SpectrogramPanel;
 class SpectrogramPanelEnhanced;
 
 /** @brief 主窗口，协调所有子组件：视频播放/图表/放大镜/截图叠加/分析引擎 */
@@ -206,7 +205,6 @@ protected:
 
     // v0.3: Multi-video and audio visualization
     VideoListPanel *m_videoListPanel = nullptr;
-    SpectrogramPanel *m_spectrogramPanel = nullptr;
     SpectrogramPanelEnhanced *m_spectrogramEnhanced = nullptr;
     VideoStateManager *m_stateManager = nullptr;
     AnalysisPhase m_analysisPhase = None;       // 当前分析阶段（进度条分离）

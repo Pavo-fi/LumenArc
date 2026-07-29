@@ -19,7 +19,7 @@ jobs:
           host: 'windows'
           target: 'desktop'
           arch: 'win64_msvc2022_64'
-          modules: 'qtcharts qtmultimedia'
+          modules: 'qtcharts qtmultimedia qtshadertools'
 
       - name: Install VLC SDK
         run: |

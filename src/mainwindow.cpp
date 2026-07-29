@@ -24,7 +24,6 @@
 #include "snapshotoverlay.h"
 #include "pinnedwidget.h"
 #include "videolistpanel.h"
-#include "spectrogrampanel.h"
 #include "spectrogrampanel_enhanced.h"
 #include "i18n.h"
 #include "aboutdialog.h"
@@ -119,7 +118,6 @@ MainWindow::MainWindow(QWidget *parent)
     // v0.3: Spectrogram panel below chart
     // v0.4: Use enhanced version with GPU rendering and log frequency
     m_spectrogramEnhanced = new SpectrogramPanelEnhanced(this);
-    m_spectrogramPanel = nullptr;  // Not used in enhanced version
 
     m_splitter = new QSplitter(Qt::Vertical, this);
     m_splitter->setHandleWidth(0);
