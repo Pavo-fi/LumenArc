@@ -25,7 +25,6 @@
 #include <QDebug>
 #include <QMenu>
 #include <QAction>
-#include <QInputDialog>
 #include <QColorDialog>
 #include <QDialog>
 #include <QVBoxLayout>
@@ -232,18 +231,22 @@ ChartPanel::ChartPanel(QWidget *parent)
         } else if (chosen == zoomABAction) {
             zoomToABRegion();
         } else if (chosen == addHGuideAction) {
-            bool ok;
-            qreal val = QInputDialog::getDouble(this,
-                lang("添加水平辅助线", "Add Horizontal Guide"),
-                lang("Y 值 (亮度)", "Y value (brightness)"),
-                m_axisY ? (m_axisY->min() + m_axisY->max()) / 2 : 128,
-                m_axisY ? m_axisY->min() : 0,
-                m_axisY ? m_axisY->max() : 255,
-                1, &ok);
-            if (ok)
-                addHorizontalGuideLine(val);
+            // 不弹框：直接用鼠标 Y 位置换算亮度值添加水平辅助线
+            qreal yVal = m_axisY ? (m_axisY->min() + m_axisY->max()) / 2 : 128;
+            if (m_axisY) {
+                QRectF pa = m_chart->plotArea();
+                QPointF chartPos = m_chart->mapFromScene(mapToScene(pos));
+                if (pa.height() > 1) {
+                    qreal norm = (pa.bottom() - chartPos.y()) / pa.height();
+                    norm = qBound(0.0, norm, 1.0);
+                    yVal = m_axisY->min() + norm * (m_axisY->max() - m_axisY->min());
+                }
+            }
+            addHorizontalGuideLine(yVal);
         } else if (chosen == addVGuideAction) {
-            addVerticalGuideLine(static_cast<qreal>(cursorTime));
+            // 不弹框：直接用鼠标 X 位置换算时间添加垂直辅助线（原用播放光标时间）
+            QPointF chartPos = m_chart->mapFromScene(mapToScene(pos));
+            addVerticalGuideLine(static_cast<qreal>(mapXToTime(clampX(chartPos.x()))));
         } else if (chosen == delGuideAction) {
             if (nearGuideIdx >= 0)
                 removeChartGuideLine(nearGuideIdx);
@@ -1608,10 +1611,16 @@ void ChartPanel::addHorizontalGuideLine(qreal yValue, const QColor &color)
     gl.lineItem = new QGraphicsLineItem(m_chart);
     gl.lineItem->setPen(QPen(color, 1, Qt::DashLine));
     gl.lineItem->setZValue(LABEL_Z_VALUE - 3);
-    gl.labelItem = new QGraphicsSimpleTextItem(QString::number(yValue, 'f', 1), m_chart);
+    // 左标签 = 亮度值（文本随 draw 更新，拖动时联动）
+    gl.labelItem = new QGraphicsSimpleTextItem(m_chart);
     gl.labelItem->setFont(fontSans(8));
     gl.labelItem->setBrush(QBrush(color));
     gl.labelItem->setZValue(LABEL_Z_VALUE - 2);
+    // 右标签 = 响度值（右 Y 轴同一像素高度的等效值）
+    gl.labelItemRight = new QGraphicsSimpleTextItem(m_chart);
+    gl.labelItemRight->setFont(fontSans(8));
+    gl.labelItemRight->setBrush(QBrush(color));
+    gl.labelItemRight->setZValue(LABEL_Z_VALUE - 2);
     m_chartGuideLines.append(gl);
     drawChartGuideLines();
 }
@@ -1625,7 +1634,7 @@ void ChartPanel::addVerticalGuideLine(qreal xTimeMs, const QColor &color)
     gl.lineItem = new QGraphicsLineItem(m_chart);
     gl.lineItem->setPen(QPen(color, 1, Qt::DashLine));
     gl.lineItem->setZValue(LABEL_Z_VALUE - 3);
-    gl.labelItem = new QGraphicsSimpleTextItem(formatTimeMs(xTimeMs + m_startTimeOfDayMs), m_chart);
+    gl.labelItem = new QGraphicsSimpleTextItem(m_chart);   // 文本随 draw 更新，拖动时联动
     gl.labelItem->setFont(fontSans(8));
     gl.labelItem->setBrush(QBrush(color));
     gl.labelItem->setZValue(LABEL_Z_VALUE - 2);
@@ -1645,6 +1654,10 @@ void ChartPanel::removeChartGuideLine(int index)
     if (gl.labelItem) {
         if (gl.labelItem->scene()) gl.labelItem->scene()->removeItem(gl.labelItem);
         delete gl.labelItem;
+    }
+    if (gl.labelItemRight) {
+        if (gl.labelItemRight->scene()) gl.labelItemRight->scene()->removeItem(gl.labelItemRight);
+        delete gl.labelItemRight;
     }
     m_chartGuideLines.removeAt(index);
 }
@@ -1709,13 +1722,32 @@ void ChartPanel::drawChartGuideLines()
                     qreal normalized = (y - yMin) / (yMax - yMin);
                     qreal widgetY = pa.bottom() - normalized * pa.height();
                     gl.lineItem->setLine(pa.left(), widgetY, pa.right(), widgetY);
-                    gl.labelItem->setPos(pa.right() + 3, widgetY - 8);
+                    // 左标签 = 亮度（左 Y 轴值），文本每次 draw 刷新 → 拖动联动
+                    if (gl.labelItem) {
+                        gl.labelItem->setText(QString::number(y, 'f', 1));
+                        gl.labelItem->setPos(pa.left() + 3, widgetY - 8);
+                    }
+                    // 右标签 = 响度（右 Y 轴同一像素高度的等效值）；无音量轴时隐藏
+                    if (gl.labelItemRight) {
+                        if (m_axisYVolume && m_axisYVolume->max() > m_axisYVolume->min()) {
+                            qreal vol = m_axisYVolume->min()
+                                        + normalized * (m_axisYVolume->max() - m_axisYVolume->min());
+                            gl.labelItemRight->setText(QString::number(vol, 'f', 2));
+                            gl.labelItemRight->setPos(pa.right() + 3, widgetY - 8);
+                            gl.labelItemRight->setVisible(true);
+                        } else {
+                            gl.labelItemRight->setVisible(false);
+                        }
+                    }
                 }
             }
         } else {
             qreal x = mapTimeToX(static_cast<qint64>(gl.value));
             gl.lineItem->setLine(x, pa.top(), x, pa.bottom());
-            gl.labelItem->setPos(x + 3, pa.top() + 2);
+            if (gl.labelItem) {   // 时间文本每次 draw 刷新 → 拖动联动
+                gl.labelItem->setText(formatTimeMs(static_cast<qint64>(gl.value) + m_startTimeOfDayMs));
+                gl.labelItem->setPos(x + 3, pa.top() + 2);
+            }
         }
         bool hovered = (i == m_hoveredGuideLine);
         QPen pen(gl.color, hovered ? 2 : 1, Qt::DashLine);

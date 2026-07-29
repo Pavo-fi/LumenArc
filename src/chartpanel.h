@@ -193,7 +193,8 @@ private:
         qreal value;  // Y value for horizontal, X time (ms) for vertical
         QColor color;
         QGraphicsLineItem *lineItem = nullptr;
-        QGraphicsSimpleTextItem *labelItem = nullptr;
+        QGraphicsSimpleTextItem *labelItem = nullptr;      // 水平：左标签（亮度）；垂直：时间
+        QGraphicsSimpleTextItem *labelItemRight = nullptr; // 水平：右标签（响度，随拖动联动）
     };
     QVector<ChartGuideLine> m_chartGuideLines;
     QVector<QGraphicsSimpleTextItem *> m_chartGuideLineDeltaLabels; // delta labels between horizontal guides
