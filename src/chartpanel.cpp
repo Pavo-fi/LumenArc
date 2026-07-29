@@ -1655,6 +1655,26 @@ void ChartPanel::clearChartGuideLines()
         removeChartGuideLine(i);
 }
 
+QVector<ChartGuideData> ChartPanel::chartGuideLinesData() const
+{
+    QVector<ChartGuideData> out;
+    out.reserve(m_chartGuideLines.size());
+    for (const auto &gl : m_chartGuideLines)
+        out.append({ gl.orientation == ChartGuideLine::Horizontal, gl.value, gl.color });
+    return out;
+}
+
+void ChartPanel::setChartGuideLinesData(const QVector<ChartGuideData> &lines)
+{
+    clearChartGuideLines();
+    for (const auto &d : lines) {
+        if (d.horizontal)
+            addHorizontalGuideLine(d.value, d.color);
+        else
+            addVerticalGuideLine(d.value, d.color);
+    }
+}
+
 void ChartPanel::drawChartGuideLines()
 {
     QRectF pa = m_chart->plotArea();

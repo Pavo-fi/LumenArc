@@ -10,6 +10,7 @@
  */
 #include "ffmpeg_video_engine.h"
 #include <QDebug>
+#include <algorithm>
 #include <QElapsedTimer>
 #include <QAudioSink>
 #include <QAudioDevice>
@@ -933,6 +934,40 @@ bool FfmpegVideoEngine::openFile(const QString &filePath)
     m_startPtsMs = (startPts != AV_NOPTS_VALUE)
             ? av_rescale_q(startPts, vs->time_base, AVRational{1, 1000})
             : 0;
+
+    // --- 实测 PTS 节奏校准 fps：部分 DVR 导出文件容器元数据 fps 翻倍/错误
+    // （如实际 15fps 报 30fps），avg_frame_rate 同样源自元数据不可靠。
+    // 读前 48 个视频包的 PTS 求中位间隔得真实节奏，偏差 >4% 时以实测为准。 ---
+    {
+        QVector<qint64> ptsList;
+        ptsList.reserve(48);
+        AVPacket *probePkt = av_packet_alloc();
+        while (ptsList.size() < 48 && av_read_frame(m_fmt, probePkt) >= 0) {
+            if (probePkt->stream_index == m_vstream && probePkt->pts != AV_NOPTS_VALUE)
+                ptsList.append(av_rescale_q(probePkt->pts, vs->time_base, AVRational{1, 1000}));
+            av_packet_unref(probePkt);
+        }
+        av_packet_free(&probePkt);
+        // 倒回文件起始（probe 消耗了 demux 位置），解码器同步清空
+        int64_t startTs = static_cast<int64_t>(m_startPtsMs) * 1000;
+        if (avformat_seek_file(m_fmt, -1, INT64_MIN, startTs, startTs, AVSEEK_FLAG_BACKWARD) < 0)
+            av_seek_frame(m_fmt, -1, 0, AVSEEK_FLAG_BACKWARD);
+        avcodec_flush_buffers(m_vdec);
+        if (ptsList.size() >= 8) {
+            std::sort(ptsList.begin(), ptsList.end());   // B 帧重排后 pts 非单调
+            QVector<qint64> deltas;
+            for (int i = 1; i < ptsList.size(); ++i)
+                if (ptsList[i] - ptsList[i - 1] > 0)
+                    deltas.append(ptsList[i] - ptsList[i - 1]);
+            if (!deltas.isEmpty()) {
+                std::sort(deltas.begin(), deltas.end());
+                float measured = 1000.0f / static_cast<float>(deltas[deltas.size() / 2]);
+                if (measured >= 3.0f && measured <= 240.0f
+                    && m_fps > 0.0f && qAbs(measured - m_fps.load()) / m_fps.load() > 0.04f)
+                    m_fps = measured;
+            }
+        }
+    }
 
     // --- 音频流（可选）：解码器 + 重采样器，输出端惰性创建 ---
     m_astream = av_find_best_stream(m_fmt, AVMEDIA_TYPE_AUDIO, -1, -1, nullptr, 0);

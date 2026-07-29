@@ -25,6 +25,14 @@ struct ChartLabel
     QColor color = Qt::red;
 };
 
+/// 图表辅助线的可序列化数据（UI 层的 ChartGuideLine 含图形项指针，不入状态）
+struct ChartGuideData
+{
+    bool horizontal = true;   // true=水平（value 为 Y 值），false=垂直（value 为 X 时间 ms）
+    qreal value = 0;
+    QColor color = QColor(255, 255, 0, 180);
+};
+
 /**
  * @brief Audio analysis data: volume curve + spectrogram.
  *

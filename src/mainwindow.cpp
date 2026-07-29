@@ -1588,7 +1588,8 @@ void MainWindow::openVideoFile(const QString &filePath)
             m_chartPanel->abPointB(),
             m_chartPanel->isABLoop(),
             m_polygonModel->polygons(),
-            m_guideLineModel->lines()
+            m_guideLineModel->lines(),
+            m_chartPanel->chartGuideLinesData()
         );
     }
 
@@ -1622,6 +1623,7 @@ void MainWindow::openVideoFile(const QString &filePath)
 
             m_chartPanel->setTimeOffset(savedState.timeOffsetMs);
             m_chartPanel->setLabels(savedState.labels);
+            m_chartPanel->setChartGuideLinesData(savedState.chartGuideLines);
 
             // Restore A/B region
             if (savedState.abPointA >= 0) m_chartPanel->setPointA(savedState.abPointA);
@@ -1669,6 +1671,7 @@ void MainWindow::openVideoFile(const QString &filePath)
         // Also reset chart-level state so labels/time axis/A-B/pinned/fusion
         // from the previous video do not leak into this one.
         m_chartPanel->setLabels({});
+        m_chartPanel->clearChartGuideLines();
         m_chartPanel->setTimeOffset(0);
         m_chartPanel->clearAB();
         m_pinnedRect = QRect();

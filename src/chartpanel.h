@@ -78,6 +78,9 @@ public:
     void removeChartGuideLine(int index);
     void clearChartGuideLines();
     int chartGuideLineCount() const { return m_chartGuideLines.size(); }
+    /// 图表辅助线的可序列化数据（逐视频状态保存/恢复用）
+    QVector<ChartGuideData> chartGuideLinesData() const;
+    void setChartGuideLinesData(const QVector<ChartGuideData> &lines);
 
 signals:
     void seekRequested(qint64 timeMs);

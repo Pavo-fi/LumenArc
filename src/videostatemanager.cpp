@@ -17,7 +17,8 @@ void VideoStateManager::saveState(const QString &videoPath,
                                    qint64 abPointB,
                                    bool abLoop,
                                    const QVector<QPolygon> &polygons,
-                                   const QVector<GuideLine> &guideLines)
+                                   const QVector<GuideLine> &guideLines,
+                                   const QVector<ChartGuideData> &chartGuideLines)
 {
     if (videoPath.isEmpty())
         return;
@@ -28,6 +29,7 @@ void VideoStateManager::saveState(const QString &videoPath,
     state.regions = regions;
     state.polygons = polygons;
     state.guideLines = guideLines;
+    state.chartGuideLines = chartGuideLines;
     state.timeOffsetMs = timeOffsetMs;
     state.magnifierRect = magnifierRect;
     state.labels = labels;

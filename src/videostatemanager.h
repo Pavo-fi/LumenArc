@@ -16,6 +16,7 @@ struct VideoState {
     QVector<QRect> regions;
     QVector<QPolygon> polygons;
     QVector<GuideLine> guideLines;
+    QVector<ChartGuideData> chartGuideLines;   // 图表辅助线（逐视频，防跨视频泄漏）
     qint64 timeOffsetMs = 0;
     QRect magnifierRect;
     QVector<ChartLabel> labels;
@@ -27,7 +28,7 @@ struct VideoState {
     
     bool hasData() const {
         return !snapshot.isEmpty() || !regions.isEmpty() || !polygons.isEmpty() || snapshot.hasAudio()
-               || !guideLines.isEmpty() || !labels.isEmpty() || snapshotFusion.isValid()
+               || !guideLines.isEmpty() || !chartGuideLines.isEmpty() || !labels.isEmpty() || snapshotFusion.isValid()
                || abPointA >= 0 || abPointB >= 0;
     }
 };
@@ -51,7 +52,8 @@ public:
                    qint64 abPointB = -1,
                    bool abLoop = false,
                    const QVector<QPolygon> &polygons = {},
-                   const QVector<GuideLine> &guideLines = {});
+                   const QVector<GuideLine> &guideLines = {},
+                   const QVector<ChartGuideData> &chartGuideLines = {});
 
     bool restoreState(const QString &videoPath, VideoState &state) const;
     bool hasState(const QString &videoPath) const;

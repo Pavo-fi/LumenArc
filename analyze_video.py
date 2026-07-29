@@ -28,16 +28,34 @@ MAX_ANALYSIS_FRAMES = 5000
 
 
 def check_fps(video_path):
-    """Return video FPS + total frames and exit."""
+    """Return video FPS + total frames and exit.
+
+    元数据 fps（cv2.CAP_PROP_FPS）在部分 DVR 导出文件上翻倍/错误
+    （如实际 15fps 报 30fps），故实测前 48 帧的 PTS 节奏校准。"""
     cap = cv2.VideoCapture(video_path)
     if not cap.isOpened():
         print(f"ERROR:Failed to open video: {video_path}", file=sys.stderr)
         sys.exit(1)
     fps = cap.get(cv2.CAP_PROP_FPS)
     total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    # 实测 PTS 节奏：grab 不解码，POS_MSEC 取每帧呈现时间戳
+    pts = []
+    for _ in range(48):
+        if not cap.grab():
+            break
+        ms = cap.get(cv2.CAP_PROP_POS_MSEC)
+        if ms and ms > 0:
+            pts.append(ms)
     cap.release()
     if fps <= 0:
         fps = 30.0
+    pts = sorted(set(pts))
+    if len(pts) >= 8:
+        deltas = sorted(b - a for a, b in zip(pts, pts[1:]) if b - a > 0.5)
+        if deltas:
+            measured = 1000.0 / deltas[len(deltas) // 2]
+            if 3.0 <= measured <= 240.0 and abs(measured - fps) / fps > 0.04:
+                fps = measured
     print(json.dumps({"fps": fps, "total_frames": total_frames}, separators=(',', ':')))
 
 
