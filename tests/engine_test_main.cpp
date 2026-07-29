@@ -83,8 +83,11 @@ int main(int argc, char *argv[])
         // 用法: catchup-bench <file> [startMs=20000] [spanMs=10000]
         const qint64 startMs = args.size() > 3 ? args[3].toLongLong() : 20000;
         const qint64 spanMs  = args.size() > 4 ? args[4].toLongLong() : 10000;
-        const struct { const char *name; AVDiscard d; } modes[] = {
-            {"DEFAULT", AVDISCARD_DEFAULT}, {"NONREF", AVDISCARD_NONREF},
+        const struct { const char *name; AVDiscard d; bool lowDelay; int threads; } modes[] = {
+            {"DEFAULT", AVDISCARD_DEFAULT, false, 0},
+            {"NONREF", AVDISCARD_NONREF, false, 0},
+            {"LOW_DELAY", AVDISCARD_DEFAULT, true, 0},
+            {"THREADS8", AVDISCARD_DEFAULT, false, 8},
         };
         for (const auto &md : modes) {
             AVFormatContext *fmt = nullptr;
@@ -98,9 +101,11 @@ int main(int argc, char *argv[])
             const AVCodec *codec = avcodec_find_decoder(st->codecpar->codec_id);
             AVCodecContext *dec = avcodec_alloc_context3(codec);
             avcodec_parameters_to_context(dec, st->codecpar);
-            dec->thread_count = 0;          // 与 m_scDec 相同：多线程软解
+            dec->thread_count = md.threads; // 0=自动多线程
             dec->pkt_timebase = st->time_base;
             dec->skip_frame = md.d;
+            if (md.lowDelay)
+                dec->flags |= AV_CODEC_FLAG_LOW_DELAY;
             avcodec_open2(dec, codec, nullptr);
             int64_t startPtsUs = fmt->start_time == AV_NOPTS_VALUE ? 0 : fmt->start_time;
             avformat_seek_file(fmt, -1, INT64_MIN, startPtsUs + startMs * 1000,
@@ -515,6 +520,57 @@ int main(int argc, char *argv[])
             failures++;
         } else if (failures == 0) {
             printf("[ OK ] scrub-playback: %d frames, all tracked, final err %lldms\n",
+                   framesDuring, qAbs(rec.lastPos - finalTarget));
+        }
+    } else if (scenario == "scrub-oscillate") {
+        // 拖拽振荡场景（滚动帧缓存验收）：模拟真实慢拖的手抖模式（+600ms/−300ms 交替，
+        // 40ms 泵）。后退步进在缓存内应 0ms 命中（无缓存时每次后退 = seek+重解 GOP ~100ms）。
+        // 断言 ① 显示帧全部精确跟踪目标（无快进感） ② 帧数显著高于纯 seek 水平
+        // ③ 松手精确落位。
+        engine.seek(0);
+        pumpFor(500);
+        QVector<qint64> targets;
+        int posBase = rec.positions.size();
+        int framesBefore = rec.frameCount;
+        engine.setScrubMode(true);
+        qint64 cur = rec.duration / 5;
+        const qint64 fwd = 600, bwd = -300;
+        for (int i = 0; i < 60; ++i) {
+            cur += (i % 2 == 0) ? fwd : bwd;
+            targets.append(cur);
+            engine.seek(cur);
+            pumpFor(40);
+        }
+        engine.setScrubMode(false);
+        int framesDuring = rec.frameCount - framesBefore;
+        qint64 frameMs = static_cast<qint64>(1000.0f / engine.fps());
+        int tracked = 0, shown = 0;
+        for (int i = posBase; i < rec.positions.size(); ++i) {
+            ++shown;
+            for (qint64 t : targets)
+                if (qAbs(rec.positions[i] - t) <= qMax<qint64>(2 * frameMs, 100)) { ++tracked; break; }
+        }
+        printf("[info] scrub-oscillate: %d frames during 60 oscillating steps, tracked %d/%d\n",
+               framesDuring, tracked, shown);
+        if (framesDuring < 20) {   // 无缓存时 D17 后退步均 ~100ms → 帧数远低于此
+            printf("[FAIL] scrub-oscillate: too few frames (%d), cache not helping\n", framesDuring);
+            failures++;
+        }
+        if (shown > 0 && tracked * 10 < shown * 9) {
+            printf("[FAIL] scrub-oscillate: %d/%d frames NOT on targets\n", shown - tracked, shown);
+            failures++;
+        }
+        qint64 finalTarget = targets.last();
+        int before = rec.frameCount;
+        engine.seek(finalTarget);
+        QElapsedTimer guard; guard.start();
+        while (rec.frameCount == before && guard.elapsed() < 3000)
+            pumpFor(20);
+        if (qAbs(rec.lastPos - finalTarget) > frameMs) {
+            printf("[FAIL] scrub-oscillate: final landed %lld target %lld\n", rec.lastPos, finalTarget);
+            failures++;
+        } else if (failures == 0) {
+            printf("[ OK ] scrub-oscillate: %d frames, tracked, final err %lldms\n",
                    framesDuring, qAbs(rec.lastPos - finalTarget));
         }
     } else if (scenario == "step") {

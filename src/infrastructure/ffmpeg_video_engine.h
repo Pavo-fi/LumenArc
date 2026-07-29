@@ -23,6 +23,7 @@
 #include <QWaitCondition>
 #include <QElapsedTimer>
 #include <QMap>
+#include <QVector>
 #include <QImage>
 #include <atomic>
 #ifdef Q_OS_WIN
@@ -231,6 +232,15 @@ private:
     qint64 m_chaseSeekTargetMs = -1;        // 本次追逐 seek 的目标（decodePos 未知时的追逐基准）
     AVCodecContext *m_chaseDec = nullptr;   // 本次追逐当前解码器（seek 时选，decode-through 沿用）
     qint64 m_lastCatchupMs = 0;             // 上次实测 seek 追赶长度（学习 GOP，长则直接软解）
+
+    // --- 拖拽滚动帧缓存：追赶解码的副产品帧（软解路径）保留在环形缓存，
+    //     目标落在缓存内直接显示（后退微调/抖动 0ms，免 seek 免重解码）。
+    //     仅存软解帧（refcount clone 零拷贝）；硬解帧持 GPU 表面会耗尽解码池，不存。
+    struct ChaseCacheEntry { qint64 relMs; AVFrame *frame; };
+    QVector<ChaseCacheEntry> m_chaseCache;  // 追加序≈PTS 序（解码器按显示序输出）
+    void chaseCachePush(qint64 relMs, AVFrame *frame);   // 超内存预算逐出最旧
+    AVFrame *chaseCacheFind(qint64 targetMs, qint64 halfFrameMs); // 取 ≥target-半帧 的最小 relMs
+    void chaseCacheClear();
 
     // --- 音频面（仅工作线程访问，计数器为原子供诊断读取） ---
     AVCodecContext *m_adec = nullptr;

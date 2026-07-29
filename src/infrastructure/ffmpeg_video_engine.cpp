@@ -448,6 +448,49 @@ bool FfmpegVideoEngine::ensureScrubDecoder()
     return true;
 }
 
+// ---------------------------------------------------------------------------
+// 拖拽滚动帧缓存：追赶解码副产品帧的环形缓存（仅软解帧，refcount clone）。
+// 预算 192MB：1440p(NV12 5.5MB)≈34 帧≈1.4s，1080p≈64 帧≈2.6s，4K≈15 帧。
+// 目标命中 → 直接显示（后退微调/抖动 0ms，免 seek 免重解码）。
+// ---------------------------------------------------------------------------
+
+void FfmpegVideoEngine::chaseCachePush(qint64 relMs, AVFrame *frame)
+{
+    AVFrame *clone = av_frame_clone(frame);
+    if (!clone)
+        return;
+    const qint64 frameBytes = qint64(frame->width) * frame->height * 3 / 2;
+    const qint64 budget = 192LL * 1024 * 1024;
+    const int maxEntries = qBound(8, frameBytes > 0 ? int(budget / frameBytes) : 32, 64);
+    while (m_chaseCache.size() >= maxEntries) {
+        av_frame_free(&m_chaseCache.first().frame);
+        m_chaseCache.removeFirst();
+    }
+    m_chaseCache.append({ relMs, clone });
+}
+
+AVFrame *FfmpegVideoEngine::chaseCacheFind(qint64 targetMs, qint64 halfFrameMs)
+{
+    // 与实时路径同语义：显示窗口 = 首个 ≥target-半帧 的帧。
+    // 缓存向量在回退重解码后可能非严格单调（旧副本+新副本），故全扫描取最小合格 relMs
+    AVFrame *best = nullptr;
+    qint64 bestMs = INT64_MAX;
+    for (const auto &e : m_chaseCache) {
+        if (e.relMs >= targetMs - halfFrameMs && e.relMs < bestMs) {
+            bestMs = e.relMs;
+            best = e.frame;
+        }
+    }
+    return best;
+}
+
+void FfmpegVideoEngine::chaseCacheClear()
+{
+    for (auto &e : m_chaseCache)
+        av_frame_free(&e.frame);
+    m_chaseCache.clear();
+}
+
 bool FfmpegVideoEngine::scrubChaseMainFrame()
 {
     if (!m_fmt || !m_vdec)
@@ -455,15 +498,26 @@ bool FfmpegVideoEngine::scrubChaseMainFrame()
 
     const qint64 frameMs = m_fps > 0.0f ? static_cast<qint64>(1000.0f / m_fps.load()) : 40;
     const qint64 halfFrame = frameMs / 2;
-    // 前进 decode-through 阈值：有索引文件 <~2 GOP 直追比 seek 重启动便宜；
-    // 无索引文件（PS/TS）直追无界，而 margin seek 有界（m_seekMarginMs），阈值收紧
-    const qint64 SEEK_THRESHOLD_MS = m_indexed ? 20000
+    // 前进 decode-through 阈值：按学习到的 GOP 长度自适应——临界点是
+    // "直追成本 delta/吞吐 = seek 固定成本 + 半个 GOP 的追赶成本"。
+    // 稀疏 GOP（D17 10s）早 seek 更快；密 GOP 直追便宜。无索引文件收紧（margin 有界）
+    const qint64 gopEst = m_lastCatchupMs > 0 ? m_lastCatchupMs : 20000;
+    const qint64 SEEK_THRESHOLD_MS = m_indexed ? qBound<qint64>(4000LL, gopEst, 20000LL)
                                                : qMax<qint64>(4000, m_seekMarginMs * 2);
 
     qint64 target = m_scrubTargetMs.load();
     if (target < 0) {
         QThread::msleep(10);     // 刚进入 scrub，尚无目标
         return false;
+    }
+
+    // 滚动缓存命中：目标帧已在追赶副产品缓存中（后退微调/抖动/重复目标），
+    // 直接显示，零 seek 零解码——这是慢拖手感的主要来源
+    if (qAbs(target - m_positionMs.load()) > halfFrame) {
+        if (AVFrame *hit = chaseCacheFind(target, halfFrame)) {
+            displayFrame(hit);
+            return true;
+        }
     }
 
     // 追逐基准：解码位置（含未显示帧）> 本次 seek 目标 > 显示位置。
@@ -511,6 +565,8 @@ bool FfmpegVideoEngine::scrubChaseMainFrame()
             while (avcodec_receive_frame(dec, frame) >= 0) {
                 qint64 relMs = ptsToRelMs(frame->best_effort_timestamp);
                 m_chaseDecodePosMs = relMs;
+                if (dec == m_scDec)
+                    chaseCachePush(relMs, frame);   // 软解帧入滚动缓存（refcount 零拷贝）
                 if (relMs >= target - halfFrame) {
                     displayFrame(frame);
                     shown = true;
@@ -553,6 +609,8 @@ bool FfmpegVideoEngine::scrubChaseMainFrame()
                     }
                 }
                 m_chaseDecodePosMs = relMs;   // 解码位置始终跟踪（含未显示帧）
+                if (dec == m_scDec)
+                    chaseCachePush(relMs, frame);   // 软解帧入滚动缓存（refcount 零拷贝）
                 if (qAbs(target - relMs) > SEEK_THRESHOLD_MS) {
                     reseek = true;            // 目标飞奔远离，解码追不上 → 交外层重 seek
                 } else if (relMs >= target - halfFrame) {
@@ -625,6 +683,10 @@ void FfmpegVideoEngine::workerMain()
     while (!m_quit.load()) {
         // --- 状态标志 ---
         bool isScrubbing = m_scrubMode.load();
+        static bool prevScrubbing = false;
+        if (prevScrubbing && !isScrubbing)
+            chaseCacheClear();   // 退出拖拽：释放滚动缓存内存（沉淀 seek 已补全精确帧）
+        prevScrubbing = isScrubbing;
         bool isActive = (m_state.load() == static_cast<int>(PlaybackState::Playing))
                         || isScrubbing || m_stepOnce;
 
@@ -901,6 +963,7 @@ bool FfmpegVideoEngine::openFile(const QString &filePath)
 
 void FfmpegVideoEngine::closeFile()
 {
+    chaseCacheClear();
 #ifdef Q_OS_WIN
     if (m_gpuFramesActive) {
         m_gpuFramesActive = false;
