@@ -573,6 +573,56 @@ int main(int argc, char *argv[])
             printf("[ OK ] scrub-oscillate: %d frames, tracked, final err %lldms\n",
                    framesDuring, qAbs(rec.lastPos - finalTarget));
         }
+    } else if (scenario == "scrub-backward") {
+        // 持续回退拖拽（滚动缓存自旋回归）：前进 15 步建缓存 → 持续回退 15 步。
+        // 缓存窗口 bug（已修）：目标退出缓存范围时返回远前方帧 → 同一帧反复显示 →
+        // positionChanged 洪泛（UI 失去响应）。断言信号总量有界 + 跟踪精度 + 落位。
+        engine.seek(rec.duration / 2);
+        pumpFor(500);
+        QVector<qint64> targets;
+        int posBase = rec.positions.size();
+        int framesBefore = rec.frameCount;
+        engine.setScrubMode(true);
+        qint64 cur = rec.duration / 2;
+        for (int i = 0; i < 15; ++i) { cur += 800; targets.append(cur); engine.seek(cur); pumpFor(50); }
+        for (int i = 0; i < 15; ++i) { cur -= 800; targets.append(cur); engine.seek(cur); pumpFor(50); }
+        engine.setScrubMode(false);
+        int posEmitted = rec.positions.size() - posBase;
+        int framesDuring = rec.frameCount - framesBefore;
+        qint64 frameMs = static_cast<qint64>(1000.0f / engine.fps());
+        int tracked = 0, shown = 0;
+        for (int i = posBase; i < rec.positions.size(); ++i) {
+            ++shown;
+            for (qint64 t : targets)
+                if (qAbs(rec.positions[i] - t) <= qMax<qint64>(3 * frameMs, 3000)) { ++tracked; break; }
+        }
+        printf("[info] scrub-backward: %d frames, %d position signals during 30 steps, tracked %d/%d\n",
+               framesDuring, posEmitted, tracked, shown);
+        if (posEmitted > 200) {   // 自旋洪泛：bug 存在时此处为成千上万
+            printf("[FAIL] scrub-backward: position signal storm (%d), cache spin suspected\n", posEmitted);
+            failures++;
+        }
+        if (framesDuring < 10) {
+            printf("[FAIL] scrub-backward: too few frames (%d)\n", framesDuring);
+            failures++;
+        }
+        if (shown > 0 && tracked * 10 < shown * 9) {
+            printf("[FAIL] scrub-backward: %d/%d frames NOT near targets\n", shown - tracked, shown);
+            failures++;
+        }
+        qint64 finalTarget = targets.last();
+        int before = rec.frameCount;
+        engine.seek(finalTarget);
+        QElapsedTimer guard; guard.start();
+        while (rec.frameCount == before && guard.elapsed() < 3000)
+            pumpFor(20);
+        if (qAbs(rec.lastPos - finalTarget) > frameMs) {
+            printf("[FAIL] scrub-backward: final landed %lld target %lld\n", rec.lastPos, finalTarget);
+            failures++;
+        } else if (failures == 0) {
+            printf("[ OK ] scrub-backward: %d frames, signals bounded, final err %lldms\n",
+                   framesDuring, qAbs(rec.lastPos - finalTarget));
+        }
     } else if (scenario == "step") {
         // 逐帧步进语义：暂停态连续 seek +1 帧，断言严格单调前进且落点精确
         float fps = engine.fps();

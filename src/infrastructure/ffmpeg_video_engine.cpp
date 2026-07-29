@@ -471,13 +471,17 @@ void FfmpegVideoEngine::chaseCachePush(qint64 relMs, AVFrame *frame)
 
 AVFrame *FfmpegVideoEngine::chaseCacheFind(qint64 targetMs, qint64 halfFrameMs)
 {
-    // 与实时路径同语义：显示窗口 = 首个 ≥target-半帧 的帧。
-    // 缓存向量在回退重解码后可能非严格单调（旧副本+新副本），故全扫描取最小合格 relMs
+    // 显示窗口 [target-半帧, target+半帧]（与实时路径同语义）。
+    // 上界是关键安全条件：目标已退出缓存覆盖范围时（如连续回退），
+    // 若返回远在目标前方的帧，显示后位置仍远离目标 → 下次调用命中同一帧 →
+    // 工作线程自旋 + positionChanged 洪泛 → UI 失去响应（实测复现）。
+    // 缓存向量在回退重解码后可能非严格单调（旧副本+新副本），故全扫描取窗口内最近帧。
     AVFrame *best = nullptr;
-    qint64 bestMs = INT64_MAX;
+    qint64 bestDist = INT64_MAX;
     for (const auto &e : m_chaseCache) {
-        if (e.relMs >= targetMs - halfFrameMs && e.relMs < bestMs) {
-            bestMs = e.relMs;
+        const qint64 dist = qAbs(e.relMs - targetMs);
+        if (dist <= halfFrameMs && dist < bestDist) {
+            bestDist = dist;
             best = e.frame;
         }
     }
