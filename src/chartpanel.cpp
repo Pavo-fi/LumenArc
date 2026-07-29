@@ -1722,20 +1722,22 @@ void ChartPanel::drawChartGuideLines()
                     qreal normalized = (y - yMin) / (yMax - yMin);
                     qreal widgetY = pa.bottom() - normalized * pa.height();
                     gl.lineItem->setLine(pa.left(), widgetY, pa.right(), widgetY);
-                    // 左标签 = 亮度（左 Y 轴值），文本每次 draw 刷新 → 拖动联动
+                    // 左标签 = 亮度（左 Y 轴值），文本每次 draw 刷新 → 拖动联动；
+                    // 标签置线段上方，避免与虚线重叠
                     if (gl.labelItem) {
                         gl.labelItem->setText(QString::number(y, 'f', 1));
-                        gl.labelItem->setPos(pa.left() + 3, widgetY - 8);
+                        gl.labelItem->setPos(pa.left() + 3,
+                                             widgetY - gl.labelItem->boundingRect().height() - 1);
                     }
                     // 右标签 = 响度（右 Y 轴同一像素高度的等效值）；无音量轴时隐藏。
-                    // 绘制在图表内侧右对齐，避免遮挡右 Y 轴刻度数值
+                    // 绘制在图表内侧右对齐（不遮右 Y 轴刻度），同样置线段上方
                     if (gl.labelItemRight) {
                         if (m_axisYVolume && m_axisYVolume->max() > m_axisYVolume->min()) {
                             qreal vol = m_axisYVolume->min()
                                         + normalized * (m_axisYVolume->max() - m_axisYVolume->min());
                             gl.labelItemRight->setText(QString::number(vol, 'f', 2));
                             gl.labelItemRight->setPos(pa.right() - gl.labelItemRight->boundingRect().width() - 3,
-                                                      widgetY - 8);
+                                                      widgetY - gl.labelItemRight->boundingRect().height() - 1);
                             gl.labelItemRight->setVisible(true);
                         } else {
                             gl.labelItemRight->setVisible(false);
