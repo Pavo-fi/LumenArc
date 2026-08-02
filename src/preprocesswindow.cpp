@@ -1457,40 +1457,24 @@ bool PreprocessWindow::eventFilter(QObject *watched, QEvent *event)
                 mime->setData(QStringLiteral("application/x-lumenarc-filerow"),
                               QByteArray::number(m_tableDragRow));
                 drag->setMimeData(mime);
-                // 拖拽视觉：简洁小标签卡（整行缩略图糊成一团，现场反馈不美观）
+                // 拖拽视觉：整行按原比例半透明化（现场反馈：小标签卡看不清，
+                // 要求“把整行拖出来”的感觉）
                 const int row = m_tableDragRow;
-                const QString fname = row >= 0 && row < m_pendingFiles.size()
-                    ? QFileInfo(m_pendingFiles[row]).fileName()
-                    : QString();
-                QPixmap pm(340, 40);
-                pm.fill(Qt::transparent);
-                {
+                if (row >= 0) {
+                    const QRect rowRect = m_fileTable->visualRect(
+                        m_fileTable->model()->index(row, 0));
+                    const QPixmap full = m_fileTable->grab(rowRect);
+                    QPixmap pm(full.size());
+                    pm.fill(Qt::transparent);
                     QPainter p(&pm);
-                    p.setRenderHint(QPainter::Antialiasing);
-                    p.setBrush(QColor(48, 58, 80, 235));
-                    p.setPen(Qt::NoPen);
-                    p.drawRoundedRect(0, 0, 340, 40, 9, 9);
-                    p.setBrush(QColor(Theme::Accent));
-                    p.drawRoundedRect(6, 8, 4, 24, 2, 2);   // 左侧强调条
-                    p.setPen(Qt::white);
-                    QFont f = p.font();
-                    f.setPointSize(10);
-                    f.setBold(true);
-                    p.setFont(f);
-                    p.drawText(QRect(20, 0, 340 - 30, 40),
-                               Qt::AlignVCenter | Qt::AlignLeft,
-                               fname.isEmpty() ? QStringLiteral("…") : fname);
-                    p.setPen(QColor(200, 208, 220));
-                    f.setPointSize(8);
-                    f.setBold(false);
-                    p.setFont(f);
-                    p.drawText(QRect(20, 0, 340 - 30, 40),
-                               Qt::AlignVCenter | Qt::AlignRight,
-                               lang("移动到目标位置", "Drop to move"));
+                    p.setRenderHint(QPainter::SmoothPixmapTransform);
+                    p.setOpacity(0.72);                      // 半透明
+                    p.drawPixmap(0, 0, full);
                     p.end();
+                    drag->setPixmap(pm);
+                    // 热点在行首中部：落点与行对齐，视觉上“行被拎起”
+                    drag->setHotSpot(QPoint(12, pm.height() / 2));
                 }
-                drag->setPixmap(pm);
-                drag->setHotSpot(QPoint(20, pm.height() / 2));
                 m_tableDragRow = -1;
                 drag->exec(Qt::MoveAction);
                 return true;

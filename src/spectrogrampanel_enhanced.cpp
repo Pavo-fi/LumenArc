@@ -9,6 +9,7 @@
  * Licensed under the Apache License, Version 2.0
  */
 #include "spectrogrampanel_enhanced.h"
+#include "domain/tick_utils.h"
 #include "i18n.h"
 
 #include <QPainter>
@@ -482,27 +483,9 @@ void SpectrogramPanelEnhanced::drawAxes(QPainter &painter)
     painter.drawLine(m_leftMargin, TOP_MARGIN, m_leftMargin, TOP_MARGIN + heatH);
 
     // X-axis: time labels（像素密度自适应：长视频/小时级自动放大步长，
-    // 避免标签糊成一团——现场反馈）
-    qint64 visibleDuration = static_cast<qint64>(m_viewXMax - m_viewXMin);
-    if (visibleDuration <= 0) visibleDuration = 1000;
-
-    qint64 timeStep = 1000;
-    if (heatW > 0 && visibleDuration > 0) {
-        const qreal pxPerMs = heatW / static_cast<qreal>(visibleDuration);
-        // 相邻标签最小像素间距（标签文本约 40-60px 宽）
-        constexpr int kMinLabelPx = 72;
-        const qint64 kSteps[] = {1000, 2000, 5000, 10000, 30000, 60000,
-                                 300000, 600000, 1800000, 3600000, 7200000,
-                                 21600000};
-        timeStep = kSteps[0];
-        for (qint64 s : kSteps) {
-            if (static_cast<qreal>(s) * pxPerMs >= kMinLabelPx) {
-                timeStep = s;
-                break;
-            }
-            timeStep = s;
-        }
-    }
+    // 避免标签糊成一团——现场反馈；算法见 domain/tick_utils.h 单测）
+    const qint64 visibleDuration = static_cast<qint64>(m_viewXMax - m_viewXMin);
+    const qint64 timeStep = computeXAxisStepMs(visibleDuration, heatW);
 
     qint64 startTime = (static_cast<qint64>(m_viewXMin) / timeStep) * timeStep;
     for (qint64 t = startTime; t <= static_cast<qint64>(m_viewXMax); t += timeStep) {

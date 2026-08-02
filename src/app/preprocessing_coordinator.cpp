@@ -524,8 +524,11 @@ void PreprocessingCoordinator::startNextTranscode()
     req.output = allocateOutput(m_outputDir, base);
     req.durationMs = durationOf(m_currentTranscode);
     req.crf = m_opts.crf;
-    // 隔行源 → 默认反交错（探测驱动，可配置关闭）
+    // 关键帧间隔 ≈ 2 秒（探测 fps 换算；0 兜底交给引擎默认）
     const ProbeResult p = m_probes.value(m_currentTranscode);
+    if (p.fps > 0.0f && p.fps <= 240.0f)
+        req.keyframeInterval = qMax(1, qRound(2.0f * p.fps));
+    // 隔行源 → 默认反交错（探测驱动，可配置关闭）
     req.deinterlace = m_opts.deinterlace && p.fieldOrder > 1;  // 1=progressive
     // 音轨已为 AAC 时直拷（探测驱动，§5.5.1）
     req.copyAudio = p.audioStreams > 0 && p.audioCodec == QLatin1String("aac");

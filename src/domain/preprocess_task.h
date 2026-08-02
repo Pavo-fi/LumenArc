@@ -33,6 +33,9 @@ struct TranscodeRequest {
     int     crf = 18;
     bool    deinterlace = true;   // 隔行源默认 yadif（可配置）
     bool    copyAudio = false;    // 音轨已为 AAC 且达标时直拷（探测驱动）
+    int     keyframeInterval = 0; // 关键帧间隔（帧数）；0=libx264 默认 250
+                                  // 现场反馈：默认 GOP 太长（15fps≈17s），
+                                  // 拖拽 seek 需从上一关键帧逐帧解码 → 卡死
 };
 
 struct ProcessingOptions {

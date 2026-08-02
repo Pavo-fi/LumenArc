@@ -19,7 +19,7 @@ endif()
 
 # --- Qt6 ---
 set(CMAKE_PREFIX_PATH "${CMAKE_PREFIX_PATH};$ENV{QT6_DIR}")
-find_package(Qt6 REQUIRED COMPONENTS Widgets Charts Multimedia)
+find_package(Qt6 REQUIRED COMPONENTS Widgets Charts Multimedia Concurrent)
 
 # --- FFmpeg (LGPL shared build: bin/ include/ lib/) ---
 set(FFMPEG_SDK_PATH "" CACHE PATH "Path to FFmpeg SDK root (contains include/ and lib/)")

@@ -50,6 +50,12 @@ QStringList TranscodeEngine::buildArgs(const TranscodeRequest &req,
         // 隔行源默认 yadif（探测到 field_order≠progressive 时由调用方置位）
         args << QStringLiteral("-vf") << QStringLiteral("yadif");
     }
+    if (req.keyframeInterval > 0) {
+        // 短 GOP：拖拽 seek 只解码 ≤2s（现场反馈：默认 GOP 250 帧太长，
+        // 15fps 源 16.7s 才一个关键帧，seek 需逐帧解码整段 → 拖拽卡死）
+        args << QStringLiteral("-g") << QString::number(req.keyframeInterval)
+             << QStringLiteral("-keyint_min") << QString::number(req.keyframeInterval);
+    }
     if (req.copyAudio) {
         args << QStringLiteral("-c:a") << QStringLiteral("copy");
     } else {

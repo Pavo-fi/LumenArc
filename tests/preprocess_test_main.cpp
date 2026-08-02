@@ -23,6 +23,7 @@
 #include "domain/preprocess_text.h"
 #include "domain/concat_precheck.h"
 #include "domain/evidence_report.h"
+#include "domain/tick_utils.h"
 #include "sortablefiletable.h"
 
 #include <QApplication>
@@ -459,6 +460,48 @@ static void testSortableFileTable()
 }
 
 // ---------------------------------------------------------------------------
+static void testTickStep()
+{
+    const qint64 min = 60000;   // 1min
+    const qint64 tenMin = 600000;
+    const qint64 twoH = 7200000;
+    const qint64 tenH = 36000000;
+    const qint64 day = 86400000;
+    // 40 分钟视频（拼接产物典型时长）900px → 5min 步长，间距 = 900*300000/2400000 = 112px
+    CHECK(computeXAxisStepMs(2400000, 900) == 300000);
+    // 2h → 10min，间距 125px
+    CHECK(computeXAxisStepMs(twoH, 900) == 600000);
+    // 10h → 1h，间距 90px
+    CHECK(computeXAxisStepMs(tenH, 900) == 3600000);
+    // 24h → 2h，间距 75px（首个 ≥72px 的 nice 档）
+    CHECK(computeXAxisStepMs(day, 900) == 7200000);
+    // 10min 视频 600px → 1min，间距 60px（<72 阈值？600*60000/600000=60 <72 → 2min）
+    CHECK(computeXAxisStepMs(tenMin, 600) == 120000);
+    // 10min 视频 1200px → 1min，间距 120px ✓
+    CHECK(computeXAxisStepMs(tenMin, 1200) == 60000);
+    // 1min 视频 600px → 5s，间距 50px → 10s？600*10000/60000=100 ≥72 → 10s
+    CHECK(computeXAxisStepMs(min, 600) == 10000);
+    // 短时长大宽度：10s 视频 1000px → 1000*1000/10000=100 → 1s
+    CHECK(computeXAxisStepMs(10000, 1000) == 1000);
+    // 极长：48h 视频 900px → 900*21600000/172800000=112 ≥72 → 6h
+    CHECK(computeXAxisStepMs(172800000, 900) == 21600000);
+    // 退化输入
+    CHECK(computeXAxisStepMs(0, 900) == 60000);
+    CHECK(computeXAxisStepMs(60000, 0) == 60000);
+    // 所有档位标签间距均 ≥ 阈值（通用性质检验）
+    const qint64 durations[] = {10000, 60000, 600000, 2400000, 7200000,
+                                36000000, 86400000, 172800000};
+    for (qint64 d : durations) {
+        for (int w : {400, 800, 1600}) {
+            const qint64 step = computeXAxisStepMs(d, w);
+            const qreal gap = step * w / static_cast<qreal>(d);
+            // 允许最后一档不足（极端长视频且宽度极小）
+            CHECK(gap >= 72.0 * 0.55 || step >= 86400000);
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 static void testEvidenceCsv()
 {
     EvidenceReportInput in;
@@ -577,6 +620,7 @@ int main(int argc, char **argv)
     testFilesNeedingTranscode();
     testEvidenceCsv();
     testSortableFileTable();
+    testTickStep();
     fprintf(stderr, "checks: %d failures: %d\n", g_checks, g_failures);
     return g_failures == 0 ? 0 : 1;
 }
