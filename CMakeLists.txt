@@ -7,6 +7,11 @@ set(CMAKE_AUTOMOC ON)
 set(CMAKE_AUTORCC ON)
 set(CMAKE_AUTOUIC ON)
 
+# 全部源文件为无 BOM UTF-8：告知 MSVC 源字符集（中文路径/文案正确性）
+if(MSVC)
+    add_compile_options(/utf-8)
+endif()
+
 # --- macOS deployment target ---
 if(APPLE)
     set(CMAKE_OSX_DEPLOYMENT_TARGET "11.0" CACHE STRING "Minimum macOS version")
@@ -67,14 +72,24 @@ set(SOURCES
     src/i18n.cpp
     src/aboutdialog.cpp
     src/videolistpanel.cpp
+    src/preprocesspanel.cpp
     src/spectrogrampanel_enhanced.cpp
     src/videostatemanager.cpp
     src/domain/region_model.cpp
     src/domain/polygon_model.cpp
     src/domain/guide_line_model.cpp
     src/domain/timeline_model.cpp
+    src/domain/filename_timestamp.cpp
+    src/domain/smart_sorter.cpp
+    src/domain/concat_precheck.cpp
+    src/domain/evidence_report.cpp
+    src/app/preprocessing_coordinator.cpp
     src/infrastructure/ffmpeg_video_engine.cpp
     src/infrastructure/python_analysis_engine.cpp
+    src/infrastructure/media_probe_engine.cpp
+    src/infrastructure/timestamp_ocr_engine.cpp
+    src/infrastructure/concat_engine.cpp
+    src/infrastructure/transcode_engine.cpp
     src/resources.qrc
 )
 
@@ -93,6 +108,7 @@ set(HEADERS
     src/i18n.h
     src/aboutdialog.h
     src/videolistpanel.h
+    src/preprocesspanel.h
     src/spectrogrampanel_enhanced.h
     src/videostatemanager.h
     src/domain/analysis_snapshot.h
@@ -102,10 +118,24 @@ set(HEADERS
     src/domain/guide_line.h
     src/domain/guide_line_model.h
     src/domain/timeline_model.h
+    src/domain/probe_result.h
+    src/domain/ocr_result.h
+    src/domain/sort_model.h
+    src/domain/preprocess_task.h
+    src/domain/filename_timestamp.h
+    src/domain/smart_sorter.h
+    src/domain/concat_precheck.h
+    src/domain/evidence_report.h
+    src/domain/preprocess_text.h
+    src/app/preprocessing_coordinator.h
     src/infrastructure/ivideo_engine.h
     src/infrastructure/ianalysis_engine.h
     src/infrastructure/ffmpeg_video_engine.h
     src/infrastructure/python_analysis_engine.h
+    src/infrastructure/media_probe_engine.h
+    src/infrastructure/timestamp_ocr_engine.h
+    src/infrastructure/concat_engine.h
+    src/infrastructure/transcode_engine.h
 )
 
 # --- Headless engine test harness ---
@@ -123,6 +153,47 @@ target_link_libraries(lumenarc_engine_test PRIVATE
     Qt6::Core
     Qt6::Gui
     Qt6::Multimedia
+    ${FFMPEG_LIBRARIES}
+)
+
+# --- Headless preprocess domain test harness ---
+add_executable(lumenarc_preprocess_test
+    tests/preprocess_test_main.cpp
+    src/domain/filename_timestamp.cpp
+    src/domain/smart_sorter.cpp
+    src/domain/concat_precheck.cpp
+    src/domain/evidence_report.cpp
+)
+target_include_directories(lumenarc_preprocess_test PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+)
+target_link_libraries(lumenarc_preprocess_test PRIVATE
+    Qt6::Core
+    Qt6::Gui
+)
+
+# --- Preprocess engine integration test (real ffmpeg/Python subprocesses) ---
+add_executable(lumenarc_preprocess_integration
+    tests/preprocess_integration_main.cpp
+    src/infrastructure/ianalysis_engine.h
+    src/infrastructure/media_probe_engine.cpp
+    src/infrastructure/timestamp_ocr_engine.cpp
+    src/infrastructure/concat_engine.cpp
+    src/infrastructure/transcode_engine.cpp
+    src/infrastructure/python_analysis_engine.cpp
+    src/i18n.cpp
+    src/domain/filename_timestamp.cpp
+    src/domain/smart_sorter.cpp
+    src/domain/concat_precheck.cpp
+    src/domain/evidence_report.cpp
+)
+target_include_directories(lumenarc_preprocess_integration PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+    ${FFMPEG_INCLUDE_DIR}
+)
+target_link_libraries(lumenarc_preprocess_integration PRIVATE
+    Qt6::Core
+    Qt6::Gui
     ${FFMPEG_LIBRARIES}
 )
 
@@ -227,6 +298,14 @@ if(WIN32)
         COMMENT "Copying analyze_video.py..."
     )
 
+    # Copy preprocess OCR script
+    add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${CMAKE_CURRENT_SOURCE_DIR}/probe_timestamps.py"
+            "$<TARGET_FILE_DIR:${PROJECT_NAME}>"
+        COMMENT "Copying probe_timestamps.py..."
+    )
+
     # Copy user manual PDF (mac: 与可执行文件同目录，供 帮助→使用手册 打开)
     if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/追光者 Lumen Arc v1.1 — 操作手册.pdf")
         add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
@@ -308,6 +387,14 @@ if(APPLE)
             "${CMAKE_CURRENT_SOURCE_DIR}/analyze_video.py"
             "$<TARGET_FILE_DIR:${PROJECT_NAME}>/../MacOS/"
         COMMENT "Copying analyze_video.py..."
+    )
+
+    # Copy preprocess OCR script
+    add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${CMAKE_CURRENT_SOURCE_DIR}/probe_timestamps.py"
+            "$<TARGET_FILE_DIR:${PROJECT_NAME}>/../MacOS/"
+        COMMENT "Copying probe_timestamps.py..."
     )
 
     # Copy ffmpeg (if bundled)
