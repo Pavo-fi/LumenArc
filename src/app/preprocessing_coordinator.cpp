@@ -287,6 +287,11 @@ void PreprocessingCoordinator::runSorting()
     QVector<ProbeResult> probes = m_probes.values();
     QVector<OcrResult> ocrs = m_ocrs.values();
     m_groups = smartSort(probes, ocrs, m_channelOverrides);
+    for (const auto &g : m_groups)
+        log(QStringLiteral("[%1] 排序：组 '%2' 含 %3 个文件%4")
+                .arg(tsLog(), g.channel).arg(g.ordered.size())
+                .arg(g.suspicious ? QStringLiteral("（存疑，需人工确认）")
+                                  : QString()));
     setPhase(TaskPhase::UserConfirm);
     emit evidenceReady(m_groups);
 }

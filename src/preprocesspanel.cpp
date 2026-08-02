@@ -284,20 +284,27 @@ void PreprocessPanel::refreshEvidenceTables(const QVector<SortGroup> &groups)
     m_groupTabs->clear();
     int overlaps = 0, gaps = 0;
     qint64 overlapMs = 0, gapMs = 0;
+    const auto fmtTime = [](qint64 ms) {
+        return QDateTime::fromMSecsSinceEpoch(ms, Qt::LocalTime)
+            .toString(QStringLiteral("MM-dd HH:mm:ss"));
+    };
     for (const auto &g : groups) {
-        auto *tab = new QTableWidget(g.ordered.size(), 6, m_groupTabs);
+        auto *tab = new QTableWidget(g.ordered.size(), 7, m_groupTabs);
         tab->setProperty("channel", g.channel);
         tab->setHorizontalHeaderLabels({
             QStringLiteral("#"), lang("首帧", "First"), lang("尾帧", "Last"),
-            lang("首帧时间", "Start time"), lang("依据", "Source"), lang("状态", "Status")});
+            lang("首帧时间", "Start time"), lang("尾帧时间", "End time"),
+            lang("依据", "Source"), lang("状态", "Status")});
         tab->verticalHeader()->setDefaultSectionSize(64);
         tab->horizontalHeader()->setSectionResizeMode(3, QHeaderView::Stretch);
+        tab->horizontalHeader()->setSectionResizeMode(4, QHeaderView::Stretch);
         tab->setSelectionBehavior(QAbstractItemView::SelectRows);
         for (int i = 0; i < g.ordered.size(); ++i) {
             const SortEntry &e = g.ordered[i];
             auto *num = new QTableWidgetItem(QString::number(i + 1));
             num->setData(Qt::UserRole, e.filePath);
             num->setFlags(num->flags() & ~Qt::ItemIsEditable);
+            num->setToolTip(e.filePath);
             tab->setItem(i, 0, num);
 
             auto *first = new QTableWidgetItem;
@@ -309,13 +316,34 @@ void PreprocessPanel::refreshEvidenceTables(const QVector<SortGroup> &groups)
             last->setFlags(last->flags() & ~Qt::ItemIsEditable);
             tab->setItem(i, 2, last);
 
-            const QString timeStr = e.startMs > 0
-                ? QDateTime::fromMSecsSinceEpoch(e.startMs, Qt::LocalTime)
-                      .toString(QStringLiteral("MM-dd HH:mm:ss"))
-                : lang("未知", "unknown");
-            auto *time = new QTableWidgetItem(timeStr);
+            const QString startStr = e.startMs > 0
+                ? fmtTime(e.startMs) : lang("未知", "unknown");
+            auto *time = new QTableWidgetItem(startStr);
             time->setFlags(time->flags() & ~Qt::ItemIsEditable);
+            if (!e.rawStartText.isEmpty())
+                time->setToolTip(lang("OCR 原文（逐字）：%1", "OCR raw: %1")
+                                     .arg(e.rawStartText));
             tab->setItem(i, 3, time);
+
+            // 尾帧时间：OCR 实测优先（硬证据）；否则按时长推算并加 ~ 前缀标明
+            QString endStr, endTip;
+            if (e.ocrEndMs > 0) {
+                endStr = fmtTime(e.ocrEndMs);
+                if (!e.rawEndText.isEmpty())
+                    endTip = lang("OCR 原文（逐字）：%1", "OCR raw: %1")
+                                 .arg(e.rawEndText);
+            } else if (e.startMs > 0 && e.durationMs > 0) {
+                endStr = QStringLiteral("~") + fmtTime(e.startMs + e.durationMs);
+                endTip = lang("按首帧时间+时长推算（无尾帧 OCR）",
+                              "Estimated from start+duration (no tail OCR)");
+            } else {
+                endStr = lang("未知", "unknown");
+            }
+            auto *endIt = new QTableWidgetItem(endStr);
+            endIt->setFlags(endIt->flags() & ~Qt::ItemIsEditable);
+            if (!endTip.isEmpty())
+                endIt->setToolTip(endTip);
+            tab->setItem(i, 4, endIt);
 
             QString src;
             switch (e.startSource) {
@@ -325,26 +353,37 @@ void PreprocessPanel::refreshEvidenceTables(const QVector<SortGroup> &groups)
             }
             auto *srcIt = new QTableWidgetItem(src);
             srcIt->setFlags(srcIt->flags() & ~Qt::ItemIsEditable);
-            tab->setItem(i, 4, srcIt);
+            tab->setItem(i, 5, srcIt);
 
             QString status = QStringLiteral("✓");
+            QString statusTip;
             for (const auto &w : g.warnings) {
                 if (w.indexA == i || w.indexB == i) {
                     if (w.type == SortWarningType::Overlap)
-                        status = QStringLiteral("⚠重叠");
+                        status = lang("⚠重叠 %1s", "⚠overlap %1s")
+                                     .arg(-w.deltaMs / 1000.0, 0, 'f', 1);
                     else if (w.type == SortWarningType::Gap)
-                        status = QStringLiteral("⚠缺口");
+                        status = lang("⚠缺口 %1s", "⚠gap %1s")
+                                     .arg(w.deltaMs / 1000.0, 0, 'f', 1);
                     else
                         status = QStringLiteral("⚠");
+                    statusTip = w.detail;
                     break;
                 }
             }
             auto *stIt = new QTableWidgetItem(status);
             stIt->setFlags(stIt->flags() & ~Qt::ItemIsEditable);
-            tab->setItem(i, 5, stIt);
+            if (!statusTip.isEmpty())
+                stIt->setToolTip(statusTip);
+            tab->setItem(i, 6, stIt);
         }
         QString title = g.channel + (g.suspicious ? QStringLiteral(" ⚠存疑") : QString());
-        m_groupTabs->addTab(tab, title);
+        const int tabIdx = m_groupTabs->addTab(tab, title);
+        m_groupTabs->setTabToolTip(tabIdx, lang(
+            "分组依据：通道号（文件名解析或人工指定）。同组输出为一个拼接文件；"
+            "缺口/重叠以警告标注，不拆分分组。",
+            "Grouping: channel id (from filename or manual). One output per group; "
+            "gaps/overlaps are annotated as warnings, not split."));
         for (const auto &w : g.warnings) {
             if (w.type == SortWarningType::Overlap) { ++overlaps; overlapMs += -w.deltaMs; }
             if (w.type == SortWarningType::Gap)     { ++gaps;     gapMs += w.deltaMs; }

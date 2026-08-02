@@ -159,6 +159,35 @@ static void testSmartSorterBasic()
         if (w.type == SortWarningType::Overlap || w.type == SortWarningType::Gap)
             ++contWarnings;
     CHECK(contWarnings == 0);
+
+    // 尾帧 OCR 与原文逐字传播（面板证据列数据源）
+    ocrs[0].wallEndMs = t0 + 59000;
+    ocrs[0].rawStartText = QStringLiteral("2024-07-01 12:00:00");
+    ocrs[0].rawEndText = QStringLiteral(".2024-07-01 12:00:59");
+    groups = smartSort(probes, ocrs);
+    CHECK(groups[0].ordered[0].ocrEndMs == t0 + 59000);
+    CHECK(groups[0].ordered[0].rawStartText == QLatin1String("2024-07-01 12:00:00"));
+    CHECK(groups[0].ordered[0].rawEndText == QLatin1String(".2024-07-01 12:00:59"));
+
+    // 首帧解析失败（wallStartMs=0）时证据截图/尾帧仍须保留（取证可见性）
+    QVector<OcrResult> broken{
+        makeOcr(QStringLiteral("a.mp4"), t0),
+        makeOcr(QStringLiteral("b.mp4"), 0),
+    };
+    broken[1].firstFrameImg = QStringLiteral("/tmp/b_head.png");
+    broken[1].lastFrameImg = QStringLiteral("/tmp/b_tail.png");
+    broken[1].wallEndMs = t0 + 119000;
+    broken[1].rawEndText = QStringLiteral("2024-07-01 12:01:59");
+    groups = smartSort(probes, broken);
+    const SortEntry *be = nullptr;
+    for (const auto &e : groups[0].ordered)
+        if (e.filePath == QLatin1String("b.mp4"))
+            be = &e;
+    CHECK(be != nullptr);
+    CHECK(be && be->thumbnailFirst == QLatin1String("/tmp/b_head.png"));
+    CHECK(be && be->thumbnailLast == QLatin1String("/tmp/b_tail.png"));
+    CHECK(be && be->ocrEndMs == t0 + 119000);
+    CHECK(be && be->rawEndText == QLatin1String("2024-07-01 12:01:59"));
 }
 
 static void testSmartSorterGroupingAndSuspicious()
@@ -340,6 +369,33 @@ static void testEvidenceCsv()
 int main(int argc, char **argv)
 {
     QCoreApplication app(argc, argv);
+    // 诊断模式：--group-debug <files...> 用生产代码路径打印文件名解析与分组结果
+    if (argc > 2 && QLatin1String(argv[1]) == QLatin1String("--group-debug")) {
+        QVector<ProbeResult> probes;
+        for (int i = 2; i < argc; ++i) {
+            const QString path = QString::fromLocal8Bit(argv[i]);
+            const QString name = QFileInfo(path).fileName();
+            const FilenameTimestamp ft = parseFilenameTimestamp(name);
+            fprintf(stderr, "[FN] %-26s patternId=%d epochMs=%lld channel='%s' raw='%s'\n",
+                    name.toUtf8().constData(), ft.patternId, (long long)ft.epochMs,
+                    ft.channel.toUtf8().constData(), ft.rawText.toUtf8().constData());
+            ProbeResult p;
+            p.filePath = path;
+            p.durationMs = 600000;
+            probes.append(p);
+        }
+        const QVector<SortGroup> groups = smartSort(probes, {});
+        fprintf(stderr, "[GRP] %lld group(s)\n", (long long)groups.size());
+        for (const auto &g : groups) {
+            fprintf(stderr, "  channel='%s' files=%d suspicious=%d\n",
+                    g.channel.toUtf8().constData(), g.ordered.size(), g.suspicious);
+            for (const auto &e : g.ordered)
+                fprintf(stderr, "    %s start=%lld src=%d\n",
+                        QFileInfo(e.filePath).fileName().toUtf8().constData(),
+                        (long long)e.startMs, int(e.startSource));
+        }
+        return 0;
+    }
     testFilenamePatterns();
     testSmartSorterBasic();
     testSmartSorterGroupingAndSuspicious();

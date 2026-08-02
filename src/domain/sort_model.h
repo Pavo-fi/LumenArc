@@ -35,11 +35,13 @@ struct SortWarning {
 struct SortEntry {
     QString filePath;
     qint64  startMs = 0;            // 墙钟起点（排序依据，派生）
-    qint64  endMs = 0;              // startMs + 时长
+    qint64  endMs = 0;              // startMs + 时长（推算值）
+    qint64  ocrEndMs = 0;           // 尾帧 OCR 实测墙钟（0=无；证据性高于 endMs 推算）
     qint64  durationMs = 0;
     OcrResult::Source startSource = OcrResult::None;
     double  conf = 0.0;
     QString thumbnailFirst, thumbnailLast;
+    QString rawStartText, rawEndText;   // OCR 原文（逐字保留，取证展示用）
 };
 
 struct SortGroup {

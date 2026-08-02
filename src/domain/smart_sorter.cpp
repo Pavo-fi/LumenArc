@@ -32,6 +32,8 @@ struct FileCtx {
     bool    durationDubious = false;
     Evidence ocr, fname, creation, mtime;
     QString thumbFirst, thumbLast;
+    QString rawStart, rawEnd;
+    qint64  ocrEndMs = 0;
 };
 
 /// 权重最高且有值者优先；同权冲突取 conf 高者
@@ -127,13 +129,18 @@ QVector<SortGroup> smartSort(const QVector<ProbeResult> &probes,
             it = byPath.insert(o.filePath, c);
         }
         FileCtx &c = it.value();
+        // 证据材料（截图/原文/尾帧墙钟）与首帧解析成败解耦：即使首帧 OCR
+        // 解析失败，尾帧证据与原文仍可用于人工判读连续性（取证可见性）
+        c.thumbFirst = o.firstFrameImg;
+        c.thumbLast = o.lastFrameImg;
+        c.rawStart = o.rawStartText;
+        c.rawEnd = o.rawEndText;
+        c.ocrEndMs = o.wallEndMs;
         if (o.wallStartMs > 0) {
             // 人工手输与 OCR 同为证据①；人工值 conf 视为 1.0（用户即真相）
             const double conf = o.source == OcrResult::Manual ? 1.0 : o.conf;
             c.ocr = {o.wallStartMs, 1.0, conf, o.source,
                      o.rawStartText};
-            c.thumbFirst = o.firstFrameImg;
-            c.thumbLast = o.lastFrameImg;
             // 尾帧交叉验证时长（durationMs 缺失时的兜底）
             if (c.durationMs <= 0 && o.durationMs > 0)
                 c.durationMs = o.durationMs;
@@ -166,6 +173,9 @@ QVector<SortGroup> smartSort(const QVector<ProbeResult> &probes,
             e.conf = ev ? ev->conf : 0.0;
             e.thumbnailFirst = files[0].thumbFirst;
             e.thumbnailLast = files[0].thumbLast;
+            e.ocrEndMs = files[0].ocrEndMs;
+            e.rawStartText = files[0].rawStart;
+            e.rawEndText = files[0].rawEnd;
             g.ordered.append(e);
             if (!ev || ev->weight <= 0.2)
                 g.suspicious = true;    // 仅有 mtime/无证据 → 人工确认
@@ -228,6 +238,9 @@ QVector<SortGroup> smartSort(const QVector<ProbeResult> &probes,
             e.conf = ev ? ev->conf : 0.0;
             e.thumbnailFirst = c.thumbFirst;
             e.thumbnailLast = c.thumbLast;
+            e.ocrEndMs = c.ocrEndMs;
+            e.rawStartText = c.rawStart;
+            e.rawEndText = c.rawEnd;
             g.ordered.append(e);
 
             if (c.ocr.epochMs > 0)
