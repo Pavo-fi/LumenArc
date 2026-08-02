@@ -13,6 +13,12 @@
 #include "domain/preprocess_text.h"
 
 #include <QProcess>
+#ifdef Q_OS_WIN
+#include <qt_windows.h>
+#ifndef CREATE_BELOW_NORMAL_PRIORITY_CLASS
+#define CREATE_BELOW_NORMAL_PRIORITY_CLASS 0x00004000
+#endif
+#endif
 #include <QTimer>
 #include <QFile>
 #include <QFileInfo>
@@ -129,6 +135,13 @@ void ConcatEngine::startConcat(const QStringList &files, const QString &outputPa
     m_stdoutBuf.clear();
     m_stderrBuf.clear();
     m_process = new QProcess(this);
+#ifdef Q_OS_WIN
+    // 低于普通优先级（现场反馈③）
+    m_process->setCreateProcessArgumentsModifier(
+        [](QProcess::CreateProcessArguments *a) {
+            a->flags |= CREATE_BELOW_NORMAL_PRIORITY_CLASS;
+        });
+#endif
     m_process->setProgram(ffmpeg);
     m_process->setArguments(args);
     connect(m_process, &QProcess::readyReadStandardOutput,

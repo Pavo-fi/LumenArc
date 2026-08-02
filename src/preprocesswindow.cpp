@@ -224,6 +224,15 @@ QWidget *PreprocessWindow::buildPageImport()
     auto *row = new QHBoxLayout();
     auto *btnAdd = new QPushButton(lang("添加文件…", "Add files…"), w);
     auto *btnClear = new QPushButton(lang("清空重选", "Clear all"), w);
+    m_skipOcrCheck = new QCheckBox(
+        lang("已有流内录制时间的片段跳过画面识别（快，推荐）",
+             "Skip on-screen OCR for clips with in-stream record time (fast, recommended)"), w);
+    m_skipOcrCheck->setChecked(true);
+    m_skipOcrCheck->setToolTip(lang(
+        "Dahua .dav 等片段内部已写录制时刻，足以排序；跳过识别可提速数十倍。"
+        "取消勾选则对所有片段做画面时间识别（交叉校验更充分但更慢）",
+        "Clips like Dahua .dav carry record time internally; skipping OCR is "
+        "orders of magnitude faster. Uncheck to OCR everything (slower cross-check)."));
     m_btnBeginSort = new QPushButton(lang("下一步：自动排序 →", "Next: auto sort →"), w);
     m_btnBeginSort->setEnabled(false);
     m_btnBeginSort->setMinimumHeight(36);
@@ -233,6 +242,7 @@ QWidget *PreprocessWindow::buildPageImport()
         .arg(Theme::Accent, Theme::AccentOnDark, Theme::BgCard, Theme::TextMuted));
     row->addWidget(btnAdd);
     row->addWidget(btnClear);
+    row->addWidget(m_skipOcrCheck);
     row->addStretch(1);
     row->addWidget(m_btnBeginSort);
     lay->addLayout(row);
@@ -320,6 +330,7 @@ void PreprocessWindow::onBeginSort()
     m_btnBeginSort->setEnabled(false);
     m_importStatus->setText(lang("正在分析素材（识别画面时间）…",
                                  "Analyzing clips (reading on-screen time)…"));
+    m_coord->setSkipOcrWhenAbsStart(m_skipOcrCheck->isChecked());
     m_coord->begin(m_pendingFiles);
     updateStepBar();
 }
@@ -1054,11 +1065,13 @@ QWidget *PreprocessWindow::buildPageRun()
     m_resultEvidence->setStyleSheet(QStringLiteral("color:%1;").arg(Theme::TextSecond));
     rcLay->addWidget(m_resultEvidence);
     auto *rcRow = new QHBoxLayout();
+    m_btnPlayOutput = new QPushButton(lang("在主窗口播放输出", "Play output in main window"), m_resultCard);
     m_btnOpenFolder = new QPushButton(lang("打开输出文件夹", "Open output folder"), m_resultCard);
     m_btnOpenReport = new QPushButton(lang("查看证据报告", "Open evidence report"), m_resultCard);
     auto *btnClose = new QPushButton(lang("完成", "Done"), m_resultCard);
     btnClose->setMinimumHeight(34);
     btnClose->setStyleSheet(m_btnBeginSort->styleSheet());
+    rcRow->addWidget(m_btnPlayOutput);
     rcRow->addWidget(m_btnOpenFolder);
     rcRow->addWidget(m_btnOpenReport);
     rcRow->addStretch(1);
@@ -1085,6 +1098,10 @@ QWidget *PreprocessWindow::buildPageRun()
             this, &PreprocessWindow::onOpenOutputFolder);
     connect(m_btnOpenReport, &QPushButton::clicked,
             this, &PreprocessWindow::onOpenReport);
+    connect(m_btnPlayOutput, &QPushButton::clicked, this, [this]() {
+        if (!m_reportOutputPath.isEmpty())
+            emit openOutputRequested(m_reportOutputPath);
+    });
     connect(btnClose, &QPushButton::clicked, this, &QWidget::close);
     return w;
 }
@@ -1199,6 +1216,7 @@ void PreprocessWindow::onFinished(const PreprocessReport &report)
     m_runEta->clear();
     m_btnCancel->setEnabled(false);
     m_reportCsv = report.reportCsvPath;
+    m_reportOutputPath = report.outputPath;
     m_outputDir = report.outputPath.isEmpty()
         ? report.evidenceDir : QFileInfo(report.outputPath).absolutePath();
 

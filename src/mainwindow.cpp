@@ -506,6 +506,8 @@ MainWindow::~MainWindow()
 void MainWindow::openPreprocessWindow()
 {
     auto *w = new PreprocessWindow(m_analysisEngine, this);
+    connect(w, &PreprocessWindow::openOutputRequested,
+            this, &MainWindow::openVideoFile);
     w->show();
     w->raise();
     w->activateWindow();

@@ -12,6 +12,13 @@
 #include "python_analysis_engine.h"
 
 #include <QProcess>
+#include <QProcessEnvironment>
+#ifdef Q_OS_WIN
+#include <qt_windows.h>
+#ifndef CREATE_BELOW_NORMAL_PRIORITY_CLASS
+#define CREATE_BELOW_NORMAL_PRIORITY_CLASS 0x00004000
+#endif
+#endif
 #include <QTimer>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -101,7 +108,8 @@ bool TimestampOcrEngine::available(QString *errorDetail)
 
 void TimestampOcrEngine::run(const QStringList &paths, const QString &workDir,
                              const QMap<QString, qint64> &trustedDurationsMs,
-                             const QString &evidenceDir, bool withSha256)
+                             const QString &evidenceDir, bool withSha256,
+                             const QStringList &framesOnlyFiles)
 {
     if (isRunning())
         return;
@@ -134,6 +142,22 @@ void TimestampOcrEngine::run(const QStringList &paths, const QString &workDir,
         f.write(QJsonDocument(durObj).toJson(QJsonDocument::Compact));
     }
 
+    // 仅截帧名单 → JSON（键 framesOnly，与脚本约定一致）
+    QString framesOnlyPath;
+    if (!framesOnlyFiles.isEmpty()) {
+        QJsonArray arr;
+        for (const QString &p : framesOnlyFiles)
+            arr.append(QDir::toNativeSeparators(p));
+        QJsonObject fo;
+        fo.insert(QStringLiteral("framesOnly"), arr);
+        framesOnlyPath = workDir + QStringLiteral("/frames_only.json");
+        QFile f(framesOnlyPath);
+        if (f.open(QIODevice::WriteOnly | QIODevice::Text))
+            f.write(QJsonDocument(fo).toJson(QJsonDocument::Compact));
+        else
+            framesOnlyPath.clear();   // 写失败则退化为全量 OCR（不静默）
+    }
+
     const QString script = QCoreApplication::applicationDirPath()
         + QStringLiteral("/probe_timestamps.py");
     QStringList args{QStringLiteral("-X"), QStringLiteral("utf8"),
@@ -146,6 +170,8 @@ void TimestampOcrEngine::run(const QStringList &paths, const QString &workDir,
         args << QStringLiteral("--evidence-dir") << evidenceDir;
     if (withSha256)
         args << QStringLiteral("--with-sha256");
+    if (!framesOnlyPath.isEmpty())
+        args << QStringLiteral("--frames-only-json") << framesOnlyPath;
     args << paths;
 
     m_total = paths.size();
@@ -156,6 +182,20 @@ void TimestampOcrEngine::run(const QStringList &paths, const QString &workDir,
     m_process = new QProcess(this);
     m_process->setProgram(pythonExecutable());
     m_process->setArguments(args);
+
+    // 线程过订阅防护（现场反馈③：OCR 期间主窗口分析被饿殍）：
+    // 子进程数学库单线程（多进程×单线程），进程级低于普通优先级
+    QProcessEnvironment env = QProcessEnvironment::systemEnvironment();
+    env.insert(QStringLiteral("OMP_NUM_THREADS"), QStringLiteral("1"));
+    env.insert(QStringLiteral("OPENBLAS_NUM_THREADS"), QStringLiteral("1"));
+    env.insert(QStringLiteral("MKL_NUM_THREADS"), QStringLiteral("1"));
+    m_process->setProcessEnvironment(env);
+#ifdef Q_OS_WIN
+    m_process->setCreateProcessArgumentsModifier(
+        [](QProcess::CreateProcessArguments *a) {
+            a->flags |= CREATE_BELOW_NORMAL_PRIORITY_CLASS;
+        });
+#endif
     connect(m_process, &QProcess::readyReadStandardOutput, this, [this]() {
         m_stdoutBuf += m_process->readAllStandardOutput();
     });

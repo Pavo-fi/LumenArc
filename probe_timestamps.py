@@ -42,6 +42,7 @@ CROP_W_RATIO = 0.30          # crop block width  = 30% of frame width
 CROP_W_RATIO_WIDE = 0.60     # second-pass width when the OSD line is cut off
 CROP_H_RATIO = 0.12          # crop block height = 12% of frame height
 CROP_MIN_WIDTH = 512         # upscale crop to at least this width
+OCR_MAX_WIDTH = 1600         # frames downscaled to this width before OCR
 MIN_OCR_SCORE = 0.6          # below -> discard block (digit-confusion guard)
 SINGLE_HIT_MIN_SCORE = 0.85  # single-frame vote acceptance (RapidOCR calibration)
 VOTE_TOLERANCE_MS = 1500     # implied-start cluster tolerance
@@ -72,10 +73,16 @@ _work_ctx = {}
 
 
 def _init_engine():
-    """ProcessPoolExecutor initializer: load model once per worker process."""
+    """ProcessPoolExecutor initializer: load model once per worker process.
+    Single-threaded inference per worker: N workers x 1 thread avoids the
+    thread oversubscription that starves the main app's analysis (field
+    report: luminance analysis 5s -> 5min during OCR)."""
     global _engine
     from rapidocr_onnxruntime import RapidOCR
-    _engine = RapidOCR()
+    try:
+        _engine = RapidOCR(intra_op_num_threads=1, inter_op_num_threads=1)
+    except TypeError:
+        _engine = RapidOCR()
 
 
 def _cleanup_dir(path):
@@ -321,19 +328,37 @@ def _search_crops(crops, filename, use_binary):
 
 def ocr_frame(frame_path, filename):
     """OCR one candidate frame. Cost-bounded adaptive chain:
-      narrow crops + enhanced -> narrow + binary -> wide crops + enhanced.
-    Returns dict(best) or None."""
+      narrow crops + enhanced -> narrow + binary -> wide corner crops.
+    Frames are downscaled to OCR_MAX_WIDTH first (det cost scales with
+    pixels; 20px+ OSD text stays legible). Returns dict(best) or None."""
     img = cv2.imread(frame_path)
     if img is None:
         return None
+    h, w = img.shape[:2]
+    if w > OCR_MAX_WIDTH:
+        img = cv2.resize(img, (OCR_MAX_WIDTH, int(h * OCR_MAX_WIDTH / w)),
+                         interpolation=cv2.INTER_AREA)
     crops = crop_blocks(img)
     best = _search_crops(crops, filename, use_binary=False)
     if best is None:
         best = _search_crops(crops, filename, use_binary=True)
     if best is None:
-        best = _search_crops(crop_blocks(img, wide=True), filename,
+        # 宽裁剪兜底仅查两个上角（日期行长被窄裁剪切断的场景；控制成本）
+        best = _search_crops(crop_blocks(img, wide=True)[:2], filename,
                              use_binary=False)
     return best
+
+
+def _ocr_frame_capped(frame_path, filename):
+    """Cost-capped OCR for bonus frames: one narrow-enhanced pass only."""
+    img = cv2.imread(frame_path)
+    if img is None:
+        return None
+    h, w = img.shape[:2]
+    if w > OCR_MAX_WIDTH:
+        img = cv2.resize(img, (OCR_MAX_WIDTH, int(h * OCR_MAX_WIDTH / w)),
+                         interpolation=cv2.INTER_AREA)
+    return _search_crops(crop_blocks(img), filename, use_binary=False)
 
 
 def vote(candidates):
@@ -439,8 +464,9 @@ def process_file(video_path, ffmpeg_path, frame_dir, duration_ms):
     w_last, conf_last, ch_last, used_last = ocr_side(tail_cands, base)
 
     # bonus: tail vote failed but eof frame exists -> low-confidence evidence
+    # (cost-capped: single narrow-enhanced pass, no wide fallback)
     if w_last <= 0 and bonus_frame:
-        o = ocr_frame(bonus_frame, base)
+        o = _ocr_frame_capped(bonus_frame, base)
         if o is not None:
             wall = int(time.mktime(o["dt"].timetuple()) * 1000) + o["ms"]
             w_last, conf_last = wall, 0.5
@@ -485,8 +511,13 @@ def _worker(video_path):
     tag = hashlib.sha1(video_path.encode("utf-8")).hexdigest()[:12]
     frame_dir = os.path.join(ctx["frame_root"], tag)
     try:
-        res = process_file(video_path, ctx["ffmpeg"], frame_dir,
-                           ctx["durations"].get(video_path, 0))
+        if video_path in ctx.get("frames_only", ()):
+            res = process_file_frames_only(video_path, ctx["ffmpeg"],
+                                           frame_dir,
+                                           ctx["durations"].get(video_path, 0))
+        else:
+            res = process_file(video_path, ctx["ffmpeg"], frame_dir,
+                               ctx["durations"].get(video_path, 0))
         res["frameTag"] = tag
     except Exception as e:
         import traceback
@@ -498,10 +529,33 @@ def _worker(video_path):
     return res
 
 
-def _worker_init(ffmpeg_path, frame_root, durations, sha256):
-    _init_engine()
+def process_file_frames_only(video_path, ffmpeg_path, frame_dir, duration_ms):
+    """Evidence frames without OCR (in-stream absolute time already trusted):
+    one head frame + one tail frame, no inference at all."""
+    os.makedirs(frame_dir, exist_ok=True)
+    out = {"file": video_path, "ok": True, "framesOnly": True,
+           "first": None, "last": None,
+           "durationMs": duration_ms, "diag": {}}
+    p1 = os.path.join(frame_dir, "head_1s.png")
+    el, actual = extract_frame(ffmpeg_path, video_path, p1, ss=1)
+    if el >= 0:
+        out["first"] = {"relMs": int(actual or 1000), "text": "", "conf": 0,
+                        "frameImg": p1, "cropImg": ""}
+    p2 = os.path.join(frame_dir, "tail_eof.png")
+    el, actual = extract_frame(ffmpeg_path, video_path, p2, sseof=True,
+                               timeout=FFMPEG_TAIL_TIMEOUT_S)
+    if el >= 0:
+        out["last"] = {"relMs": int(actual or 0), "text": "", "conf": 0,
+                       "frameImg": p2, "cropImg": ""}
+    return out
+
+
+def _worker_init(ffmpeg_path, frame_root, durations, sha256,
+                 frames_only=frozenset()):
+    # 模型加载惰性化（首个 OCR 调用时）：纯 frames-only 批次不加载模型
     _work_ctx.update({"ffmpeg": ffmpeg_path, "frame_root": frame_root,
-                      "durations": durations, "sha256": sha256})
+                      "durations": durations, "sha256": sha256,
+                      "frames_only": set(frames_only)})
 
 
 def sha256_file(path):
@@ -524,6 +578,9 @@ def main():
     ap.add_argument("--duration-json", default="",
                     help="JSON object {file: trustedDurationMs} from C++ side")
     ap.add_argument("--with-sha256", action="store_true")
+    ap.add_argument("--frames-only-json", default="",
+                    help="JSON {framesOnly: [file]}: extract evidence frames "
+                         "but skip OCR (in-stream absolute time already trusted)")
     ap.add_argument("--evidence-dir", default="",
                     help="persistent dir for evidence frames; default=temp")
     args = ap.parse_args()
@@ -540,6 +597,15 @@ def main():
                              for k, v in json.load(f).items()}
         except (json.JSONDecodeError, ValueError) as e:
             print(f"WARNING:duration-json parse failed: {e}", file=sys.stderr)
+
+    frames_only = set()
+    if args.frames_only_json and os.path.isfile(args.frames_only_json):
+        try:
+            with open(args.frames_only_json, "r", encoding="utf-8") as f:
+                frames_only = {os.path.normpath(p)
+                               for p in json.load(f).get("framesOnly", [])}
+        except (json.JSONDecodeError, ValueError, AttributeError) as e:
+            print(f"WARNING:frames-only-json parse failed: {e}", file=sys.stderr)
 
     files = [os.path.normpath(f) for f in args.files]
     for f in files:
@@ -560,7 +626,7 @@ def main():
                 max_workers=workers,
                 initializer=_worker_init,
                 initargs=(args.ffmpeg_path, frame_root, durations,
-                          args.with_sha256)) as pool:
+                          args.with_sha256, frames_only)) as pool:
             futs = {pool.submit(_worker, f): f for f in files}
             done = 0
             for fut in futures.as_completed(futs):

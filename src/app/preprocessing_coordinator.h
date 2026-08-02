@@ -42,6 +42,8 @@ public:
 
     /// 可信时长来源（引擎中立接口注入，R4；空 = 仅用容器时长）
     void setAnalysisEngine(IAnalysisEngine *engine);
+    /// 流内绝对时间可信的文件跳过 OCR（默认 true；仅截证据帧）
+    void setSkipOcrWhenAbsStart(bool on) { m_skipOcrWhenAbsStart = on; }
 
     void begin(const QStringList &files);
     void confirmOrder();                    // UserConfirm → Precheck
@@ -101,6 +103,7 @@ private:
     void writeOperationsLog(const QString &dir) const;
 
     IAnalysisEngine *m_analysis = nullptr;      // 不持有
+    bool m_skipOcrWhenAbsStart = true;
     MediaProbeEngine *m_probeEngine;
     TimestampOcrEngine *m_ocrEngine;
     ConcatEngine *m_concatEngine;

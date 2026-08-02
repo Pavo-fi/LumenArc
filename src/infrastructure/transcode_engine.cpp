@@ -13,6 +13,12 @@
 #include "domain/preprocess_text.h"
 
 #include <QProcess>
+#ifdef Q_OS_WIN
+#include <qt_windows.h>
+#ifndef CREATE_BELOW_NORMAL_PRIORITY_CLASS
+#define CREATE_BELOW_NORMAL_PRIORITY_CLASS 0x00004000
+#endif
+#endif
 #include <QTimer>
 #include <QFile>
 #include <QDir>
@@ -78,6 +84,13 @@ void TranscodeEngine::run(const TranscodeRequest &req)
     m_stdoutBuf.clear();
     m_stderrBuf.clear();
     m_process = new QProcess(this);
+#ifdef Q_OS_WIN
+    // 低于普通优先级：转码期间主窗口分析/播放保持响应（现场反馈③）
+    m_process->setCreateProcessArgumentsModifier(
+        [](QProcess::CreateProcessArguments *a) {
+            a->flags |= CREATE_BELOW_NORMAL_PRIORITY_CLASS;
+        });
+#endif
     m_process->setProgram(PythonAnalysisEngine::findFfmpegPath());
     m_process->setArguments(buildArgs(req, m_tempOutput));
     connect(m_process, &QProcess::readyReadStandardOutput,

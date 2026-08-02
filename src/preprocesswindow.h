@@ -43,6 +43,10 @@ class PreprocessWindow : public QMainWindow
 public:
     explicit PreprocessWindow(IAnalysisEngine *analysis, QWidget *parent = nullptr);
 
+signals:
+    /// 请求主窗口播放输出文件（MainWindow 接线 openVideoFile，R2 不回转）
+    void openOutputRequested(const QString &path);
+
 private slots:
     // ① 导入
     void onAddFiles();
@@ -116,6 +120,7 @@ private:
     QProgressBar *m_importProgress = nullptr;
     QLabel *m_importStatus = nullptr;
     QPushButton *m_btnBeginSort = nullptr;
+    QCheckBox *m_skipOcrCheck = nullptr;
     QStringList m_pendingFiles;
 
     // ② 校对
@@ -165,7 +170,9 @@ private:
     QLabel *m_resultEvidence = nullptr;
     QPushButton *m_btnOpenFolder = nullptr;
     QPushButton *m_btnOpenReport = nullptr;
+    QPushButton *m_btnPlayOutput = nullptr;
     QElapsedTimer m_runTimer;
     QString m_reportCsv;
+    QString m_reportOutputPath;
     QString m_outputDir;
 };

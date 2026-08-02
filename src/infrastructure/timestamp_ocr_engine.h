@@ -45,9 +45,12 @@ public:
     /// 批量 OCR（单 Python 进程，脚本内多进程池）。
     /// trustedDurationsMs：可信时长表（键=文件路径，缺省项脚本 ffprobe 兜底）。
     /// evidenceDir：证据帧持久目录（空 = 临时目录，任务结束清理）。
+    /// framesOnlyFiles：仅截取证据帧、跳过 OCR 推理的文件（流内绝对时间
+    /// 已可信，识别仅徒增耗时——现场反馈②）。
     void run(const QStringList &paths, const QString &workDir,
              const QMap<QString, qint64> &trustedDurationsMs,
-             const QString &evidenceDir, bool withSha256);
+             const QString &evidenceDir, bool withSha256,
+             const QStringList &framesOnlyFiles = {});
     void cancel();
     bool isRunning() const;
 

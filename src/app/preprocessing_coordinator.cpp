@@ -250,9 +250,21 @@ void PreprocessingCoordinator::onTrustedDurationsReady(const QMap<QString, qint6
         onOcrFinished(degraded);
         return;
     }
+    // 流内绝对时间已可信的文件跳过 OCR 推理（现场反馈②：OCR 全失败的
+    // DHAV 批次耗时 8.7min；仅截证据帧，排序依据 absStart）
+    QStringList framesOnly;
+    if (m_skipOcrWhenAbsStart) {
+        for (const QString &f : m_files) {
+            if (m_probes.value(f).absStartEpochMs > 0)
+                framesOnly << f;
+        }
+        if (!framesOnly.isEmpty())
+            log(QStringLiteral("[%1] %2 个文件已有流内录制时间，跳过画面识别"
+                               "（仅截证据帧）").arg(tsLog()).arg(framesOnly.size()));
+    }
     m_ocrEngine->run(m_files, m_evidenceDir, durMap,
                      m_evidenceDir + QStringLiteral("/frames"),
-                     m_opts.withSha256);
+                     m_opts.withSha256, framesOnly);
 }
 
 void PreprocessingCoordinator::onOcrEngineError(PreprocessError error, const QString &detail)
@@ -524,6 +536,10 @@ void PreprocessingCoordinator::startNextConcat()
     QString safeChannel = m_currentConcatGroup;
     safeChannel.replace(QRegularExpression(QStringLiteral(R"([\\/:*?"<>|()])")),
                         QStringLiteral("_"));
+    // 默认组输出名友好化（现场反馈①：`_默认组__concat.mp4` 难辨认）
+    if (safeChannel == QStringLiteral("（默认组）")
+        || safeChannel == QStringLiteral("_默认组_"))
+        safeChannel = QStringLiteral("merged");
     req.outputPath = allocateOutput(m_outputDir,
                                     safeChannel + QStringLiteral("_concat"));
     qint64 totalMs = 0;
