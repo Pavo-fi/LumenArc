@@ -16,6 +16,26 @@
 #include <QAudioDevice>
 #include <QAudioFormat>
 #include <QMediaDevices>
+#include <QFile>
+#include <QTextStream>
+#include <QDateTime>
+#include <QStandardPaths>
+
+// --- 临时诊断：音频健康日志（定位“特定文件无声”问题，定位后移除） ---
+// 输出 %TEMP%/lumenarc_audio.log；仅工作线程调用，逐行 append
+static void audioDiag(const QString &msg)
+{
+    static QFile f(QStandardPaths::standardLocations(QStandardPaths::TempLocation).first()
+                   + QStringLiteral("/lumenarc_audio.log"));
+    if (!f.isOpen())
+        f.open(QIODevice::Append | QIODevice::Text);
+    if (!f.isOpen())
+        return;
+    QTextStream ts(&f);
+    ts << QDateTime::currentDateTime().toString(QStringLiteral("HH:mm:ss.zzz"))
+       << ' ' << msg << '\n';
+    ts.flush();
+}
 
 extern "C" {
 #include <libavformat/avformat.h>
@@ -29,8 +49,6 @@ extern "C" {
 
 #ifdef Q_OS_WIN
 #include <dxgi.h>
-#include <d3d11.h>
-#include <libavutil/hwcontext_d3d11va.h>
 #endif
 
 // D3D11VA get_format 回调：优先硬解像素格式，否则回退软解
@@ -71,7 +89,6 @@ QVector<FfmpegVideoEngine::D3D11AdapterInfo> FfmpegVideoEngine::availableAdapter
 FfmpegVideoEngine::FfmpegVideoEngine(QObject *parent)
     : IVideoEngine(parent)
 {
-    qRegisterMetaType<GpuFrameInfo>("GpuFrameInfo");   // 跨线程信号排队投递
 }
 
 FfmpegVideoEngine::~FfmpegVideoEngine()
@@ -155,11 +172,16 @@ bool FfmpegVideoEngine::ensureAudioOutput()
     fmt.setSampleRate(m_outSampleRate);
     fmt.setChannelCount(m_outChannels);
     fmt.setSampleFormat(QAudioFormat::Int16);
-    if (!device.isFormatSupported(fmt)) {
+    const bool fmtSupported = device.isFormatSupported(fmt);
+    if (!fmtSupported) {
         fmt = device.preferredFormat();
         m_outSampleRate = fmt.sampleRate();
         m_outChannels = fmt.channelCount();
     }
+    audioDiag(QStringLiteral("ensureAudioOutput: dev='%1' in=%2Hz/%3ch fmtSupported=%4 out=%5Hz/%6ch")
+              .arg(device.description()).arg(m_adec->sample_rate)
+              .arg(m_adec->ch_layout.nb_channels).arg(fmtSupported)
+              .arg(m_outSampleRate).arg(m_outChannels));
 
     // 重采样器：解码帧格式 → 输出格式
     AVChannelLayout outLayout;
@@ -181,6 +203,9 @@ bool FfmpegVideoEngine::ensureAudioOutput()
     // 推模式：工作线程无 Qt 事件循环，拉模式的设备回调不会被驱动
     m_sinkIo = m_sink->start();
     m_audioSinkOk = (m_sinkIo != nullptr);
+    audioDiag(QStringLiteral("sink start: io=%1 state=%2 err=%3 bufSize=%4")
+              .arg(m_sinkIo != nullptr).arg(m_sink->state()).arg(m_sink->error())
+              .arg(bytesPerSec));
     // 音频帧时长估算：AAC 固定 1024 样本/帧（8kHz=128ms，16kHz=64ms，44.1k≈23ms）
     m_audioFrameMs = qMax<qint64>(1, 1024 * 1000 / m_adec->sample_rate);
     return m_audioSinkOk.load();
@@ -212,16 +237,39 @@ void FfmpegVideoEngine::processAudioPacket(AVPacket *pkt)
     if (!m_adec)
         return;
 
-    // rate != 1.0：一期音频静音，解码直接丢弃
-    if (qAbs(m_rate.load() - 1.0f) > 0.01f)
-        return;
+    // scrub 拖拽：片段音频——目标变更且节流窗口已过则重置 sink 布防新片段，
+    // 只写目标后 ~100ms 音频，拖拽时听到与光标对齐的声音
+    const bool scrubbing = m_scrubMode.load();
+    if (scrubbing && !m_scrubSnippetAudio)
+        return;   // 快拖（>4×）：片段音频及其收割阻塞追逐循环，关闭
+    if (scrubbing) {
+        const qint64 target = m_scrubTargetMs.load();
+        if (target < 0)
+            return;
+        if (!m_monotonic.isValid())
+            m_monotonic.start();
+        const qint64 now = m_monotonic.elapsed();
+        if (target != m_scrubAudioTarget
+            && now - m_lastScrubAudioEmitElapsed >= SCRUB_AUDIO_EMIT_GAP_MS) {
+            if (m_sink) {
+                m_sink->reset();            // 丢弃陈旧缓冲，片段与光标对齐
+                m_sinkIo = m_sink->start(); // reset 后需重新 start 才能写入（同 seek 路径）
+            }
+            m_scrubAudioTarget = target;
+            m_lastScrubAudioEmitElapsed = now;
+        }
+        if (target != m_scrubAudioTarget)
+            return;   // 节流中：丢弃本包
+    }
 
-    // scrub 拖拽期间静音（追逐循环自行丢音频包，此处防其他路径漏入）
-    if (m_scrubMode.load())
+    if (!ensureAudioOutput()) {
+        if (!m_diagOutFailLogged) {
+            m_diagOutFailLogged = true;
+            audioDiag(QStringLiteral("ensureAudioOutput FAILED: adec=%1 astream=%2")
+                      .arg(m_adec != nullptr).arg(m_astream));
+        }
         return;
-
-    if (!ensureAudioOutput())
-        return;
+    }
 
     m_sink->setVolume(m_volume.load() / 100.0f);  // 音量原子量随包应用
 
@@ -235,7 +283,8 @@ void FfmpegVideoEngine::processAudioPacket(AVPacket *pkt)
         qint64 relMs = ptsToRelMsA(frame->best_effort_timestamp);
         qint64 frameDurMs = frame->nb_samples * 1000 / inRate;
         double skipFrac = 0.0;
-        if (relMs >= 0 && m_audioDiscardBeforeRelMs >= 0) {
+        // scrub 模式由片段窗口自行定位，忽略 seek 丢弃点（否则回拖到 seek 点前会无声）
+        if (!scrubbing && relMs >= 0 && m_audioDiscardBeforeRelMs >= 0) {
             if (relMs + frameDurMs <= m_audioDiscardBeforeRelMs) {
                 av_frame_unref(frame);
                 continue;                       // 整帧早于目标：丢弃
@@ -244,6 +293,14 @@ void FfmpegVideoEngine::processAudioPacket(AVPacket *pkt)
                 skipFrac = static_cast<double>(m_audioDiscardBeforeRelMs - relMs)
                            / frameDurMs;        // 部分重叠：按比例裁剪起始部分
             }
+        }
+
+        // scrub 片段窗口：只保留 [target, target+WINDOW] 内的帧
+        if (scrubbing && (relMs < 0
+                          || relMs + frameDurMs <= m_scrubAudioTarget
+                          || relMs >= m_scrubAudioTarget + SCRUB_AUDIO_WINDOW_MS)) {
+            av_frame_unref(frame);
+            continue;
         }
 
         int outSamples = swr_get_out_samples(m_swr, frame->nb_samples);
@@ -262,6 +319,18 @@ void FfmpegVideoEngine::processAudioPacket(AVPacket *pkt)
                     offset = qBound<qint64>(0, offset, bytes - align);
                 }
 
+                const char *payloadData = out.constData() + offset;
+                qint64 payload = bytes - offset;
+
+                if (scrubbing) {
+                    // 片段直写：无背压等待（片段 ≤100ms），不打断追逐循环
+                    if (m_sinkIo)
+                        m_sinkIo->write(payloadData, payload);
+                    m_audioBytesWritten += payload;
+                    av_frame_unref(frame);
+                    continue;
+                }
+
                 // 首个写入样本锚定音频时钟基点（F-A：声音与画面同一起点）
                 if (m_audioBaseRelMs < 0) {
                     if (relMs >= 0)
@@ -270,7 +339,19 @@ void FfmpegVideoEngine::processAudioPacket(AVPacket *pkt)
                         m_audioBaseRelMs = qMax<qint64>(0, m_audioDiscardBeforeRelMs);
                 }
 
-                qint64 payload = bytes - offset;
+                // 倍速变速音频：重采样使音频时长随 rate 缩放（音调随速度变化）
+                QByteArray resampled;
+                const float rate = m_rate.load();
+                if (qAbs(rate - 1.0f) > 0.01f) {
+                    resampled = resampleAudioForRate(payloadData, payload, rate);
+                    if (resampled.isEmpty()) {
+                        av_frame_unref(frame);
+                        continue;
+                    }
+                    payloadData = resampled.constData();
+                    payload = resampled.size();
+                }
+
                 // 背压：设备缓冲满则短暂等待（播放面自然节流）
                 int guard = 0;
                 while (m_sink->bytesFree() < payload && guard++ < 100
@@ -280,8 +361,35 @@ void FfmpegVideoEngine::processAudioPacket(AVPacket *pkt)
                     QThread::msleep(2);
                 }
                 if (m_sinkIo)
-                    m_sinkIo->write(out.constData() + offset, payload);
+                    m_sinkIo->write(payloadData, payload);
                 m_audioBytesWritten += payload;
+                if (guard >= 100)
+                    audioDiag(QStringLiteral("BACKPRESSURE TIMEOUT: sink not draining "
+                              "state=%1 err=%2 bytesFree=%3")
+                              .arg(m_sink->state()).arg(m_sink->error())
+                              .arg(m_sink->bytesFree()));
+                {
+                    const int16_t *s = reinterpret_cast<const int16_t *>(payloadData);
+                    const int n = static_cast<int>(payload / 2);
+                    for (int i = 0; i < n; ++i) {
+                        const int a = s[i] < 0 ? -int(s[i]) : int(s[i]);
+                        if (a > m_diagPeak)
+                            m_diagPeak = a;
+                    }
+                    m_diagDecodedMs += converted * 1000 / m_outSampleRate;
+                    if (m_diagDecodedMs >= 2000) {
+                        audioDiag(QStringLiteral(
+                            "play: state=%1 err=%2 bytesFree=%3 written=%4 outPeak=%5 (%6 dB)")
+                            .arg(m_sink->state()).arg(m_sink->error())
+                            .arg(m_sink->bytesFree()).arg(m_audioBytesWritten.load())
+                            .arg(m_diagPeak)
+                            .arg(m_diagPeak > 0
+                                 ? QString::number(20.0 * log10(m_diagPeak / 32768.0), 'f', 1)
+                                 : QStringLiteral("-inf")));
+                        m_diagDecodedMs = 0;
+                        m_diagPeak = 0;
+                    }
+                }
             }
         }
         av_frame_unref(frame);
@@ -289,141 +397,34 @@ void FfmpegVideoEngine::processAudioPacket(AVPacket *pkt)
     av_frame_free(&frame);
 }
 
+QByteArray FfmpegVideoEngine::resampleAudioForRate(const char *pcm, qint64 bytes, float rate) const
+{
+    // 变速重采样：rate>1 抽稀（加速+高音调），rate<1 插值（减速+低音调）。
+    // 线性插值，s16 交错多声道，输出帧数 = floor(输入帧数 / rate)。
+    const int ch = qMax(1, m_outChannels);
+    const qint64 inFrames = bytes / (static_cast<qint64>(ch) * 2);
+    if (inFrames < 2 || rate <= 0.0f)
+        return {};
+    const qint64 outFrames = static_cast<qint64>(inFrames / rate);
+    if (outFrames <= 0)
+        return {};
+    QByteArray out(static_cast<int>(outFrames * ch * 2), Qt::Uninitialized);
+    const qint16 *in = reinterpret_cast<const qint16 *>(pcm);
+    qint16 *dst = reinterpret_cast<qint16 *>(out.data());
+    for (qint64 n = 0; n < outFrames; ++n) {
+        const double pos = n * rate;
+        const qint64 i0 = static_cast<qint64>(pos);
+        const double frac = pos - i0;
+        const qint64 i1 = qMin(i0 + 1, inFrames - 1);
+        for (int c = 0; c < ch; ++c) {
+            const double s = in[i0 * ch + c] * (1.0 - frac) + in[i1 * ch + c] * frac;
+            dst[n * ch + c] = static_cast<qint16>(qBound(-32768.0, s, 32767.0));
+        }
+    }
+    return out;
+}
+
 float FfmpegVideoEngine::rate() const { return m_rate.load(); }
-
-bool FfmpegVideoEngine::setGpuFramesEnabled(bool on)
-{
-#ifdef Q_OS_WIN
-    m_gpuFramesWanted = on;
-    postCommand(Command::None);   // 唤醒工作线程评估
-    return true;
-#else
-    Q_UNUSED(on)
-    return false;
-#endif
-}
-
-#ifdef Q_OS_WIN
-// ---------------------------------------------------------------------------
-// GPU 零拷贝显示（实验，v1.6）：VideoProcessor NV12→BGRA → keyed-mutex 共享纹理
-// 生产方（工作线程）acquire 0 / release 1；消费方（UI/QRhi）acquire 1 / release 0。
-// 任何一步失败返回 false，displayFrame 回退 CPU 路径（兼容性红线）。
-// ---------------------------------------------------------------------------
-
-void FfmpegVideoEngine::releaseGpuPipeline()
-{
-    for (int i = 0; i < 2; ++i) {
-        m_gpuMutex[i].Reset();
-        m_gpuTex[i].Reset();
-        m_gpuHandle[i] = 0;
-    }
-    m_gpuVideoProc.Reset();
-    m_gpuVideoProcEnum.Reset();
-    m_gpuVideoCtx.Reset();
-    m_gpuVideoDev.Reset();
-    m_gpuW = m_gpuH = 0;
-}
-
-bool FfmpegVideoEngine::ensureGpuPipeline(int w, int h)
-{
-    if (m_gpuVideoProc && m_gpuW == w && m_gpuH == h)
-        return true;
-    releaseGpuPipeline();
-    if (!m_hwDeviceCtx)
-        return false;
-    auto *hwctx = reinterpret_cast<AVHWDeviceContext *>(m_hwDeviceCtx->data);
-    auto *d3d = static_cast<AVD3D11VADeviceContext *>(hwctx->hwctx);
-    if (!d3d || !d3d->device || !d3d->device_context)
-        return false;
-
-    if (FAILED(d3d->device->QueryInterface(IID_PPV_ARGS(&m_gpuVideoDev)))
-        || FAILED(d3d->device_context->QueryInterface(IID_PPV_ARGS(&m_gpuVideoCtx)))) {
-        releaseGpuPipeline();
-        return false;
-    }
-
-    D3D11_VIDEO_PROCESSOR_CONTENT_DESC cd{};
-    cd.InputFrameFormat = D3D11_VIDEO_FRAME_FORMAT_PROGRESSIVE;
-    cd.InputWidth = w;
-    cd.InputHeight = h;
-    cd.OutputWidth = w;
-    cd.OutputHeight = h;
-    cd.Usage = D3D11_VIDEO_USAGE_PLAYBACK_NORMAL;
-    if (FAILED(m_gpuVideoDev->CreateVideoProcessorEnumerator(&cd, &m_gpuVideoProcEnum))
-        || FAILED(m_gpuVideoDev->CreateVideoProcessor(m_gpuVideoProcEnum.Get(), 0,
-                                                      &m_gpuVideoProc))) {
-        releaseGpuPipeline();
-        return false;
-    }
-
-    for (int i = 0; i < 2; ++i) {
-        D3D11_TEXTURE2D_DESC td{};
-        td.Width = w;
-        td.Height = h;
-        td.MipLevels = 1;
-        td.ArraySize = 1;
-        td.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
-        td.SampleDesc = { 1, 0 };
-        td.Usage = D3D11_USAGE_DEFAULT;
-        td.BindFlags = D3D11_BIND_RENDER_TARGET;   // VideoProcessor 输出要求
-        td.MiscFlags = D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX;
-        if (FAILED(d3d->device->CreateTexture2D(&td, nullptr, &m_gpuTex[i]))) {
-            releaseGpuPipeline();
-            return false;
-        }
-        if (FAILED(m_gpuTex[i]->QueryInterface(IID_PPV_ARGS(&m_gpuMutex[i])))) {
-            releaseGpuPipeline();
-            return false;
-        }
-        Microsoft::WRL::ComPtr<IDXGIResource> res;
-        if (FAILED(m_gpuTex[i]->QueryInterface(IID_PPV_ARGS(&res)))
-            || FAILED(res->GetSharedHandle(reinterpret_cast<HANDLE *>(&m_gpuHandle[i])))) {
-            releaseGpuPipeline();
-            return false;
-        }
-    }
-    m_gpuW = w;
-    m_gpuH = h;
-    return true;
-}
-
-bool FfmpegVideoEngine::gpuBlitToShared(AVFrame *frame)
-{
-    if (!ensureGpuPipeline(frame->width, frame->height))
-        return false;
-    auto *hwctx = reinterpret_cast<AVHWDeviceContext *>(m_hwDeviceCtx->data);
-    auto *d3d = static_cast<AVD3D11VADeviceContext *>(hwctx->hwctx);
-
-    const int slot = (m_gpuSlot ^= 1);
-    if (FAILED(m_gpuMutex[slot]->AcquireSync(0, 500)))
-        return false;
-
-    bool ok = false;
-    ID3D11Texture2D *srcTex = reinterpret_cast<ID3D11Texture2D *>(frame->data[0]);
-    UINT srcSlice = static_cast<UINT>(reinterpret_cast<intptr_t>(frame->data[1]));
-
-    D3D11_VIDEO_PROCESSOR_INPUT_VIEW_DESC ivd{};
-    ivd.ViewDimension = D3D11_VPIV_DIMENSION_TEXTURE2D;
-    ivd.Texture2D.ArraySlice = srcSlice;
-    Microsoft::WRL::ComPtr<ID3D11VideoProcessorInputView> inView;
-    D3D11_VIDEO_PROCESSOR_OUTPUT_VIEW_DESC ovd{};
-    ovd.ViewDimension = D3D11_VPOV_DIMENSION_TEXTURE2D;
-    Microsoft::WRL::ComPtr<ID3D11VideoProcessorOutputView> outView;
-
-    if (SUCCEEDED(m_gpuVideoDev->CreateVideoProcessorInputView(
-            srcTex, m_gpuVideoProcEnum.Get(), &ivd, &inView))
-        && SUCCEEDED(m_gpuVideoDev->CreateVideoProcessorOutputView(
-            m_gpuTex[slot].Get(), m_gpuVideoProcEnum.Get(), &ovd, &outView))) {
-        D3D11_VIDEO_PROCESSOR_STREAM stream{};
-        stream.Enable = TRUE;
-        stream.pInputSurface = inView.Get();
-        ok = SUCCEEDED(m_gpuVideoCtx->VideoProcessorBlt(m_gpuVideoProc.Get(),
-                                                        outView.Get(), 0, 1, &stream));
-    }
-    m_gpuMutex[slot]->ReleaseSync(1);
-    return ok;
-}
-#endif // Q_OS_WIN
 
 bool FfmpegVideoEngine::ensureScrubDecoder()
 {
@@ -496,19 +497,78 @@ void FfmpegVideoEngine::chaseCacheClear()
     m_chaseCache.clear();
 }
 
+void FfmpegVideoEngine::diagScrubDisplay(const char *site, qint64 relMs, qint64 target)
+{
+    audioDiag(QStringLiteral("scrub display[%1]: rel=%2 target=%3 err=%4 gopLearn=%5 "
+              "chaseWall=%6 hopArmed=%7")
+              .arg(QString::fromLatin1(site)).arg(relMs).arg(target).arg(target - relMs)
+              .arg(m_gopLearnMs).arg(m_lastChaseWallMs).arg(m_hopFirstFrame ? 1 : 0));
+}
+
+void FfmpegVideoEngine::diagScrubFlush()
+{
+    const qint64 now = m_monotonic.elapsed();
+    if (now - m_diagScrubLastLogElapsed >= 2000) {
+        audioDiag(QStringLiteral(
+            "scrub 2s: displays=%1 cacheHits=%2 reseeks=%3 uiDrops=%4 maxGap=%5ms inFlight=%6")
+            .arg(m_diagScrubDisplays).arg(m_diagScrubCacheHits)
+            .arg(m_diagScrubReseeks).arg(m_diagScrubDrops)
+            .arg(m_diagScrubMaxGapMs).arg(m_framesInFlight.load()));
+        m_diagScrubDisplays = m_diagScrubCacheHits = m_diagScrubReseeks
+                            = m_diagScrubDrops = m_diagScrubMaxGapMs = 0;
+        m_diagScrubLastLogElapsed = now;
+    }
+}
+
+void FfmpegVideoEngine::diagScrubTick()
+{
+    const qint64 now = m_monotonic.elapsed();
+    if (m_diagScrubLastDispElapsed >= 0) {
+        const int gap = int(now - m_diagScrubLastDispElapsed);
+        if (gap > m_diagScrubMaxGapMs)
+            m_diagScrubMaxGapMs = gap;   // 相邻显示最大墙钟间隔（卡顿体感）
+    }
+    m_diagScrubLastDispElapsed = now;
+    ++m_diagScrubDisplays;
+    diagScrubFlush();
+}
+
 bool FfmpegVideoEngine::scrubChaseMainFrame()
 {
     if (!m_fmt || !m_vdec)
         return false;
+    if (!m_monotonic.isValid())
+        m_monotonic.start();
 
     const qint64 frameMs = m_fps > 0.0f ? static_cast<qint64>(1000.0f / m_fps.load()) : 40;
     const qint64 halfFrame = frameMs / 2;
     // 前进 decode-through 阈值：按学习到的 GOP 长度自适应——临界点是
     // "直追成本 delta/吞吐 = seek 固定成本 + 半个 GOP 的追赶成本"。
     // 稀疏 GOP（D17 10s）早 seek 更快；密 GOP 直追便宜。无索引文件收紧（margin 有界）
-    const qint64 gopEst = m_lastCatchupMs > 0 ? m_lastCatchupMs : 20000;
-    const qint64 SEEK_THRESHOLD_MS = m_indexed ? qBound<qint64>(4000LL, gopEst, 20000LL)
-                                               : qMax<qint64>(4000, m_seekMarginMs * 2);
+    // 超长 GOP（>6s，如监控恢复文件 15s GOP）：关键帧跳显模式，阈值收紧——
+    // 目标跑过 2.5s 即重 seek 跳显下一关键帧，不做 GOP 全程解码追赶
+    // （15s GOP 硬解追赶 ≈1s+ 墙钟停顿，是这类文件拖拽跳跃卡顿的物理根源）
+    // 超长 GOP（>6s）且实测追赶墙钟耗时 >120ms（解码器喂不饱）：关键帧跳显
+    // 模式，阈值收紧——目标跑过 2.5s 即重 seek 跳显下一关键帧，不做 GOP 全程
+    // 解码追赶（慢解码 + 长 GOP = 秒级墙钟停顿，是拖拽跳跃卡顿的物理根源）。
+    // 快解码器（如 D17 1440p 软解 ~3000fps，10s GOP 追赶仅 ~80ms）不跳显，
+    // 保持精确追赶——按实测墙钟自适应，不按文件类型一刀切
+    const qint64 gopEst = m_gopLearnMs > 0 ? m_gopLearnMs : 20000;
+    // 跳显判定（双通道，都用 reseek 落点实测的 GOP m_gopLearnMs，避免被
+    // 直追期的 m_lastCatchupMs 噪声污染）：
+    // ① sparseGop——超长 GOP 且追赶墙钟慢（>120ms）：跳显阈值 3s
+    // ② denseVelHop——密 GOP（≤2s）+ 快拖超实测解码吞吐（~31×）：跳显阈值 300ms，
+    //    误差 ≤1 GOP 在快拖中不可见；长 GOP 快解码文件（D17 10s GOP 追赶仅 ~80ms）
+    //    不进此通道，保持精确追赶
+    const bool sparseGop = m_gopLearnMs > 6000 && m_lastChaseWallMs > 120;
+    // 快拖跳显：目标速度超实测解码吞吐（~31×）时布防——但跳显与否最终由
+    // 显示点的实测误差决定（m_gopLearnMs 是“目标在 GOP 内的偏移”而非 GOP
+    // 长度，不能用于判定；误差 >2s 说明 GOP 其实很长，放弃跳显让精确追赶兜底）
+    const bool denseVelHop = qAbs(m_scrubVel) > 30.0 && !sparseGop;
+    const bool hopMode = sparseGop || denseVelHop;
+    const qint64 SEEK_THRESHOLD_MS = hopMode ? 2500
+                                     : m_indexed ? qBound<qint64>(4000LL, gopEst, 20000LL)
+                                                 : qMax<qint64>(4000, m_seekMarginMs * 2);
 
     qint64 target = m_scrubTargetMs.load();
     if (target < 0) {
@@ -516,11 +576,35 @@ bool FfmpegVideoEngine::scrubChaseMainFrame()
         return false;
     }
 
+    // 目标速度 EMA → 片段音频闸（>4× 快拖关闭片段音频与其收割）
+    {
+        const qint64 nowV = m_monotonic.elapsed();
+        if (m_velLastTargetMs >= 0) {
+            const qint64 dt = nowV - m_velLastElapsed;
+            if (dt > 0) {
+                const double inst = double(target - m_velLastTargetMs) / double(dt);
+                m_scrubVel = 0.5 * m_scrubVel + 0.5 * inst;
+            }
+        }
+        m_velLastTargetMs = target;
+        m_velLastElapsed = nowV;
+        m_scrubSnippetAudio = (qAbs(m_scrubVel) < 4.0);
+    }
+
     // 滚动缓存命中：目标帧已在追赶副产品缓存中（后退微调/抖动/重复目标），
-    // 直接显示，零 seek 零解码——这是慢拖手感的主要来源
+    // 直接显示，零 seek 零解码——这是慢拖手感的主要来源。
+    // 显示经 ~30Hz 节拍闸：闸未开短睡等下一拍，保证显示墙钟时刻均匀
     if (qAbs(target - m_positionMs.load()) > halfFrame) {
         if (AVFrame *hit = chaseCacheFind(target, halfFrame)) {
-            displayFrame(hit);
+            const qint64 now = m_monotonic.elapsed();
+            if (now - m_lastScrubDisplayElapsed >= scrubGateIntervalMs()) {
+                ++m_diagScrubCacheHits;   // 临时诊断
+                diagScrubDisplay("cache", ptsToRelMs(hit->best_effort_timestamp), target);
+                displayFrame(hit);
+                m_lastScrubDisplayElapsed = now;
+            } else {
+                QThread::msleep(2);   // 节拍闸未开：短睡等下一拍，避免空转
+            }
             return true;
         }
     }
@@ -532,13 +616,29 @@ bool FfmpegVideoEngine::scrubChaseMainFrame()
                         : (m_chaseSeekTargetMs >= 0) ? m_chaseSeekTargetMs
                         : m_positionMs.load();
     const qint64 delta = target - anchor;
-    if (delta > SEEK_THRESHOLD_MS || delta < -2 * frameMs) {
+    bool wantReseek = (delta > SEEK_THRESHOLD_MS || delta < -2 * frameMs);
+    // 跳显抑制：上一跳显示的关键帧距目标 gap（≈GOP 长），目标未越过
+    // "上一跳目标 + gap"（≈下一关键帧）前不重 seek——否则 decodePos 停在
+    // 关键帧、delta 永远超阈，退化成同一关键帧的 seek+重复显示风暴
+    if (wantReseek && delta > SEEK_THRESHOLD_MS && m_hopTargetMs >= 0
+        && target < m_hopTargetMs + m_hopGapMs)
+        wantReseek = false;
+    bool didReseek = false;
+    if (wantReseek) {
+        didReseek = true;
+        ++m_diagScrubReseeks;   // 临时诊断
         // 大跳/后退：主管线 seek + flush（落在上一个关键帧，下方解码追赶到目标窗口）
         // 追赶过滤由下方目标窗口完成，不走 drainDecoder 的 discard 路径
         scrubRedirectDemuxer(target);   // 内含 m_vdec/m_scDec flush
-        // 短追赶用硬解（thread_count=1 无管线填充延迟，24帧 ≈24-48ms）；
-        // 本文件已学习到长 GOP（实测追赶 >4s）时直接用多线程软解（~3000fps 吞吐）
-        m_chaseDec = (m_lastCatchupMs > 4000 && ensureScrubDecoder()) ? m_scDec : m_vdec;
+        // 超长 GOP / 密 GOP 超吞吐快拖：布防关键帧跳显。仅前进布防——
+        // 后退步进是精细回看，照常追赶到精确目标窗口
+        m_hopFirstFrame = hopMode && (delta > SEEK_THRESHOLD_MS);
+        m_hopTargetMs = -1;             // 方向/落点变更：旧抑制锚点失效
+        // 短追赶用硬解（thread_count=1 无管线填充延迟）；
+        // 长 GOP（实测 >4s）用多线程软解（~3000fps 吞吐）
+        m_chaseDec = (m_gopLearnMs > 4000 && !sparseGop && ensureScrubDecoder())
+                     ? m_scDec : m_vdec;
+        m_chaseStartElapsed = m_monotonic.elapsed();   // 追赶墙钟计时起点
         m_chaseDecodePosMs = -1;
         m_chaseSeekTargetMs = target;
         m_needMarginMeasure = false;   // margin 测量在 drainDecoder，chase 不用，防陈旧测量
@@ -559,8 +659,12 @@ bool FfmpegVideoEngine::scrubChaseMainFrame()
     AVFrame *frame = av_frame_alloc();
     bool shown = false;
     bool reseek = false;      // 目标大幅移动（后退或飞奔），交外层重定位
+    bool harvesting = false;  // 片段音频收割中：目标帧已显示，继续读包补全 100ms 音频窗口
+    int harvestBudget = 0;    // 收割剩余包预算（防高码流空转）
 
-    while (!shown && !reseek && !m_quit.load() && !hasPendingCommand()) {
+    while (!reseek && !m_quit.load() && !hasPendingCommand()) {
+        if (shown && !harvesting)
+            break;                        // 显示完成且无收割任务 → 交外层
         target = m_scrubTargetMs.load();      // 追逐中目标持续移动，每包刷新
         if (target < 0)
             break;
@@ -572,7 +676,8 @@ bool FfmpegVideoEngine::scrubChaseMainFrame()
                 m_chaseDecodePosMs = relMs;
                 if (dec == m_scDec)
                     chaseCachePush(relMs, frame);   // 软解帧入滚动缓存（refcount 零拷贝）
-                if (relMs >= target - halfFrame) {
+                if (!shown && relMs >= target - halfFrame) {
+                    diagScrubDisplay("eof-drain", relMs, target);
                     displayFrame(frame);
                     shown = true;
                 }
@@ -589,8 +694,19 @@ bool FfmpegVideoEngine::scrubChaseMainFrame()
             QThread::msleep(5);                   // demux 错误：退避后交外层
             break;
         }
+        if (harvesting && --harvestBudget <= 0)
+            harvesting = false;                   // 预算耗尽，交外层
         if (pkt->stream_index != m_vstream) {
-            av_packet_unref(pkt);                 // 音频/其他流：scrub 期间丢弃（静音拖拽）
+            if (pkt->stream_index == m_astream) {
+                processAudioPacket(pkt);   // scrub 片段音频（拖拽有声）
+                if (harvesting && m_scrubAudioTarget >= 0) {
+                    // 音频已覆盖满布防窗口 [target, target+100ms] → 收割完成
+                    const qint64 apts = ptsToRelMsA(pkt->pts);
+                    if (apts >= m_scrubAudioTarget + SCRUB_AUDIO_WINDOW_MS)
+                        harvesting = false;
+                }
+            }
+            av_packet_unref(pkt);
             continue;
         }
         if (avcodec_send_packet(dec, pkt) >= 0) {
@@ -599,9 +715,12 @@ bool FfmpegVideoEngine::scrubChaseMainFrame()
                 if (!catchupMeasured) {
                     catchupMeasured = true;
                     m_lastCatchupMs = target - relMs;   // 学习本文件 GOP 长度
+                    if (didReseek)
+                        m_gopLearnMs = target - relMs;  // reseek 落点间距 = 干净的 GOP 代理
                     // 首帧实测追赶长度：>4s 且还在硬解 → 切多线程软解重 seek。
                     // 硬解短追赶低延迟，软解长追赶高吞吐，一次额外 seek ≪ 长追赶节省
-                    if (dec == m_vdec && m_lastCatchupMs > 4000 && ensureScrubDecoder()) {
+                    if (dec == m_vdec && m_gopLearnMs > 4000 && !m_hopFirstFrame
+                        && ensureScrubDecoder()) {
                         av_frame_unref(frame);
                         av_packet_unref(pkt);
                         scrubRedirectDemuxer(target);   // flush 两个解码器
@@ -609,20 +728,102 @@ bool FfmpegVideoEngine::scrubChaseMainFrame()
                         dec = m_scDec;
                         m_chaseDecodePosMs = -1;
                         m_chaseSeekTargetMs = target;
+                        // 追赶墙钟从重 seek 点重计：不把硬解空耗算进软解样本，
+                        // 防胀大的墙钟样本把 sparseGop 误判布防（D17 回归）
+                        m_chaseStartElapsed = m_monotonic.elapsed();
                         catchupMeasured = false;
                         break;   // demux 已重定位，外层 while 继续读包喂软解
                     }
                 }
                 m_chaseDecodePosMs = relMs;   // 解码位置始终跟踪（含未显示帧）
+                // 关键帧跳显（超长 GOP 前进飞奔）：seek 落点首帧即关键帧，追赶 >3s
+                // 直接显示本帧（Premiere 式预览，即时反馈）。不置 shown——
+                // decode-through 继续向目标窗口推进，decodePos 前进防 reseek 空转
+                if (m_hopFirstFrame && !shown) {
+                    m_hopFirstFrame = false;
+                    const qint64 err = target - relMs;
+                    // 跳显误差闸随拖拽速度缩放：可接受的落后量 = 光标 100ms 墙钟
+                    // 内走过的距离（v×100ms）。100× 快拖时落后 10s 时间轴 = 100ms
+                    // 墙钟延迟，人眼不可察——这个文件可 seek 的 IDR 每 10s 一个
+                    // （拼接视频 stss 稀疏），固定 2s 上限会把跳显全部拒绝，
+                    // 退化成同关键帧 seek 风暴（实测 99 次/s，冻屏元凶）
+                    const qint64 errCap = qMax<qint64>(
+                        2000, qint64(qAbs(m_scrubVel) * 100.0));
+                    const bool hopOk = sparseGop ? (err > 3000)
+                                                 : (err > 300 && err <= errCap);
+                    if (hopOk) {
+                        if (relMs == m_positionMs.load()) {
+                            // 同一关键帧重复命中（边界速度/悬停）：免 sws/emit/重绘，
+                            // 仅刷新抑制锚点——每次重复跳显省 ~10ms 墙钟
+                            m_hopTargetMs = target;
+                            m_hopGapMs = err;
+                        } else {
+                            diagScrubDisplay("hop", relMs, target);
+                            displayFrame(frame);
+                            m_lastScrubDisplayElapsed = m_monotonic.elapsed();
+                            m_hopTargetMs = target;   // 抑制锚点：目标越过 target+gap 才允许下一跳
+                            m_hopGapMs = err;
+                        }
+                    } else {
+                        // 拒绝也必须设抑制锚点：否则目标未越过下一关键帧前无限
+                        // 重 seek 同一落点（日志实测同帧 10-20 次/ms 的 seek 循环）
+                        m_hopTargetMs = target;
+                        m_hopGapMs = err;
+                        if (!sparseGop && err > 2000)
+                            diagScrubDisplay("hop-reject", relMs, target);
+                    }
+                }
                 if (dec == m_scDec)
                     chaseCachePush(relMs, frame);   // 软解帧入滚动缓存（refcount 零拷贝）
                 if (qAbs(target - relMs) > SEEK_THRESHOLD_MS) {
                     reseek = true;            // 目标飞奔远离，解码追不上 → 交外层重 seek
-                } else if (relMs >= target - halfFrame) {
-                    // 指哪播哪：只显示目标窗口帧；落后帧静默解码跳过（GOP 引用链
-                    // 必须逐帧过，但不做 sws/emit——绝不播放中间帧，避免快进感）
-                    displayFrame(frame);      // 含硬解回传/sws/positionChanged/frameReady
-                    shown = true;
+                } else if (!shown && relMs > target + 2 * halfFrame) {
+                    // 目标回退到解码位置之后：交外层后退重定位。
+                    // 无上界窗口会显示超前帧（“快进感”，oscillate 回归复现）
+                    reseek = true;
+                } else if (!shown && relMs >= target - halfFrame) {
+                    // 显示节拍闸（~30Hz 墙钟）：拖拽显示由解码事件驱动改为均匀
+                    // 节拍驱动，消除解码吞吐波动/GOP 切换导致的卡顿与跳跃感
+                    const qint64 now = m_monotonic.elapsed();
+                    const qint64 gateWait = scrubGateIntervalMs()
+                                            - (now - m_lastScrubDisplayElapsed);
+                    if (dec == m_vdec && gateWait > 0) {
+                        // 硬解帧不入缓存（持 GPU 表面）：持帧等到下一拍再判
+                        QThread::msleep(gateWait);
+                        target = m_scrubTargetMs.load();   // 等待期间目标可能已前移
+                        if (target < 0)
+                            break;
+                    }
+                    if (relMs >= target - halfFrame
+                        && m_monotonic.elapsed() - m_lastScrubDisplayElapsed
+                               >= scrubGateIntervalMs()) {
+                        // 指哪播哪：只显示目标窗口帧；落后帧静默解码跳过（GOP 引用链
+                        // 必须逐帧过，但不做 sws/emit——绝不播放中间帧，避免快进感）
+                        diagScrubDisplay("window", relMs, target);
+                        displayFrame(frame);      // 含硬解回传/sws/positionChanged/frameReady
+                        m_lastScrubDisplayElapsed = m_monotonic.elapsed();
+                        if (m_chaseStartElapsed >= 0) {
+                            // 实测追赶墙钟耗时（EMA）：关键帧跳显模式的自适应依据。
+                            // 仅在本文件 GOP 已知（解码器选择有据可依）后采样——
+                            // GOP 未知时的硬解长追赶非最优路径，一次性慢样本会
+                            // 把 sparseGop 锁死在布防态；长 GOP 只记录软解追赶耗时
+                            const qint64 wall = m_monotonic.elapsed() - m_chaseStartElapsed;
+                            if (m_gopLearnMs > 0 && (dec == m_scDec || m_gopLearnMs <= 4000))
+                                m_lastChaseWallMs = m_lastChaseWallMs > 0
+                                                    ? (m_lastChaseWallMs + wall) / 2 : wall;
+                            m_chaseStartElapsed = -1;
+                        }
+                        shown = true;
+                        if (m_astream >= 0 && m_scrubSnippetAudio) {
+                            harvesting = true;    // 有音轨且慢拖：收割补全片段音频窗口
+                            harvestBudget = 80;
+                        }
+                    } else if (dec == m_scDec && relMs >= target + SCRUB_LOOKAHEAD_MS) {
+                        // 软解帧已入滚动缓存：闸未开期间超前解码量有界，
+                        // 交外层——后续节拍由函数入口的缓存命中路径服务
+                        break;
+                    }
+                    // 其余：闸未开静默续解（软解帧已缓存；硬解目标已跑过此帧则丢弃续追）
                 }
                 av_frame_unref(frame);
                 if (shown || reseek)
@@ -691,23 +892,17 @@ void FfmpegVideoEngine::workerMain()
         static bool prevScrubbing = false;
         if (prevScrubbing && !isScrubbing)
             chaseCacheClear();   // 退出拖拽：释放滚动缓存内存（沉淀 seek 已补全精确帧）
+        if (!prevScrubbing && isScrubbing) {
+            m_lastScrubDisplayElapsed = 0;   // 进入拖拽：首帧立即显示（节拍闸复位）
+            m_hopTargetMs = -1;              // 跳显抑制锚点复位
+            m_velLastTargetMs = -1;          // 速度估计器复位（片段音频闸）
+            m_scrubVel = 0.0;
+            m_scrubSnippetAudio = true;
+            m_scrubGateExtraMs = 0;            // 节拍自适应增量复位
+        }
         prevScrubbing = isScrubbing;
         bool isActive = (m_state.load() == static_cast<int>(PlaybackState::Playing))
                         || isScrubbing || m_stepOnce;
-
-#ifdef Q_OS_WIN
-        // --- GPU 零拷贝路径状态评估（工作线程权威）：
-        //     需 UI 请求 + 硬解设备存在；变化时通知 UI 切换显示路径 ---
-        {
-            bool can = m_gpuFramesWanted.load() && m_hwDeviceCtx != nullptr;
-            if (can != m_gpuFramesActive) {
-                m_gpuFramesActive = can;
-                if (!can)
-                    releaseGpuPipeline();
-                emit gpuFramesActiveChanged(can);
-            }
-        }
-#endif
 
         // --- 处理命令 ---
         {
@@ -741,6 +936,10 @@ void FfmpegVideoEngine::workerMain()
                 m_state = static_cast<int>(PlaybackState::Playing);
                 resumeAudio();
                 emit stateChanged(PlaybackState::Playing);
+                audioDiag(QStringLiteral("cmd Play: sink=%1 state=%2 err=%3")
+                          .arg(m_sink != nullptr)
+                          .arg(m_sink ? m_sink->state() : -1)
+                          .arg(m_sink ? m_sink->error() : -1));
                 break;
             case Command::Pause:
                 if (m_state.load() == static_cast<int>(PlaybackState::Playing)) {
@@ -987,6 +1186,14 @@ bool FfmpegVideoEngine::openFile(const QString &filePath)
         }
     }
     m_audioMaster = (m_astream >= 0);
+    audioDiag(QStringLiteral("openFile: %1 audio=%2")
+              .arg(filePath)
+              .arg(m_astream >= 0
+                   ? QStringLiteral("%1 %2Hz %3ch")
+                     .arg(avcodec_get_name(m_fmt->streams[m_astream]->codecpar->codec_id))
+                     .arg(m_fmt->streams[m_astream]->codecpar->sample_rate)
+                     .arg(m_fmt->streams[m_astream]->codecpar->ch_layout.nb_channels)
+                   : QStringLiteral("none")));
 
     m_discardBeforeRelMs = -1;
     m_audioDiscardBeforeRelMs = -1;
@@ -1003,13 +1210,6 @@ bool FfmpegVideoEngine::openFile(const QString &filePath)
 void FfmpegVideoEngine::closeFile()
 {
     chaseCacheClear();
-#ifdef Q_OS_WIN
-    if (m_gpuFramesActive) {
-        m_gpuFramesActive = false;
-        emit gpuFramesActiveChanged(false);
-    }
-    releaseGpuPipeline();
-#endif
     prefetchAbort();
     m_frameCache.clear();
     m_pfPendingFromMs = -1;
@@ -1021,12 +1221,21 @@ void FfmpegVideoEngine::closeFile()
     m_audioMaster = false;
     m_audioSinkOk = false;
     m_audioBytesWritten = 0;
+    m_diagDecodedMs = 0;
+    m_diagPeak = 0;
+    m_diagOutFailLogged = false;
     if (m_sws) { sws_freeContext(m_sws); m_sws = nullptr; }
     m_swsW = m_swsH = 0; m_swsFmt = -1;
     if (m_vdec) { avcodec_free_context(&m_vdec); m_vdec = nullptr; }
     if (m_scDec) { avcodec_free_context(&m_scDec); m_scDec = nullptr; }
     m_chaseDec = nullptr;
     m_lastCatchupMs = 0;
+    m_hopFirstFrame = false;
+    m_hopTargetMs = -1;
+    m_hopGapMs = 0;
+    m_lastChaseWallMs = 0;
+    m_chaseStartElapsed = -1;
+    m_gopLearnMs = 0;
     m_chaseSeekTargetMs = -1;
     if (m_hwDeviceCtx) { av_buffer_unref(&m_hwDeviceCtx); m_hwDeviceCtx = nullptr; }
     m_hwActive = false;
@@ -1471,29 +1680,13 @@ void FfmpegVideoEngine::displayFrame(AVFrame *frame)
     if (m_framesInFlight.load() >= 2) {
         m_positionMs = relMs;
         emit positionChanged(relMs);
+        if (m_scrubMode.load()) {
+            ++m_diagScrubDrops;   // 临时诊断：UI 背压丢帧（画面冻结的嫌疑指标）
+            m_scrubGateExtraMs = qMin(m_scrubGateExtraMs + 5, 20);   // 节拍自适应放宽
+            diagScrubFlush();     // 画面全丢时 tick 不运行，由这里驱动周期落盘
+        }
         return;
     }
-
-#ifdef Q_OS_WIN
-    // GPU 零拷贝路径（实验，v1.6）：硬解帧 VideoProcessor→共享纹理，跳过回传/sws/QImage。
-    // 失败或软解帧自动回退下方 CPU 路径。播放中每 30 帧补发一帧 QImage（放大镜/钉图用），
-    // 暂停/步进帧全量发 QImage（截图/钉图的精确性不受影响）。
-    if (m_gpuFramesActive && frame->format == AV_PIX_FMT_D3D11 && gpuBlitToShared(frame)) {
-        m_positionMs = relMs;
-        ++m_framesInFlight;   // UI presenter 消费后 ackFrame()
-        emit positionChanged(relMs);
-        GpuFrameInfo info;
-        info.sharedHandle = m_gpuHandle[m_gpuSlot];
-        info.slot = m_gpuSlot;
-        info.size = QSize(m_gpuW, m_gpuH);
-        emit frameTextureReady(info);
-        bool wantCpuFrame = (m_state.load() != static_cast<int>(PlaybackState::Playing))
-                            || (++m_gpuFrameCounter % 30 == 0);
-        if (!wantCpuFrame)
-            return;
-        // 否则继续走下方 CPU 路径补发 QImage（两路各自计数/ack，互不影响）
-    }
-#endif
 
     // 硬解帧需先回传 CPU（D3D11 纹理 → NV12 系统内存）
     AVFrame *swFrame = nullptr;
@@ -1542,4 +1735,9 @@ void FfmpegVideoEngine::displayFrame(AVFrame *frame)
     ++m_framesInFlight;   // UI 侧 VideoWidget::onFrameReady 调 ackFrame() 归还
     emit positionChanged(relMs);
     emit frameReady(img);
+    if (m_scrubMode.load()) {
+        if (m_scrubGateExtraMs > 0)
+            --m_scrubGateExtraMs;   // 成功显示：节拍增量逐帧衰减回 25ms
+        diagScrubTick();   // 临时诊断：scrub 显示计数 + 最大间隔
+    }
 }

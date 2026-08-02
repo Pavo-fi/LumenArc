@@ -49,6 +49,8 @@ signals:
     void colorScaleChanged(ColorScale scale);
     void freqScaleChanged(FreqScale scale);
     void seekRequested(qint64 timeMs);
+    /// 光标拖拽松手（退出 scrub 模式 + 最终精确 seek，与 ChartPanel 同语义）
+    void scrubEnded();
     void xAxisRangeChanged(qreal xMin, qreal xMax);
 
 protected:

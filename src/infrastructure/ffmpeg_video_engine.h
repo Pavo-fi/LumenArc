@@ -26,15 +26,6 @@
 #include <QVector>
 #include <QImage>
 #include <atomic>
-#ifdef Q_OS_WIN
-#include <wrl/client.h>
-struct ID3D11Texture2D;
-struct ID3D11VideoDevice;
-struct ID3D11VideoContext;
-struct ID3D11VideoProcessor;
-struct ID3D11VideoProcessorEnumerator;
-struct IDXGIKeyedMutex;
-#endif
 
 struct AVFormatContext;
 struct AVCodecContext;
@@ -72,7 +63,7 @@ public:
     void setVolume(int vol) override;
     void setRate(float rate) override;
     float rate() const override;
-    bool supportsRateAudio() const override { return false; } // 一期：倍速静音
+    bool supportsRateAudio() const override { return true; }  // v1.1：倍速变速音频（音调随速度变化）
     /// 启用/禁用硬件解码（下次 load 生效；失败自动回退软解）
     void setHardwareDecode(bool enabled) { m_hwDecodeEnabled = enabled; }
     /// 诊断/测试用：当前是否实际处于硬解路径
@@ -90,14 +81,14 @@ public:
     void setHardwareAdapter(int index) { m_hwAdapterIndex = index; }
     /// 诊断/测试用：当前实际使用的适配器名（软解为空）
     QString hardwareAdapterName() const override { return m_hwAdapterName; }
-    /// 请求 GPU 零拷贝帧路径（实验，v1.6）：工作线程评估后 gpuFramesActiveChanged 确认
-    bool setGpuFramesEnabled(bool on) override;
 
     /// 拖拽模式：拖拽中 seek 只写原子追逐目标（worker scrub 循环连续解码追赶）；
     /// 松手走一次性精确 seek
     void setScrubMode(bool on) override {
         m_scrubMode = on;
         m_scrubTargetMs = -1;
+        if (!on)
+            m_scrubAudioTarget = -1;   // 退出拖拽：清除片段音频布防状态
         m_chaseDecodePosMs = -1;
         m_chaseSeekTargetMs = -1;
         m_cmdCond.wakeAll();   // 唤醒工作线程进入/退出 scrub 循环
@@ -141,6 +132,8 @@ private:
     // --- Scrub 追逐解码（VLC 路线：多线程软解 + 低固定开销 seek，无代理） ---
     bool scrubChaseMainFrame();               // Scrub 追逐解码：围绕原子目标连续解码追赶
     bool ensureScrubDecoder();                // 惰性创建 scrub 专用多线程软解上下文（VLC 式追赶）
+    void diagScrubTick();                     // 临时诊断：scrub 显示计数 + 周期落盘
+    void diagScrubFlush();                    // 临时诊断：2s 周期落盘检查
 
 public:
     /// 诊断/测试用：本次 seek 以来写入音频缓冲的字节数
@@ -179,24 +172,6 @@ private:
     qint64 m_startPtsMs = 0;        // 流起始 PTS（绝对），用于相对时间换算
     bool m_indexed = true;          // 容器是否有 seek 索引（PS/TS 无索引）
     AVBufferRef *m_hwDeviceCtx = nullptr;   // D3D11VA 设备上下文（软解为 nullptr）
-#ifdef Q_OS_WIN
-    // --- GPU 零拷贝显示（实验，v1.6）：VideoProcessor NV12→BGRA → keyed-mutex 共享纹理 ---
-    bool ensureGpuPipeline(int w, int h);   // 工作线程内惰性创建
-    bool gpuBlitToShared(AVFrame *frame);   // 工作线程内：解码纹理 → 共享 BGRA
-    void releaseGpuPipeline();
-    Microsoft::WRL::ComPtr<ID3D11VideoDevice> m_gpuVideoDev;
-    Microsoft::WRL::ComPtr<ID3D11VideoContext> m_gpuVideoCtx;
-    Microsoft::WRL::ComPtr<ID3D11VideoProcessor> m_gpuVideoProc;
-    Microsoft::WRL::ComPtr<ID3D11VideoProcessorEnumerator> m_gpuVideoProcEnum;
-    Microsoft::WRL::ComPtr<ID3D11Texture2D> m_gpuTex[2];
-    Microsoft::WRL::ComPtr<IDXGIKeyedMutex> m_gpuMutex[2];
-    quint64 m_gpuHandle[2] = {0, 0};
-    int m_gpuW = 0, m_gpuH = 0;
-    int m_gpuSlot = 0;
-    int m_gpuFrameCounter = 0;              // 低频 QImage 节流计数（放大镜/钉图用）
-#endif
-    std::atomic<bool> m_gpuFramesWanted{false};   // UI 请求（原子，跨线程）
-    bool m_gpuFramesActive = false;         // 工作线程内评估的实际状态
     std::atomic<bool> m_hwDecodeEnabled{true};
     std::atomic<bool> m_hwActive{false};    // 已确认收到硬解帧
     std::atomic<int> m_hwAdapterIndex{-1};  // -1=自动（偏好独显）
@@ -233,6 +208,24 @@ private:
     AVCodecContext *m_chaseDec = nullptr;   // 本次追逐当前解码器（seek 时选，decode-through 沿用）
     qint64 m_lastCatchupMs = 0;             // 上次实测 seek 追赶长度（学习 GOP，长则直接软解）
 
+    // --- Scrub 显示节拍闸（第二层：输出侧匀速化） ---
+    // 拖拽显示由“解码事件驱动”改为“~30Hz 墙钟节拍驱动”：闸未开时软解帧
+    // 静默入滚动缓存（超前量有界），硬解帧持帧等到下一拍；消除解码吞吐
+    // 波动/GOP 切换导致的显示位置-时刻双重不均匀。
+    qint64 m_lastScrubDisplayElapsed = 0;   // 上次 scrub 显示的单调时钟
+    static constexpr qint64 SCRUB_DISPLAY_INTERVAL_MS = 25;  // 显示节拍（40Hz，对 60Hz UI 留有余量）
+    static constexpr qint64 SCRUB_LOOKAHEAD_MS = 800;        // 软解超前解码上限（40Hz 节拍下 30× 快拖不饿解码）
+    int m_scrubGateExtraMs = 0;             // 节拍自适应增量：UI 背压丢帧时 +5ms（上限 +20），
+                                            // 成功显示逐帧衰减——生产速率自动降到 UI 可持续水平，
+                                            // 防“光标在动画面冻结”的观感
+    qint64 scrubGateIntervalMs() const { return SCRUB_DISPLAY_INTERVAL_MS + m_scrubGateExtraMs; }
+    bool m_hopFirstFrame = false;           // 超长 GOP：本次 seek 首帧布防关键帧跳显
+    qint64 m_hopTargetMs = -1;              // 上一跳显的目标（抑制锚点，-1=无）
+    qint64 m_hopGapMs = 0;                  // 上一跳显时目标-关键帧间距（≈GOP 长）
+    qint64 m_lastChaseWallMs = 0;           // 上次实测追赶墙钟耗时（跳显自适应依据）
+    qint64 m_chaseStartElapsed = -1;        // 本次追赶墙钟计时起点（-1=无）
+    qint64 m_gopLearnMs = 0;                // 实测 GOP 长度（reseek 落点间距，跳显判定用）
+
     // --- 拖拽滚动帧缓存：追赶解码的副产品帧（软解路径）保留在环形缓存，
     //     目标落在缓存内直接显示（后退微调/抖动 0ms，免 seek 免重解码）。
     //     仅存软解帧（refcount clone 零拷贝）；硬解帧持 GPU 表面会耗尽解码池，不存。
@@ -261,4 +254,39 @@ private:
     qint64 m_smoothAudioClock = -1;       // 平滑时钟基准（-1=未锚定）
     qint64 m_smoothClockElapsed = 0;      // 平滑基准对应的单调时钟
     qint64 m_lastRawAudioClock = -1;      // 上次原始时钟观测值
+
+    // --- 临时诊断：音频健康日志（定位后移除） ---
+    qint64 m_diagDecodedMs = 0;           // 本日志周期内已解码音频时长
+    int m_diagPeak = 0;                   // 本日志周期内 s16 输出峰值
+    bool m_diagOutFailLogged = false;     // ensureAudioOutput 失败只记一次
+
+    // --- 临时诊断：scrub 卡顿归因计数（定位后移除） ---
+    int m_diagScrubDisplays = 0;          // 周期内 scrub 显示帧数
+    int m_diagScrubCacheHits = 0;         // 周期内缓存命中显示数
+    int m_diagScrubReseeks = 0;           // 周期内 reseek 次数
+    int m_diagScrubDrops = 0;             // 周期内因 UI 背压（inFlight≥2）丢弃的图像帧数
+    int m_diagScrubMaxGapMs = 0;          // 周期内相邻显示最大墙钟间隔（卡顿体感）
+    qint64 m_diagScrubLastDispElapsed = -1; // 上次 scrub 显示的单调时钟
+    qint64 m_diagScrubLastLogElapsed = 0; // 上次 scrub 统计落盘的单调时钟
+    void diagScrubDisplay(const char *site, qint64 relMs, qint64 target); // 临时：显示点追踪
+
+    /// @brief 变速音频重采样：线性插值 s16 交错 PCM
+    /// rate>1 抽稀加速（音调升高），rate<1 插值减速（音调降低）
+    QByteArray resampleAudioForRate(const char *pcm, qint64 bytes, float rate) const;
+
+    // --- Scrub 片段音频（拖拽有声：目标变更时重置 sink 并播放 ~100ms 片段） ---
+    qint64 m_scrubAudioTarget = -1;         // 当前片段对应的目标（-1=未布防）
+    qint64 m_lastScrubAudioEmitElapsed = 0; // 上次片段发出的单调时钟（节流）
+    static constexpr qint64 SCRUB_AUDIO_WINDOW_MS = 100;   // 片段时长
+    static constexpr qint64 SCRUB_AUDIO_EMIT_GAP_MS = 120; // 片段节流间隔
+
+    // --- Scrub 目标速度估计（片段音频随速度闸控） ---
+    // 快拖（>4×）时片段音频及其收割会阻塞追逐循环：每次显示后收割 100ms 音频
+    // 窗口要读 ~80 包（≈100ms 墙钟），加上 sink reset/start 每 120ms 一次——
+    // 显示节拍被切成一段一段，是拖拽“时好时坏”的元凶。快拖时片段本身
+    // 也只是无意义啾声，直接关闭；慢拖保留（拖拽听觉反馈）
+    double m_scrubVel = 0.0;                // 目标速度 EMA（时间轴 ms / 墙钟 ms）
+    qint64 m_velLastTargetMs = -1;          // 上次目标采样
+    qint64 m_velLastElapsed = 0;            // 上次采样单调时钟
+    bool m_scrubSnippetAudio = true;        // 片段音频闸（<4× 开）
 };

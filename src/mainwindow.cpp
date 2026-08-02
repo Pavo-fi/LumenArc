@@ -17,7 +17,6 @@
 #include "domain/timeline_model.h"
 #include "infrastructure/ivideo_engine.h"
 #include "infrastructure/ianalysis_engine.h"
-#include "infrastructure/vlc_video_engine.h"
 #include "infrastructure/ffmpeg_video_engine.h"
 #include "infrastructure/python_analysis_engine.h"
 #include "magnifierwidget.h"
@@ -27,6 +26,7 @@
 #include "spectrogrampanel_enhanced.h"
 #include "i18n.h"
 #include "aboutdialog.h"
+#include "theme.h"
 
 #include <QListWidget>
 #include <QSplitter>
@@ -88,20 +88,15 @@ MainWindow::MainWindow(QWidget *parent)
     m_timelineModel = new TimelineModel(this);
     m_stateManager = new VideoStateManager(this);
 
-    // 播放引擎选择（QSettings 持久化，默认 FFmpeg；VLC 保留为后备）
+    // 播放引擎：自研 FFmpeg 内核（硬解设置经 QSettings 持久化）
     {
         QSettings engineSettings("LumenArc", "LumenArc");
-        QString engineName = engineSettings.value("videoEngine", "ffmpeg").toString();
-        if (engineName == "vlc") {
-            m_videoEngine = new VlcVideoEngine(this);
-        } else {
-            auto *ffEngine = new FfmpegVideoEngine(this);
-            ffEngine->setHardwareDecode(
-                engineSettings.value("hwDecode", true).toBool());
-            ffEngine->setHardwareAdapter(
-                engineSettings.value("hwAdapter", -1).toInt());
-            m_videoEngine = ffEngine;
-        }
+        auto *ffEngine = new FfmpegVideoEngine(this);
+        ffEngine->setHardwareDecode(
+            engineSettings.value("hwDecode", true).toBool());
+        ffEngine->setHardwareAdapter(
+            engineSettings.value("hwAdapter", -1).toInt());
+        m_videoEngine = ffEngine;
     }
 
     m_videoWidget = new VideoWidget(this);
@@ -120,18 +115,20 @@ MainWindow::MainWindow(QWidget *parent)
     m_spectrogramEnhanced = new SpectrogramPanelEnhanced(this);
 
     m_splitter = new QSplitter(Qt::Vertical, this);
-    m_splitter->setHandleWidth(0);
+    m_splitter->setHandleWidth(6);
     m_splitter->setChildrenCollapsible(false);
     m_splitter->addWidget(m_videoWidget);
     m_splitter->setStretchFactor(0, 7);  // 44%
     setCentralWidget(m_splitter);
 
-    // --- Shared styles ---
-    const QString titleBarStyle = "background: #363636;";
+    // --- Shared styles（主题化）---
+    const QString titleBarStyle =
+        "background: " + Theme::BgPanel + "; border-bottom: 1px solid " + Theme::Border + ";";
     const QString collapseBtnStyle =
-        "QPushButton { background: transparent; color: #aaa; border: none; font-size: 10px; }"
-        "QPushButton:hover { color: #ddd; }";
-    const QString titleLabelStyle = "color: #F5F0E8; font-size: 11px; background: transparent;";
+        "QPushButton { background: transparent; color: " + Theme::TextSecond + "; border: none; font-size: 10px; border-radius: 4px; }"
+        "QPushButton:hover { color: " + Theme::Accent + "; background: " + Theme::BgHover + "; }";
+    const QString titleLabelStyle =
+        "color: " + Theme::TextPrimary + "; font-size: 12px; font-weight: 600; background: transparent; padding-left: 2px;";
 
     // --- Chart container with title bar ---
     m_chartContainer = new QWidget(m_splitter);
@@ -140,13 +137,13 @@ MainWindow::MainWindow(QWidget *parent)
     chartContainerLayout->setSpacing(0);
 
     auto *chartTitleBar = new QWidget(m_chartContainer);
-    chartTitleBar->setFixedHeight(24);
+    chartTitleBar->setFixedHeight(28);
     chartTitleBar->setStyleSheet(titleBarStyle);
     auto *chartTitleLayout = new QHBoxLayout(chartTitleBar);
     chartTitleLayout->setContentsMargins(4, 0, 4, 0);
 
     m_chartCollapseBtn = new QPushButton(QString::fromUtf8("\xe2\x96\xbc"), chartTitleBar); // ▼
-    m_chartCollapseBtn->setFixedSize(20, 20);
+    m_chartCollapseBtn->setFixedSize(22, 22);
     m_chartCollapseBtn->setStyleSheet(collapseBtnStyle);
     m_chartCollapseBtn->setToolTip(lang("收起量化分析", "Collapse quantitative analysis"));
     m_chartCollapseBtn->setFocusPolicy(Qt::NoFocus);
@@ -176,13 +173,13 @@ MainWindow::MainWindow(QWidget *parent)
     specContainerLayout->setSpacing(0);
 
     auto *specTitleBar = new QWidget(m_spectrogramContainer);
-    specTitleBar->setFixedHeight(24);
+    specTitleBar->setFixedHeight(28);
     specTitleBar->setStyleSheet(titleBarStyle);
     auto *specTitleLayout = new QHBoxLayout(specTitleBar);
     specTitleLayout->setContentsMargins(4, 0, 4, 0);
 
     m_spectrogramCollapseBtn = new QPushButton(QString::fromUtf8("\xe2\x96\xbc"), specTitleBar); // ▼
-    m_spectrogramCollapseBtn->setFixedSize(20, 20);
+    m_spectrogramCollapseBtn->setFixedSize(22, 22);
     m_spectrogramCollapseBtn->setStyleSheet(collapseBtnStyle);
     m_spectrogramCollapseBtn->setToolTip(lang("收起语谱图", "Collapse spectrogram"));
     m_spectrogramCollapseBtn->setFocusPolicy(Qt::NoFocus);
@@ -195,7 +192,7 @@ MainWindow::MainWindow(QWidget *parent)
     specTitleLayout->addSpacing(12);
 
     m_noiseFloorLabel = new QLabel(lang("底噪:", "Noise:"), specTitleBar);
-    m_noiseFloorLabel->setStyleSheet("QLabel { color: #aaa; font-size: 11px; }");
+    m_noiseFloorLabel->setStyleSheet("QLabel { color: " + Theme::TextSecond + "; font-size: 11px; }");
     specTitleLayout->addWidget(m_noiseFloorLabel);
 
     m_noiseFloorSlider = new QSlider(Qt::Horizontal, specTitleBar);
@@ -204,19 +201,19 @@ MainWindow::MainWindow(QWidget *parent)
     m_noiseFloorSlider->setFixedWidth(100);
     m_noiseFloorSlider->setToolTip(lang("底噪阈值: -5.5 dB", "Noise floor threshold: -5.5 dB"));
     m_noiseFloorSlider->setStyleSheet(
-        "QSlider::groove:horizontal { background: #444; height: 4px; border-radius: 2px; }"
-        "QSlider::handle:horizontal { background: #00bcd4; width: 12px; margin: -4px 0; border-radius: 6px; }"
-        "QSlider::sub-page:horizontal { background: #00bcd4; border-radius: 2px; }"
+        "QSlider::groove:horizontal { background: " + Theme::Border + "; height: 4px; border-radius: 2px; }"
+        "QSlider::handle:horizontal { background: " + Theme::Info + "; width: 14px; height: 14px; margin: -5px 0; border-radius: 7px; }"
+        "QSlider::sub-page:horizontal { background: " + Theme::Info + "; border-radius: 2px; }"
     );
     specTitleLayout->addWidget(m_noiseFloorSlider);
 
     m_noiseFloorValueLabel = new QLabel("-5.5", specTitleBar);
-    m_noiseFloorValueLabel->setStyleSheet("QLabel { color: #00bcd4; font-size: 11px; font-family: Consolas; min-width: 30px; }");
+    m_noiseFloorValueLabel->setStyleSheet("QLabel { color: " + Theme::Info + "; font-size: 11px; font-family: Consolas; min-width: 30px; }");
     specTitleLayout->addWidget(m_noiseFloorValueLabel);
 
     // Noise reduction slider
     m_noiseReductionLabel = new QLabel(lang("降噪:", "NR:"), specTitleBar);
-    m_noiseReductionLabel->setStyleSheet("QLabel { color: #aaa; font-size: 11px; }");
+    m_noiseReductionLabel->setStyleSheet("QLabel { color: " + Theme::TextSecond + "; font-size: 11px; }");
     specTitleLayout->addWidget(m_noiseReductionLabel);
 
     m_noiseReductionSlider = new QSlider(Qt::Horizontal, specTitleBar);
@@ -225,14 +222,14 @@ MainWindow::MainWindow(QWidget *parent)
     m_noiseReductionSlider->setFixedWidth(80);
     m_noiseReductionSlider->setToolTip(lang("降噪强度（需重新分析）", "Noise reduction (re-analysis needed)"));
     m_noiseReductionSlider->setStyleSheet(
-        "QSlider::groove:horizontal { background: #444; height: 4px; border-radius: 2px; }"
-        "QSlider::handle:horizontal { background: #ff9800; width: 12px; margin: -4px 0; border-radius: 6px; }"
-        "QSlider::sub-page:horizontal { background: #ff9800; border-radius: 2px; }"
+        "QSlider::groove:horizontal { background: " + Theme::Border + "; height: 4px; border-radius: 2px; }"
+        "QSlider::handle:horizontal { background: " + Theme::Accent + "; width: 14px; height: 14px; margin: -5px 0; border-radius: 7px; }"
+        "QSlider::sub-page:horizontal { background: " + Theme::Accent + "; border-radius: 2px; }"
     );
     specTitleLayout->addWidget(m_noiseReductionSlider);
 
     m_noiseReductionValueLabel = new QLabel("0.0", specTitleBar);
-    m_noiseReductionValueLabel->setStyleSheet("QLabel { color: #ff9800; font-size: 11px; font-family: Consolas; min-width: 24px; }");
+    m_noiseReductionValueLabel->setStyleSheet("QLabel { color: " + Theme::Accent + "; font-size: 11px; font-family: Consolas; min-width: 24px; }");
     specTitleLayout->addWidget(m_noiseReductionValueLabel);
 
     // 安装事件过滤器，使全局快捷键（方向键、空格等）不被 Slider 拦截
@@ -240,12 +237,12 @@ MainWindow::MainWindow(QWidget *parent)
     m_noiseReductionSlider->installEventFilter(this);
 
     m_nrApplyBtn = new QPushButton(lang("应用", "Apply"), specTitleBar);
-    m_nrApplyBtn->setFixedSize(36, 20);
+    m_nrApplyBtn->setFixedSize(40, 22);
     m_nrApplyBtn->setFocusPolicy(Qt::NoFocus);
     m_nrApplyBtn->setStyleSheet(
-        "QPushButton { background: #555; color: #ff9800; border: 1px solid #ff9800; border-radius: 3px; font-size: 10px; }"
-        "QPushButton:hover { background: #666; }"
-        "QPushButton:disabled { color: #666; border-color: #666; }"
+        "QPushButton { background: transparent; color: " + Theme::Accent + "; border: 1px solid " + Theme::Accent + "; border-radius: 11px; font-size: 10px; }"
+        "QPushButton:hover { background: " + Theme::Accent + "; color: " + Theme::AccentOnDark + "; }"
+        "QPushButton:disabled { color: " + Theme::TextMuted + "; border-color: " + Theme::Border + "; background: transparent; }"
     );
     specTitleLayout->addWidget(m_nrApplyBtn);
 
@@ -283,7 +280,7 @@ MainWindow::MainWindow(QWidget *parent)
             m_chartContent->setVisible(false);
             m_chartContent->setMinimumSize(0, 0);
             m_chartContent->setMaximumSize(0, 0);
-            m_chartContainer->setMinimumHeight(24);
+            m_chartContainer->setMinimumHeight(28);
         } else {
             // Expand: restore saved sizes
             sizes = m_chartSavedSizes;
@@ -326,7 +323,7 @@ MainWindow::MainWindow(QWidget *parent)
             m_spectrogramContent->setVisible(false);
             m_spectrogramContent->setMinimumSize(0, 0);
             m_spectrogramContent->setMaximumSize(0, 0);
-            m_spectrogramContainer->setMinimumHeight(24);
+            m_spectrogramContainer->setMinimumHeight(28);
         } else {
             // Expand: restore saved sizes
             sizes = m_spectrogramSavedSizes;
@@ -359,14 +356,14 @@ MainWindow::MainWindow(QWidget *parent)
 
     // Left vertical bar (always visible)
     m_videoListSidebar = new QWidget(sidebarWidget);
-    m_videoListSidebar->setFixedWidth(24);
-    m_videoListSidebar->setStyleSheet("background: #363636;");
+    m_videoListSidebar->setFixedWidth(28);
+    m_videoListSidebar->setStyleSheet("background: " + Theme::BgPanel + "; border-right: 1px solid " + Theme::Border + ";");
     auto *sidebarBarLayout = new QVBoxLayout(m_videoListSidebar);
     sidebarBarLayout->setContentsMargins(2, 4, 2, 4);
     sidebarBarLayout->setSpacing(4);
 
     m_videoListCollapseBtn = new QPushButton(QString::fromUtf8("\xe2\x97\x80"), m_videoListSidebar); // ◀
-    m_videoListCollapseBtn->setFixedSize(20, 20);
+    m_videoListCollapseBtn->setFixedSize(22, 22);
     m_videoListCollapseBtn->setStyleSheet(collapseBtnStyle);
     m_videoListCollapseBtn->setToolTip(lang("收起视频列表", "Collapse video list"));
     m_videoListCollapseBtn->setFocusPolicy(Qt::NoFocus);
@@ -378,7 +375,7 @@ MainWindow::MainWindow(QWidget *parent)
         QString vertText = lang("视频列表", "Videos");
         for (const QChar &ch : vertText) {
             auto *chLabel = new QLabel(QString(ch), m_videoListSidebar);
-            chLabel->setStyleSheet("color: #F5F0E8; font-size: 11px; background: transparent;");
+            chLabel->setStyleSheet("color: " + Theme::TextSecond + "; font-size: 11px; background: transparent;");
             chLabel->setAlignment(Qt::AlignCenter);
             sidebarBarLayout->addWidget(chLabel);
         }
@@ -422,13 +419,13 @@ MainWindow::MainWindow(QWidget *parent)
         "QDockWidget { border: 0px; padding: 0px; }"
         "QDockWidget::title { padding: 0px; margin: 0px; border: 0px; }");
     auto *placeholderContent = new QWidget();
-    placeholderContent->setFixedWidth(24);
-    placeholderContent->setStyleSheet("background: #363636;");
+    placeholderContent->setFixedWidth(28);
+    placeholderContent->setStyleSheet("background: " + Theme::BgPanel + "; border-right: 1px solid " + Theme::Border + ";");
     auto *phLayout = new QVBoxLayout(placeholderContent);
     phLayout->setContentsMargins(2, 4, 2, 4);
     phLayout->setSpacing(4);
     auto *phExpandBtn = new QPushButton(QString::fromUtf8("\xe2\x96\xb6"), placeholderContent); // ▶
-    phExpandBtn->setFixedSize(20, 20);
+    phExpandBtn->setFixedSize(22, 22);
     phExpandBtn->setStyleSheet(collapseBtnStyle);
     phExpandBtn->setToolTip(lang("展开视频列表", "Expand video list"));
     phExpandBtn->setFocusPolicy(Qt::NoFocus);
@@ -438,7 +435,7 @@ MainWindow::MainWindow(QWidget *parent)
         QString vertText = lang("视频列表", "Videos");
         for (const QChar &ch : vertText) {
             auto *chLabel = new QLabel(QString(ch), placeholderContent);
-            chLabel->setStyleSheet("color: #F5F0E8; font-size: 11px; background: transparent;");
+            chLabel->setStyleSheet("color: " + Theme::TextSecond + "; font-size: 11px; background: transparent;");
             chLabel->setAlignment(Qt::AlignCenter);
             phLayout->addWidget(chLabel);
         }
@@ -461,10 +458,10 @@ MainWindow::MainWindow(QWidget *parent)
     // v0.3: Status bar with progress
     m_operationLabel = new QLabel(this);
     m_operationLabel->setMinimumWidth(200);
-    m_operationLabel->setStyleSheet("color: #F5F0E8;");
+    m_operationLabel->setStyleSheet("color: " + Theme::TextPrimary + ";");
     m_statusLabel = new QLabel(this);
     m_hwAdapterLabel = new QLabel(this);
-    m_hwAdapterLabel->setStyleSheet("color: #888; font-size: 10px;");
+    m_hwAdapterLabel->setStyleSheet("color: " + Theme::TextMuted + "; font-size: 10px;");
     m_progressBar = new QProgressBar(this);
     m_progressBar->setMaximumWidth(200);
     m_progressBar->setRange(0, 100);
@@ -504,19 +501,12 @@ MainWindow::~MainWindow()
 /// @brief 创建菜单栏：文件/编辑/导出/帮助
 void MainWindow::createMenus()
 {
-    // Fix menu item left padding (remove unused icon space)
-    QString menuStyle =
-        "QMenu { padding: 4px 0; }"
-        "QMenu::item { padding: 5px 24px 5px 12px; }"
-        "QMenu::item:disabled { color: #888; }";
-    menuBar()->setStyleSheet(menuBar()->styleSheet() + menuStyle);
-
     QMenu *fileMenu = menuBar()->addMenu(lang("文件(&F)", "&File"));
     fileMenu->addAction(lang("打开视频(&O)...", "&Open Video..."), this, &MainWindow::onOpenFile, QKeySequence::Open);
     fileMenu->addAction(lang("加载图片为叠加(&I)...", "Load Image as &Overlay..."), this, &MainWindow::onLoadOverlayImage);
     fileMenu->addSeparator();
     fileMenu->addAction(lang("保存分析结果(&S)...", "&Save Analysis Result..."), this, &MainWindow::onSaveAnalysis, QKeySequence::Save);
-    fileMenu->addAction(lang("加载分析结果(&L)...", "&Load Analysis Result..."), this, &MainWindow::onLoadAnalysis, QKeySequence::Open);
+    fileMenu->addAction(lang("加载分析结果(&L)...", "&Load Analysis Result..."), this, &MainWindow::onLoadAnalysis, QKeySequence(QStringLiteral("Ctrl+L")));
     fileMenu->addSeparator();
     fileMenu->addAction(lang("退出(&X)", "E&xit"), this, &QWidget::close, QKeySequence::Quit);
 
@@ -529,29 +519,6 @@ void MainWindow::createMenus()
 
     // Settings menu
     QMenu *settingsMenu = menuBar()->addMenu(lang("设置(&S)", "&Settings"));
-    QMenu *engineMenu = settingsMenu->addMenu(lang("播放内核（重启生效）", "Playback Engine (restart required)"));
-    QActionGroup *engineGroup = new QActionGroup(this);
-    QAction *ffmpegAction = engineMenu->addAction("FFmpeg");
-    QAction *vlcAction = engineMenu->addAction("VLC");
-    for (QAction *a : {ffmpegAction, vlcAction}) {
-        a->setCheckable(true);
-        engineGroup->addAction(a);
-    }
-    {
-        QSettings s("LumenArc", "LumenArc");
-        QString cur = s.value("videoEngine", "ffmpeg").toString();
-        (cur == "vlc" ? vlcAction : ffmpegAction)->setChecked(true);
-    }
-    connect(ffmpegAction, &QAction::triggered, this, [this]() {
-        QSettings s("LumenArc", "LumenArc");
-        s.setValue("videoEngine", "ffmpeg");
-        showOperationStatus(lang("播放内核将在重启后切换为 FFmpeg", "Engine will switch to FFmpeg after restart"));
-    });
-    connect(vlcAction, &QAction::triggered, this, [this]() {
-        QSettings s("LumenArc", "LumenArc");
-        s.setValue("videoEngine", "vlc");
-        showOperationStatus(lang("播放内核将在重启后切换为 VLC", "Engine will switch to VLC after restart"));
-    });
 
     QAction *hwAction = settingsMenu->addAction(lang("硬件解码（重启生效）", "Hardware Decoding (restart required)"));
     hwAction->setCheckable(true);
@@ -563,23 +530,6 @@ void MainWindow::createMenus()
         QSettings s("LumenArc", "LumenArc");
         s.setValue("hwDecode", on);
     });
-
-    // GPU 零拷贝显示（实验，v1.6）：即时生效，失败自动回退 CPU 路径
-    QAction *gpuDispAction = settingsMenu->addAction(lang("GPU 显示管线（实验）", "GPU Display Pipeline (experimental)"));
-    gpuDispAction->setCheckable(true);
-    {
-        QSettings s("LumenArc", "LumenArc");
-        gpuDispAction->setChecked(s.value("gpuDisplay", false).toBool());
-    }
-    connect(gpuDispAction, &QAction::toggled, this, [this](bool on) {
-        QSettings s("LumenArc", "LumenArc");
-        s.setValue("gpuDisplay", on);
-        if (m_videoWidget)
-            m_videoWidget->setGpuFramesEnabled(on);
-    });
-    // 启动时应用持久化状态
-    if (m_videoWidget && gpuDispAction->isChecked())
-        m_videoWidget->setGpuFramesEnabled(true);
 
     // 硬解设备选择（自动=偏好独显；重启生效）
     QMenu *adapterMenu = settingsMenu->addMenu(lang("硬解设备（重启生效）", "HW Decode Adapter (restart required)"));
@@ -623,7 +573,7 @@ void MainWindow::createMenus()
 
     helpMenu->addSeparator();
     helpMenu->addAction(lang("使用手册", "User Manual"), []() {
-        QString path = QCoreApplication::applicationDirPath() + "/追光者 Lumen Arc v0.5 Beta — 操作手册.pdf";
+        QString path = QCoreApplication::applicationDirPath() + "/追光者 Lumen Arc v1.1 — 操作手册.pdf";
         QDesktopServices::openUrl(QUrl::fromLocalFile(path));
     });
 
@@ -642,6 +592,8 @@ void MainWindow::createMenus()
                 {"右键", "删除鼠标下的 ROI / 辅助线（无需先选中）"},
                 {"Esc", "关闭放大镜 / 退出当前模式"},
                 {"Ctrl+S", "保存分析结果"},
+                {"Ctrl+L", "加载分析结果"},
+                {"Ctrl+O", "打开视频文件"},
             };
         } else {
             shortcuts = {
@@ -654,6 +606,8 @@ void MainWindow::createMenus()
                 {"Right-click", "Delete ROI / Guide Line under cursor (no selection needed)"},
                 {"Esc", "Close Magnifier / Exit Mode"},
                 {"Ctrl+S", "Save Analysis"},
+                {"Ctrl+L", "Load Analysis"},
+                {"Ctrl+O", "Open Video"},
             };
         }
 
@@ -661,14 +615,14 @@ void MainWindow::createMenus()
         dlg->setWindowTitle(lang("快捷键速查", "Keyboard Shortcuts"));
         dlg->setWindowOpacity(0.75);
         dlg->setFixedSize(420, 520);
-        dlg->setStyleSheet("QDialog { background: #1e1e2e; }");
+        dlg->setStyleSheet("QDialog { background: " + Theme::BgPanel + "; }");
 
         QVBoxLayout *layout = new QVBoxLayout(dlg);
         layout->setContentsMargins(16, 16, 16, 16);
         layout->setSpacing(8);
 
         QLabel *title = new QLabel(lang("⌨ 快捷键速查", "⌨ Keyboard Shortcuts"));
-        title->setStyleSheet("color: #cdd6f4; font-size: 15px; font-weight: bold; padding: 4px 0;");
+        title->setStyleSheet("color: " + Theme::TextPrimary + "; font-size: 15px; font-weight: bold; padding: 4px 0;");
         layout->addWidget(title);
 
         QTableWidget *table = new QTableWidget(shortcuts.size(), 2, dlg);
@@ -682,24 +636,24 @@ void MainWindow::createMenus()
         table->horizontalHeader()->setSectionResizeMode(1, QHeaderView::Stretch);
         table->setColumnWidth(0, 130);
         table->setStyleSheet(
-            "QTableWidget { background: #1e1e2e; border: none; color: #cdd6f4; font-size: 12px; }"
-            "QTableWidget::item { padding: 4px 8px; border-bottom: 1px solid #313244; }"
-            "QHeaderView::section { background: #1e1e2e; border: none; }"
+            "QTableWidget { background: " + Theme::BgPanel + "; border: none; color: " + Theme::TextPrimary + "; font-size: 12px; }"
+            "QTableWidget::item { padding: 4px 8px; border-bottom: 1px solid " + Theme::Border + "; }"
+            "QHeaderView::section { background: " + Theme::BgPanel + "; border: none; }"
         );
         for (int i = 0; i < shortcuts.size(); ++i) {
             QTableWidgetItem *keyItem = new QTableWidgetItem(shortcuts[i].key);
-            keyItem->setForeground(QBrush(QColor("#89b4fa")));
+            keyItem->setForeground(QBrush(QColor(Theme::Accent)));
             keyItem->setFont(QFont("Consolas", 11, QFont::Bold));
             table->setItem(i, 0, keyItem);
             QTableWidgetItem *descItem = new QTableWidgetItem(shortcuts[i].desc);
-            descItem->setForeground(QBrush(QColor("#bac2de")));
+            descItem->setForeground(QBrush(QColor(Theme::TextPrimary)));
             table->setItem(i, 1, descItem);
         }
         table->setRowHeight(shortcuts.size(), 0);
         layout->addWidget(table);
 
         QLabel *hint = new QLabel(lang("按 Esc 或点击 ✕ 关闭", "Press Esc or click ✕ to close"));
-        hint->setStyleSheet("color: #585b70; font-size: 11px; padding: 4px 0;");
+        hint->setStyleSheet("color: " + Theme::TextMuted + "; font-size: 11px; padding: 4px 0;");
         hint->setAlignment(Qt::AlignCenter);
         layout->addWidget(hint);
 
@@ -716,179 +670,165 @@ void MainWindow::createMenus()
 /// @brief 创建工具栏：播放/分析/截图融合按钮组
 void MainWindow::createToolBar()
 {
-    // --- Unified button style ---
+    // --- 三层按钮体系：主操作(实心金) / 次级(无边框卡片) / 幽灵图标 ---
     const QString btnBase =
         "QPushButton {"
-        "  height: 30px; border: 1px solid #888; border-radius: 4px;"
-        "  background: #555; color: #eee;"
+        "  height: 32px; border: none; border-radius: 6px;"
+        "  background: " + Theme::BgCard + "; color: " + Theme::TextPrimary + ";"
         "  font-family: 'Segoe UI', 'Microsoft YaHei'; font-size: 12px;"
-        "  padding: 0 8px;"
+        "  padding: 0 10px;"
         "}"
-        "QPushButton:hover { background: #666; }"
-        "QPushButton:pressed { background: #444; }"
-        "QPushButton:disabled { background: #444; color: #888; border: 1px solid #555; }";
+        "QPushButton:hover { background: " + Theme::BgHover + "; }"
+        "QPushButton:pressed { background: " + Theme::BgPressed + "; }"
+        "QPushButton:disabled { background: " + Theme::BgPressed + "; color: " + Theme::TextMuted + "; }";
 
-    // Fusion buttons: orange accent when enabled, orange bg when checked
+    // 工具组（截图融合）：次级样式，选中态金色描边
     const QString fusionBtnStyle =
         "QPushButton {"
-        "  height: 30px; border: 1px solid #FF9800; border-radius: 4px;"
-        "  background: #555; color: #FF9800;"
+        "  height: 32px; border: none; border-radius: 6px;"
+        "  background: " + Theme::BgCard + "; color: " + Theme::TextSecond + ";"
         "  font-family: 'Segoe UI', 'Microsoft YaHei'; font-size: 12px;"
-        "  font-weight: bold;"
-        "  padding: 0 8px;"
+        "  padding: 0 10px;"
         "}"
-        "QPushButton:hover { background: #666; color: #FFB74D; }"
-        "QPushButton:pressed { background: #444; color: #F57C00; }"
-        "QPushButton:disabled { background: #444; color: #888; border: 1px solid #555; }"
-        "QPushButton:checked { background: #FF9800; color: #fff; border: 1px solid #F57C00; }"
-        "QPushButton:checked:hover { background: #FFB74D; color: #fff; }"
-        "QPushButton:checked:pressed { background: #F57C00; color: #fff; }";
+        "QPushButton:hover { background: " + Theme::BgHover + "; color: " + Theme::TextPrimary + "; }"
+        "QPushButton:pressed { background: " + Theme::BgPressed + "; }"
+        "QPushButton:disabled { background: " + Theme::BgPressed + "; color: " + Theme::TextMuted + "; }"
+        "QPushButton:checked { background: " + Theme::BgCard + "; color: " + Theme::Accent + "; border: 1px solid " + Theme::Accent + "; }";
 
+    // 幽灵图标按钮：透明底 + hover 微光
     const QString iconBtnStyle =
         "QPushButton {"
-        "  width: 30px; height: 30px; border: 1px solid #888; border-radius: 4px;"
-        "  background: #555; padding: 0;"
+        "  width: 32px; height: 32px; border: none; border-radius: 6px;"
+        "  background: transparent; padding: 0;"
         "}"
-        "QPushButton:hover { background: #666; }"
-        "QPushButton:pressed { background: #444; }"
-        "QPushButton:disabled { background: #444; border: 1px solid #555; }";
+        "QPushButton:hover { background: " + Theme::BgHover + "; }"
+        "QPushButton:pressed { background: " + Theme::BgPressed + "; }"
+        "QPushButton:disabled { background: transparent; }";
 
+    // 倍速芯片：胶囊形状态徽章
     const QString speedBtnStyle =
         "QPushButton {"
-        "  width: 40px; height: 30px; border: 1px solid #888; border-radius: 4px;"
-        "  background: #555; color: #00bcd4; font-weight: bold;"
+        "  width: 46px; height: 32px; border: none; border-radius: 16px;"
+        "  background: " + Theme::BgCard + "; color: " + Theme::Accent + "; font-weight: bold;"
         "  font-family: 'Consolas', monospace; font-size: 12px; padding: 0;"
         "}"
-        "QPushButton:hover { background: #666; }"
-        "QPushButton:pressed { background: #444; }"
-        "QPushButton:disabled { background: #444; color: #666; border: 1px solid #555; }";
+        "QPushButton:hover { background: " + Theme::BgHover + "; color: " + Theme::AccentHover + "; }"
+        "QPushButton:pressed { background: " + Theme::BgPressed + "; }"
+        "QPushButton:disabled { background: " + Theme::BgPressed + "; color: " + Theme::TextMuted + "; }";
 
+    // 主操作：实心金底深字（视觉焦点，每屏唯一）
     const QString primaryBtnStyle =
         "QPushButton {"
-        "  height: 30px; border: none; border-radius: 4px;"
-        "  background: #2196F3; color: #fff;"
+        "  height: 32px; border: none; border-radius: 6px;"
+        "  background: " + Theme::Accent + "; color: " + Theme::AccentOnDark + ";"
         "  font-family: 'Segoe UI', 'Microsoft YaHei'; font-size: 12px; font-weight: bold;"
         "  padding: 0 14px; min-width: 80px;"
         "}"
-        "QPushButton:hover { background: #1976D2; }"
-        "QPushButton:pressed { background: #0D47A1; }"
-        "QPushButton:disabled { background: #555; color: #888; }";
+        "QPushButton:hover { background: " + Theme::AccentHover + "; }"
+        "QPushButton:pressed { background: " + Theme::AccentPress + "; }"
+        "QPushButton:disabled { background: " + Theme::BgPressed + "; color: " + Theme::TextMuted + "; }";
 
     const QString timeLabelStyle =
-        "QLabel { font-family: 'Consolas', monospace; font-size: 12px; color: #ccc; padding: 0 6px; }";
+        "QLabel { font-family: 'Consolas', monospace; font-size: 13px; color: " + Theme::TextPrimary + "; padding: 0 8px; }";
 
     QToolBar *toolBar = addToolBar("Main");
-    toolBar->setIconSize(QSize(16, 16));
-    toolBar->setStyleSheet(
-        "QToolBar { spacing: 4px; padding: 2px; background: #333; border: none; }"
-        "QToolBar::separator { width: 1px; background: #666; margin: 4px 4px; }"
-    );
+    toolBar->setIconSize(QSize(18, 18));
 
     // --- Playback group ---
     m_playBtn = new QPushButton(this);
-    m_playBtn->setIcon(style()->standardIcon(QStyle::SP_MediaPlay));
+    m_playBtn->setIcon(QIcon(QStringLiteral(":/icons/play.svg")));
     m_playBtn->setToolTip(lang("播放", "Play"));
-    m_playBtn->setFixedSize(30, 30);
-    m_playBtn->setIconSize(QSize(14, 14));
+    m_playBtn->setFixedSize(32, 32);
+    m_playBtn->setIconSize(QSize(18, 18));
     m_playBtn->setStyleSheet(iconBtnStyle);
     m_playBtn->setEnabled(false);
 
     m_pauseBtn = new QPushButton(this);
-    m_pauseBtn->setIcon(style()->standardIcon(QStyle::SP_MediaPause));
+    m_pauseBtn->setIcon(QIcon(QStringLiteral(":/icons/pause.svg")));
     m_pauseBtn->setToolTip(lang("暂停", "Pause"));
-    m_pauseBtn->setFixedSize(30, 30);
-    m_pauseBtn->setIconSize(QSize(14, 14));
+    m_pauseBtn->setFixedSize(32, 32);
+    m_pauseBtn->setIconSize(QSize(18, 18));
     m_pauseBtn->setStyleSheet(iconBtnStyle);
     m_pauseBtn->setEnabled(false);
 
     m_stopBtn = new QPushButton(this);
-    m_stopBtn->setIcon(style()->standardIcon(QStyle::SP_MediaStop));
+    m_stopBtn->setIcon(QIcon(QStringLiteral(":/icons/stop.svg")));
     m_stopBtn->setToolTip(lang("停止", "Stop"));
-    m_stopBtn->setFixedSize(30, 30);
-    m_stopBtn->setIconSize(QSize(14, 14));
+    m_stopBtn->setFixedSize(32, 32);
+    m_stopBtn->setIconSize(QSize(18, 18));
     m_stopBtn->setStyleSheet(iconBtnStyle);
     m_stopBtn->setEnabled(false);
 
     m_speedBtn = new QPushButton("1x", this);
-    m_speedBtn->setToolTip(lang("倍速播放 (1x/2x/4x/8x)", "Playback speed (1x/2x/4x/8x)"));
-    m_speedBtn->setFixedSize(40, 30);
+    m_speedBtn->setToolTip(lang("倍速播放 (0.25x/0.5x/1x/2x/4x/8x)", "Playback speed (0.25x/0.5x/1x/2x/4x/8x)"));
+    m_speedBtn->setFixedSize(46, 32);
     m_speedBtn->setStyleSheet(speedBtnStyle);
     m_speedBtn->setEnabled(false);
-
-    // A/B loop button
-    m_loopBtn = new QPushButton(QString::fromUtf8("\xf0\x9f\x94\x81"), this); // 🔁
-    m_loopBtn->setToolTip(lang("循环播放 A-B 区域", "Loop A-B region"));
-    m_loopBtn->setFixedSize(30, 30);
-    m_loopBtn->setStyleSheet(iconBtnStyle);
-    m_loopBtn->setCheckable(true);
-    m_loopBtn->setEnabled(false);
 
     // --- Analyze group ---
     m_analyzeBtn = new QPushButton(lang("亮度分析", "Luminance"), this);
     m_analyzeBtn->setToolTip(lang("分析当前视频的亮度（无需播放）", "Analyze current video luminance (no playback needed)"));
-    m_analyzeBtn->setFixedHeight(30);
+    m_analyzeBtn->setFixedHeight(32);
     m_analyzeBtn->setStyleSheet(primaryBtnStyle);
     m_analyzeBtn->setEnabled(false);
 
-    // v0.3: Audio analysis button (teal)
+    // 次主操作：金色描边轮廓样式（与实心主按钮形成层级）
     const QString audioBtnStyle =
         "QPushButton {"
-        "  height: 30px; border: none; border-radius: 4px;"
-        "  background: #00897B; color: #fff;"
+        "  height: 32px; border: 1px solid " + Theme::Accent + "; border-radius: 6px;"
+        "  background: transparent; color: " + Theme::Accent + ";"
         "  font-family: 'Segoe UI', 'Microsoft YaHei'; font-size: 12px; font-weight: bold;"
         "  padding: 0 14px; min-width: 80px;"
         "}"
-        "QPushButton:hover { background: #00796B; }"
-        "QPushButton:pressed { background: #00695C; }"
-        "QPushButton:disabled { background: #555; color: #888; }";
+        "QPushButton:hover { background: rgba(240, 180, 41, 25); }"
+        "QPushButton:pressed { background: rgba(240, 180, 41, 45); }"
+        "QPushButton:disabled { background: transparent; color: " + Theme::TextMuted + "; border-color: " + Theme::Border + "; }";
     m_audioAnalysisBtn = new QPushButton(lang("音频分析", "Audio"), this);
     m_audioAnalysisBtn->setToolTip(lang("独立分析音频（频谱图+音量）", "Analyze audio only (spectrogram + volume)"));
-    m_audioAnalysisBtn->setFixedHeight(30);
+    m_audioAnalysisBtn->setFixedHeight(32);
     m_audioAnalysisBtn->setStyleSheet(audioBtnStyle);
     m_audioAnalysisBtn->setEnabled(false);
 
     m_setTimeBtn = new QPushButton(lang("设置时间", "Set Time"), this);
     m_setTimeBtn->setToolTip(lang("设置图表起始时间 (HH:MM:SS)", "Set start time for the chart axis (HH:MM:SS)"));
-    m_setTimeBtn->setFixedHeight(30);
+    m_setTimeBtn->setFixedHeight(32);
     m_setTimeBtn->setStyleSheet(btnBase);
     m_setTimeBtn->setEnabled(false);
 
     // --- Fusion group ---
     m_captureBtn = new QPushButton(lang("截取", "Capture"), this);
     m_captureBtn->setToolTip(lang("截取当前帧", "Capture current frame"));
-    m_captureBtn->setFixedHeight(30);
+    m_captureBtn->setFixedHeight(32);
     m_captureBtn->setStyleSheet(fusionBtnStyle);
     m_captureBtn->setEnabled(false);
 
     m_editBtn = new QPushButton(lang("编辑", "Edit"), this);
     m_editBtn->setToolTip(lang("编辑截图叠加", "Edit snapshot overlay"));
-    m_editBtn->setFixedHeight(30);
+    m_editBtn->setFixedHeight(32);
     m_editBtn->setStyleSheet(fusionBtnStyle);
     m_editBtn->setEnabled(false);
 
     m_placeBtn = new QPushButton(lang("放置", "Place"), this);
     m_placeBtn->setToolTip(lang("切换叠加显示", "Toggle overlay on/off"));
-    m_placeBtn->setFixedHeight(30);
+    m_placeBtn->setFixedHeight(32);
     m_placeBtn->setStyleSheet(fusionBtnStyle);
     m_placeBtn->setCheckable(true);
     m_placeBtn->setEnabled(false);
 
-    // v0.5: ROI模式按钮
+    // v0.5: ROI 模式按钮组（分段控件：共享圆角外框）
     const QString modeBtnStyle =
         "QPushButton {"
-        "  height: 30px; border: 1px solid #888; border-radius: 4px;"
-        "  background: #555; color: #eee;"
+        "  height: 28px; border: none; border-radius: 4px;"
+        "  background: transparent; color: " + Theme::TextSecond + ";"
         "  font-family: 'Segoe UI', 'Microsoft YaHei'; font-size: 12px;"
-        "  padding: 0 8px;"
+        "  padding: 0 10px;"
         "}"
-        "QPushButton:hover { background: #666; }"
-        "QPushButton:pressed { background: #444; }"
-        "QPushButton:disabled { background: #444; color: #888; border: 1px solid #555; }"
-        "QPushButton:checked { background: #2196F3; color: #fff; border: 1px solid #1976D2; }";
+        "QPushButton:hover { color: " + Theme::TextPrimary + "; background: " + Theme::BgHover + "; }"
+        "QPushButton:checked { background: " + Theme::Accent + "; color: " + Theme::AccentOnDark + "; font-weight: bold; }";
 
     m_rectModeBtn = new QPushButton(lang("矩形", "Rect"), this);
     m_rectModeBtn->setToolTip(lang("矩形ROI模式 (P)", "Rect ROI Mode (P)"));
-    m_rectModeBtn->setFixedHeight(30);
+    m_rectModeBtn->setFixedHeight(28);
     m_rectModeBtn->setStyleSheet(modeBtnStyle);
     m_rectModeBtn->setCheckable(true);
     m_rectModeBtn->setChecked(true);
@@ -905,7 +845,7 @@ void MainWindow::createToolBar()
         "· Double-click to close\n"
         "· Right-click to cancel\n"
         "· Esc to exit mode"));
-    m_polygonModeBtn->setFixedHeight(30);
+    m_polygonModeBtn->setFixedHeight(28);
     m_polygonModeBtn->setStyleSheet(modeBtnStyle);
     m_polygonModeBtn->setCheckable(true);
 
@@ -925,18 +865,28 @@ void MainWindow::createToolBar()
         "· Drag endpoint: resize\n"
         "· Right-click: delete\n"
         "· Esc to exit mode"));
-    m_guideLineBtn->setFixedHeight(30);
+    m_guideLineBtn->setFixedHeight(28);
     m_guideLineBtn->setStyleSheet(modeBtnStyle);
     m_guideLineBtn->setCheckable(true);
 
+    // 分段控件容器：三个模式按钮共享一个圆角外框
+    auto *modeSegment = new QWidget(this);
+    modeSegment->setStyleSheet("background: " + Theme::BgCard + "; border-radius: 6px;");
+    auto *modeLayout = new QHBoxLayout(modeSegment);
+    modeLayout->setContentsMargins(2, 2, 2, 2);
+    modeLayout->setSpacing(2);
+    modeLayout->addWidget(m_rectModeBtn);
+    modeLayout->addWidget(m_polygonModeBtn);
+    modeLayout->addWidget(m_guideLineBtn);
+
     m_copyRoiBtn = new QPushButton(lang("复制ROI", "Copy ROI"), this);
     m_copyRoiBtn->setToolTip(lang("复制ROI区域 (Ctrl+Shift+C)", "Copy ROI (Ctrl+Shift+C)"));
-    m_copyRoiBtn->setFixedHeight(30);
+    m_copyRoiBtn->setFixedHeight(32);
     m_copyRoiBtn->setStyleSheet(btnBase);
 
     m_pasteRoiBtn = new QPushButton(lang("粘贴ROI", "Paste ROI"), this);
     m_pasteRoiBtn->setToolTip(lang("粘贴ROI区域 (Ctrl+Shift+V)", "Paste ROI (Ctrl+Shift+V)"));
-    m_pasteRoiBtn->setFixedHeight(30);
+    m_pasteRoiBtn->setFixedHeight(32);
     m_pasteRoiBtn->setStyleSheet(btnBase);
     m_pasteRoiBtn->setEnabled(false);
 
@@ -947,15 +897,12 @@ void MainWindow::createToolBar()
     toolBar->addWidget(m_pauseBtn);
     toolBar->addWidget(m_stopBtn);
     toolBar->addWidget(m_speedBtn);
-    toolBar->addWidget(m_loopBtn);
     toolBar->addSeparator();
     toolBar->addWidget(m_analyzeBtn);
     toolBar->addWidget(m_audioAnalysisBtn);  // v0.3: Audio analysis
     toolBar->addWidget(m_setTimeBtn);
     toolBar->addSeparator();
-    toolBar->addWidget(m_rectModeBtn);
-    toolBar->addWidget(m_polygonModeBtn);
-    toolBar->addWidget(m_guideLineBtn);
+    toolBar->addWidget(modeSegment);
     toolBar->addSeparator();
     toolBar->addWidget(m_copyRoiBtn);
     toolBar->addWidget(m_pasteRoiBtn);
@@ -981,20 +928,7 @@ void MainWindow::setupConnections()
     connect(m_playBtn, &QPushButton::clicked, this, &MainWindow::onPlay);
     connect(m_pauseBtn, &QPushButton::clicked, this, &MainWindow::onPause);
     connect(m_stopBtn, &QPushButton::clicked, this, &MainWindow::onStop);
-    connect(m_speedBtn, &QPushButton::clicked, this, [this]() {
-        adjustSpeed(1.0f);
-    });
-    connect(m_loopBtn, &QPushButton::clicked, this, [this](bool checked) {
-        m_chartPanel->setABLoop(checked);
-        showOperationStatus(checked
-            ? lang("循环播放已开启", "Loop enabled")
-            : lang("循环播放已关闭", "Loop disabled"));
-    });
-    connect(m_chartPanel, &ChartPanel::abRegionChanged, this, [this]() {
-        bool hasRegion = m_chartPanel->isABRegionSet();
-        m_loopBtn->setEnabled(hasRegion);
-        m_loopBtn->setChecked(hasRegion);
-    });
+    connect(m_speedBtn, &QPushButton::clicked, this, &MainWindow::cycleSpeed);
     connect(m_analyzeBtn, &QPushButton::clicked, this, &MainWindow::onAnalyze);
     connect(m_audioAnalysisBtn, &QPushButton::clicked, this, &MainWindow::onAudioAnalysis);
     connect(m_setTimeBtn, &QPushButton::clicked, this, &MainWindow::onSetStartTime);
@@ -1307,7 +1241,6 @@ void MainWindow::setupConnections()
                 m_audioAnalysisBtn->setEnabled(false);
                 m_setTimeBtn->setEnabled(false);
                 m_captureBtn->setEnabled(false);
-                m_loopBtn->setEnabled(false);
 
                 setWindowTitle(lang("追光者 Lumen Arc v1.0", "Lumen Arc v1.0"));
                 updateTimeDisplay();
@@ -1344,6 +1277,11 @@ void MainWindow::setupConnections()
     // Spectrogram cursor drag -> seek
     connect(m_spectrogramEnhanced, &SpectrogramPanelEnhanced::seekRequested,
             this, &MainWindow::onSeekFromChart);
+    // 语谱拖拽松手：退出 scrub 模式 + 最终精确 seek（光标在拖拽中已两面板同步）
+    connect(m_spectrogramEnhanced, &SpectrogramPanelEnhanced::scrubEnded, this, [this]() {
+        m_videoEngine->setScrubMode(false);
+        m_videoEngine->seek(m_chartPanel->cursorTime());
+    });
 
     // v0.5: 多边形ROI和辅助线模式切换
     connect(m_rectModeBtn, &QPushButton::clicked, this, &MainWindow::onRectMode);
@@ -1513,11 +1451,11 @@ void MainWindow::onOpenFile()
 
         if (i == 0) {
             openVideoFile(path);
-            // VLC fallback: if getVideoInfo failed, use VLC's duration
+            // 引擎回退：getVideoInfo 失败时改用引擎时长
             if (durationMs <= 0) {
-                qint64 vlcDur = m_videoEngine->duration();
-                if (vlcDur > 0) {
-                    m_videoListPanel->updateDuration(path, vlcDur);
+                qint64 engineDur = m_videoEngine->duration();
+                if (engineDur > 0) {
+                    m_videoListPanel->updateDuration(path, engineDur);
                 }
             }
         }
@@ -1544,6 +1482,8 @@ void MainWindow::openVideoFile(const QString &filePath)
     QVector<QRect> regions;
     QVector<QPolygon> loadedPolygons;
     QVector<GuideLine> loadedGuideLines;
+    QVector<int> loadedRegionRoiIds;
+    QVector<int> loadedPolygonRoiIds;
     qint64 timeOffset = 0;
     QRect magnifierRect;
     QVector<ChartLabel> labels;
@@ -1551,11 +1491,16 @@ void MainWindow::openVideoFile(const QString &filePath)
     SnapshotFusionData snapshotFusion;
     if (m_timelineModel->loadFromFile(filePath, &regions, &timeOffset,
                                        &magnifierRect, &labels, &pinnedRect,
-                                       &snapshotFusion, &loadedPolygons, &loadedGuideLines)) {
-        restoreAnalysisState(regions, timeOffset, labels, pinnedRect, snapshotFusion);
-        m_polygonModel->clearPolygons();
-        for (const QPolygon &poly : loadedPolygons)
-            m_polygonModel->addPolygon(poly);
+                                       &snapshotFusion, &loadedPolygons, &loadedGuideLines,
+                                       &loadedRegionRoiIds, &loadedPolygonRoiIds)) {
+        restoreAnalysisState(regions, timeOffset, labels, pinnedRect, snapshotFusion, loadedRegionRoiIds);
+        if (loadedPolygonRoiIds.size() == loadedPolygons.size())
+            m_polygonModel->restorePolygons(loadedPolygons, loadedPolygonRoiIds);
+        else {
+            m_polygonModel->clearPolygons();
+            for (const QPolygon &poly : loadedPolygons)
+                m_polygonModel->addPolygon(poly);
+        }
         m_guideLineModel->clearLines();
         for (const GuideLine &line : loadedGuideLines)
             m_guideLineModel->addLine(line);
@@ -1589,7 +1534,9 @@ void MainWindow::openVideoFile(const QString &filePath)
             m_chartPanel->isABLoop(),
             m_polygonModel->polygons(),
             m_guideLineModel->lines(),
-            m_chartPanel->chartGuideLinesData()
+            m_chartPanel->chartGuideLinesData(),
+            m_regionModel->roiIds(),
+            m_polygonModel->roiIds()
         );
     }
 
@@ -1602,13 +1549,22 @@ void MainWindow::openVideoFile(const QString &filePath)
         // Check if we have a saved state for this video (memory state takes priority)
         VideoState savedState;
         if (m_stateManager->restoreState(filePath, savedState)) {
-            m_regionModel->clearRegions();
-            for (const QRect &rc : savedState.regions)
-                m_regionModel->addRegion(rc);
+            // 带 roiId 恢复：保持与分析数据 dataEntries 的 roi_id 对齐
+            if (savedState.regionRoiIds.size() == savedState.regions.size())
+                m_regionModel->restoreRegions(savedState.regions, savedState.regionRoiIds);
+            else {
+                m_regionModel->clearRegions();
+                for (const QRect &rc : savedState.regions)
+                    m_regionModel->addRegion(rc);
+            }
 
-            m_polygonModel->clearPolygons();
-            for (const QPolygon &poly : savedState.polygons)
-                m_polygonModel->addPolygon(poly);
+            if (savedState.polygonRoiIds.size() == savedState.polygons.size())
+                m_polygonModel->restorePolygons(savedState.polygons, savedState.polygonRoiIds);
+            else {
+                m_polygonModel->clearPolygons();
+                for (const QPolygon &poly : savedState.polygons)
+                    m_polygonModel->addPolygon(poly);
+            }
 
             m_guideLineModel->clearLines();
             for (const GuideLine &line : savedState.guideLines)
@@ -1704,6 +1660,8 @@ void MainWindow::openVideoFile(const QString &filePath)
                 QVector<QRect> regions;
                 QVector<QPolygon> loadedPolygons;
                 QVector<GuideLine> loadedGuideLines;
+                QVector<int> loadedRegionRoiIds;
+                QVector<int> loadedPolygonRoiIds;
                 qint64 timeOffset = 0;
                 QRect magnifierRect;
                 QVector<ChartLabel> labels;
@@ -1711,11 +1669,16 @@ void MainWindow::openVideoFile(const QString &filePath)
                 SnapshotFusionData snapshotFusion;
                 if (m_timelineModel->loadFromFile(vlaPath, &regions, &timeOffset,
                                                     &magnifierRect, &labels, &pinnedRect,
-                                                    &snapshotFusion, &loadedPolygons, &loadedGuideLines)) {
-                    restoreAnalysisState(regions, timeOffset, labels, pinnedRect, snapshotFusion);
-                    m_polygonModel->clearPolygons();
-                    for (const QPolygon &poly : loadedPolygons)
-                        m_polygonModel->addPolygon(poly);
+                                                    &snapshotFusion, &loadedPolygons, &loadedGuideLines,
+                                                    &loadedRegionRoiIds, &loadedPolygonRoiIds)) {
+                    restoreAnalysisState(regions, timeOffset, labels, pinnedRect, snapshotFusion, loadedRegionRoiIds);
+                    if (loadedPolygonRoiIds.size() == loadedPolygons.size())
+                        m_polygonModel->restorePolygons(loadedPolygons, loadedPolygonRoiIds);
+                    else {
+                        m_polygonModel->clearPolygons();
+                        for (const QPolygon &poly : loadedPolygons)
+                            m_polygonModel->addPolygon(poly);
+                    }
                     m_guideLineModel->clearLines();
                     for (const GuideLine &line : loadedGuideLines)
                         m_guideLineModel->addLine(line);
@@ -1759,12 +1722,10 @@ void MainWindow::onSaveAnalysis()
                                      m_pinnedRect,
                                      m_snapshotFusion,
                                      m_polygonModel->polygons(),
-                                     m_guideLineModel->lines())) {
-        // Save spectrogram to separate binary file
-        AnalysisSnapshot snap = m_timelineModel->snapshot();
-        if (snap.hasAudio()) {
-            TimelineModel::saveSpecToFile(filePath + ".spec", snap.audio);
-        }
+                                     m_guideLineModel->lines(),
+                                     m_regionModel->roiIds(),
+                                     m_polygonModel->roiIds())) {
+        // VLA2：频谱已内嵌于文件中，无需 .spec 伴随文件
         QMessageBox::information(this, lang("保存", "Save"),
             lang("分析结果保存成功。", "Analysis result saved successfully."));
         showOperationStatus(lang("保存成功", "Saved"));
@@ -1785,6 +1746,8 @@ void MainWindow::onLoadAnalysis()
         QVector<QRect> regions;
         QVector<QPolygon> loadedPolygons;
         QVector<GuideLine> loadedGuideLines;
+        QVector<int> loadedRegionRoiIds;
+        QVector<int> loadedPolygonRoiIds;
         qint64 timeOffset = 0;
         QRect magnifierRect;
         QVector<ChartLabel> labels;
@@ -1792,11 +1755,16 @@ void MainWindow::onLoadAnalysis()
         SnapshotFusionData snapshotFusion;
         if (m_timelineModel->loadFromFile(filePath, &regions, &timeOffset,
                                             &magnifierRect, &labels, &pinnedRect,
-                                            &snapshotFusion, &loadedPolygons, &loadedGuideLines)) {
-            restoreAnalysisState(regions, timeOffset, labels, pinnedRect, snapshotFusion);
-            m_polygonModel->clearPolygons();
-            for (const QPolygon &poly : loadedPolygons)
-                m_polygonModel->addPolygon(poly);
+                                            &snapshotFusion, &loadedPolygons, &loadedGuideLines,
+                                            &loadedRegionRoiIds, &loadedPolygonRoiIds)) {
+            restoreAnalysisState(regions, timeOffset, labels, pinnedRect, snapshotFusion, loadedRegionRoiIds);
+            if (loadedPolygonRoiIds.size() == loadedPolygons.size())
+                m_polygonModel->restorePolygons(loadedPolygons, loadedPolygonRoiIds);
+            else {
+                m_polygonModel->clearPolygons();
+                for (const QPolygon &poly : loadedPolygons)
+                    m_polygonModel->addPolygon(poly);
+            }
             m_guideLineModel->clearLines();
             for (const GuideLine &line : loadedGuideLines)
                 m_guideLineModel->addLine(line);
@@ -1905,11 +1873,11 @@ void MainWindow::dropEvent(QDropEvent *event)
 
         if (first) {
             openVideoFile(filePath);
-            // VLC fallback: if getVideoInfo failed, use VLC's duration
+            // 引擎回退：getVideoInfo 失败时改用引擎时长
             if (durationMs <= 0) {
-                qint64 vlcDur = m_videoEngine->duration();
-                if (vlcDur > 0) {
-                    m_videoListPanel->updateDuration(filePath, vlcDur);
+                qint64 engineDur = m_videoEngine->duration();
+                if (engineDur > 0) {
+                    m_videoListPanel->updateDuration(filePath, engineDur);
                 }
             }
             first = false;
@@ -1945,7 +1913,7 @@ void MainWindow::onStop()
 }
 
 /// @brief v0.3: 启动多视频连续播放
-/// @brief 倍速循环调节：0.25x/0.5x/1x/2x/4x/8x
+/// @brief 按步进调整播放速度：0.25x/0.5x/1x/2x/4x/8x
 void MainWindow::adjustSpeed(float delta)
 {
     static const float speeds[] = {0.25f, 0.5f, 1.0f, 2.0f, 4.0f, 8.0f};
@@ -1966,7 +1934,33 @@ void MainWindow::adjustSpeed(float delta)
     else
         idx = qMax(idx - 1, 0);
 
-    m_currentSpeed = speeds[idx];
+    applySpeed(speeds[idx]);
+}
+
+/// @brief 循环切换播放倍速：0.25x/0.5x/1x/2x/4x/8x，到达最高速后回到最低速
+void MainWindow::cycleSpeed()
+{
+    static const float speeds[] = {0.25f, 0.5f, 1.0f, 2.0f, 4.0f, 8.0f};
+    static const int count = 6;
+
+    // Find current speed index
+    int idx = 0;
+    for (int i = 0; i < count; ++i) {
+        if (qAbs(m_currentSpeed - speeds[i]) < 0.01f) {
+            idx = i;
+            break;
+        }
+    }
+
+    // Cycle to next speed, wrapping around to the start
+    idx = (idx + 1) % count;
+    applySpeed(speeds[idx]);
+}
+
+/// @brief 统一应用播放速度并更新 UI 和状态提示
+void MainWindow::applySpeed(float speed)
+{
+    m_currentSpeed = speed;
 
     // Format display text: integers show "2x", decimals show "0.5x"
     QString speedText;
@@ -2277,10 +2271,10 @@ void MainWindow::onAnalysisProgress(int analyzed, int total, qreal percent)
             m_progressBar->setValue(newPercent);
         }
     } else if (m_analysisPhase == Luminance) {
-        // Luminance analysis: 0%-100%
+        // Luminance analysis: 0%-100%（v1.1 起 analyzed/total 语义统一为采样点数）
         m_statusLabel->setText(
-            QString(lang("已分析 %1 帧（%2%）", "Analyzed %1 frames (%2%)"))
-                .arg(analyzed).arg(percent, 0, 'f', 1));
+            QString(lang("分析中 %1%（%2 个采样点）", "Analyzing %1% (%2 samples)"))
+                .arg(percent, 0, 'f', 1).arg(analyzed));
         int newPercent = qBound(0, static_cast<int>(percent), 100);
         if (newPercent > m_progressBar->value()) {
             m_progressBar->setValue(newPercent);
@@ -2337,12 +2331,10 @@ void MainWindow::onAnalysisFinished(const AnalysisSnapshot &snapshot)
                                      magRect, m_chartPanel->labels(), m_pinnedRect,
                                      m_snapshotFusion,
                                      m_polygonModel->polygons(),
-                                     m_guideLineModel->lines());
-        // Save spectrogram to separate binary file
-        AnalysisSnapshot snap = m_timelineModel->snapshot();
-        if (snap.hasAudio()) {
-            TimelineModel::saveSpecToFile(vlaPath + ".spec", snap.audio);
-        }
+                                     m_guideLineModel->lines(),
+                                     m_regionModel->roiIds(),
+                                     m_polygonModel->roiIds());
+        // VLA2：频谱已内嵌于文件中，无需 .spec 伴随文件
     }
 
     QString msg;
@@ -2485,6 +2477,10 @@ void MainWindow::onDurationChanged(qint64 durationMs)
 
     m_chartPanel->setDuration(effectiveDur);
 
+    // 拖拽匀速化（第一层）：向图表传入帧时长，启用速度自适应帧网格量化
+    const float fpsNow = m_videoEngine->fps();
+    m_chartPanel->setFrameDuration(fpsNow > 0.0f ? qint64(1000.0 / fpsNow + 0.5) : 0);
+
     // v0.3: Sync duration to VideoListPanel
     if (!m_currentVideoPath.isEmpty() && m_videoListPanel) {
         m_videoListPanel->updateDuration(m_currentVideoPath, effectiveDur);
@@ -2532,8 +2528,12 @@ void MainWindow::onSeekFromChart(qint64 timeMs)
     m_spectrogramEnhanced->setCursorTime(timeMs);
 
     // 拖拽中：scrub 追逐模式——只写原子目标，引擎 worker 连续解码追赶，
-    // 免节流免命令队列（mouseMove 不再产生 seek 命令，拖拽期间解码管线不断流）
-    if (m_chartPanel->isDraggingCursor()) {
+    // 免节流免命令队列（mouseMove 不再产生 seek 命令，拖拽期间解码管线不断流）。
+    // 图表与语谱两个面板的光标拖拽都走此路径（此前语谱拖拽漏判，
+    // 退化成 50ms 节流一次性 seek：每拍全量 flush 重定，无追赶无缓存——卡顿主因）
+    const bool dragging = m_chartPanel->isDraggingCursor()
+                          || (m_spectrogramEnhanced && m_spectrogramEnhanced->isDraggingCursor());
+    if (dragging) {
         m_videoEngine->setScrubMode(true);
         m_videoEngine->setScrubTarget(timeMs);
     } else {
@@ -2594,11 +2594,17 @@ void MainWindow::restoreAnalysisState(const QVector<QRect> &regions,
                                        qint64 timeOffset,
                                        const QVector<ChartLabel> &labels,
                                        const QRect &pinnedRect,
-                                       const SnapshotFusionData &fusion)
+                                       const SnapshotFusionData &fusion,
+                                       const QVector<int> &regionRoiIds)
 {
-    m_regionModel->clearRegions();
-    for (const QRect &rc : regions)
-        m_regionModel->addRegion(rc);
+    // 带 roiId 恢复：保持与分析数据 dataEntries 的 roi_id 对齐
+    if (regionRoiIds.size() == regions.size())
+        m_regionModel->restoreRegions(regions, regionRoiIds);
+    else {
+        m_regionModel->clearRegions();
+        for (const QRect &rc : regions)
+            m_regionModel->addRegion(rc);
+    }
     m_chartPanel->setTimeOffset(timeOffset);
     m_chartPanel->setLabels(labels);
     if (!pinnedRect.isEmpty())

@@ -20,6 +20,7 @@
 #include <QTime>
 #include <QWheelEvent>
 #include <QPushButton>
+#include <QElapsedTimer>
 
 #include "domain/analysis_snapshot.h"
 
@@ -46,6 +47,8 @@ public:
     void setCursorTime(qint64 timeMs);
     qint64 cursorTime() const;
     void setDuration(qint64 durationMs);
+    /// 设置视频帧时长（拖拽匀速化量化用；0=未知，退化为原始直通）
+    void setFrameDuration(qint64 frameMs) { m_frameMs = frameMs; }
     void setTimeOffset(qint64 offsetMs);
     qint64 timeOffset() const { return m_startTimeOfDayMs; }
     bool isDraggingCursor() const { return m_draggingCursor; }
@@ -137,6 +140,21 @@ private:
     QGraphicsSimpleTextItem *m_cursorDataLabel = nullptr;
     bool m_draggingCursor = false;
     qint64 m_cursorTimeMs = 0;
+
+    // --- 拖拽匀速化（第一层：输入侧速度自适应帧网格量化） ---
+    // 估计目标速度（时间轴 ms / 墙钟 ms），据此选取帧步长 n，并把发出的
+    // seek 目标量化到以拖拽起点为锚的 n·frameMs 网格——慢拖逐帧均匀推进，
+    // 快拖等距跳帧，消除鼠标事件间隔抖动导致的目标序列不均匀。
+    qint64 m_frameMs = 0;            // 视频帧时长（0=未知，不量化）
+    QElapsedTimer m_dragWallClock;   // 拖拽墙钟（速度估计）
+    qint64 m_dragLastWallMs = -1;    // 上次 mouseMove 的墙钟
+    qint64 m_dragLastRawMs = -1;     // 上次 mouseMove 的原始目标
+    double m_dragVelocity = 0.0;     // 目标速度 EMA（带符号，ms/ms）
+    qint64 m_dragAnchorMs = 0;       // 量化网格锚点（拖拽起点）
+    qint64 m_dragLastEmittedMs = -1; // 上次实际发出的量化目标（去重）
+    qint64 m_dragQuantum = 0;        // 当前量化步长（步长切换时平移锚点保持相位连续）
+    qint64 quantizeDragTarget(qint64 t);
+    static constexpr qint64 DRAG_DISPLAY_CADENCE_MS = 25; // 显示节拍（与引擎节拍闸一致）
     qint64 m_durationMs = 0;
     qint64 m_startTimeOfDayMs = 0;
 

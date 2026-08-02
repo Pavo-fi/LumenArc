@@ -13,6 +13,7 @@
 #include "domain/polygon_model.h"
 #include "domain/timeline_model.h"
 #include "i18n.h"
+#include "theme.h"
 
 #include <QtCharts/QChart>
 #include <QtCharts/QLineSeries>
@@ -41,7 +42,7 @@ ChartPanel::ChartPanel(QWidget *parent)
     setRenderHint(QPainter::Antialiasing);
     setRubberBand(QChartView::NoRubberBand);
     setDragMode(QGraphicsView::NoDrag);
-    setBackgroundBrush(QBrush(QColor(40, 40, 40)));
+    setBackgroundBrush(QBrush(QColor(Theme::BgPanel)));
     setFocusPolicy(Qt::NoFocus);  // 防止图表窃取键盘焦点导致快捷键失效
 
     m_chart = new QChart();
@@ -49,7 +50,7 @@ ChartPanel::ChartPanel(QWidget *parent)
     m_chart->legend()->setVisible(true);
     m_chart->legend()->setAlignment(Qt::AlignBottom);
     m_chart->legend()->setLabelColor(QColor(0xF5, 0xF0, 0xE8));
-    m_chart->setBackgroundBrush(QBrush(QColor(40, 40, 40)));
+    m_chart->setBackgroundBrush(QBrush(QColor(Theme::BgPanel)));
 
     connect(m_chart, &QChart::plotAreaChanged, this, &ChartPanel::updateTimeLabelPositions);
     connect(m_chart, &QChart::plotAreaChanged, this, &ChartPanel::updateLabelItems);
@@ -95,7 +96,7 @@ ChartPanel::ChartPanel(QWidget *parent)
 
     m_cursorLine = new QGraphicsLineItem(m_chart);
     m_cursorLine->setZValue(CURSOR_Z_VALUE);
-    QPen cursorPen(QColor(0xFF, 0x98, 0x1C)); // orange
+    QPen cursorPen{QColor(Theme::Accent)}; // 品牌金
     cursorPen.setWidth(2);
     cursorPen.setStyle(Qt::DashLine);
     m_cursorLine->setPen(cursorPen);
@@ -104,7 +105,7 @@ ChartPanel::ChartPanel(QWidget *parent)
     // Time label above cursor line
     m_cursorTimeBg = new QGraphicsRectItem(m_chart);
     m_cursorTimeBg->setZValue(CURSOR_Z_VALUE);
-    m_cursorTimeBg->setBrush(QBrush(QColor(60, 60, 60, 220)));
+    m_cursorTimeBg->setBrush(QBrush(QColor(37, 41, 50, 230)));
     m_cursorTimeBg->setPen(Qt::NoPen);
     m_cursorTimeBg->setVisible(false);
 
@@ -120,15 +121,15 @@ ChartPanel::ChartPanel(QWidget *parent)
     m_cursorDataLabel->setBrush(QBrush(QColor(0xF5, 0xF0, 0xE8)));
     m_cursorDataLabel->setVisible(false);
 
-    // A/B region markers
-    QPen penA(QColor(0xF4, 0x43, 0x36)); // red
+    // A/B region markers（Okabe-Ito 色板）
+    QPen penA(QColor(213, 94, 0)); // vermillion
     penA.setWidth(2);
     m_lineA = new QGraphicsLineItem(m_chart);
     m_lineA->setPen(penA);
     m_lineA->setZValue(CURSOR_Z_VALUE - 1);
     m_lineA->setVisible(false);
 
-    QPen penB(QColor(0x21, 0x96, 0xF3)); // blue
+    QPen penB(QColor(86, 180, 233)); // sky blue
     penB.setWidth(2);
     m_lineB = new QGraphicsLineItem(m_chart);
     m_lineB->setPen(penB);
@@ -137,18 +138,18 @@ ChartPanel::ChartPanel(QWidget *parent)
 
     m_labelAText = new QGraphicsSimpleTextItem("A", m_chart);
     m_labelAText->setFont(fontMono(10, QFont::Bold));
-    m_labelAText->setBrush(QBrush(QColor(0xF4, 0x43, 0x36)));
+    m_labelAText->setBrush(QBrush(QColor(213, 94, 0)));
     m_labelAText->setZValue(CURSOR_Z_VALUE);
     m_labelAText->setVisible(false);
 
     m_labelBText = new QGraphicsSimpleTextItem("B", m_chart);
     m_labelBText->setFont(fontMono(10, QFont::Bold));
-    m_labelBText->setBrush(QBrush(QColor(0x21, 0x96, 0xF3)));
+    m_labelBText->setBrush(QBrush(QColor(86, 180, 233)));
     m_labelBText->setZValue(CURSOR_Z_VALUE);
     m_labelBText->setVisible(false);
 
     m_abHighlight = new QGraphicsRectItem(m_chart);
-    m_abHighlight->setBrush(QBrush(QColor(33, 150, 243, 25)));
+    m_abHighlight->setBrush(QBrush(QColor(86, 180, 233, 25)));
     m_abHighlight->setPen(Qt::NoPen);
     m_abHighlight->setZValue(0);
     m_abHighlight->setVisible(false);
@@ -412,7 +413,7 @@ void ChartPanel::onDataReplaced()
         if (!m_volumeSeries) {
             m_volumeSeries = new QLineSeries();
             m_volumeSeries->setName(lang("音量", "Volume"));
-            QPen volumePen(QColor(76, 175, 80, 180));
+            QPen volumePen(QColor(0, 158, 115, 180));
             volumePen.setWidth(1);
             m_volumeSeries->setPen(volumePen);
             if (!m_axisYVolume) {
@@ -711,7 +712,7 @@ void ChartPanel::rebuildSeries()
     // v0.3: Create volume series
     m_volumeSeries = new QLineSeries();
     m_volumeSeries->setName(lang("音量", "Volume"));
-    QPen volumePen(QColor(76, 175, 80, 180));  // Green semi-transparent
+    QPen volumePen(QColor(0, 158, 115, 180));  // Okabe-Ito bluish green
     volumePen.setWidth(1);
     m_volumeSeries->setPen(volumePen);
 
@@ -1266,12 +1267,13 @@ void ChartPanel::wheelEvent(QWheelEvent *event)
 void ChartPanel::addLabelAtTime(qint64 timeMs)
 {
     static const QColor presetColors[] = {
-        QColor(220, 50, 50),   // red
-        QColor(50, 160, 220),  // blue
-        QColor(50, 200, 80),   // green
-        QColor(230, 160, 30),  // orange
-        QColor(160, 80, 200),  // purple
-        QColor(200, 200, 50),  // yellow
+        // Okabe-Ito 色盲友好调色板
+        QColor(86, 180, 233),   // sky blue
+        QColor(230, 159, 0),    // orange
+        QColor(0, 158, 115),    // bluish green
+        QColor(213, 94, 0),     // vermillion
+        QColor(204, 121, 167),  // reddish purple
+        QColor(240, 228, 66),   // yellow
     };
     static int colorIndex = 0;
 
@@ -1292,7 +1294,7 @@ void ChartPanel::addLabelAtTime(qint64 timeMs)
         auto *btn = new QPushButton(&dlg);
         btn->setFixedSize(32, 32);
         btn->setStyleSheet(QString(
-            "QPushButton { background-color: %1; border: 2px solid #555; border-radius: 4px; }"
+            "QPushButton { background-color: %1; border: 2px solid #333947; border-radius: 4px; }"
             "QPushButton:hover { border: 2px solid white; }"
         ).arg(c.name()));
         connect(btn, &QPushButton::clicked, &dlg, [&dlg, &chosenColor, c]() {
@@ -1363,6 +1365,13 @@ void ChartPanel::mousePressEvent(QMouseEvent *event)
         if (qAbs(chartPos.x() - cursorX) < 10 && plotArea.contains(chartPos)) {
             m_draggingCursor = true;
             setCursor(Qt::SizeHorCursor);
+            // 拖拽匀速化：初始化速度估计器与量化网格锚点
+            m_dragWallClock.start();
+            m_dragLastWallMs = -1;
+            m_dragLastRawMs = mapXToTime(clampX(chartPos.x()));
+            m_dragVelocity = 0.0;
+            m_dragAnchorMs = m_dragLastRawMs;
+            m_dragLastEmittedMs = -1;
             return;
         }
 
@@ -1434,10 +1443,13 @@ void ChartPanel::mouseMoveEvent(QMouseEvent *event)
     if (m_draggingCursor) {
         QPointF chartPos = m_chart->mapFromScene(mapToScene(event->pos()));
         qreal x = clampX(chartPos.x());
-        qint64 t = mapXToTime(x);
+        qint64 t = quantizeDragTarget(mapXToTime(x));
         m_cursorTimeMs = t;
         updateCursorPosition();
-        emit seekRequested(t);
+        if (t != m_dragLastEmittedMs) {
+            m_dragLastEmittedMs = t;
+            emit seekRequested(t);
+        }
         return;
     }
 
@@ -1501,6 +1513,47 @@ void ChartPanel::mouseReleaseEvent(QMouseEvent *event)
         emit scrubEnded();
     }
     QChartView::mouseReleaseEvent(event);
+}
+
+// =============================================================================
+// 拖拽匀速化：速度自适应帧网格量化
+// =============================================================================
+
+qint64 ChartPanel::quantizeDragTarget(qint64 t)
+{
+    if (m_frameMs <= 0)
+        return t;   // 帧时长未知：退化为原始直通
+
+    // 目标速度 EMA（时间轴 ms / 墙钟 ms，带符号）。0.5/0.5 权重：
+    // 加减速响应快，起步飞奔不会因 EMA 冷启动而滞留 n=1
+    const qint64 now = m_dragWallClock.elapsed();
+    if (m_dragLastWallMs >= 0) {
+        const qint64 dtWall = now - m_dragLastWallMs;
+        if (dtWall > 0) {
+            const double inst = double(t - m_dragLastRawMs) / double(dtWall);
+            m_dragVelocity = 0.5 * m_dragVelocity + 0.5 * inst;
+        }
+    }
+    m_dragLastWallMs = now;
+    m_dragLastRawMs = t;
+
+    // 速度自适应步长：显示帧以固定墙钟节拍均匀推进所需的帧数。
+    // 慢拖 v·25ms < 半帧 → n=1 逐帧均匀；快拖等距跳帧，步长随速度缩放。
+    const double v = qAbs(m_dragVelocity);
+    const qint64 n = qBound<qint64>(
+        1LL, qint64(v * DRAG_DISPLAY_CADENCE_MS / m_frameMs + 0.5), 256LL);
+    const qint64 quantum = n * m_frameMs;
+
+    // 步长切换时把网格锚点平移到最近发出点，保持步进相位连续——
+    // 避免 n 变化瞬间目标序列出现额外跳变
+    if (quantum != m_dragQuantum && m_dragLastEmittedMs >= 0)
+        m_dragAnchorMs = m_dragLastEmittedMs;
+    m_dragQuantum = quantum;
+
+    // 以拖拽起点为锚的网格量化：保证一次拖拽内步进严格均匀
+    const qint64 tq = m_dragAnchorMs
+        + qRound64(double(t - m_dragAnchorMs) / double(quantum)) * quantum;
+    return qBound<qint64>(0LL, tq, m_durationMs);
 }
 
 // =============================================================================
@@ -1569,6 +1622,9 @@ void ChartPanel::zoomToABRegion()
 
 void ChartPanel::updateABMarkers()
 {
+    // 防御：构造期 setChart 可能提前触发 rangeChanged，此时 A/B 图形项尚未创建
+    if (!m_lineA || !m_lineB || !m_labelAText || !m_labelBText || !m_abHighlight || !m_chart)
+        return;
     QRectF pa = m_chart->plotArea();
     bool hasA = m_abPointA >= 0;
     bool hasB = m_abPointB >= 0;

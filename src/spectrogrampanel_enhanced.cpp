@@ -927,6 +927,7 @@ void SpectrogramPanelEnhanced::mouseReleaseEvent(QMouseEvent *event)
     if (event->button() == Qt::LeftButton && m_draggingCursor) {
         m_draggingCursor = false;
         unsetCursor();
+        emit scrubEnded();
         event->accept();
         return;
     }

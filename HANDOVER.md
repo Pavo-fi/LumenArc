@@ -593,3 +593,102 @@ build/testdata（CI 生成的测试剪辑）。已拷贝：third_party/ffmpeg（
 | `5c9ac46` | 视频列表 fps 翻倍（15→30） | cv2.CAP_PROP_FPS 与 avg_frame_rate 都读容器元数据，部分 DVR 文件元数据就是错的。修复：两侧实测前 48 帧 PTS 节奏（中位间隔，偏差 >4% 以实测为准）；引擎侧校准同时修好逐帧步进与图表时间轴。元数据正确文件不受影响（已验证） |
 | 本次 | 辅助线 UX 重构 | ① 去掉 QInputDialog 弹框：右键菜单"添加水平/垂直辅助线"直接取鼠标位置换算（水平=鼠标 Y→亮度值，垂直=鼠标 X→时间，垂直原先用播放光标时间）② 标签文本移入 drawChartGuideLines 每次 draw 刷新 → 拖动时数值实时联动（原只在创建时设置）③ 水平辅助线双标签：左侧=亮度值（左 Y 轴），右侧=响度 dB 值（右 Y 轴同一像素等效值，无音量轴时隐藏）④ 响度标签绘制在图表内侧右对齐，不遮挡右 Y 轴刻度 ⑤ 多条水平辅助线间右侧加 ▲ 响度差值（dB 差绝对值，与左侧 △ 亮度差值对应） |
 | 本次 | 文件夹改名构建修复 | 用户改名 V1.0 remake → LumenArc_v1.0 remake 使 CMakeCache 路径失效：build 目录已按新路径重建（内置 python/ffmpeg 保留） |
+
+---
+
+## 十二、Scrub 拖拽顺滑化两轮迭代 + 音频无声排查（2026-08-02）
+
+> 用户场景：在图表/语谱上拖拽光标观测局部亮度在十几分钟跨度上的变化。
+> 初始症状：画面不规则跳跃兼卡顿；迭代后变为"顺滑一会→冻屏→再顺滑"。
+> 战场文件：`明景拼接视频（）长72528.mp4`（1440p H.264 23.98fps AAC 48kHz，**2h/10.2GB**）。
+
+### 12.0 问题文件关键实测数据
+
+| 文件 | 分辨率/fps | 可 seek 关键帧 | 解码吞吐（catchup-bench） | 备注 |
+|---|---|---|---|---|
+| $RCR79YF/*.mp4（恢复文件） | 720x480 15fps | ~15s/个（40 个/10min） | ~7900fps（全 GOP 追赶仅 ~28ms） | AAC 8kHz mono；前 2 分钟内容近乎静音（max -48dB） |
+| D17_...17015190.mp4 | 2560x1440 25fps | ~5-10s/个 | 软解 ~3140fps（10s GOP 追赶 ~80ms） | HANDOVER 老测试文件 |
+| 明景拼接视频（）长72528.mp4 | 2560x1440 23.98fps | **每 10s 一个 IDR**（stss 只索引 IDR；ffprobe 看到的 ~1s"关键帧"是开放 GOP 恢复点，不可 seek） | ~750fps（≈31× 实时，demux 上限 ~800pkt/s） | **超 31× 的拖拽物理上必靠 seek 跳显** |
+
+### 12.1 两层匀速化（第一迭代）
+
+- **第一层·输入侧量化**（chartpanel.cpp `quantizeDragTarget`，仅 ChartPanel）：
+  目标速度 EMA（0.5/0.5）→ 步长 `n = clamp(v×25ms/frameMs, 1, 256)`，seek 目标量化到
+  `n·frameMs` 网格（锚点=拖拽起点，步长切换时平移锚点保持相位连续），相同目标去重不 emit。
+  慢拖严格逐帧均匀，快拖等距跳帧。`setFrameDuration()` 由 MainWindow::onDurationChanged 注入。
+- **第二层·输出侧节拍闸**（ffmpeg_video_engine.cpp scrubChaseMainFrame）：
+  显示由"解码事件驱动"改为"墙钟节拍驱动"（`SCRUB_DISPLAY_INTERVAL_MS=25`）。
+  闸未开：软解帧静默入滚动缓存（超前量 `SCRUB_LOOKAHEAD_MS=800` 有界后交外层，由缓存命中路径服务后续拍）；
+  硬解帧持帧睡到下一拍。进入 scrub 复位闸门（首帧零延迟）。
+  **UI 背压自适应**：丢帧（inFlight≥2）一次节拍 +5ms（上限 +20ms），成功显示逐帧衰减——
+  生产速率自动降到 UI 可持续水平，防"光标在动画面冻结"。
+
+### 12.2 关键 Bug 修复（按发现顺序，均为实测/日志驱动）
+
+1. **语谱拖拽从未进入 scrub 模式**（最大单点收益）：`MainWindow::onSeekFromChart` 的拖拽判断
+   只查 `m_chartPanel->isDraggingCursor()`，语谱拖拽全部走 50ms 节流一次性 seek
+   （每拍全量 flush 重定，无追赶无缓存）。修复：判断改为图表||语谱；
+   `SpectrogramPanelEnhanced` 补 `scrubEnded` 信号（松手退出 scrub + 精确落位）。
+2. **片段音频收割阻塞追逐循环**（"时好时坏"主因）：每次显示后收割 100ms 音频窗口需读 ~80 包
+   （≈100ms 墙钟）+ sink reset/start 每 120ms 一次。修复：引擎侧目标速度 EMA >4× 时
+   关闭片段音频与收割（`m_scrubSnippetAudio`）；慢拖保留。
+3. **窗口显示无上界**：目标回退时窗口条件 `relMs >= target-halfFrame` 会显示超前 1.3s 的帧
+   （快进感）。修复：`relMs > target + 2*halfFrame` 交外层后退重定位。
+4. **关键帧跳显（hop）双通道自适应**：
+   - `sparseGop` = 实测 GOP（reseek 落点间距 `m_gopLearnMs`）> 6s 且追赶墙钟 EMA > 120ms
+     （真慢解码文件；D17 软解 80ms 不进此通道）；
+   - `denseVelHop` = 目标速度 > 30×（实测吞吐上限 ~31×，超出后 decode-through 物理追不上）。
+   - 防回归细节：墙钟只在 GOP 已知后采样、软解切换重 seek 后重新计时
+     （否则一次性硬解慢样本把 sparseGop 锁死）；`m_gopLearnMs` 只在 reseek 落点更新
+     （直追期的 `m_lastCatchupMs` 是"目标在 GOP 内偏移"噪声，不可用于判定）。
+   - **跳显抑制锚点**：目标未越过"上一跳目标+实测 gap"（≈下一关键帧）前不重 seek——
+     防同关键帧 seek+重复显示风暴；**拒绝也要设锚点**（见第 5 条教训）。
+   - **同帧去重**：落点=当前显示帧时免 sws/emit/重绘。
+5. **终局根因（日志实锤）：hop-reject 风暴**。拼接视频 seek 落点全是整 10s IDR 网格，
+   误差普遍 2~11s，固定 2s 误差闸把跳显全部拒绝 → 无显示 + 同帧 seek 循环
+   （用户日志：reseeks=198/2s、同 (rel,target) 1ms 内重复 10-20 次、displays=5/2s、maxGap=1361ms）。
+   修复：**误差闸随速度缩放 `errCap = max(2000, v×100ms)`**——100× 快拖落后 10s 时间轴
+   = 100ms 墙钟延迟，人眼不可察；慢速自动收紧。
+6. 效果（2h 文件无头仿真）：75× 与 250× 全程扫动均稳定 ~35fps、maxGap ≤ 79ms、0 hop-reject；
+   用户实测慢拖冻屏率可接受、快拖冻屏消除。
+
+### 12.3 音频无声排查（$RCR79YF 结论）
+
+- 现象：该文件夹视频在 app 内无声，别的播放器有声，别的视频在 app 内有声。
+- 排查（全部在你本机对你的文件实测）：`audio`（字节实时速率入声卡）、`avsync`（偏差 84ms）、
+  新增 `scrub-then-play`（拖拽 30 次后播放，设备时钟正常）、新增 `audio-peak`
+  （复刻解码→swr→s16 通路分级测电平，输入输出成比例）——**引擎全链路无罪**。
+- app 日志实锤：`play: state=0 err=0 written=... outPeak=18618 (-4.9dB)`——
+  -5dB 真实电平已进入 Windows 音频会话（Realtek 扬声器，8kHz 不被声卡原生支持，
+  自动回退 48kHz 立体声重采样正常）。
+- **结论**：问题在 Windows 侧——待用户确认音量合成器 LumenArc.exe 条目（静音/音量）
+  与按应用输出设备路由。文件自身特性：开头 2 分钟近乎静音（max -48dB），易误判。
+
+### 12.4 临时诊断代码（定位完成后应移除）
+
+- `ffmpeg_video_engine.cpp` 顶部 `audioDiag()` → 写 `%TEMP%/lumenarc_audio.log`；
+  埋点：ensureAudioOutput/sink start/openFile/cmd Play/背压超时/play 2s 电平。
+- `diagScrubTick/diagScrubFlush/diagScrubDisplay`：`scrub 2s:` 周期统计
+  （displays/cacheHits/reseeks/uiDrops/maxGap/inFlight）+ 显示点追踪
+  （`display[cache|window|hop|hop-reject|eof-drain]`）。
+- 引擎公有诊断接口 audioBytesWritten/hasAudio/audioClockMs/hardwareDecodeActive 保留（测试用）。
+
+### 12.5 测试场景新增与断言更新（tests/engine_test_main.cpp）
+
+| 场景 | 用途 |
+|---|---|
+| `audio-peak <file>` | 分级测量解码/swr 电平，定位无声环节（复刻引擎通路含设备回退） |
+| `scrub-then-play <file>` | scrub 后播放音频是否存活（设备时钟断言，bytesWritten 不可信——sink 空写也计数） |
+| `scrub-sweep <file> [steps] [pumpMs] [startPct] [endPct]` | 长距离连续拖拽仿真：帧数、平均/最大位置步进；配合引擎 diag 日志看 maxGap/reseeks/uiDrops |
+
+断言与引擎语义对齐：`scrub-playback`/`scrub-backward` 追踪容忍 = 精确帧 ±3s 或
+"落后（不超前）目标 ≤ v×100ms"（>30× 跳显是预期行为）；oscillate 容差不变（慢拖必须精确）。
+
+### 12.6 遗留事项
+
+1. Windows 音量合成器/输出路由待用户确认（12.3）。
+2. 移除 12.4 临时诊断（确认音频问题解决后）。
+3. 若 UI 背压（uiDrops 高）在 1440p+ 上仍频发：视频绘制改 GPU 路径
+  （QOpenGLWidget 纹理上传替代 QPainter CPU 缩放，~10ms/帧 → ~1ms）。
+4. 调参速查：节拍 25ms（自适应 +0~20ms）、超前量 800ms、片段音频闸 4×、
+   跳显速度闸 30×、误差闸 max(2000, v×100ms)、sparseGop(GOP>6s 且墙钟 EMA>120ms)。

@@ -107,6 +107,10 @@ private:
     void updatePinnedImage(const QImage &frame);
     /// @brief 按步进调整播放速度
     void adjustSpeed(float delta);
+    /// @brief 循环切换播放速度
+    void cycleSpeed();
+    /// @brief 统一应用播放速度并更新 UI 和状态提示
+    void applySpeed(float speed);
     /// @brief 根据当前播放状态刷新按钮可用性
     void updatePlaybackButtons();
     /// @brief 在状态栏左侧显示操作反馈（5秒后自动清除）
@@ -116,7 +120,8 @@ private:
                                qint64 timeOffset,
                                const QVector<ChartLabel> &labels,
                                const QRect &pinnedRect,
-                               const SnapshotFusionData &fusion);
+                               const SnapshotFusionData &fusion,
+                               const QVector<int> &regionRoiIds = {});
 
 protected:
     void dragEnterEvent(QDragEnterEvent *event) override;
@@ -150,7 +155,6 @@ protected:
     QPushButton *m_editBtn = nullptr;
     QPushButton *m_placeBtn = nullptr;
     QPushButton *m_speedBtn = nullptr;
-    QPushButton *m_loopBtn = nullptr;  // A/B loop button
     float m_currentSpeed = 1.0f;
 
     QString m_currentVideoPath;
