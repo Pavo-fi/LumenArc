@@ -23,7 +23,7 @@
 #include "snapshotoverlay.h"
 #include "pinnedwidget.h"
 #include "videolistpanel.h"
-#include "preprocesspanel.h"
+#include "preprocesswindow.h"
 #include "spectrogrampanel_enhanced.h"
 #include "i18n.h"
 #include "aboutdialog.h"
@@ -447,12 +447,8 @@ MainWindow::MainWindow(QWidget *parent)
     resizeDocks({m_videoListPlaceholder}, {24}, Qt::Horizontal);
     m_videoListPlaceholder->setVisible(false);
 
-    // v1.1: 前处理面板（与视频列表同区标签页，§8.1）
-    m_preprocessPanel = new PreprocessPanel(this);
-    addDockWidget(Qt::LeftDockWidgetArea, m_preprocessPanel);
-    tabifyDockWidget(m_videoListPanel, m_preprocessPanel);
-    m_videoListPanel->raise();
-    resizeDocks({m_preprocessPanel}, {360}, Qt::Horizontal);
+    // v1.2: 前处理改为独立任务窗口（docs/PREPROCESSING_UI_REDESIGN_CN.md），
+    // 经工具栏「素材整理拼接」按钮/文件菜单打开（见 openPreprocessWindow）
 
     connect(phExpandBtn, &QPushButton::clicked, this, [this]() {
         m_videoListPlaceholder->setVisible(false);
@@ -490,9 +486,6 @@ MainWindow::MainWindow(QWidget *parent)
     auto *pyEngine = new PythonAnalysisEngine(this);
     pyEngine->setPythonExecutable(detectPythonPath());
     m_analysisEngine = pyEngine;
-    // v1.1: 前处理协调器注入可信时长来源（引擎中立接口，R4）
-    if (m_preprocessPanel)
-        m_preprocessPanel->coordinator()->setAnalysisEngine(m_analysisEngine);
 
     // Snapshot overlay (floating on video area)
     m_snapshotOverlay = new SnapshotOverlay(m_videoWidget);
@@ -509,11 +502,21 @@ MainWindow::~MainWindow()
     m_analysisEngine->cancelAnalysis();
 }
 
+/// @brief 打开素材整理拼接独立任务窗口（每次开启新会话；WA_DeleteOnClose 自销毁）
+void MainWindow::openPreprocessWindow()
+{
+    auto *w = new PreprocessWindow(m_analysisEngine, this);
+    w->show();
+    w->raise();
+    w->activateWindow();
+}
+
 /// @brief 创建菜单栏：文件/编辑/导出/帮助
 void MainWindow::createMenus()
 {
     QMenu *fileMenu = menuBar()->addMenu(lang("文件(&F)", "&File"));
     fileMenu->addAction(lang("打开视频(&O)...", "&Open Video..."), this, &MainWindow::onOpenFile, QKeySequence::Open);
+    fileMenu->addAction(lang("素材整理拼接(&M)...", "&Merge Clips..."), this, &MainWindow::openPreprocessWindow, QKeySequence(QStringLiteral("Ctrl+M")));
     fileMenu->addAction(lang("加载图片为叠加(&I)...", "Load Image as &Overlay..."), this, &MainWindow::onLoadOverlayImage);
     fileMenu->addSeparator();
     fileMenu->addAction(lang("保存分析结果(&S)...", "&Save Analysis Result..."), this, &MainWindow::onSaveAnalysis, QKeySequence::Save);
@@ -926,6 +929,23 @@ void MainWindow::createToolBar()
     m_timeLabel = new QLabel("00:00 / 00:00", this);
     m_timeLabel->setStyleSheet(timeLabelStyle);
     toolBar->addWidget(m_timeLabel);
+
+    // v1.2: 素材整理拼接入口（独立任务窗口，显眼入口，UI 重设计 D1）
+    auto *tbSpacer = new QWidget(this);
+    tbSpacer->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
+    toolBar->addWidget(tbSpacer);
+    auto *preprocessBtn = new QPushButton(lang("素材整理拼接", "Merge Clips"), this);
+    preprocessBtn->setToolTip(lang("多段监控录像智能排序、无损拼接与统一格式",
+                                   "Sort, losslessly merge and normalize surveillance clips"));
+    preprocessBtn->setMinimumHeight(30);
+    preprocessBtn->setStyleSheet(QStringLiteral(
+        "QPushButton { background: %1; color: %2; font-weight: bold; "
+        "border-radius: 6px; padding: 4px 14px; }"
+        "QPushButton:hover { background: %3; }")
+        .arg(Theme::Accent, Theme::AccentOnDark, Theme::AccentHover));
+    toolBar->addWidget(preprocessBtn);
+    connect(preprocessBtn, &QPushButton::clicked,
+            this, &MainWindow::openPreprocessWindow);
 
     // Prevent toolbar buttons from stealing keyboard focus
     for (auto *btn : toolBar->findChildren<QPushButton*>()) {

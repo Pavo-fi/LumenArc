@@ -197,7 +197,8 @@ protected:
     QWidget *m_videoListSidebar = nullptr;
     QWidget *m_videoListContent = nullptr;
     QDockWidget *m_videoListPlaceholder = nullptr;
-    class PreprocessPanel *m_preprocessPanel = nullptr;
+    /// 打开素材整理拼接窗口（v1.2 独立任务窗口）
+    void openPreprocessWindow();
     QWidget *m_chartContainer = nullptr;
     QWidget *m_chartContent = nullptr;
     QWidget *m_spectrogramContainer = nullptr;
