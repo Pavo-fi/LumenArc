@@ -3,6 +3,7 @@
 > 编制日期：2026-07-28
 > 最新标签：`v1.3.3-always-flush`
 > 提交历史：`77c8e44`→`abd7b11`→`ff4c9a4`→`adb429b`→`5bbb59b`→`6b61a8d`→`25efc66`→`d978496`→`f496680`→`4447ca7`→`66b2b8f`→`0306427`→`e812e0c`→`f073804`→`16a64de`→`d9cc07a`→`977cb96`→`f9141f8`→`9d1230a`
+> 前处理批次：`9c97072`→`2ba4776`→`772c97f`→`7f5f20b`→`e34bdd9`→`40abd96`→`4b87a5a`（见第十三章）
 
 ---
 
@@ -692,3 +693,82 @@ build/testdata（CI 生成的测试剪辑）。已拷贝：third_party/ffmpeg（
   （QOpenGLWidget 纹理上传替代 QPainter CPU 缩放，~10ms/帧 → ~1ms）。
 4. 调参速查：节拍 25ms（自适应 +0~20ms）、超前量 800ms、片段音频闸 4×、
    跳显速度闸 30×、误差闸 max(2000, v×100ms)、sparseGop(GOP>6s 且墙钟 EMA>120ms)。
+
+
+---
+
+## 十三、前处理板块：方案评审修正 + M0 验证 + M1-M5 全量实施（2026-08-02）
+
+> 任务链：评审 `docs/PREPROCESSING_TECH_DESIGN_CN.md`（多视频智能排序/无损拼接/统一转码）
+> → 修正方案 v1.0→v1.1（13 项评审意见）→ 按里程碑 M0-M5 实施并全部落地。
+> 设计文档为单一事实来源，本节只记录**实施结果与现场知识**。
+
+### 13.1 批次提交（7 个，全部构建/测试绿）
+
+| commit | 内容 |
+|---|---|
+| `9c97072` | refactor：`trustedDurationFor` 下沉——`IAnalysisEngine` 新增 `VideoTiming/trustedDurationMs`（引擎中立，R2），`detectPythonPath` 移入 `PythonAnalysisEngine`（static），MainWindow 时长路径不再 qobject_cast（剩 4 处 cast 为 python 路径注入配置代码，存量债务） |
+| `2ba4776` | feat domain：`probe_result/ocr_result/sort_model/preprocess_task` + `filename_timestamp`（M1-M5，**M5 先于 M2** 否则毫秒被截胡）+ `smart_sorter`（证据分层/分组/连续性/矛盾裁决，纯函数）+ `concat_precheck`（OK/WARN/BLOCK，**mjpeg 移出 MP4 白名单**）+ `evidence_report`（RFC4180 CSV+BOM）+ `preprocess_text.h`（CSV/concat 转义、进度解析、creation_time 脏值过滤） |
+| `772c97f` | feat 引擎：`MediaProbeEngine`（进程内 libavformat，QThreadPool×4，内容嗅探伪 MP4，首包 PTS/关键帧，时长交叉验证）/`TimestampOcrEngine`（**接口签名无 python/ffmpeg 路径**，R-2）/`ConcatEngine`（concat demuxer 流拷贝，可选逐段 `-output_ts_offset` 归一化）/`TranscodeEngine`（libx264 veryfast CRF18，`.part.mp4` 临时名→原子改名）+ `probe_timestamps.py` |
+| `7f5f20b` | feat app+ui：`PreprocessingCoordinator`（状态机 SSOT：Idle→Probing→Ocr→Sorting→UserConfirm→Precheck→Transcoding⇄Concat→Done/Failed/Cancelled；OCR 缺失降级续跑不静默）+ `PreprocessPanel`（四步向导，与视频列表同区标签页）+ MainWindow 挂接（`tabifyDockWidget` + 引擎接口注入） |
+| `e34bdd9` | test：`lumenarc_preprocess_test`（64 断言）+ `lumenarc_preprocess_integration`（29 断言，真实 ffmpeg/Python 子进程）；**MSVC 全局 `/utf-8`**（全部源文件为无 BOM UTF-8，此前中文字面量靠本机 locale 侥幸正确） |
+| `40abd96` | chore：rapidocr_onnxruntime **三处同步**（build-win64.yml / build.yml / build-mac.yml 的 bundled python pip 行 + setup_python_deps.bat）；THIRD_PARTY_LICENSES 补 RapidOCR(Apache-2.0)/onnxruntime(MIT)；**删 setup_deps.py**（VLC 下载脚本死代码，R10） |
+| `4b87a5a` | docs：方案 v1.1（R-1~R-13 修订记录）+ `tools/m0_synth_benchmark.py` + MANUAL 第十三章 + README 功能表 |
+
+### 13.2 M0 决策门结果（合成矩阵 8/8 = 100%，deltaMs 全 0）
+
+`tools/m0_synth_benchmark.py --ffmpeg build/Release/ffmpeg/ffmpeg.exe`：
+正常×3 / yuvj420p / 噪声(CRF35) / 中文日期 OSD / 伪MP4(TS改名) / 截断TS，全部命中。
+**合成全绿 ≠ 现场验收**（方案 R-12）：≥90% 决策门须由火调队用发布包内
+`probe_timestamps.py` 跑 ~30 段真实素材；2GB 级无索引文件尾帧 seek 验证（§12.5）同待现场。
+
+### 13.3 OCR 管线四个真实工程坑（全部已修，勿再踩）
+
+1. **输入侧 `-ss` 在 TS/伪 MP4 上落点偏移 9 秒**（字节插值）。修法：取帧命令带
+   `-vf showinfo`，解析 `pts_time`，**实际位置 = ss + pts_time**——证据帧 relMs 永远为实测真值，
+   投票推导的墙钟起点不再被 seek 精度污染。输出侧 `-ss` 同样平移时间轴（pts_time≈0）。
+2. **RapidOCR 把单行 OSD 拆成多框**（"2024-07-01" + "12:00:01" 分离 → 正则全废）。
+   修法：`merge_ocr_lines` 按基线 y 聚类、x 排序拼接成整行再解析。0%→100% 的决定性修复。
+3. **CJK 日期超出 30% 裁剪宽度**（"2024年07月01日 12:xx" 被切）。修法：追加 60% 宽裁剪通道
+   （窄增强→窄二值→宽增强三级链，首个解析命中即止）。
+4. **mjpeg 编码器拒写全色域 YUV**（yuvj420p 源，"Non full-range YUV is non-standard"）。
+   修法：证据帧一律 PNG（无损且免去 strict 标志）。
+
+投票阈值校准：RapidOCR 在干净 OSD 上 conf≈0.85-0.9，单帧门槛从 0.9 降到
+`SINGLE_HIT_MIN_SCORE=0.85`（得 conf=0.7 中置信），≥2 帧一致仍 0.95。
+
+### 13.4 集成测试运行方式
+
+```
+build/Release/lumenarc_preprocess_test.exe            # 64 断言 headless
+build/Release/lumenarc_preprocess_integration.exe <clips_dir> <out_dir> 1719835200
+# clips_dir 由 m0_synth_benchmark.py --keep 生成；exe 须在 build/Release
+# （依赖旁置的 probe_timestamps.py / python/ / ffmpeg/）
+```
+
+### 13.5 drawtext 合成素材转义知识（再生测试素材必备）
+
+- fontfile 盘符冒号要过两层反转义（graph 层 + filter-args 层）：argv 层需恰好 **2 个**反斜杠，即 `C\\:/Windows/Fonts/...`（Python 源码写 `"\\\\:"`；实测 1 个或 4 个均失败，偶数 ≥2 可行——切勿凭文档想当然，以实测为准）；
+- `%{pts\:gmtime\:EPOCH\:%T}`：扩展参数按 `:` 分割且**不认反斜杠转义**，FMT 内含冒号
+  必报 "requires at most 3 arguments"——用 `%T`（本构建 strftime 支持）而非 `%H\:%M\:%S`；
+- text 值整体单引号包裹（无 shell 时 argv 直传）。
+
+### 13.6 打包注意
+
+- Release 体积增量实测 **约 +56MB**（onnxruntime 42.5MB + rapidocr 13.2MB + 传递依赖 ~5MB），
+  方案原估 +25MB 已修正；CI 三处 pip 行已同步，发版无需手动操作。
+- 本机 `build/Release/python/` 已手动装 rapidocr（embeddable 无 ensurepip，走 get-pip.py
+  引导，同 CI）；**clean 重建后需重装**（同第十一章内置 python 注意事项）。
+- `probe_timestamps.py` 已纳入 CMake POST_BUILD 拷贝（与 analyze_video.py 同模式，规范 P5）。
+
+### 13.7 遗留事项（按优先级）
+
+1. **现场决策门**（13.2）：30 段真实素材 OCR 成功率 + 2GB 无索引尾帧 seek。
+2. **report.html 未实现**：设计 §9.1 要求 HTML 报告（内嵌缩略图），当前仅 CSV+截图+日志
+   已落地。Coordinator::finalize 留好了挂点（evidence dir 迁移后写文件处）。
+3. **排序微调用 ↑↓ 按钮**，未做 QListWidget 式拖拽（设计 §8.2 的"复用 VideoListPanel
+   拖拽模式"列为 UX 增强候选；`applyGroupOrder` 接口已支持任意重排）。
+4. **时间戳归一化路径已实现但无集成测试**（需重叠段素材；ConcatEngine 两段式：
+   逐段 `-output_ts_offset` remux → 再拼）。
+5. 发版前手工点检清单需补前处理四步流程（规范 7.4，UI 不做自动化）。
+6. 转码 60 分钟超时/磁盘预估系数（1.2）写死在代码里，v2 参数面开放（方案 §5.5.2/§10.2）。
