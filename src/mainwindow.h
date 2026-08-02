@@ -197,6 +197,7 @@ protected:
     QWidget *m_videoListSidebar = nullptr;
     QWidget *m_videoListContent = nullptr;
     QDockWidget *m_videoListPlaceholder = nullptr;
+    class PreprocessPanel *m_preprocessPanel = nullptr;
     QWidget *m_chartContainer = nullptr;
     QWidget *m_chartContent = nullptr;
     QWidget *m_spectrogramContainer = nullptr;

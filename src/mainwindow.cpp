@@ -23,6 +23,7 @@
 #include "snapshotoverlay.h"
 #include "pinnedwidget.h"
 #include "videolistpanel.h"
+#include "preprocesspanel.h"
 #include "spectrogrampanel_enhanced.h"
 #include "i18n.h"
 #include "aboutdialog.h"
@@ -446,6 +447,13 @@ MainWindow::MainWindow(QWidget *parent)
     resizeDocks({m_videoListPlaceholder}, {24}, Qt::Horizontal);
     m_videoListPlaceholder->setVisible(false);
 
+    // v1.1: 前处理面板（与视频列表同区标签页，§8.1）
+    m_preprocessPanel = new PreprocessPanel(this);
+    addDockWidget(Qt::LeftDockWidgetArea, m_preprocessPanel);
+    tabifyDockWidget(m_videoListPanel, m_preprocessPanel);
+    m_videoListPanel->raise();
+    resizeDocks({m_preprocessPanel}, {360}, Qt::Horizontal);
+
     connect(phExpandBtn, &QPushButton::clicked, this, [this]() {
         m_videoListPlaceholder->setVisible(false);
         m_videoListPanel->setVisible(true);
@@ -482,6 +490,9 @@ MainWindow::MainWindow(QWidget *parent)
     auto *pyEngine = new PythonAnalysisEngine(this);
     pyEngine->setPythonExecutable(detectPythonPath());
     m_analysisEngine = pyEngine;
+    // v1.1: 前处理协调器注入可信时长来源（引擎中立接口，R4）
+    if (m_preprocessPanel)
+        m_preprocessPanel->coordinator()->setAnalysisEngine(m_analysisEngine);
 
     // Snapshot overlay (floating on video area)
     m_snapshotOverlay = new SnapshotOverlay(m_videoWidget);
@@ -1311,115 +1322,15 @@ void MainWindow::setupConnections()
  */
 QString MainWindow::detectPythonPath() const
 {
-    QString appDir = QCoreApplication::applicationDirPath();
-
-#ifdef Q_OS_WIN
-    // 0. Bundled Python (Windows)
-    QString bundledPy = appDir + "/python/python.exe";
-    if (QFile::exists(bundledPy))
-        return QDir::toNativeSeparators(bundledPy);
-#endif
-
-#ifdef Q_OS_MACOS
-    // 0. Bundled Python (inside .app bundle)
-    QString bundledPy = appDir + "/python/bin/python3";
-    if (QFile::exists(bundledPy))
-        return bundledPy;
-#endif
-
-    // 1. Environment variable (cross-platform)
-    QString env = qEnvironmentVariable("PYTHON_PATH");
-    if (!env.isEmpty() && QFile::exists(env))
-        return env;
-
-#ifdef Q_OS_WIN
-    // 2. Registry-based detection via QSettings
-    QStringList registryKeys = {
-        "HKEY_CURRENT_USER\\Software\\Python\\PythonCore",
-        "HKEY_LOCAL_MACHINE\\SOFTWARE\\Python\\PythonCore"
-    };
-    for (const QString &regKey : registryKeys) {
-        QSettings settings(regKey, QSettings::NativeFormat);
-        QStringList versions = settings.childGroups();
-        std::sort(versions.begin(), versions.end(), std::greater<QString>());
-        for (const QString &ver : versions) {
-            settings.beginGroup(ver);
-            QString installPath = settings.value("InstallPath").toString();
-            settings.endGroup();
-            if (!installPath.isEmpty()) {
-                QString pyPath = installPath + "/python.exe";
-                if (QFile::exists(pyPath))
-                    return QDir::toNativeSeparators(pyPath);
-                pyPath = installPath + "/python3.exe";
-                if (QFile::exists(pyPath))
-                    return QDir::toNativeSeparators(pyPath);
-            }
-        }
-    }
-
-    // 3. Common Windows install paths
-    QStringList winCandidates = {
-        "C:/Python313/python.exe",
-        "C:/Python312/python.exe",
-        "C:/Python311/python.exe",
-        "C:/Python310/python.exe",
-        "C:/Program Files/Python313/python.exe",
-        "C:/Program Files/Python312/python.exe",
-        "C:/Program Files/Python311/python.exe",
-        "C:/Program Files/Python310/python.exe",
-        "python.exe"
-    };
-    for (const QString &c : winCandidates) {
-        if (QFile::exists(c))
-            return c;
-    }
-
-    // 4. Windows py.exe launcher
-    QProcess probe;
-    probe.start("py", {"-3", "-c", "import sys; print(sys.executable)"});
-    if (probe.waitForFinished(3000) && probe.exitCode() == 0) {
-        QString pyPath = QString::fromUtf8(probe.readAllStandardOutput()).trimmed();
-        if (!pyPath.isEmpty() && QFile::exists(pyPath))
-            return pyPath;
-    }
-#endif
-
-#ifdef Q_OS_MACOS
-    // 2. which python3
-    QProcess probe;
-    probe.start("which", {"python3"});
-    if (probe.waitForFinished(3000) && probe.exitCode() == 0) {
-        QString pyPath = QString::fromUtf8(probe.readAllStandardOutput()).trimmed();
-        if (!pyPath.isEmpty() && QFile::exists(pyPath))
-            return pyPath;
-    }
-
-    // 3. Common macOS install paths
-    QStringList macCandidates = {
-        "/opt/homebrew/bin/python3",
-        "/usr/local/bin/python3",
-        "/usr/bin/python3"
-    };
-    for (const QString &c : macCandidates) {
-        if (QFile::exists(c))
-            return c;
-    }
-#endif
-
-    return QString();
+    // Sunk into the engine (R2/R4, preprocess design §3.4); keep this wrapper
+    // to avoid touching legacy call sites.
+    return PythonAnalysisEngine::detectPythonPath();
 }
 
 qint64 MainWindow::trustedDurationFor(const QString &path) const
 {
-    auto *pyEngine = qobject_cast<PythonAnalysisEngine *>(m_analysisEngine);
-    if (!pyEngine)
-        return 0;
-
-    auto info = pyEngine->getVideoInfo(path);
-    if (info.fps <= 0.0f || info.totalFrames <= 0)
-        return 0;
-
-    return static_cast<qint64>((static_cast<qreal>(info.totalFrames) / info.fps) * 1000.0);
+    // R2: engine-neutral interface, no downcast (preprocess design §3.4)
+    return m_analysisEngine ? m_analysisEngine->trustedDurationMs(path) : 0;
 }
 
 void MainWindow::onOpenFile()
@@ -1436,16 +1347,12 @@ void MainWindow::onOpenFile()
     // v0.3: Add all files to video list, open first one for playback
     for (int i = 0; i < filePaths.size(); ++i) {
         const QString &path = filePaths[i];
-        // Get video info (fps + total frames -> duration)
-        auto *pyEngine = qobject_cast<PythonAnalysisEngine *>(m_analysisEngine);
-        float fps = 30.0f;
-        qint64 durationMs = 0;
-        if (pyEngine) {
-            auto info = pyEngine->getVideoInfo(path);
-            fps = info.fps;
-            if (fps > 0 && info.totalFrames > 0)
-                durationMs = static_cast<qint64>((info.totalFrames / fps) * 1000.0);
-        }
+        // Get video info (fps + total frames -> duration) via interface (R2)
+        IAnalysisEngine::VideoTiming timing;
+        if (m_analysisEngine)
+            timing = m_analysisEngine->videoTiming(path);
+        float fps = timing.fps;
+        qint64 durationMs = timing.durationMs;
         if (fps <= 0) fps = 30.0f;
         m_videoListPanel->addVideo(path, durationMs, fps);
 
