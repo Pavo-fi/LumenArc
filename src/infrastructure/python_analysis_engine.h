@@ -53,8 +53,15 @@ public:
     /// Get video FPS and total frames by calling analyze_video.py --check-fps
     VideoInfo getVideoInfo(const QString &videoPath);
 
+    /// Engine-neutral timing (R2: capability on the interface, no downcast)
+    VideoTiming videoTiming(const QString &videoPath) override;
+
     /// Find ffmpeg executable (bundled or system)
     static QString findFfmpegPath();
+
+    /// Detect python interpreter (bundled -> env -> registry -> PATH).
+    /// Sunk from MainWindow::detectPythonPath (preprocess design §3.4).
+    static QString detectPythonPath();
 
 private slots:
     void onReadyReadStdout();

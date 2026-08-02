@@ -46,8 +46,38 @@ public:
     virtual void cancelAnalysis() = 0;
     virtual bool isRunning() const = 0;
 
+    /**
+     * @brief Engine-neutral video timing info (fps + trusted duration).
+     *
+     * Capability raised to the interface per R2 (callers must not downcast
+     * to concrete engines). Default: unknown (fps=0, durationMs=0).
+     */
+    struct VideoTiming {
+        float fps = 0.0f;          ///< measured fps (<=0 = unknown)
+        qint64 durationMs = 0;     ///< trusted duration in ms (<=0 = unknown)
+    };
+    virtual VideoTiming videoTiming(const QString &videoPath);
+
+    /**
+     * @brief Trusted duration in ms (0 = unknown). Convenience wrapper.
+     * Sunk from MainWindow::trustedDurationFor (preprocess design §3.4).
+     */
+    virtual qint64 trustedDurationMs(const QString &videoPath);
+
 signals:
     void progressUpdated(int analyzed, int total, qreal percent);
     void analysisFinished(const AnalysisSnapshot &result);
     void analysisFailed(const QString &error);
 };
+
+// --- default (no-capability) implementations -------------------------------
+inline IAnalysisEngine::VideoTiming IAnalysisEngine::videoTiming(const QString &)
+{
+    return {};
+}
+
+inline qint64 IAnalysisEngine::trustedDurationMs(const QString &videoPath)
+{
+    const VideoTiming t = videoTiming(videoPath);
+    return t.durationMs;
+}

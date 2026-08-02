@@ -20,6 +20,8 @@
 #include <QCoreApplication>
 #include <QThread>
 #include <QDebug>
+#include <QSettings>
+#include <algorithm>
 #include <cstring>
 
 PythonAnalysisEngine::PythonAnalysisEngine(QObject *parent)
@@ -42,6 +44,117 @@ void PythonAnalysisEngine::setPythonExecutable(const QString &path)
 void PythonAnalysisEngine::setScriptPath(const QString &path)
 {
     m_scriptPath = path;
+}
+
+IAnalysisEngine::VideoTiming PythonAnalysisEngine::videoTiming(const QString &videoPath)
+{
+    VideoTiming t;
+    const VideoInfo info = getVideoInfo(videoPath);
+    if (info.fps > 0.0f)
+        t.fps = info.fps;
+    if (info.fps > 0.0f && info.totalFrames > 0)
+        t.durationMs = static_cast<qint64>((static_cast<qreal>(info.totalFrames) / info.fps) * 1000.0);
+    return t;
+}
+
+QString PythonAnalysisEngine::detectPythonPath()
+{
+    QString appDir = QCoreApplication::applicationDirPath();
+
+#ifdef Q_OS_WIN
+    // 0. Bundled Python (Windows)
+    QString bundledPy = appDir + "/python/python.exe";
+    if (QFile::exists(bundledPy))
+        return QDir::toNativeSeparators(bundledPy);
+#endif
+
+#ifdef Q_OS_MACOS
+    // 0. Bundled Python (inside .app bundle)
+    QString bundledPy = appDir + "/python/bin/python3";
+    if (QFile::exists(bundledPy))
+        return bundledPy;
+#endif
+
+    // 1. Environment variable (cross-platform)
+    QString env = qEnvironmentVariable("PYTHON_PATH");
+    if (!env.isEmpty() && QFile::exists(env))
+        return env;
+
+#ifdef Q_OS_WIN
+    // 2. Registry-based detection via QSettings
+    QStringList registryKeys = {
+        "HKEY_CURRENT_USER\\Software\\Python\\PythonCore",
+        "HKEY_LOCAL_MACHINE\\SOFTWARE\\Python\\PythonCore"
+    };
+    for (const QString &regKey : registryKeys) {
+        QSettings settings(regKey, QSettings::NativeFormat);
+        QStringList versions = settings.childGroups();
+        std::sort(versions.begin(), versions.end(), std::greater<QString>());
+        for (const QString &ver : versions) {
+            settings.beginGroup(ver);
+            QString installPath = settings.value("InstallPath").toString();
+            settings.endGroup();
+            if (!installPath.isEmpty()) {
+                QString pyPath = installPath + "/python.exe";
+                if (QFile::exists(pyPath))
+                    return QDir::toNativeSeparators(pyPath);
+                pyPath = installPath + "/python3.exe";
+                if (QFile::exists(pyPath))
+                    return QDir::toNativeSeparators(pyPath);
+            }
+        }
+    }
+
+    // 3. Common Windows install paths
+    QStringList winCandidates = {
+        "C:/Python313/python.exe",
+        "C:/Python312/python.exe",
+        "C:/Python311/python.exe",
+        "C:/Python310/python.exe",
+        "C:/Program Files/Python313/python.exe",
+        "C:/Program Files/Python312/python.exe",
+        "C:/Program Files/Python311/python.exe",
+        "C:/Program Files/Python310/python.exe",
+        "python.exe"
+    };
+    for (const QString &c : winCandidates) {
+        if (QFile::exists(c))
+            return c;
+    }
+
+    // 4. Windows py.exe launcher
+    QProcess probe;
+    probe.start("py", {"-3", "-c", "import sys; print(sys.executable)"});
+    if (probe.waitForFinished(3000) && probe.exitCode() == 0) {
+        QString pyPath = QString::fromUtf8(probe.readAllStandardOutput()).trimmed();
+        if (!pyPath.isEmpty() && QFile::exists(pyPath))
+            return pyPath;
+    }
+#endif
+
+#ifdef Q_OS_MACOS
+    // 2. which python3
+    QProcess probe;
+    probe.start("which", {"python3"});
+    if (probe.waitForFinished(3000) && probe.exitCode() == 0) {
+        QString pyPath = QString::fromUtf8(probe.readAllStandardOutput()).trimmed();
+        if (!pyPath.isEmpty() && QFile::exists(pyPath))
+            return pyPath;
+    }
+
+    // 3. Common macOS install paths
+    QStringList macCandidates = {
+        "/opt/homebrew/bin/python3",
+        "/usr/local/bin/python3",
+        "/usr/bin/python3"
+    };
+    for (const QString &c : macCandidates) {
+        if (QFile::exists(c))
+            return c;
+    }
+#endif
+
+    return QString();
 }
 
 QString PythonAnalysisEngine::findFfmpegPath()
