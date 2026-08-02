@@ -216,14 +216,13 @@ QWidget *PreprocessWindow::buildPageImport()
     m_fileTable->setSelectionMode(QAbstractItemView::SingleSelection);
     m_fileTable->setSelectionBehavior(QAbstractItemView::SelectRows);   // 点任意列 = 选整行
     m_fileTable->setEditTriggers(QAbstractItemView::NoEditTriggers);
-    // 行拖拽排序（现场反馈：默认 InternalMove 是覆盖语义，改用自定义插入语义）
-    m_fileTable->setDragDropMode(QAbstractItemView::InternalMove);
-    m_fileTable->setDragEnabled(true);
+    // 行拖拽排序：自建拖拽（不依赖 Qt 内置 InternalMove——其覆盖语义不可靠，
+    // 现场三次验证未解决）。事件挂在 viewport：mousePress 记起点 → mouseMove
+    // 发起 QDrag → drop 按行中心上/下半插位。
+    m_fileTable->setDragDropMode(QAbstractItemView::NoDragDrop);
+    // NoDragDrop 会连 viewport acceptDrops 一并关掉 → 自建 drop 无法到达；手动开回
     m_fileTable->setAcceptDrops(true);
-    m_fileTable->setDropIndicatorShown(true);
-    m_fileTable->setDefaultDropAction(Qt::MoveAction);
-    auto *sortTable = static_cast<SortableFileTable *>(m_fileTable);
-    sortTable->orderChanged = [this]() { syncPendingFromTable(); };
+    m_fileTable->viewport()->installEventFilter(this);
     lay->addWidget(m_fileTable, 1);
 
     m_importProgress = new QProgressBar(w);
@@ -1434,6 +1433,70 @@ int insertIndexForChan(QWidget *host, const QString &chan, int x,
 
 bool PreprocessWindow::eventFilter(QObject *watched, QEvent *event)
 {
+    // --- 导入表 viewport：自建行拖拽（插入语义，不依赖 Qt 内置拖放） ---
+    if (m_fileTable && watched == m_fileTable->viewport()) {
+        switch (event->type()) {
+        case QEvent::MouseButtonPress: {
+            auto *me = static_cast<QMouseEvent *>(event);
+            if (me->button() == Qt::LeftButton) {
+                m_tableDragRow = m_fileTable->indexAt(me->pos()).row();
+                m_dragStartPos = me->pos();
+            }
+            break;
+        }
+        case QEvent::MouseButtonRelease:
+            m_tableDragRow = -1;
+            break;
+        case QEvent::MouseMove: {
+            auto *me = static_cast<QMouseEvent *>(event);
+            if (m_tableDragRow >= 0 && (me->buttons() & Qt::LeftButton)
+                && (me->pos() - m_dragStartPos).manhattanLength() > 10) {
+                auto *drag = new QDrag(m_fileTable);
+                auto *mime = new QMimeData;
+                mime->setData(QStringLiteral("application/x-lumenarc-filerow"),
+                              QByteArray::number(m_tableDragRow));
+                drag->setMimeData(mime);
+                drag->setPixmap(m_fileTable->grab(
+                    m_fileTable->visualRect(
+                        m_fileTable->model()->index(m_tableDragRow, 0))
+                        .adjusted(0, -4, 0, 4)).scaledToHeight(28));
+                m_tableDragRow = -1;
+                drag->exec(Qt::MoveAction);
+                return true;
+            }
+            break;
+        }
+        case QEvent::DragEnter:
+        case QEvent::DragMove: {
+            auto *de = static_cast<QDragMoveEvent *>(event);
+            if (de->mimeData()->hasFormat(
+                    QStringLiteral("application/x-lumenarc-filerow"))) {
+                de->acceptProposedAction();
+                return true;
+            }
+            break;
+        }
+        case QEvent::Drop: {
+            auto *de = static_cast<QDropEvent *>(event);
+            auto *st = static_cast<SortableFileTable *>(m_fileTable);
+            if (st->handleRowDrop(de->mimeData(), de->position().toPoint())) {
+                syncPendingFromTable();
+                de->acceptProposedAction();
+                return true;
+            }
+            if (de->mimeData()->hasFormat(
+                    QStringLiteral("application/x-lumenarc-filerow"))) {
+                de->acceptProposedAction();   // 落点无效但属于行拖拽：消化掉
+                return true;
+            }
+            break;
+        }
+        default:
+            break;
+        }
+        return false;
+    }
+
     // --- 卡片：选中/双击/拖拽启动 ---
     auto *card = qobject_cast<QFrame *>(watched);
     if (card && card->property("clip").isValid()) {

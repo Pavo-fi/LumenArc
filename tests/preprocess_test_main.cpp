@@ -432,6 +432,30 @@ static void testSortableFileTable()
     // 越界输入安全
     CHECK(!t.moveRowTo(-1, 1, false));
     CHECK(!t.moveRowTo(0, 99, false));
+
+    // handleRowDrop：模拟自建拖拽的落点处理（mime 格式 + 行中心上下半）
+    t.resize(480, 320);
+    t.show();                       // visualRect 依赖布局
+    QMimeData mime;
+    mime.setData(QStringLiteral("application/x-lumenarc-filerow"),
+                 QByteArray::number(0));        // 拖第 0 行（A）
+    const QRect rc = t.visualRect(t.model()->index(2, 0));   // 目标：第 2 行（C）
+    CHECK(rc.isValid());
+    // 落点上缘（插到 C 前）→ [B, A, C, D]
+    CHECK(t.handleRowDrop(&mime, QPoint(rc.center().x(), rc.top() + 2)));
+    CHECK(row0Names() == QStringList({"b.mp4", "a.mp4", "c.mp4", "d.mp4"}));
+    // 再拖 A(现第 1 行) 落 C 下缘（插到 C 后）→ [B, C, A, D]
+    QMimeData mime2;
+    mime2.setData(QStringLiteral("application/x-lumenarc-filerow"),
+                  QByteArray::number(1));
+    const QRect rc2 = t.visualRect(t.model()->index(2, 0));
+    CHECK(t.handleRowDrop(&mime2, QPoint(rc2.center().x(), rc2.bottom() - 2)));
+    CHECK(row0Names() == QStringList({"b.mp4", "c.mp4", "a.mp4", "d.mp4"}));
+    // 无格式 / 无效落点 → 不移动
+    QMimeData empty;
+    CHECK(!t.handleRowDrop(&empty, rc2.center()));
+    CHECK(!t.handleRowDrop(&mime2, QPoint(-50, -50)));
+    CHECK(row0Names() == QStringList({"b.mp4", "c.mp4", "a.mp4", "d.mp4"}));
 }
 
 // ---------------------------------------------------------------------------

@@ -126,6 +126,7 @@ private:
     QPushButton *m_btnQuickMerge = nullptr;
     QCheckBox *m_skipOcrCheck = nullptr;
     QStringList m_pendingFiles;
+    int m_tableDragRow = -1;               // 导入表拖拽起点行（自建拖拽，不依赖 Qt 内置）
     bool m_pendingQuickMerge = false;      // 直接拼接链式标志（列表顺序）
     ProcessingOptions m_pendingOpts;
 

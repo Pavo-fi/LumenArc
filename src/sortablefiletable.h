@@ -16,6 +16,7 @@
 
 #include <QTableWidget>
 #include <QDropEvent>
+#include <QMimeData>
 #include <functional>
 
 class SortableFileTable : public QTableWidget
@@ -46,6 +47,27 @@ public:
         for (int c = 0; c < rowItems.size(); ++c)
             setItem(qBound(0, toRow, rowCount() - 1), c, rowItems[c]);
         return true;
+    }
+
+    /// 处理自建行拖拽的落点（mime 须带 application/x-lumenarc-filerow=源行号）：
+    /// pos 为 viewport 坐标；行中心上缘插到该行前，下缘插到该行后。
+    /// 返回是否发生移动。
+    bool handleRowDrop(const QMimeData *mime, const QPoint &pos)
+    {
+        if (!mime || !mime->hasFormat(
+                QStringLiteral("application/x-lumenarc-filerow")))
+            return false;
+        bool ok = false;
+        const int srcRow = mime->data(
+            QStringLiteral("application/x-lumenarc-filerow")).toInt(&ok);
+        if (!ok)
+            return false;
+        const QModelIndex idx = indexAt(pos);
+        if (!idx.isValid())
+            return false;
+        const QRect vr = visualRect(idx);
+        const bool after = (pos.y() - vr.top()) > vr.height() / 2;
+        return moveRowTo(srcRow, idx.row(), after);
     }
 
 protected:
