@@ -38,6 +38,10 @@ struct ProbeResult {
     QString audioCodec, audioSampleRate, audioChannels;
     QString creationTimeRaw;        // 原始字符串（取证留档，逐字保留）
     qint64  creationTimeMs = 0;     // 解析值（脏值=0）
+    /// 流内绝对起始墙钟（Dahua DHAV 等私有容器由录像机固件写入的录制时刻，
+    /// epoch ms UTC；0=无）。仅接受 2000-01-01 ~ 当前+1天 区间的合理值，
+    /// 防止普通容器损坏文件的垃圾 PTS 被误判为纪元时间。
+    qint64  absStartEpochMs = 0;
     qint64  fileMtimeMs = 0;        // 文件 mtime（证据④兜底）
     QString probeError;             // 空=成功
 

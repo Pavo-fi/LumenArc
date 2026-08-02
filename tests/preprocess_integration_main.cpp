@@ -21,6 +21,7 @@
 #include "infrastructure/concat_engine.h"
 #include "infrastructure/transcode_engine.h"
 #include "domain/concat_precheck.h"
+#include "domain/smart_sorter.h"
 
 #include <QCoreApplication>
 #include <QDir>
@@ -51,6 +52,57 @@ static qint64 localTruthMs(qint64 utcEpochMs)
 int main(int argc, char **argv)
 {
     QCoreApplication app(argc, argv);
+    // 诊断模式：--probe <files...> 打印真实探测结果（现场排障用）
+    if (argc > 2 && (QLatin1String(argv[1]) == QLatin1String("--probe")
+                     || QLatin1String(argv[1]) == QLatin1String("--sort"))) {
+        const bool sortMode = QLatin1String(argv[1]) == QLatin1String("--sort");
+        QVector<ProbeResult> probes;
+        for (int i = 2; i < argc; ++i) {
+            const QString f = QString::fromLocal8Bit(argv[i]);
+            const ProbeResult r = MediaProbeEngine::probeOne(f);
+            probes.append(r);
+            const QString absStr = r.absStartEpochMs > 0
+                ? QDateTime::fromMSecsSinceEpoch(r.absStartEpochMs, Qt::LocalTime)
+                      .toString(QStringLiteral("yyyy-MM-dd HH:mm:ss"))
+                : QStringLiteral("-");
+            fprintf(stderr,
+                "[PROBE] %s | ok=%d %s/%s %dx%d fps=%.3f %s dur=%lldms "
+                "startRel=%lldms absStart=%lldms(%s) audio=%d/%s err=%s\n",
+                QFileInfo(f).fileName().toUtf8().constData(), int(r.ok()),
+                r.container.toUtf8().constData(), r.videoCodec.toUtf8().constData(),
+                r.width, r.height, r.fps, r.pixFmt.toUtf8().constData(),
+                (long long)r.durationMs, (long long)r.startTimeMs,
+                (long long)r.absStartEpochMs, absStr.toUtf8().constData(),
+                r.audioStreams, r.audioCodec.toUtf8().constData(),
+                r.probeError.toUtf8().constData());
+        }
+        if (sortMode) {
+            const QVector<SortGroup> groups = smartSort(probes, {});
+            fprintf(stderr, "[SORT] %lld group(s)\n", (long long)groups.size());
+            for (const auto &g : groups) {
+                fprintf(stderr, "  group '%s' files=%d suspicious=%d\n",
+                        g.channel.toUtf8().constData(), g.ordered.size(),
+                        int(g.suspicious));
+                for (int i = 0; i < g.ordered.size(); ++i) {
+                    const auto &e = g.ordered[i];
+                    fprintf(stderr, "    %2d. %s start=%lld(%s) kind=%d dur=%llds\n",
+                            i + 1,
+                            QFileInfo(e.filePath).fileName().toUtf8().constData(),
+                            (long long)e.startMs,
+                            e.startMs > 0
+                                ? QDateTime::fromMSecsSinceEpoch(e.startMs, Qt::LocalTime)
+                                      .toString(QStringLiteral("MM-dd HH:mm:ss"))
+                                      .toUtf8().constData()
+                                : "-",
+                            e.sourceKind, (long long)(e.durationMs / 1000));
+                }
+                for (const auto &w : g.warnings)
+                    fprintf(stderr, "    WARN type=%d delta=%lld %s\n", int(w.type),
+                            (long long)w.deltaMs, w.detail.toUtf8().constData());
+            }
+        }
+        return 0;
+    }
     if (argc < 4) {
         fprintf(stderr, "usage: %s <clips_dir> <out_dir> <base_epoch_s>\n", argv[0]);
         return 2;

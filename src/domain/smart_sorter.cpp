@@ -22,6 +22,7 @@ struct Evidence {
     double  weight = 0.0;
     double  conf = 0.0;
     OcrResult::Source source = OcrResult::None;
+    int     kind = SortEvidenceKind::None;   // SortEvidenceKind::*
     QString rawText;            // 取证原文
 };
 
@@ -30,7 +31,7 @@ struct FileCtx {
     QString channel;
     qint64  durationMs = 0;
     bool    durationDubious = false;
-    Evidence ocr, fname, creation, mtime;
+    Evidence ocr, fname, absStart, creation, mtime;
     QString thumbFirst, thumbLast;
     QString rawStart, rawEnd;
     qint64  ocrEndMs = 0;
@@ -40,7 +41,7 @@ struct FileCtx {
 const Evidence *bestEvidence(const FileCtx &c)
 {
     const Evidence *best = nullptr;
-    for (const Evidence *e : {&c.ocr, &c.fname, &c.creation, &c.mtime}) {
+    for (const Evidence *e : {&c.ocr, &c.fname, &c.absStart, &c.creation, &c.mtime}) {
         if (e->epochMs <= 0)
             continue;
         if (!best || e->weight > best->weight
@@ -48,6 +49,24 @@ const Evidence *bestEvidence(const FileCtx &c)
             best = e;
     }
     return best;
+}
+
+/// OCR 与流内绝对时间的交叉校验（§5.2.5 同级偏差提示，不改序）
+void appendCrossChecks(const FileCtx &c, SortGroup &g, int indexA)
+{
+    if (c.ocr.epochMs > 0 && c.absStart.epochMs > 0) {
+        const qint64 dev = qAbs(c.ocr.epochMs - c.absStart.epochMs);
+        if (dev > kCrossCheckToleranceMs) {
+            SortWarning w;
+            w.type = SortWarningType::EvidenceConflict;
+            w.indexA = indexA;
+            w.deltaMs = dev;
+            w.detail = QStringLiteral(
+                "画面识别与流内录制时间偏差 %1s，请人工核对")
+                           .arg(dev / 1000.0, 0, 'f', 1);
+            g.warnings.append(w);
+        }
+    }
 }
 
 QVector<int> orderBy(const QVector<FileCtx> &files,
@@ -113,12 +132,19 @@ QVector<SortGroup> smartSort(const QVector<ProbeResult> &probes,
             QFileInfo(p.filePath).fileName());
         c.channel = ft.channel;
         if (ft.hit())
-            c.fname = {ft.epochMs, 0.8, 0.9, OcrResult::None, ft.rawText};
+            c.fname = {ft.epochMs, 0.8, 0.9, OcrResult::None,
+                       SortEvidenceKind::Filename, ft.rawText};
+        if (p.absStartEpochMs > 0)
+            // 录像机固件写入的录制时刻（DHAV 等）：元数据级证据，
+            // 权重大于容器 creation_time 标签、小于文件名与 OCR（§5.2.1）
+            c.absStart = {p.absStartEpochMs, 0.6, 0.8, OcrResult::None,
+                          SortEvidenceKind::AbsStart, QString()};
         if (p.creationTimeMs > 0)
             c.creation = {p.creationTimeMs, 0.5, 0.6, OcrResult::None,
-                          p.creationTimeRaw};
+                          SortEvidenceKind::Creation, p.creationTimeRaw};
         if (p.fileMtimeMs > 0)
-            c.mtime = {p.fileMtimeMs, 0.2, 0.3, OcrResult::None, QString()};
+            c.mtime = {p.fileMtimeMs, 0.2, 0.3, OcrResult::None,
+                       SortEvidenceKind::Mtime, QString()};
         byPath.insert(p.filePath, c);
     }
     for (const OcrResult &o : ocrs) {
@@ -140,6 +166,8 @@ QVector<SortGroup> smartSort(const QVector<ProbeResult> &probes,
             // 人工手输与 OCR 同为证据①；人工值 conf 视为 1.0（用户即真相）
             const double conf = o.source == OcrResult::Manual ? 1.0 : o.conf;
             c.ocr = {o.wallStartMs, 1.0, conf, o.source,
+                     o.source == OcrResult::Manual ? SortEvidenceKind::Manual
+                                                   : SortEvidenceKind::Ocr,
                      o.rawStartText};
             // 尾帧交叉验证时长（durationMs 缺失时的兜底）
             if (c.durationMs <= 0 && o.durationMs > 0)
@@ -170,6 +198,7 @@ QVector<SortGroup> smartSort(const QVector<ProbeResult> &probes,
             e.durationMs = files[0].durationMs;
             e.endMs = e.startMs + e.durationMs;
             e.startSource = ev ? ev->source : OcrResult::None;
+            e.sourceKind = ev ? ev->kind : SortEvidenceKind::None;
             e.conf = ev ? ev->conf : 0.0;
             e.thumbnailFirst = files[0].thumbFirst;
             e.thumbnailLast = files[0].thumbLast;
@@ -177,6 +206,7 @@ QVector<SortGroup> smartSort(const QVector<ProbeResult> &probes,
             e.rawStartText = files[0].rawStart;
             e.rawEndText = files[0].rawEnd;
             g.ordered.append(e);
+            appendCrossChecks(files[0], g, 0);
             if (!ev || ev->weight <= 0.2)
                 g.suspicious = true;    // 仅有 mtime/无证据 → 人工确认
             out.append(g);
@@ -225,7 +255,7 @@ QVector<SortGroup> smartSort(const QVector<ProbeResult> &probes,
         }
 
         // --- 组装 + 连续性校验 ---
-        bool anyOcr = false, anyMtimeOnly = false;
+        bool anyOcr = false, anyAbsStart = false, anyMtimeOnly = false;
         for (int pos = 0; pos < order.size(); ++pos) {
             const FileCtx &c = files[order[pos]];
             const Evidence *ev = bestEvidence(c);
@@ -235,6 +265,7 @@ QVector<SortGroup> smartSort(const QVector<ProbeResult> &probes,
             e.durationMs = c.durationMs;
             e.endMs = e.startMs + c.durationMs;
             e.startSource = ev ? ev->source : OcrResult::None;
+            e.sourceKind = ev ? ev->kind : SortEvidenceKind::None;
             e.conf = ev ? ev->conf : 0.0;
             e.thumbnailFirst = c.thumbFirst;
             e.thumbnailLast = c.thumbLast;
@@ -242,9 +273,12 @@ QVector<SortGroup> smartSort(const QVector<ProbeResult> &probes,
             e.rawStartText = c.rawStart;
             e.rawEndText = c.rawEnd;
             g.ordered.append(e);
+            appendCrossChecks(c, g, pos);
 
             if (c.ocr.epochMs > 0)
                 anyOcr = true;
+            if (c.absStart.epochMs > 0)
+                anyAbsStart = true;
             if (ev && ev->weight <= 0.2)
                 anyMtimeOnly = true;
             if (ev && ev->conf < 0.8 && ev->weight >= 0.5) {
@@ -296,8 +330,8 @@ QVector<SortGroup> smartSort(const QVector<ProbeResult> &probes,
                 g.warnings.append(w);
             }
         }
-        if (!anyOcr)
-            g.suspicious = true;        // 全组无 OCR → 强制人工确认
+        if (!anyOcr && !anyAbsStart)
+            g.suspicious = true;        // 无 OCR 且无流内时间 → 强制人工确认
         if (anyMtimeOnly)
             g.suspicious = true;
         out.append(g);

@@ -71,6 +71,7 @@ QString buildEvidenceCsv(const EvidenceReportInput &input)
         "首帧OCR原始文本,首帧解析时间(派生),首帧依据,OCR置信度,"
         "尾帧OCR原始文本,尾帧解析时间(派生),尾帧依据,OCR置信度,"
         "文件名时间戳(原始),文件名解析时间(派生),creation_time(原始),"
+        "流内起始墙钟(派生),"
         "时长(容器ms),时长(可信ms),衔接警告(派生),处理动作,输出文件\r\n");
 
     // 按排序结果顺序输出；未进入排序的（探测失败等）附在末尾
@@ -107,6 +108,8 @@ QString buildEvidenceCsv(const EvidenceReportInput &input)
         cols << QString();   // 文件名时间戳原文（排序内部证据，见 HTML 报告明细）
         cols << QString();
         cols << csvEscape(p ? p->creationTimeRaw : QString());
+        cols << (p && p->absStartEpochMs > 0 ? msToIso(p->absStartEpochMs)
+                                             : QString());
         cols << (p && p->durationMs > 0 ? QString::number(p->durationMs) : QString());
         cols << (o && o->durationMs > 0 ? QString::number(o->durationMs) : QString());
         cols << csvEscape(linkWarn.value(path));

@@ -16,6 +16,19 @@
 #include <QVector>
 #include "ocr_result.h"
 
+/// 排序证据类型（display 由 UI 依此映射文案，domain 不写界面字符串）
+namespace SortEvidenceKind {
+enum {
+    None = 0,
+    Ocr = 1,        // 画面 OSD 识别（像素级真相）
+    Manual = 2,     // 人工看图输入
+    Filename = 3,   // 文件名时间
+    AbsStart = 4,   // 流内绝对起始墙钟（DHAV 等录像机固件写入）
+    Creation = 5,   // 容器 creation_time 标签
+    Mtime = 6       // 文件修改时间
+};
+}
+
 enum class SortWarningType {
     Overlap,            // 相邻段重叠（deltaMs < 0）
     Gap,                // 相邻段缺口（deltaMs > 容差）
@@ -39,6 +52,7 @@ struct SortEntry {
     qint64  ocrEndMs = 0;           // 尾帧 OCR 实测墙钟（0=无；证据性高于 endMs 推算）
     qint64  durationMs = 0;
     OcrResult::Source startSource = OcrResult::None;
+    int     sourceKind = SortEvidenceKind::None;   // SortEvidenceKind::*（UI 文案映射）
     double  conf = 0.0;
     QString thumbnailFirst, thumbnailLast;
     QString rawStartText, rawEndText;   // OCR 原文（逐字保留，取证展示用）

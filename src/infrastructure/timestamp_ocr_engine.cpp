@@ -136,7 +136,8 @@ void TimestampOcrEngine::run(const QStringList &paths, const QString &workDir,
 
     const QString script = QCoreApplication::applicationDirPath()
         + QStringLiteral("/probe_timestamps.py");
-    QStringList args{script,
+    QStringList args{QStringLiteral("-X"), QStringLiteral("utf8"),
+                     script,
                      QStringLiteral("--ffmpeg-path"), ffmpeg,
                      QStringLiteral("--work-dir"), workDir,
                      QStringLiteral("--workers"), QStringLiteral("4"),

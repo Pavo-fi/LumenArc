@@ -435,16 +435,21 @@ void PreprocessWindow::rebuildReviewViews()
 void PreprocessWindow::refreshReviewSummary()
 {
     int total = 0, ocrCount = 0, manualCount = 0, unknownCount = 0;
+    int absStartCount = 0, fnameCount = 0;
     int gaps = 0, overlaps = 0;
     qint64 gapMs = 0, overlapMs = 0;
     int dubious = 0;
     for (const auto &g : m_groups) {
         total += g.ordered.size();
         for (const auto &e : g.ordered) {
-            if (e.startSource == OcrResult::Ocr)
+            if (e.sourceKind == SortEvidenceKind::Ocr)
                 ++ocrCount;
-            else if (e.startSource == OcrResult::Manual)
+            else if (e.sourceKind == SortEvidenceKind::Manual)
                 ++manualCount;
+            else if (e.sourceKind == SortEvidenceKind::AbsStart)
+                ++absStartCount;
+            else if (e.sourceKind == SortEvidenceKind::Filename)
+                ++fnameCount;
             if (e.startMs <= 0)
                 ++unknownCount;
         }
@@ -459,6 +464,10 @@ void PreprocessWindow::refreshReviewSummary()
         basis = lang("已按画面时间自动排序", "Auto-sorted by on-screen time");
     else if (manualCount > 0)
         basis = lang("已按人工输入时间排序", "Sorted by manual times");
+    else if (absStartCount > 0)
+        basis = lang("已按流内录制时间排序", "Sorted by in-stream record time");
+    else if (fnameCount > 0)
+        basis = lang("已按文件名时间排序", "Sorted by filename time");
     else
         basis = lang("无法识别画面时间，按文件信息排序（请人工核对）",
                      "On-screen time unavailable; sorted by file info (please verify)");
@@ -555,14 +564,30 @@ QWidget *PreprocessWindow::makeCard(const SortEntry &e, int groupIdx,
     lay->addWidget(endLbl);
 
     QString badge, badgeColor;
-    switch (e.startSource) {
-    case OcrResult::Ocr:
+    switch (e.sourceKind) {
+    case SortEvidenceKind::Ocr:
         badge = lang("✓ 画面时间识别", "✓ On-screen time");
         badgeColor = Theme::Success;
         break;
-    case OcrResult::Manual:
+    case SortEvidenceKind::Manual:
         badge = lang("✓ 人工确认", "✓ Manual");
         badgeColor = Theme::Success;
+        break;
+    case SortEvidenceKind::AbsStart:
+        badge = lang("✓ 流内录制时间", "✓ In-stream record time");
+        badgeColor = Theme::Info;
+        break;
+    case SortEvidenceKind::Filename:
+        badge = lang("✓ 文件名时间", "✓ Filename time");
+        badgeColor = Theme::Info;
+        break;
+    case SortEvidenceKind::Creation:
+        badge = lang("✓ 拍摄时间(元数据)", "✓ Creation time (metadata)");
+        badgeColor = Theme::Info;
+        break;
+    case SortEvidenceKind::Mtime:
+        badge = lang("⚠ 文件修改时间（仅供参考）", "⚠ File mtime (weak evidence)");
+        badgeColor = Theme::Accent;
         break;
     default:
         badge = lang("⚠ 需人工输入时间", "⚠ Manual input needed");

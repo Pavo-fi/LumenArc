@@ -366,6 +366,51 @@ static void testEvidenceCsv()
 }
 
 // ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+static void testAbsStartEvidence()
+{
+    const qint64 t0 = epochOf(2026, 7, 22, 6, 0, 2);
+    // DHAV 场景：无 OCR/文件名证据，流内绝对起始决定顺序
+    QVector<ProbeResult> probes{
+        makeProbe(QStringLiteral("06.03.25-06.10.00[M].dav"), 395000),
+        makeProbe(QStringLiteral("06.00.02-06.02.15[R].dav"), 133000),
+    };
+    probes[0].absStartEpochMs = t0 + 203000;
+    probes[1].absStartEpochMs = t0;
+    auto groups = smartSort(probes, {});
+    CHECK(groups.size() == 1);
+    CHECK(groups[0].ordered.size() == 2);
+    CHECK(groups[0].ordered[0].filePath.contains(QLatin1String("06.00.02")));
+    CHECK(groups[0].ordered[0].sourceKind == SortEvidenceKind::AbsStart);
+    CHECK(groups[0].ordered[1].filePath.contains(QLatin1String("06.03.25")));
+    CHECK(!groups[0].suspicious);   // absStart 为有效证据，不强制人工
+
+    // OCR 优先于 absStart（证据层级：OCR 1.0 > absStart 0.6）
+    QVector<OcrResult> ocrs{makeOcr(probes[1].filePath, t0 + 2000)};
+    groups = smartSort(probes, ocrs);
+    const SortEntry &e1 = groups[0].ordered[0];
+    CHECK(e1.sourceKind == SortEvidenceKind::Ocr);
+    CHECK(e1.startMs == t0 + 2000);
+
+    // OCR 与 absStart 偏差 > 2min → 交叉冲突警告（不改序）
+    ocrs[0].wallStartMs = t0 + 200000;
+    groups = smartSort(probes, ocrs);
+    bool sawConflict = false;
+    for (const auto &w : groups[0].warnings)
+        if (w.type == SortWarningType::EvidenceConflict)
+            sawConflict = true;
+    CHECK(sawConflict);
+
+    // 偏差 < 2min → 无冲突警告
+    ocrs[0].wallStartMs = t0 + 60000;
+    groups = smartSort(probes, ocrs);
+    sawConflict = false;
+    for (const auto &w : groups[0].warnings)
+        if (w.type == SortWarningType::EvidenceConflict)
+            sawConflict = true;
+    CHECK(!sawConflict);
+}
+
 int main(int argc, char **argv)
 {
     QCoreApplication app(argc, argv);
@@ -397,6 +442,8 @@ int main(int argc, char **argv)
         return 0;
     }
     testFilenamePatterns();
+    testSmartSorterBasic();
+    testAbsStartEvidence();
     testSmartSorterBasic();
     testSmartSorterGroupingAndSuspicious();
     testSmartSorterConflictAdjudication();

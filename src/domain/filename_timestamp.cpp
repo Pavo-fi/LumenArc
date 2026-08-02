@@ -55,6 +55,8 @@ FilenameTimestamp parseFilenameTimestamp(const QString &fileName)
     // 通道号补充模式（无时间戳时也可单独提供分组依据）
     static const QRegularExpression reChannelIpc(
         R"(IPC[_-]?(\d+))", QRegularExpression::CaseInsensitiveOption);
+    // 注：Dahua 导出命名 HH.MM.SS-HH.MM.SS[...].dav 为纯时间段（无日期/通道），
+    // 刻意不解析——时间排序证据由流内绝对起始墙钟（absStartEpochMs）提供。
 
     auto trySet = [&](const QRegularExpressionMatch &m, int patternId,
                       int y, int mo, int d, int h, int mi, int s, int ms,

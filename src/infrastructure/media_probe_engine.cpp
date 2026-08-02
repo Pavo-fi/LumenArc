@@ -224,6 +224,20 @@ ProbeResult MediaProbeEngine::probeOne(const QString &path)
     r.startTimeMs = tsToMs(vs->start_time != AV_NOPTS_VALUE
                                ? vs->start_time : fmt->start_time, vs->time_base);
 
+    // 流内绝对墙钟（Dahua DHAV 等：fmt->start_time 为录制时刻 epoch µs）。
+    // 只接受合理纪元区间（2000-01-01 ~ 当前+1天），避免垃圾 PTS 误判。
+    // 时区约定：DVR 把本地墙钟当作“UTC 秒”写入（OSD 墙钟与之同基准），
+    // 与 OCR 的本地墙钟语义对齐 → 取 UTC 分量按本地时间重解释。
+    if (fmt->start_time != AV_NOPTS_VALUE && fmt->start_time > 0) {
+        const qint64 epochS = fmt->start_time / 1000000;
+        const qint64 nowS = QDateTime::currentSecsSinceEpoch();
+        if (epochS >= 946684800 && epochS <= nowS + 86400) {
+            const QDateTime utc = QDateTime::fromSecsSinceEpoch(epochS, Qt::UTC);
+            r.absStartEpochMs = QDateTime(utc.date(), utc.time(), Qt::LocalTime)
+                                    .toMSecsSinceEpoch();
+        }
+    }
+
     // 首视频包：PTS（相对换算）+ 关键帧标志（拼接前置校验输入）
     AVPacket *pkt = av_packet_alloc();
     for (int i = 0; i < 256 && av_read_frame(fmt, pkt) >= 0; ++i) {

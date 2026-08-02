@@ -101,7 +101,7 @@ def ffprobe_duration_ms(ffmpeg_path, video_path):
             r = subprocess.run(
                 [ffprobe, "-v", "error", "-show_entries", "format=duration",
                  "-of", "default=noprint_wrappers=1:nokey=1", video_path],
-                capture_output=True, text=True, timeout=30)
+                capture_output=True, encoding="utf-8", errors="replace", timeout=30)
             if r.returncode == 0:
                 return int(float(r.stdout.strip()) * 1000)
         except (subprocess.TimeoutExpired, ValueError):
@@ -109,7 +109,7 @@ def ffprobe_duration_ms(ffmpeg_path, video_path):
     # Last resort: parse "Duration: hh:mm:ss.cc" from ffmpeg -i stderr
     try:
         r = subprocess.run([ffmpeg_path, "-hide_banner", "-i", video_path],
-                           capture_output=True, text=True, timeout=30)
+                           capture_output=True, encoding="utf-8", errors="replace", timeout=30)
         m = re.search(r"Duration:\s*(\d+):(\d+):(\d+(?:\.\d+)?)", r.stderr)
         if m:
             h, mnt, s = int(m.group(1)), int(m.group(2)), float(m.group(3))
@@ -151,8 +151,8 @@ def extract_frame(ffmpeg_path, video_path, out_png, ss=None, sseof=False,
         cmd += ["-frames:v", "1", "-vf", "showinfo", out_png]
         t0 = time.monotonic()
         try:
-            r = subprocess.run(cmd, capture_output=True, text=True,
-                               timeout=timeout, errors="replace")
+            r = subprocess.run(cmd, capture_output=True, encoding="utf-8",
+                               errors="replace", timeout=timeout)
         except subprocess.TimeoutExpired:
             continue
         elapsed = int((time.monotonic() - t0) * 1000)
@@ -589,5 +589,18 @@ def main():
     sys.stdout.write("\n")
 
 
+def _force_utf8_io():
+    """Child-process IO contract with the C++ engine is UTF-8. On Chinese
+    Windows the embeddable Python defaults stdout/stderr to GBK, which both
+    garbles PROGRESS/ERROR lines containing Chinese paths and can crash
+    subprocess readers (text=True uses locale codec). Force UTF-8."""
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except (AttributeError, ValueError):
+            pass
+
+
 if __name__ == "__main__":
+    _force_utf8_io()
     main()
