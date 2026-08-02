@@ -7,6 +7,7 @@
 > 现场反馈批次：`95f6dba`→`a8a2fe1`→`62a1c76`（见第十四章）
 > DAV 批次：见第十五章（GBK 编码崩溃根因 + DHAV 流内绝对时间证据层）
 > 性能批次：见第十六章（absStart 跳过 88×、子进程低优先级、merged 命名+播放出口）
+> 流程批次：见第十七章（非强制一键拼接、逐文件转码、假成功修复）
 
 ---
 
@@ -919,3 +920,44 @@ I/O 优先级随进程级一并降低。
   即跳过其余帧"的激进早退，但会牺牲开机黑屏素材的检出率，暂未做。
 - 问题①若用户实际遇到的是"文件真的被删/播放报错"，待其进一步描述后复查
   （当前证据：文件在、可探测、命名与出口已友好化）。
+
+
+---
+
+## 十七、流程非强制化 + 假成功修复（2026-08-02 第五批）
+
+> 现场反馈：①排序完显示"完成"但没有拼接结果；②自动排序/转码不应是强制步骤——
+> 拖进去用户自己在列表排完即可快速无损拼接，转码只处理确实需要的单个文件。
+
+### 17.1 问题①根因（C3 违规，已修）
+
+`onTranscodeOneFailed`/`onConcatOneFailed` 只记录失败并继续队列，`finalize()` 原先
+**无条件** `emit finished()` → UI 无脑绿勾"✓ 拼接完成"。转码/拼接全败时
+`m_concatOutputs` 为空 → `report.outputPath` 竟指向输出**目录**（0 B）→ 播放按钮无效。
+
+修复：`finalize()` 在 `m_concatOutputs.isEmpty()` 时改为 `emit failed(ConcatFailed)`
+（附失败统计明细）；UI `onFinished` 额外校验 outputPath 是**存在的非空文件**，否则
+显示"⚠ 未产出输出文件"红色卡片且播放按钮禁用；`startProcessing` 阶段不符不再静默
+return（写日志）。
+
+### 17.2 问题②：排序/转码非强制
+
+- **begin 不再强制 OCR**：`begin()` 探测完成后直接按**导入顺序**成组（`buildListOrderGroups`，
+  默认组，时间未知）→ UserConfirm。新增 `runAutoSort()`（UserConfirm 可选触发）与
+  `beginWithAutoSort()`（一键自动排序链）；OCR 引擎降级/absStart 跳过逻辑移入 `runAutoSort`。
+- **导入页一键拼接**：表格行支持拖拽排序（`InternalMove` + `rowsMoved` 同步
+  m_pendingFiles）；「开始拼接 ▶」= begin → evidenceReady(列表顺序) → confirmOrder →
+  precheckReady → startProcessing 自动链（`m_pendingQuickMerge`，不切校对/设置页）；
+  探测已完成时（UserConfirm）直接复用会话。设置页「开始拼接」原路径保留。
+- **逐文件转码判定**：新增 `filesNeedingTranscode()`（domain）——白名单外/探测失败/
+  编码与组基准不一致 → 仅该文件转码；分辨率/像素/音轨/帧率大偏差 → 整组转码。
+  取代原"组级 BLOCK → 全组转码"。dav 批次（hevc 同参，1fps/15fps 混）仍整组转码（fps
+  偏差），mp4 混入单个 avi/mjpeg 时只转那一个。磁盘预估与设置页文案同步改为逐文件口径。
+- 单测 99→106（testFilesNeedingTranscode 7 项），集成 29/29，vla 回归绿。
+
+### 17.3 遗留
+
+- 转码输出固定 h264/yuv420p，**不统一分辨率/帧率**：组内分辨率不一致时转码后 concat
+  仍可能失败（concat demuxer 限制）。单相机批次（同参）不受影响；跨相机混拼需后续在
+  TranscodeEngine 增加 scale/fps 统一参数（v2）。
+- 直接拼接的报告按"人工顺序"记录（sourceKind=None），证据 CSV 如实呈现。
