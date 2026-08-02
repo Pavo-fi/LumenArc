@@ -23,7 +23,10 @@
 #include "domain/preprocess_text.h"
 #include "domain/concat_precheck.h"
 #include "domain/evidence_report.h"
+#include "sortablefiletable.h"
 
+#include <QApplication>
+#include <QTableWidget>
 #include <QCoreApplication>
 #include <QDateTime>
 #include <QDebug>
@@ -376,6 +379,62 @@ static void testFilesNeedingTranscode()
 }
 
 // ---------------------------------------------------------------------------
+static void testSortableFileTable()
+{
+    // 现场反馈：拖拽行必须“插入”，不得覆盖/替换目标行
+    SortableFileTable t(4, 3);
+    const QString names[4] = {
+        QStringLiteral("a.mp4"), QStringLiteral("b.mp4"),
+        QStringLiteral("c.mp4"), QStringLiteral("d.mp4")};
+    for (int r = 0; r < 4; ++r)
+        for (int c = 0; c < 3; ++c) {
+            auto *it = new QTableWidgetItem(
+                QStringLiteral("%1_%2").arg(names[r]).arg(c));
+            it->setData(Qt::UserRole, names[r]);
+            t.setItem(r, c, it);
+        }
+    auto row0Names = [&t]() -> QStringList {
+        QStringList out;
+        for (int r = 0; r < t.rowCount(); ++r)
+            out << t.item(r, 0)->data(Qt::UserRole).toString();
+        return out;
+    };
+
+    // 拖 A(0) 到 C(2) 上方 → [B, A, C, D]（插入语义，C 及其后顺移）
+    CHECK(t.moveRowTo(0, 2, false));
+    CHECK(row0Names() == QStringList({"b.mp4", "a.mp4", "c.mp4", "d.mp4"}));
+    // 恢复
+    CHECK(t.moveRowTo(1, 0, false));
+    CHECK(row0Names() == QStringList({"a.mp4", "b.mp4", "c.mp4", "d.mp4"}));
+
+    // 拖 D(3) 到 B(1) 上方 → [A, D, B, C]
+    CHECK(t.moveRowTo(3, 1, false));
+    CHECK(row0Names() == QStringList({"a.mp4", "d.mp4", "b.mp4", "c.mp4"}));
+    CHECK(t.moveRowTo(1, 3, true));    // D 到 C 之后（末尾）→ [A,B,C,D]
+    CHECK(row0Names() == QStringList({"a.mp4", "b.mp4", "c.mp4", "d.mp4"}));
+
+    // 拖 A(0) 到 D(3) 下缘（after）→ [B, C, D, A]
+    CHECK(t.moveRowTo(0, 3, true));
+    CHECK(row0Names() == QStringList({"b.mp4", "c.mp4", "d.mp4", "a.mp4"}));
+    CHECK(t.moveRowTo(3, 0, false));   // A 回到最前
+    CHECK(row0Names() == QStringList({"a.mp4", "b.mp4", "c.mp4", "d.mp4"}));
+
+    // 相邻无变化：B(1) 插到 C(2) 上方 → 已在该位置 → false，行序不变
+    CHECK(!t.moveRowTo(1, 2, false));
+    CHECK(row0Names() == QStringList({"a.mp4", "b.mp4", "c.mp4", "d.mp4"}));
+
+    // 无覆盖：全部行唯一且 UserRole 跟随行移动
+    bool unique = true;
+    for (const QString &n : names)
+        unique = unique && (row0Names().count(n) == 1);
+    CHECK(unique);
+
+    // 越界输入安全
+    CHECK(!t.moveRowTo(-1, 1, false));
+    CHECK(!t.moveRowTo(0, 99, false));
+}
+
+// ---------------------------------------------------------------------------
 static void testEvidenceCsv()
 {
     EvidenceReportInput in;
@@ -453,7 +512,9 @@ static void testAbsStartEvidence()
 
 int main(int argc, char **argv)
 {
-    QCoreApplication app(argc, argv);
+    // GUI 单测需要 QApplication（Windows 桌面 session 可初始化 widget；
+    // 若在无桌面的 CI 环境卡死，测试不会显示窗口，不影响 headless 用例）
+    QApplication app(argc, argv);
     // 诊断模式：--group-debug <files...> 用生产代码路径打印文件名解析与分组结果
     if (argc > 2 && QLatin1String(argv[1]) == QLatin1String("--group-debug")) {
         QVector<ProbeResult> probes;
@@ -491,6 +552,7 @@ int main(int argc, char **argv)
     testPrecheck();
     testFilesNeedingTranscode();
     testEvidenceCsv();
+    testSortableFileTable();
     fprintf(stderr, "checks: %d failures: %d\n", g_checks, g_failures);
     return g_failures == 0 ? 0 : 1;
 }

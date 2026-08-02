@@ -172,6 +172,7 @@ target_include_directories(lumenarc_preprocess_test PRIVATE
 target_link_libraries(lumenarc_preprocess_test PRIVATE
     Qt6::Core
     Qt6::Gui
+    Qt6::Widgets   # SortableFileTable 拖拽插入语义 GUI 单测（offscreen）
 )
 
 # --- Preprocess engine integration test (real ffmpeg/Python subprocesses) ---
