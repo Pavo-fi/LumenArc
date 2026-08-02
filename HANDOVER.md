@@ -6,6 +6,7 @@
 > 前处理批次：`9c97072`→`2ba4776`→`772c97f`→`7f5f20b`→`e34bdd9`→`40abd96`→`4b87a5a`（见第十三章）
 > 现场反馈批次：`95f6dba`→`a8a2fe1`→`62a1c76`（见第十四章）
 > DAV 批次：见第十五章（GBK 编码崩溃根因 + DHAV 流内绝对时间证据层）
+> 性能批次：见第十六章（absStart 跳过 88×、子进程低优先级、merged 命名+播放出口）
 
 ---
 
@@ -875,3 +876,46 @@ Non-monotonic DTS 警告无害）。诊断工具：`--probe/--sort <files...>`�
 - 音轨 copyAudio 策略与方案 §5.5.1 "48k 立体声统一"存在偏差（8k/16k DVR 音轨直拷保留），
   属既有偏差，未在本批处理。
 - 报告 HTML 版仍未实现；2GB 无索引尾帧 seek 现场验证仍挂起。
+
+
+---
+
+## 十六、性能与可用性三连修（2026-08-02 第四批）
+
+> 现场反馈：①拼接输出文件"拖入播放后消失找不到"；②读帧排序慢得令人发指（要求 10×）；
+> ③排序期间主窗口亮度分析从秒级饿殍到 5 分钟。
+
+### 16.1 问题①（实为找不到，文件未丢）
+
+取证：`$RCR79YF/LumenArc_Merged_20260802_1938/_默认组__concat.mp4`（203MB）安在；
+dav 批次 19:41 会话因 GBK 崩溃 OCR 全败、用户 11 分钟后取消（operations.log 实锤），
+根本没有产出文件。修复：默认组输出名 `_默认组__concat.mp4` → **`merged_concat.mp4`**；
+结果卡片新增**「在主窗口播放输出」**（PreprocessWindow::openOutputRequested →
+MainWindow::openVideoFile，信号解耦 R2），消除"拖入"动作。
+
+### 16.2 问题②：OCR 速度（实测 88×/1.7×）
+
+- **absStart 跳过策略（主修复）**：`setSkipOcrWhenAbsStart(true)`（默认开，①幕可关）——
+  absStartEpochMs>0 的文件走 `--frames-only-json`：仅截 head_1s+tail_eof 证据帧、零推理。
+  实测 3 个 dav：132.3s → **1.5s（88×）**；12 段批 8.7min → ~6s。OcrResult 仅带截图，
+  排序仍由 absStart 证据驱动（frames-only 写失败退化为全量 OCR，不静默）。
+- **全量 OCR 提速（次级）**：帧降采样至 1600 宽（det 成本∝像素）、宽裁剪兜底收敛为
+  2 个上角、bonus eof 仅单遍窄增强、模型加载惰性化（frames-only 批次不加载）。
+  失败路径 132.3s → 76.4s（1.7×）；成功路径（常态）2 帧 2 裁剪 ≈ 3-5s/段。
+- 推理改单线程（intra/inter_op_num_threads=1，RapidOCR 不支持时回退默认）——
+  牺牲 ~2× 单吞吐换主窗口隔离（见 16.3），失败路径属病态素材的固有浪费。
+
+### 16.3 问题③：主窗口饿殍（进程优先级隔离）
+
+根因：4 worker × onnxruntime 默认全核线程池 → 线程过订阅 + 同优先级抢占。
+修复：OCR/转码/拼接子进程一律 `CREATE_BELOW_NORMAL_PRIORITY_CLASS`（Qt
+`setCreateProcessArgumentsModifier`，qt_windows.h 未导出该常量，回退定义 0x00004000）；
+OCR 进程环境 OMP/OPENBLAS/MKL_NUM_THREADS=1。Windows 调度器保证主分析进程优先，
+I/O 优先级随进程级一并降低。
+
+### 16.4 遗留
+
+- 全量 OCR 失败路径 76s/3 段仍慢（病态 OSD 的固有成本）；如需再压可加"首帧零命中
+  即跳过其余帧"的激进早退，但会牺牲开机黑屏素材的检出率，暂未做。
+- 问题①若用户实际遇到的是"文件真的被删/播放报错"，待其进一步描述后复查
+  （当前证据：文件在、可探测、命名与出口已友好化）。
