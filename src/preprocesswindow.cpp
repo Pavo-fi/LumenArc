@@ -16,6 +16,8 @@
 #include "i18n.h"
 #include "theme.h"
 
+#include <functional>
+
 #include <QStackedWidget>
 #include <QHBoxLayout>
 #include <QVBoxLayout>
@@ -51,6 +53,54 @@
 namespace {
 const char *kVideoExts[] = {"mp4", "avi", "wmv", "flv", "ts", "mts",
                             "m2ts", "dav", "mov", "mkv", "mpg", "mpeg", "3gp"};
+
+// 行拖拽插入语义表（现场反馈：QTableWidget 默认 InternalMove 是“覆盖/替换”
+// 目标行，用户期望“插入到目标位置、其余顺移”）。无 Q_OBJECT，纯虚函数重写。
+class SortableFileTable : public QTableWidget
+{
+public:
+    using QTableWidget::QTableWidget;
+    std::function<void()> orderChanged;   // 拖拽落定后回调（同步文件顺序）
+
+protected:
+    void dropEvent(QDropEvent *event) override
+    {
+        if (event->source() == this
+            && (event->dropAction() == Qt::MoveAction
+                || event->dropAction() == Qt::CopyAction)) {
+            const QModelIndex target = indexAt(event->position().toPoint());
+            const auto sel = selectionModel()
+                                 ? selectionModel()->selectedRows()
+                                 : QModelIndexList();
+            if (!target.isValid() || sel.isEmpty()) {
+                QTableWidget::dropEvent(event);   // 异常路径兑底：交给默认
+                return;
+            }
+            const int srcRow = sel.first().row();
+            int toRow = target.row();
+            if (dropIndicatorPosition() == QAbstractItemView::BelowItem)
+                toRow += 1;                   // 落点下缘 → 插到目标行之后
+            if (srcRow < toRow)
+                toRow -= 1;                   // 移除源行后目标位置前移
+            if (toRow == srcRow) {
+                event->accept();              // 位置未变
+                return;
+            }
+            // QTableModel 不支持 moveRows：整行 take → insert 空行 → 逐列回填
+            QList<QTableWidgetItem *> rowItems;
+            for (int c = 0; c < columnCount(); ++c)
+                rowItems.append(takeItem(srcRow, c));
+            insertRow(qBound(0, toRow, rowCount()));
+            for (int c = 0; c < rowItems.size(); ++c)
+                setItem(qBound(0, toRow, rowCount() - 1), c, rowItems[c]);
+            event->accept();
+            if (orderChanged)
+                orderChanged();
+            return;
+        }
+        QTableWidget::dropEvent(event);
+    }
+};
 
 bool isVideoFile(const QString &path)
 {
@@ -203,7 +253,7 @@ QWidget *PreprocessWindow::buildPageImport()
     m_importSummary = new QLabel(lang("尚未导入文件", "No files imported"), w);
     lay->addWidget(m_importSummary);
 
-    m_fileTable = new QTableWidget(0, 6, w);
+    m_fileTable = new SortableFileTable(0, 6, w);
     m_fileTable->setHorizontalHeaderLabels({
         lang("文件名", "File"), lang("时长", "Duration"),
         lang("分辨率", "Resolution"), lang("格式", "Format"),
@@ -212,14 +262,14 @@ QWidget *PreprocessWindow::buildPageImport()
     m_fileTable->verticalHeader()->setVisible(false);
     m_fileTable->setSelectionMode(QAbstractItemView::SingleSelection);
     m_fileTable->setEditTriggers(QAbstractItemView::NoEditTriggers);
-    // 行拖拽排序（现场反馈：用户自己在列表排完即可直接拼接）
+    // 行拖拽排序（现场反馈：默认 InternalMove 是覆盖语义，改用自定义插入语义）
     m_fileTable->setDragDropMode(QAbstractItemView::InternalMove);
     m_fileTable->setDragEnabled(true);
     m_fileTable->setAcceptDrops(true);
     m_fileTable->setDropIndicatorShown(true);
     m_fileTable->setDefaultDropAction(Qt::MoveAction);
-    connect(m_fileTable->model(), &QAbstractItemModel::rowsMoved,
-            this, [this]() { syncPendingFromTable(); });
+    auto *sortTable = static_cast<SortableFileTable *>(m_fileTable);
+    sortTable->orderChanged = [this]() { syncPendingFromTable(); };
     lay->addWidget(m_fileTable, 1);
 
     m_importProgress = new QProgressBar(w);
