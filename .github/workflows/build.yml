@@ -19,14 +19,8 @@ jobs:
           host: 'windows'
           target: 'desktop'
           arch: 'win64_msvc2022_64'
-          modules: 'qtcharts qtmultimedia qtshadertools'
+          modules: 'qtcharts qtmultimedia'
 
-      - name: Install VLC SDK
-        run: |
-          echo "VLC_SDK_PATH=${{ github.workspace }}\vlc_extracted\vlc-3.0.21" >> $env:GITHUB_ENV
-          choco install vlc -y --no-progress
-          echo "VLC_BIN_PATH=C:\Program Files\VideoLAN\VLC" >> $env:GITHUB_ENV
-        shell: pwsh
 
       - name: Bundle Python 3.12 embeddable
         run: |

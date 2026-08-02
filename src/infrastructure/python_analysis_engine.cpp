@@ -11,6 +11,7 @@
 #include "python_analysis_engine.h"
 #include "i18n.h"
 #include <QProcess>
+#include <QStringList>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QJsonArray>
@@ -46,12 +47,16 @@ void PythonAnalysisEngine::setScriptPath(const QString &path)
 QString PythonAnalysisEngine::findFfmpegPath()
 {
     QString appDir = QCoreApplication::applicationDirPath();
-    // Check bundled location first
-    QString bundled = appDir + "/ffmpeg/ffmpeg.exe";
-    if (QFile::exists(bundled)) return bundled;
-    // Same directory
-    QString sameDir = appDir + "/ffmpeg.exe";
-    if (QFile::exists(sameDir)) return sameDir;
+    // Bundled locations first (Windows .exe / macOS & Linux 无扩展名)
+    const QStringList candidates = {
+        appDir + "/ffmpeg/ffmpeg.exe",
+        appDir + "/ffmpeg.exe",
+        appDir + "/ffmpeg/ffmpeg",
+        appDir + "/ffmpeg",
+    };
+    for (const QString &p : candidates)
+        if (QFile::exists(p))
+            return p;
     // System PATH
     return "ffmpeg";
 }
@@ -101,7 +106,8 @@ static int computeProcessCount(qint64 totalFrames, float fps)
 
     if (durationSec < 30)  return 1;
     if (durationSec < 120) return qMin(2, maxProcs);
-    return qMin(4, maxProcs);
+    if (durationSec < 600) return qMin(4, maxProcs);
+    return qMin(8, maxProcs);   // v1.1：ffmpeg 分块管道，上限 4→8
 }
 
 void PythonAnalysisEngine::startAnalysis(const QString &videoPath, const QVector<QRect> &regions,
@@ -202,6 +208,7 @@ void PythonAnalysisEngine::startAnalysis(const QString &videoPath, const QVector
 
     m_outputBuffer.clear();
     m_stderrBuffer.clear();
+    m_lastProgressPct = 0.0;   // 新一轮分析，进度单调基线归零
 
     // Store roiIds for use in onFinished
     m_pendingRectRoiIds = rectRoiIds;
@@ -252,6 +259,7 @@ void PythonAnalysisEngine::startAudioAnalysis(const QString &videoPath)
 
     m_outputBuffer.clear();
     m_stderrBuffer.clear();
+    m_lastProgressPct = 0.0;   // 新一轮分析，进度单调基线归零
 
     m_process = new QProcess(this);
     m_process->setProgram(m_pythonPath);
@@ -327,6 +335,9 @@ void PythonAnalysisEngine::onReadyReadStderr()
             QStringList parts = lineStr.mid(9).split('|');
             if (parts.size() >= 3) {
                 qreal pct = parts[2].toDouble();
+                // v1.1：单调化兜底——旧脚本/多阶段输出可能回退，进度条与文本只增不减
+                pct = qMax(pct, m_lastProgressPct);
+                m_lastProgressPct = pct;
                 emit progressUpdated(parts[0].toInt(), parts[1].toInt(), pct);
             }
         }

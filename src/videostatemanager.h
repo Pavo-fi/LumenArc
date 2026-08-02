@@ -14,7 +14,9 @@ struct VideoState {
     QString filePath;
     AnalysisSnapshot snapshot;
     QVector<QRect> regions;
+    QVector<int> regionRoiIds;      // 与 regions 一一对应（保持分析数据 roiId 对齐）
     QVector<QPolygon> polygons;
+    QVector<int> polygonRoiIds;     // 与 polygons 一一对应
     QVector<GuideLine> guideLines;
     QVector<ChartGuideData> chartGuideLines;   // 图表辅助线（逐视频，防跨视频泄漏）
     qint64 timeOffsetMs = 0;
@@ -53,7 +55,9 @@ public:
                    bool abLoop = false,
                    const QVector<QPolygon> &polygons = {},
                    const QVector<GuideLine> &guideLines = {},
-                   const QVector<ChartGuideData> &chartGuideLines = {});
+                   const QVector<ChartGuideData> &chartGuideLines = {},
+                   const QVector<int> &regionRoiIds = {},
+                   const QVector<int> &polygonRoiIds = {});
 
     bool restoreState(const QString &videoPath, VideoState &state) const;
     bool hasState(const QString &videoPath) const;

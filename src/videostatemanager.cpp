@@ -18,7 +18,9 @@ void VideoStateManager::saveState(const QString &videoPath,
                                    bool abLoop,
                                    const QVector<QPolygon> &polygons,
                                    const QVector<GuideLine> &guideLines,
-                                   const QVector<ChartGuideData> &chartGuideLines)
+                                   const QVector<ChartGuideData> &chartGuideLines,
+                                   const QVector<int> &regionRoiIds,
+                                   const QVector<int> &polygonRoiIds)
 {
     if (videoPath.isEmpty())
         return;
@@ -27,7 +29,9 @@ void VideoStateManager::saveState(const QString &videoPath,
     state.filePath = videoPath;
     state.snapshot = snapshot;
     state.regions = regions;
+    state.regionRoiIds = regionRoiIds;
     state.polygons = polygons;
+    state.polygonRoiIds = polygonRoiIds;
     state.guideLines = guideLines;
     state.chartGuideLines = chartGuideLines;
     state.timeOffsetMs = timeOffsetMs;

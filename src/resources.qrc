@@ -1,5 +1,9 @@
 <RCC>
     <qresource prefix="/">
         <file alias="lightchaser.jpg">../lightchaser.jpg</file>
+        <file alias="logo.png">../logo.png</file>
+        <file alias="icons/play.svg">icons/play.svg</file>
+        <file alias="icons/pause.svg">icons/pause.svg</file>
+        <file alias="icons/stop.svg">icons/stop.svg</file>
     </qresource>
 </RCC>

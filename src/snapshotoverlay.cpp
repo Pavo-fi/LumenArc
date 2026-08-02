@@ -10,6 +10,7 @@
  */
 #include "snapshotoverlay.h"
 #include "i18n.h"
+#include "theme.h"
 
 #include <QPainter>
 #include <QPainterPath>
@@ -65,10 +66,10 @@ SnapshotOverlay::SnapshotOverlay(QWidget *parent)
     m_closeBtn->hide();
 
     QString sliderStyle =
-        "QSlider::groove:horizontal { height: 3px; background: #555; border-radius: 1px; }"
-        "QSlider::handle:horizontal { background: #00bcd4; width: 10px; height: 10px; "
+        "QSlider::groove:horizontal { height: 3px; background: " + Theme::Border + "; border-radius: 1px; }"
+        "QSlider::handle:horizontal { background: " + Theme::Accent + "; width: 10px; height: 10px; "
         "  margin: -4px 0; border-radius: 5px; }"
-        "QSlider::sub-page:horizontal { background: #00bcd4; border-radius: 1px; }";
+        "QSlider::sub-page:horizontal { background: " + Theme::Accent + "; border-radius: 1px; }";
     m_brightnessSlider->setStyleSheet(sliderStyle);
     m_contrastSlider->setStyleSheet(sliderStyle);
     m_opacitySlider->setStyleSheet(sliderStyle);

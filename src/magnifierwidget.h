@@ -78,6 +78,7 @@ private:
     ContentWidget *m_content = nullptr;
 
     QImage m_snapshotOriginal;  // full-frame snapshot for re-cropping
+    QImage m_lastFullFrame;     // 最近一帧完整画面：暂停时平移/缩放后立即重裁刷新
 
     qreal m_zoomLevel = 2.0;
     QPoint m_cursorPos;

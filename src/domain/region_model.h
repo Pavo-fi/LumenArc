@@ -43,6 +43,10 @@ public:
     int regionCount() const;
     /// @brief 返回指定索引的 ROI ID
     int roiIdAt(int index) const;
+    /// @brief 返回当前所有 ROI ID 的副本（与 regions() 顺序一致）
+    QVector<int> roiIds() const;
+    /// @brief 带 ROI ID 整体恢复（切换视频/加载 .vla 时保持 roiId 与分析数据对齐）
+    void restoreRegions(const QVector<QRect> &regions, const QVector<int> &roiIds);
     /// @brief 查找指定 ROI ID 的当前索引，未找到返回 -1
     int findIndexByRoiId(int roiId) const;
 

@@ -19,14 +19,8 @@ jobs:
           host: 'windows'
           target: 'desktop'
           arch: 'win64_msvc2022_64'
-          modules: 'qtcharts qtmultimedia qtshadertools'
+          modules: 'qtcharts qtmultimedia'
 
-      - name: Install VLC SDK
-        run: |
-          echo "VLC_SDK_PATH=${{ github.workspace }}\vlc_extracted\vlc-3.0.21" >> $env:GITHUB_ENV
-          choco install vlc -y --no-progress
-          echo "VLC_BIN_PATH=C:\Program Files\VideoLAN\VLC" >> $env:GITHUB_ENV
-        shell: pwsh
 
       - name: Configure CMake
         run: cmake -B build -S . -G "Visual Studio 17 2022" -A x64 -DCMAKE_BUILD_TYPE=Release

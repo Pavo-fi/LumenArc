@@ -344,6 +344,10 @@ void MagnifierWidget::zoomAtPoint(int delta, QPoint videoPos)
     if (!m_snapshotOriginal.isNull() && m_content->hasSnapshot())
         m_content->reCropSnapshot(m_sourceRect, m_snapshotOriginal);
 
+    // 暂停/停止时无新帧到达：缩放后立即用最近一帧重裁（与 recalcSourceRect 同理）
+    if (!m_lastFullFrame.isNull())
+        onFrameReady(m_lastFullFrame);
+
     m_content->update();
 }
 
@@ -415,11 +419,17 @@ void MagnifierWidget::recalcSourceRect()
                                          m_snapshotBrightness, m_snapshotContrast, m_snapshotOpacity);
         }
     }
+
+    // 暂停/停止时无新帧到达：源区域变化后立即用最近一帧重裁，
+    // 放大镜视野随中键拖动/滚轮缩放实时刷新
+    if (!m_lastFullFrame.isNull())
+        onFrameReady(m_lastFullFrame);
 }
 
 /// @brief 接收视频帧：裁剪源区域后传给ContentWidget渲染
 void MagnifierWidget::onFrameReady(const QImage &fullFrame)
 {
+    m_lastFullFrame = fullFrame;   // 隐式共享，赋值近乎零开销；暂停时供重裁刷新
     if (fullFrame.isNull() || m_sourceRect.isEmpty())
         return;
 

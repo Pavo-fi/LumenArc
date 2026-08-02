@@ -77,6 +77,25 @@ int RegionModel::roiIdAt(int index) const
     return m_roiIds[index];
 }
 
+QVector<int> RegionModel::roiIds() const
+{
+    QReadLocker lock(&m_lock);
+    return m_roiIds;
+}
+
+void RegionModel::restoreRegions(const QVector<QRect> &regions, const QVector<int> &roiIds)
+{
+    QWriteLocker lock(&m_lock);
+    m_regions = regions;
+    m_roiIds = roiIds;
+    // 下一个 ID 取最大值+1，保证后续新增区域不与恢复 ID 冲突
+    m_nextRoiId = 1;
+    for (int id : m_roiIds)
+        m_nextRoiId = qMax(m_nextRoiId, id + 1);
+    lock.unlock();
+    emit regionsChanged();
+}
+
 int RegionModel::findIndexByRoiId(int roiId) const
 {
     QReadLocker lock(&m_lock);
@@ -85,14 +104,15 @@ int RegionModel::findIndexByRoiId(int roiId) const
 
 QColor RegionModel::regionColor(int index)
 {
+    // Okabe-Ito 色盲友好调色板（与图表数据线/标签共用一套视觉语言）
     static const QList<QColor> colors = {
-        QColor(255, 0, 0),     // 赤
-        QColor(255, 127, 0),   // 橙
-        QColor(255, 255, 0),   // 黄
-        QColor(0, 255, 0),     // 绿
-        QColor(0, 255, 255),   // 青
-        QColor(0, 0, 255),     // 蓝
-        QColor(139, 0, 255)    // 紫
+        QColor(213, 94, 0),     // 朱红 vermillion
+        QColor(230, 159, 0),    // 橙 orange
+        QColor(240, 228, 66),   // 黄 yellow
+        QColor(0, 158, 115),    // 青绿 bluish green
+        QColor(86, 180, 233),   // 天蓝 sky blue
+        QColor(0, 114, 178),    // 蓝 blue
+        QColor(204, 121, 167)   // 紫红 reddish purple
     };
     return colors[index % colors.size()];
 }

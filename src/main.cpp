@@ -17,8 +17,13 @@
 #include <QPainter>
 #include <QLinearGradient>
 #include <QImage>
+#include <QLibrary>
+#ifdef Q_OS_WIN
+#include <qt_windows.h>
+#endif
 #include "mainwindow.h"
 #include "i18n.h"
+#include "theme.h"
 
 // Ivory white color constant
 static const QColor IVORY(255, 255, 240);
@@ -101,11 +106,11 @@ static QPixmap createSplashPixmap(const QString &statusText, int progress = 30)
     p.setBrush(QColor(255, 255, 255, 30));
     p.drawRoundedRect(barX, barY, barW, barH, 2, 2);
 
-    // --- Progress bar fill (dynamic) ---
+    // --- Progress bar fill (dynamic) --- 品牌金渐变
     int progressWidth = qBound(1, barW * qMin(100, qMax(0, progress)) / 100, barW);
     QLinearGradient barGrad(barX, barY, barX + progressWidth, barY);
-    barGrad.setColorAt(0.0, QColor(0, 150, 180));
-    barGrad.setColorAt(1.0, QColor(0, 210, 240));
+    barGrad.setColorAt(0.0, QColor(217, 158, 20));   // AccentPress
+    barGrad.setColorAt(1.0, QColor(240, 180, 41));   // Accent
     p.setBrush(barGrad);
     p.drawRoundedRect(barX, barY, progressWidth, barH, 2, 2);
 
@@ -132,31 +137,8 @@ int main(int argc, char *argv[])
     app.setApplicationName("LumenArc");
     app.setOrganizationName("LumenArc");
 
-    // Global dark theme stylesheet
-    app.setStyleSheet(
-        "QMainWindow, QWidget { background-color: #2b2b2b; color: #F5F0E8; }"
-        "QMenuBar { background-color: #3c3c3c; color: #F5F0E8; }"
-        "QMenu { background-color: #3c3c3c; color: #F5F0E8; }"
-        "QMenu::item:selected { background-color: #505050; }"
-        "QMenu::item:disabled { color: #888; }"
-        "QToolBar { background-color: #3c3c3c; border: none; }"
-        "QStatusBar { background-color: #3c3c3c; color: #F5F0E8; }"
-        "QDockWidget { color: #F5F0E8; }"
-        "QDockWidget::title { background: #363636; padding: 4px; }"
-        "QLabel { color: #F5F0E8; background: transparent; }"
-        "QPushButton { background-color: #454545; color: #F5F0E8; border: 1px solid #555; padding: 4px 8px; }"
-        "QPushButton:hover { background-color: #505050; }"
-        "QPushButton:pressed { background-color: #3a3a3a; }"
-        "QPushButton:disabled { background-color: #555; color: #888; }"
-        "QSlider { background: transparent; }"
-        "QSlider::groove:horizontal { background: #555; height: 4px; }"
-        "QSlider::handle:horizontal { background: #F5F0E8; width: 12px; margin: -4px 0; }"
-        "QSplitter { background: #2b2b2b; }"
-        "QProgressBar { background: #555; border: 1px solid #666; text-align: center; color: #F5F0E8; }"
-        "QProgressBar::chunk { background: #4CAF50; }"
-        "QListWidget { background-color: #2b2b2b; color: #F5F0E8; border: 1px solid #555; }"
-        "QListWidget::item:selected { background-color: #505050; }"
-    );
+    // 全局深色主题（Design Tokens + Qt 默认控件全覆盖）
+    Theme::apply(app);
 
     QString iconPath = QDir(app.applicationDirPath()).filePath("app.ico");
     app.setWindowIcon(QIcon(iconPath));
@@ -185,6 +167,18 @@ int main(int argc, char *argv[])
 
     splash.finish(&window);
     window.showMaximized();
+
+#ifdef Q_OS_WIN
+    // Windows 深色系统标题栏（DWMWA_USE_IMMERSIVE_DARK_MODE）
+    {
+        typedef int (WINAPI *DwmSetAttrFn)(void *, unsigned long, const void *, unsigned long);
+        if (auto fn = reinterpret_cast<DwmSetAttrFn>(
+                QLibrary::resolve(QStringLiteral("dwmapi"), "DwmSetWindowAttribute"))) {
+            int dark = 1;
+            fn(reinterpret_cast<void *>(window.winId()), 20, &dark, sizeof(dark));
+        }
+    }
+#endif
 
     return app.exec();
 }

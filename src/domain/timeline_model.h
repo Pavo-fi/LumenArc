@@ -79,7 +79,9 @@ public:
                     const QRect &pinned = QRect(),
                     const SnapshotFusionData &snapshotFusion = SnapshotFusionData(),
                     const QVector<QPolygon> &polygons = {},
-                    const QVector<GuideLine> &guideLines = {}) const;
+                    const QVector<GuideLine> &guideLines = {},
+                    const QVector<int> &regionRoiIds = {},
+                    const QVector<int> &polygonRoiIds = {}) const;
 
     /// Deserialize snapshot from .vla JSON file. Emits dataReplaced() on success.
     /// Output params restore ROI, time offset, magnifier, labels, pinned, snapshot fusion, polygons, guide lines.
@@ -91,7 +93,9 @@ public:
                       QRect *pinned = nullptr,
                       SnapshotFusionData *snapshotFusion = nullptr,
                       QVector<QPolygon> *polygons = nullptr,
-                      QVector<GuideLine> *guideLines = nullptr);
+                      QVector<GuideLine> *guideLines = nullptr,
+                      QVector<int> *regionRoiIds = nullptr,
+                      QVector<int> *polygonRoiIds = nullptr);
 
     /// Serialize spectrogram data to binary .vla.spec file.
     /// Format: [uint32 nFrames][uint32 nFreqBins][float32 sampleRate][uint32 hopLength][float32 data...]

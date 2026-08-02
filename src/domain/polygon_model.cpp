@@ -73,6 +73,25 @@ int PolygonModel::roiIdAt(int index) const
     return m_roiIds[index];
 }
 
+QVector<int> PolygonModel::roiIds() const
+{
+    QReadLocker lock(&m_lock);
+    return m_roiIds;
+}
+
+void PolygonModel::restorePolygons(const QVector<QPolygon> &polygons, const QVector<int> &roiIds)
+{
+    QWriteLocker lock(&m_lock);
+    m_polygons = polygons;
+    m_roiIds = roiIds;
+    // 下一个 ID 取最大值+1，保证后续新增多边形不与恢复 ID 冲突
+    m_nextRoiId = 1;
+    for (int id : m_roiIds)
+        m_nextRoiId = qMax(m_nextRoiId, id + 1);
+    lock.unlock();
+    emit polygonsChanged();
+}
+
 int PolygonModel::findIndexByRoiId(int roiId) const
 {
     QReadLocker lock(&m_lock);

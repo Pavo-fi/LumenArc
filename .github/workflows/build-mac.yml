@@ -1,0 +1,89 @@
+name: Build macOS
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+jobs:
+  build-mac:
+    runs-on: macos-14   # Apple Silicon (arm64)；Qt6 macOS 二进制为 universal
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Qt 6
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: '6.8.0'
+          host: 'mac'
+          target: 'desktop'
+          arch: 'clang_64'
+          modules: 'qtcharts qtmultimedia'
+
+      - name: Install FFmpeg SDK (headers + shared dylibs)
+        run: brew install ffmpeg
+
+
+      - name: Configure CMake
+        run: |
+          cmake -B build -S . -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_PREFIX_PATH="$Qt6_DIR" \
+            -DFFMPEG_SDK_PATH="/opt/homebrew"
+
+      - name: Build
+        run: cmake --build build --parallel
+
+      - name: Bundle relocatable Python (python-build-standalone)
+        run: |
+          PS_VER="3.12.13+20260728"
+          curl -L -o python.tar.gz "https://github.com/astral-sh/python-build-standalone/releases/download/20260728/cpython-${PS_VER}-aarch64-apple-darwin-install_only.tar.gz"
+          mkdir -p /tmp/pystand
+          tar xzf python.tar.gz -C /tmp/pystand
+          cp -R /tmp/pystand/python "build/LumenArc.app/Contents/MacOS/python"
+          "build/LumenArc.app/Contents/MacOS/python/bin/python3" -m pip install --quiet --no-warn-script-location numpy opencv-python-headless
+          "build/LumenArc.app/Contents/MacOS/python/bin/python3" -c "import cv2, numpy; print('python bundle OK:', cv2.__version__, numpy.__version__)"
+
+      - name: Bundle ffmpeg CLI
+        run: |
+          mkdir -p "build/LumenArc.app/Contents/MacOS/ffmpeg"
+          cp /opt/homebrew/bin/ffmpeg "build/LumenArc.app/Contents/MacOS/ffmpeg/ffmpeg"
+          chmod +x "build/LumenArc.app/Contents/MacOS/ffmpeg/ffmpeg"
+
+      - name: Bundle dependencies (recursive dylib collection + rpath rewrite)
+        run: python3 tools/mac_bundle_deps.py bundle "build/LumenArc.app"
+
+      - name: Dependency audit (fail on any build-machine absolute path)
+        run: python3 tools/mac_bundle_deps.py audit "build/LumenArc.app"
+
+      - name: Ad-hoc code sign (arm64 requirement)
+        run: python3 tools/mac_bundle_deps.py sign "build/LumenArc.app"
+
+      - name: Smoke test (launch binary, print deps sanity)
+        run: |
+          otool -L "build/LumenArc.app/Contents/MacOS/LumenArc" | head -20
+          "build/LumenArc.app/Contents/MacOS/ffmpeg/ffmpeg" -version | head -1
+          "build/LumenArc.app/Contents/MacOS/python/bin/python3" "build/LumenArc.app/Contents/MacOS/analyze_video.py" --help | head -3
+
+      - name: Create DMG
+        run: |
+          hdiutil create -volname "LumenArc" \
+            -srcfolder "build/LumenArc.app" \
+            -ov -format UDZO \
+            "LumenArc-mac-arm64.dmg"
+          ls -lh LumenArc-mac-arm64.dmg
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: LumenArc-mac-arm64
+          path: LumenArc-mac-arm64.dmg
+
+      - name: Attach DMG to GitHub Release (tag builds only)
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: LumenArc-mac-arm64.dmg
+          fail_on_unmatched_files: true

@@ -112,6 +112,85 @@ AnalysisSnapshot TimelineModel::snapshot() const
     return m_snapshot;
 }
 
+// ---------------------------------------------------------------------------
+// VLA2 二进制容器格式
+//
+// 布局（QDataStream 默认大端）：
+//   [0-3]   magic "VLA2"
+//   [4-7]   quint32 formatVersion = 2
+//   [8-11]  quint32 chunkCount
+//   [12-15] quint32 flags（保留，0）
+//   随后 chunkCount 个块：
+//     tag: 4 ASCII | codec: quint8 (0=raw,1=zlib) | reserved: 3 字节
+//     rawLength: quint32（解压后长度）| storedLength: quint32 | payload
+//
+// 块定义：
+//   META  QJsonDocument(compact)：version(7 语义)/analyzed_at/time_offset/
+//         regions[+roi_id]/polygons[+roi_id]/guide_lines/magnifier/labels/
+//         pinned/snapshot_fusion(含 base64 PNG)/audio 参数/data_entries
+//   TMS   quint64 count + count×qint64 时间戳（毫秒）
+//   LUM   quint32 roiCount + quint64 sampleCount + roiCount×sampleCount×float32
+//   VOL   quint64 count + count×float32 音量
+//   SPEC  quint32 freqBins + quint32 frames + double min + double max
+//         + freqBins×frames×uint8（[min,max] 量化，恰为色映射显示精度；
+//         量化误差 ~range/255；比 double 省 8 倍、比 float32 省 4 倍）
+//
+// 相比 JSON v7：单文件自包含（频谱内嵌，无 .spec 伴随文件）、体积减半以上、
+// 读写无 JSON 大数组解析。旧 JSON vla 仍可读（魔数嗅探分流）。
+// ---------------------------------------------------------------------------
+static const char VLA2_MAGIC[4] = {'V', 'L', 'A', '2'};
+static constexpr quint32 VLA2_VERSION = 2;
+
+static QByteArray vlaPackChunk(const char *tag4, const QByteArray &payload)
+{
+    QByteArray compressed = qCompress(payload, 6);
+    const bool useZ = compressed.size() < payload.size();
+    QByteArray out;
+    QDataStream ds(&out, QIODevice::WriteOnly);
+    ds.writeRawData(tag4, 4);
+    ds << quint8(useZ ? 1 : 0);
+    ds.writeRawData("\0\0\0", 3);   // reserved
+    ds << quint32(payload.size());
+    ds << quint32(useZ ? compressed.size() : payload.size());
+    out.append(useZ ? compressed : payload);
+    return out;
+}
+
+static bool vlaUnpackAll(const QByteArray &data, QMap<QByteArray, QByteArray> *chunks)
+{
+    if (data.size() < 16 || memcmp(data.constData(), VLA2_MAGIC, 4) != 0)
+        return false;
+    QDataStream ds(data);
+    ds.skipRawData(4);
+    quint32 version = 0, count = 0, flags = 0;
+    ds >> version >> count >> flags;
+    Q_UNUSED(flags);
+    if (version != VLA2_VERSION || count > 64)
+        return false;
+    for (quint32 i = 0; i < count; ++i) {
+        char tag[4];
+        quint8 codec = 0;
+        char reserved[3];
+        quint32 rawLen = 0, storedLen = 0;
+        if (ds.readRawData(tag, 4) != 4)
+            return false;
+        ds >> codec;
+        if (ds.readRawData(reserved, 3) != 3)
+            return false;
+        ds >> rawLen >> storedLen;
+        if (rawLen > 512 * 1024 * 1024 || storedLen > 512 * 1024 * 1024)
+            return false;
+        QByteArray stored(int(storedLen), Qt::Uninitialized);
+        if (storedLen > 0 && ds.readRawData(stored.data(), int(storedLen)) != int(storedLen))
+            return false;
+        QByteArray payload = (codec == 1) ? qUncompress(stored) : stored;
+        if (payload.size() != int(rawLen))
+            return false;
+        chunks->insert(QByteArray(tag, 4), payload);
+    }
+    return true;
+}
+
 bool TimelineModel::saveToFile(const QString &filePath,
                                 const QVector<QRect> &regions,
                                 qint64 timeOffsetMs,
@@ -120,7 +199,9 @@ bool TimelineModel::saveToFile(const QString &filePath,
                                 const QRect &pinned,
                                 const SnapshotFusionData &snapshotFusion,
                                 const QVector<QPolygon> &polygons,
-                                const QVector<GuideLine> &guideLines) const
+                                const QVector<GuideLine> &guideLines,
+                                const QVector<int> &regionRoiIds,
+                                const QVector<int> &polygonRoiIds) const
 {
     QReadLocker lock(&m_lock);
 
@@ -128,26 +209,30 @@ bool TimelineModel::saveToFile(const QString &filePath,
         return false;
 
     QJsonObject root;
-    root["version"] = 6;
+    root["version"] = 7;
     root["analyzed_at"] = QDateTime::currentDateTime().toString(Qt::ISODate);
     root["time_offset"] = static_cast<double>(timeOffsetMs);
 
-    // ROI rectangles
+    // ROI rectangles（v7: 附带 roi_id，恢复时保持与分析数据对齐）
     QJsonArray regionsArray;
-    for (const QRect &rc : regions) {
+    for (int i = 0; i < regions.size(); ++i) {
+        const QRect &rc = regions[i];
         QJsonObject obj;
         obj["x"] = rc.x();
         obj["y"] = rc.y();
         obj["w"] = rc.width();
         obj["h"] = rc.height();
+        if (i < regionRoiIds.size())
+            obj["roi_id"] = regionRoiIds[i];
         regionsArray.append(obj);
     }
     root["regions"] = regionsArray;
 
-    // ROI polygons (v5)
+    // ROI polygons (v5; v7 附带 roi_id)
     if (!polygons.isEmpty()) {
         QJsonArray polyArray;
-        for (const QPolygon &poly : polygons) {
+        for (int i = 0; i < polygons.size(); ++i) {
+            const QPolygon &poly = polygons[i];
             QJsonObject pObj;
             QJsonArray pointsArray;
             for (const QPoint &pt : poly) {
@@ -157,6 +242,8 @@ bool TimelineModel::saveToFile(const QString &filePath,
                 pointsArray.append(ptArr);
             }
             pObj["points"] = pointsArray;
+            if (i < polygonRoiIds.size())
+                pObj["roi_id"] = polygonRoiIds[i];
             polyArray.append(pObj);
         }
         root["polygons"] = polyArray;
@@ -226,35 +313,15 @@ bool TimelineModel::saveToFile(const QString &filePath,
         root["snapshot_fusion"] = snapObj;
     }
 
-    // Audio data (v4) - volume and metadata only, spectrogram stored separately in .vla.spec
+    // Audio metadata（音量/频谱在 VOL/SPEC 二进制块中）
     if (!m_snapshot.audio.isEmpty()) {
         QJsonObject audioObj;
-        QJsonArray volumeArray;
-        for (qreal v : m_snapshot.audio.volume)
-            volumeArray.append(v);
-        audioObj["volume"] = volumeArray;
-
         audioObj["sample_rate"] = m_snapshot.audio.sampleRate;
         audioObj["hop_length"] = m_snapshot.audio.hopLength;
         audioObj["n_fft"] = m_snapshot.audio.nFft;
         root["audio"] = audioObj;
     }
 
-    // Timestamps as JSON array
-    QJsonArray tsArray;
-    for (qint64 ts : m_snapshot.timestamps)
-        tsArray.append(static_cast<double>(ts));
-    root["timestamps"] = tsArray;
-
-    // Luminances as 2D JSON array
-    QJsonArray lumArray;
-    for (const auto &region : m_snapshot.values) {
-        QJsonArray regionArray;
-        for (qreal v : region)
-            regionArray.append(v);
-        lumArray.append(regionArray);
-    }
-    root["luminances"] = lumArray;
     root["point_count"] = m_snapshot.pointCount();
     root["region_count"] = m_snapshot.regionCount();
 
@@ -270,16 +337,85 @@ bool TimelineModel::saveToFile(const QString &filePath,
         root["data_entries"] = entriesArray;
     }
 
+    // ---- 组装 VLA2 二进制块 ----
+    QVector<QPair<QByteArray, QByteArray>> chunks;
+    chunks.append({"META", QJsonDocument(root).toJson(QJsonDocument::Compact)});
+
+    // TMS：时间戳（qint64 毫秒）
+    QByteArray tms;
+    {
+        QDataStream ds(&tms, QIODevice::WriteOnly);
+        ds << quint64(m_snapshot.timestamps.size());
+        for (qint64 t : m_snapshot.timestamps)
+            ds << t;
+    }
+    chunks.append({"TMS ", tms});
+
+    // LUM：亮度矩阵（float32，按 ROI 行主序）
+    QByteArray lum;
+    {
+        QDataStream ds(&lum, QIODevice::WriteOnly);
+        ds << quint32(m_snapshot.values.size());
+        ds << quint64(m_snapshot.timestamps.size());
+        ds.setFloatingPointPrecision(QDataStream::SinglePrecision);
+        for (const auto &row : m_snapshot.values)
+            for (qreal v : row)
+                ds << float(v);
+    }
+    chunks.append({"LUM ", lum});
+
+    // VOL：音量（float32）
+    if (!m_snapshot.audio.volume.isEmpty()) {
+        QByteArray vol;
+        QDataStream ds(&vol, QIODevice::WriteOnly);
+        ds << quint64(m_snapshot.audio.volume.size());
+        ds.setFloatingPointPrecision(QDataStream::SinglePrecision);
+        for (qreal v : m_snapshot.audio.volume)
+            ds << float(v);
+        chunks.append({"VOL ", vol});
+    }
+
+    // SPEC：频谱矩阵（uint16 量化到 [min,max]，频率行主序 freq×frames）
+    const auto &spec = m_snapshot.audio.spectrogram;
+    if (!spec.isEmpty() && !spec[0].isEmpty()) {
+        double sMin = std::numeric_limits<double>::max();
+        double sMax = std::numeric_limits<double>::lowest();
+        for (const auto &bin : spec)
+            for (qreal v : bin) {
+                sMin = qMin(sMin, double(v));
+                sMax = qMax(sMax, double(v));
+            }
+        QByteArray sp;
+        QDataStream ds(&sp, QIODevice::WriteOnly);
+        ds << quint32(spec.size());
+        ds << quint32(spec[0].size());
+        ds << sMin << sMax;
+        const double scale = (sMax > sMin) ? (255.0 / (sMax - sMin)) : 0.0;
+        for (const auto &bin : spec)
+            for (qreal v : bin)
+                ds << quint8(scale > 0.0
+                             ? qBound(0, int((v - sMin) * scale + 0.5), 255)
+                             : 0);
+        chunks.append({"SPEC", sp});
+    }
+
+    QByteArray fileData;
+    {
+        QDataStream ds(&fileData, QIODevice::WriteOnly);
+        ds.writeRawData(VLA2_MAGIC, 4);
+        ds << quint32(VLA2_VERSION) << quint32(chunks.size()) << quint32(0);
+    }
+    for (const auto &c : chunks)
+        fileData.append(vlaPackChunk(c.first.constData(), c.second));
+
     lock.unlock();
 
     QFile file(filePath);
-    if (!file.open(QIODevice::WriteOnly | QIODevice::Text))
+    if (!file.open(QIODevice::WriteOnly))
         return false;
-
-    QJsonDocument doc(root);
-    file.write(doc.toJson(QJsonDocument::Compact));
+    file.write(fileData);
     file.close();
-    return true;
+    return file.error() == QFile::NoError;
 }
 
 bool TimelineModel::loadFromFile(const QString &filePath,
@@ -290,30 +426,127 @@ bool TimelineModel::loadFromFile(const QString &filePath,
                                   QRect *pinned,
                                   SnapshotFusionData *snapshotFusion,
                                   QVector<QPolygon> *polygons,
-                                  QVector<GuideLine> *guideLines)
+                                  QVector<GuideLine> *guideLines,
+                                  QVector<int> *regionRoiIds,
+                                  QVector<int> *polygonRoiIds)
 {
     QFile file(filePath);
-    if (!file.open(QIODevice::ReadOnly | QIODevice::Text))
+    if (!file.open(QIODevice::ReadOnly))
         return false;
 
     QByteArray data = file.readAll();
     file.close();
 
-    QJsonParseError parseError;
-    QJsonDocument doc = QJsonDocument::fromJson(data, &parseError);
-    if (parseError.error != QJsonParseError::NoError)
-        return false;
+    QJsonObject root;
+    int version = 0;
+    QVector<qint64> timestamps;
+    QVector<QVector<qreal>> values;
+    AudioData audioData;
+    bool isVla2 = false;
 
-    if (!doc.isObject())
-        return false;
+    if (data.startsWith(QByteArray(VLA2_MAGIC, 4))) {
+        // ===== VLA2 二进制容器 =====
+        isVla2 = true;
+        QMap<QByteArray, QByteArray> chunks;
+        if (!vlaUnpackAll(data, &chunks))
+            return false;
+        QJsonParseError perr;
+        QJsonDocument metaDoc = QJsonDocument::fromJson(chunks.value("META"), &perr);
+        if (perr.error != QJsonParseError::NoError || !metaDoc.isObject())
+            return false;
+        root = metaDoc.object();
+        version = root["version"].toInt();
+        if (version < 1)
+            return false;
 
-    QJsonObject root = doc.object();
+        // TMS：时间戳（qint64 毫秒）
+        {
+            QDataStream ds(chunks.value("TMS "));
+            quint64 n = 0;
+            ds >> n;
+            if (n > 100000000)
+                return false;
+            timestamps.reserve(int(n));
+            for (quint64 i = 0; i < n; ++i) {
+                qint64 t = 0;
+                ds >> t;
+                timestamps.append(t);
+            }
+        }
+        // LUM：亮度矩阵（float32）
+        {
+            QDataStream ds(chunks.value("LUM "));
+            quint32 rows = 0;
+            quint64 cols = 0;
+            ds >> rows >> cols;
+            if (rows > 1024 || cols > 100000000)
+                return false;
+            ds.setFloatingPointPrecision(QDataStream::SinglePrecision);
+            values.reserve(int(rows));
+            for (quint32 r = 0; r < rows; ++r) {
+                QVector<qreal> row;
+                row.reserve(int(cols));
+                for (quint64 c = 0; c < cols; ++c) {
+                    float f = 0;
+                    ds >> f;
+                    row.append(f);
+                }
+                values.append(std::move(row));
+            }
+        }
+        // VOL：音量（float32）
+        if (chunks.contains("VOL ")) {
+            QDataStream ds(chunks.value("VOL "));
+            quint64 n = 0;
+            ds >> n;
+            if (n > 100000000)
+                return false;
+            ds.setFloatingPointPrecision(QDataStream::SinglePrecision);
+            audioData.volume.reserve(int(n));
+            for (quint64 i = 0; i < n; ++i) {
+                float f = 0;
+                ds >> f;
+                audioData.volume.append(f);
+            }
+        }
+        // SPEC：频谱矩阵（uint16 量化，频率行主序）
+        if (chunks.contains("SPEC")) {
+            QDataStream ds(chunks.value("SPEC"));
+            quint32 fb = 0, fr = 0;
+            double sMin = 0, sMax = 0;
+            ds >> fb >> fr >> sMin >> sMax;
+            if (fb > 8192 || fr > 10000000)
+                return false;
+            const double inv = (sMax > sMin) ? ((sMax - sMin) / 255.0) : 0.0;
+            audioData.spectrogram.resize(int(fb));
+            for (quint32 f = 0; f < fb; ++f) {
+                audioData.spectrogram[int(f)].resize(int(fr));
+                for (quint32 t = 0; t < fr; ++t) {
+                    quint8 q = 0;
+                    ds >> q;
+                    audioData.spectrogram[int(f)][int(t)] = sMin + q * inv;
+                }
+            }
+        }
+    } else {
+        // ===== 旧 JSON 格式（v1~v7） =====
+        QJsonParseError parseError;
+        QJsonDocument doc = QJsonDocument::fromJson(data, &parseError);
+        if (parseError.error != QJsonParseError::NoError)
+            return false;
 
-    int version = root["version"].toInt();
-    if (version < 1)
-        return false;
+        if (!doc.isObject())
+            return false;
 
-    // v2+: ROI rectangles
+        root = doc.object();
+        version = root["version"].toInt();
+        if (version < 1)
+            return false;
+    }
+
+    // v2+: ROI rectangles（v7 可能附带 roi_id）
+    if (regionRoiIds)
+        regionRoiIds->clear();
     if (version >= 2 && regions) {
         regions->clear();
         QJsonArray regionsArray = root["regions"].toArray();
@@ -324,10 +557,14 @@ bool TimelineModel::loadFromFile(const QString &filePath,
                 continue;
             regions->append(QRect(obj["x"].toInt(), obj["y"].toInt(),
                                    obj["w"].toInt(), obj["h"].toInt()));
+            if (regionRoiIds && obj.contains("roi_id"))
+                regionRoiIds->append(obj["roi_id"].toInt());
         }
     }
 
-    // v5+: ROI polygons
+    // v5+: ROI polygons（v7 可能附带 roi_id）
+    if (polygonRoiIds)
+        polygonRoiIds->clear();
     if (version >= 5 && polygons && root.contains("polygons")) {
         polygons->clear();
         QJsonArray polyArray = root["polygons"].toArray();
@@ -340,8 +577,11 @@ bool TimelineModel::loadFromFile(const QString &filePath,
                 if (ptArr.size() >= 2)
                     poly.append(QPoint(ptArr[0].toInt(), ptArr[1].toInt()));
             }
-            if (poly.size() >= 3)
+            if (poly.size() >= 3) {
                 polygons->append(poly);
+                if (polygonRoiIds && pObj.contains("roi_id"))
+                    polygonRoiIds->append(pObj["roi_id"].toInt());
+            }
         }
     }
 
@@ -406,50 +646,49 @@ bool TimelineModel::loadFromFile(const QString &filePath,
         }
     }
 
-    // Parse timestamps
-    QJsonArray tsArray = root["timestamps"].toArray();
-    QVector<qint64> timestamps;
-    timestamps.reserve(tsArray.size());
-    for (const auto &v : tsArray)
-        timestamps.append(static_cast<qint64>(v.toDouble()));
+    // Parse timestamps / luminances（旧 JSON 路径；VLA2 已从二进制块读取）
+    if (!isVla2) {
+        QJsonArray tsArray = root["timestamps"].toArray();
+        timestamps.reserve(tsArray.size());
+        for (const auto &v : tsArray)
+            timestamps.append(static_cast<qint64>(v.toDouble()));
 
-    // Parse luminances
-    QJsonArray lumArray = root["luminances"].toArray();
-    QVector<QVector<qreal>> values;
-    values.reserve(lumArray.size());
-    for (const auto &regionVal : lumArray) {
-        QJsonArray regionArray = regionVal.toArray();
-        QVector<qreal> region;
-        region.reserve(regionArray.size());
-        for (const auto &v : regionArray)
-            region.append(v.toDouble());
-        values.append(std::move(region));
+        QJsonArray lumArray = root["luminances"].toArray();
+        values.reserve(lumArray.size());
+        for (const auto &regionVal : lumArray) {
+            QJsonArray regionArray = regionVal.toArray();
+            QVector<qreal> region;
+            region.reserve(regionArray.size());
+            for (const auto &v : regionArray)
+                region.append(v.toDouble());
+            values.append(std::move(region));
+        }
     }
 
-    // Parse audio data (v4+)
-    AudioData audioData;
+    // Parse audio data (v4+；VLA2 的 VOL/SPEC 已从二进制块读取，此处仅取参数)
     if (version >= 4 && root.contains("audio")) {
         QJsonObject audioObj = root["audio"].toObject();
 
-        QJsonArray volArray = audioObj["volume"].toArray();
-        audioData.volume.reserve(volArray.size());
-        for (const auto &v : volArray)
-            audioData.volume.append(v.toDouble());
+        if (!isVla2) {
+            QJsonArray volArray = audioObj["volume"].toArray();
+            audioData.volume.reserve(volArray.size());
+            for (const auto &v : volArray)
+                audioData.volume.append(v.toDouble());
 
-        // Try to load spectrogram from separate binary file (.vla.spec)
-        QString specFilePath = filePath + ".spec";
-        bool specLoaded = false;
-        if (QFile::exists(specFilePath)) {
-            specLoaded = loadSpecFromFile(specFilePath, audioData);
-        }
-        qDebug() << "[loadFromFile] specFilePath:" << specFilePath
-                 << "exists:" << QFile::exists(specFilePath)
-                 << "specLoaded:" << specLoaded
-                 << "spectrogram.size:" << audioData.spectrogram.size()
-                 << "volume.size:" << audioData.volume.size();
+            // Try to load spectrogram from separate binary file (.vla.spec)
+            QString specFilePath = filePath + ".spec";
+            bool specLoaded = false;
+            if (QFile::exists(specFilePath)) {
+                specLoaded = loadSpecFromFile(specFilePath, audioData);
+            }
+            qDebug() << "[loadFromFile] specFilePath:" << specFilePath
+                     << "exists:" << QFile::exists(specFilePath)
+                     << "specLoaded:" << specLoaded
+                     << "spectrogram.size:" << audioData.spectrogram.size()
+                     << "volume.size:" << audioData.volume.size();
 
-        // Fallback: load spectrogram from JSON (for backward compatibility)
-        if (!specLoaded && audioObj.contains("spectrogram")) {
+            // Fallback: load spectrogram from JSON (for backward compatibility)
+            if (!specLoaded && audioObj.contains("spectrogram")) {
             QJsonArray specArray = audioObj["spectrogram"].toArray();
             audioData.spectrogram.reserve(specArray.size());
             for (const auto &binVal : specArray) {
@@ -459,6 +698,7 @@ bool TimelineModel::loadFromFile(const QString &filePath,
                 for (const auto &v : binArray)
                     bin.append(v.toDouble());
                 audioData.spectrogram.append(std::move(bin));
+            }
             }
         }
 
@@ -502,6 +742,26 @@ bool TimelineModel::loadFromFile(const QString &filePath,
     }
 
     // Set data (emits dataReplaced)
+    // v6 兼容：文件无 roi_id 字段时，从 dataEntries（v6 全局顺序 id）按类型顺序
+    // 回填恢复 ID，使 ROI 模型恢复后与分析数据精确匹配；数量对不上则放弃，
+    // 调用方回退顺序分配（与旧行为一致）
+    if (regionRoiIds && regionRoiIds->isEmpty() && regions && !regions->isEmpty()
+        && !dataEntries.isEmpty()) {
+        for (const auto &e : dataEntries)
+            if (e.type == DataEntry::Rect)
+                regionRoiIds->append(e.roiId);
+        if (regionRoiIds->size() != regions->size())
+            regionRoiIds->clear();
+    }
+    if (polygonRoiIds && polygonRoiIds->isEmpty() && polygons && !polygons->isEmpty()
+        && !dataEntries.isEmpty()) {
+        for (const auto &e : dataEntries)
+            if (e.type == DataEntry::Polygon)
+                polygonRoiIds->append(e.roiId);
+        if (polygonRoiIds->size() != polygons->size())
+            polygonRoiIds->clear();
+    }
+
     if (!dataEntries.isEmpty()) {
         setData(std::move(timestamps), std::move(values), std::move(dataEntries), audioData);
     } else {

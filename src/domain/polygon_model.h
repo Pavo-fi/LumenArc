@@ -30,6 +30,10 @@ public:
     QVector<QPolygon> polygons() const;
     int polygonCount() const;
     int roiIdAt(int index) const;
+    /// @brief 返回当前所有 ROI ID 的副本（与 polygons() 顺序一致）
+    QVector<int> roiIds() const;
+    /// @brief 带 ROI ID 整体恢复（切换视频/加载 .vla 时保持 roiId 与分析数据对齐）
+    void restorePolygons(const QVector<QPolygon> &polygons, const QVector<int> &roiIds);
     int findIndexByRoiId(int roiId) const;
 
     static QColor polygonColor(int index);

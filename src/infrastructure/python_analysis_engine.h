@@ -69,6 +69,7 @@ private:
     QByteArray m_stderrBuffer;
     QMap<QString, VideoInfo> m_videoInfoCache;  // B7: cache to avoid repeated blocking calls
     qreal m_noiseReduction = 0.0;
+    qreal m_lastProgressPct = 0.0;  // 进度单调化（startAnalysis/startAudioAnalysis 时归零）
     // Stored for current analysis run (populated in startAnalysis, used in onFinished)
     QVector<int> m_pendingRectRoiIds;
     QVector<int> m_pendingPolygonRoiIds;
