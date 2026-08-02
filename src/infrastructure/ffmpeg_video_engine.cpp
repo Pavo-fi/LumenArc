@@ -172,21 +172,60 @@ bool FfmpegVideoEngine::ensureAudioOutput()
     fmt.setSampleRate(m_outSampleRate);
     fmt.setChannelCount(m_outChannels);
     fmt.setSampleFormat(QAudioFormat::Int16);
-    const bool fmtSupported = device.isFormatSupported(fmt);
+    bool fmtSupported = device.isFormatSupported(fmt);
     if (!fmtSupported) {
-        fmt = device.preferredFormat();
+        // 设备不支持原生率（实测 8kHz AAC → Realtek 不支持，日志 fmtSupported=0）：
+        // 在常见配置中探测 Int16 可用格式，避免整体套用 preferredFormat
+        // （preferred 可能是 Int64/Float，与重采样输出不一致 → 无声噪声）。
+        bool found = false;
+        const int rates[] = {48000, 44100, m_outSampleRate, 32000, 22050, 16000};
+        for (int r : rates) {
+            for (int c : {2, 1}) {
+                QAudioFormat cand;
+                cand.setSampleRate(r);
+                cand.setChannelCount(c);
+                cand.setSampleFormat(QAudioFormat::Int16);
+                if (device.isFormatSupported(cand)) {
+                    fmt = cand;
+                    found = true;
+                    break;
+                }
+            }
+            if (found)
+                break;
+        }
+        if (!found) {
+            // 极端兜底：preferred 的率/声道 + Int16（格式仍与重采样一致）
+            const QAudioFormat pf = device.preferredFormat();
+            fmt.setSampleRate(pf.sampleRate());
+            fmt.setChannelCount(pf.channelCount());
+        }
         m_outSampleRate = fmt.sampleRate();
         m_outChannels = fmt.channelCount();
+        fmtSupported = false;
     }
-    audioDiag(QStringLiteral("ensureAudioOutput: dev='%1' in=%2Hz/%3ch fmtSupported=%4 out=%5Hz/%6ch")
+    m_outBytesPerSample = fmt.bytesPerSample();
+    if (m_outBytesPerSample <= 0)
+        m_outBytesPerSample = 2;
+    audioDiag(QStringLiteral("ensureAudioOutput: dev='%1' in=%2Hz/%3ch fmtSupported=%4 "
+                              "out=%5Hz/%6ch fmt=%7bps=%8")
               .arg(device.description()).arg(m_adec->sample_rate)
               .arg(m_adec->ch_layout.nb_channels).arg(fmtSupported)
-              .arg(m_outSampleRate).arg(m_outChannels));
+              .arg(m_outSampleRate).arg(m_outChannels)
+              .arg(int(fmt.sampleFormat())).arg(m_outBytesPerSample));
 
-    // 重采样器：解码帧格式 → 输出格式
+    // 重采样器：解码帧格式 → sink 实际格式（样本类型跟随 fmt，实测设备可能是 Int64）
+    AVSampleFormat outFmt = AV_SAMPLE_FMT_S16;
+    switch (fmt.sampleFormat()) {
+    case QAudioFormat::UInt8:  outFmt = AV_SAMPLE_FMT_U8;  break;
+    case QAudioFormat::Int16:  outFmt = AV_SAMPLE_FMT_S16; break;
+    case QAudioFormat::Int32:  outFmt = AV_SAMPLE_FMT_S32; break;
+    case QAudioFormat::Float:  outFmt = AV_SAMPLE_FMT_FLT; break;
+    default:                   outFmt = AV_SAMPLE_FMT_S16; break;
+    }
     AVChannelLayout outLayout;
     av_channel_layout_default(&outLayout, m_outChannels);
-    if (swr_alloc_set_opts2(&m_swr, &outLayout, AV_SAMPLE_FMT_S16, m_outSampleRate,
+    if (swr_alloc_set_opts2(&m_swr, &outLayout, outFmt, m_outSampleRate,
                             &m_adec->ch_layout, m_adec->sample_fmt,
                             m_adec->sample_rate, 0, nullptr) < 0 || !m_swr)
         return false;
@@ -196,7 +235,7 @@ bool FfmpegVideoEngine::ensureAudioOutput()
         return false;
     }
 
-    int bytesPerSec = m_outSampleRate * m_outChannels * 2;
+    int bytesPerSec = m_outSampleRate * m_outChannels * m_outBytesPerSample;
     m_sink = new QAudioSink(device, fmt);
     m_sink->setBufferSize(bytesPerSec);              // 1s 设备缓冲
     m_sink->setVolume(m_volume.load() / 100.0f);
@@ -305,16 +344,17 @@ void FfmpegVideoEngine::processAudioPacket(AVPacket *pkt)
 
         int outSamples = swr_get_out_samples(m_swr, frame->nb_samples);
         if (outSamples > 0) {
-            QByteArray out(outSamples * m_outChannels * 2, Qt::Uninitialized);
+            const int frameBytes = m_outChannels * m_outBytesPerSample;
+            QByteArray out(outSamples * frameBytes, Qt::Uninitialized);
             uint8_t *outBuf[1] = { reinterpret_cast<uint8_t *>(out.data()) };
             int converted = swr_convert(m_swr, outBuf, outSamples,
                                         const_cast<const uint8_t **>(frame->extended_data),
                                         frame->nb_samples);
             if (converted > 0) {
-                qint64 bytes = static_cast<qint64>(converted) * m_outChannels * 2;
+                qint64 bytes = static_cast<qint64>(converted) * frameBytes;
                 qint64 offset = 0;
                 if (skipFrac > 0.0) {
-                    qint64 align = static_cast<qint64>(m_outChannels) * 2;
+                    qint64 align = frameBytes;
                     offset = (static_cast<qint64>(bytes * skipFrac) / align) * align;
                     offset = qBound<qint64>(0, offset, bytes - align);
                 }
@@ -400,25 +440,43 @@ void FfmpegVideoEngine::processAudioPacket(AVPacket *pkt)
 QByteArray FfmpegVideoEngine::resampleAudioForRate(const char *pcm, qint64 bytes, float rate) const
 {
     // 变速重采样：rate>1 抽稀（加速+高音调），rate<1 插值（减速+低音调）。
-    // 线性插值，s16 交错多声道，输出帧数 = floor(输入帧数 / rate)。
+    // 线性插值，交错多声道，输出帧数 = floor(输入帧数 / rate)。
     const int ch = qMax(1, m_outChannels);
-    const qint64 inFrames = bytes / (static_cast<qint64>(ch) * 2);
+    const qint64 frameBytes = static_cast<qint64>(ch) * m_outBytesPerSample;
+    const qint64 inFrames = frameBytes > 0 ? bytes / frameBytes : 0;
     if (inFrames < 2 || rate <= 0.0f)
         return {};
     const qint64 outFrames = static_cast<qint64>(inFrames / rate);
     if (outFrames <= 0)
         return {};
-    QByteArray out(static_cast<int>(outFrames * ch * 2), Qt::Uninitialized);
-    const qint16 *in = reinterpret_cast<const qint16 *>(pcm);
-    qint16 *dst = reinterpret_cast<qint16 *>(out.data());
-    for (qint64 n = 0; n < outFrames; ++n) {
-        const double pos = n * rate;
-        const qint64 i0 = static_cast<qint64>(pos);
-        const double frac = pos - i0;
-        const qint64 i1 = qMin(i0 + 1, inFrames - 1);
-        for (int c = 0; c < ch; ++c) {
-            const double s = in[i0 * ch + c] * (1.0 - frac) + in[i1 * ch + c] * frac;
-            dst[n * ch + c] = static_cast<qint16>(qBound(-32768.0, s, 32767.0));
+    QByteArray out(static_cast<int>(outFrames * frameBytes), Qt::Uninitialized);
+    if (m_outBytesPerSample == 2) {
+        const qint16 *in = reinterpret_cast<const qint16 *>(pcm);
+        qint16 *dst = reinterpret_cast<qint16 *>(out.data());
+        for (qint64 n = 0; n < outFrames; ++n) {
+            const double pos = n * rate;
+            const qint64 i0 = static_cast<qint64>(pos);
+            const double frac = pos - i0;
+            const qint64 i1 = qMin(i0 + 1, inFrames - 1);
+            for (int c = 0; c < ch; ++c) {
+                const double s = in[i0 * ch + c] * (1.0 - frac) + in[i1 * ch + c] * frac;
+                dst[n * ch + c] = static_cast<qint16>(qBound(-32768.0, s, 32767.0));
+            }
+        }
+    } else {
+        // 非 Int16（Float/Int64 等）：按 32 位浮点视图插值
+        const float *in = reinterpret_cast<const float *>(pcm);
+        float *dst = reinterpret_cast<float *>(out.data());
+        const qint64 inF = inFrames;
+        for (qint64 n = 0; n < outFrames; ++n) {
+            const double pos = n * rate;
+            const qint64 i0 = static_cast<qint64>(pos);
+            const double frac = pos - i0;
+            const qint64 i1 = qMin(i0 + 1, inF - 1);
+            for (int c = 0; c < ch; ++c) {
+                const double s = in[i0 * ch + c] * (1.0 - frac) + in[i1 * ch + c] * frac;
+                dst[n * ch + c] = static_cast<float>(s);
+            }
         }
     }
     return out;

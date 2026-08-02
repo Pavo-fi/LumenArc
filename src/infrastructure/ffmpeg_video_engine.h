@@ -243,6 +243,7 @@ private:
     int m_astream = -1;
     int m_outSampleRate = 0;
     int m_outChannels = 0;
+    int m_outBytesPerSample = 2;    // sink 实际样本字节（Int16=2，Int64=8…）
     bool m_audioMaster = false;     // 有可用音轨且 rate==1.0 时音频为主时钟
     std::atomic<qint64> m_audioBytesWritten{0};
     qint64 m_audioBaseRelMs = -1;   // 首个写入样本的 PTS（相对毫秒），-1=未锚定
