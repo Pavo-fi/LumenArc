@@ -79,7 +79,7 @@ jobs:
           Remove-Item "build\Release\python\get-pip.py"
 
           # Install packages using embedded Python (correct version)
-          & "build\Release\python\python.exe" -m pip install opencv-python-headless numpy --target "build\Release\python\Lib\site-packages" --no-warn-script-location
+          & "build\Release\python\python.exe" -m pip install opencv-python-headless numpy rapidocr_onnxruntime --target "build\Release\python\Lib\site-packages" --no-warn-script-location
 
           # Cleanup pip/setuptools to reduce size
           Remove-Item "build\Release\python\Lib\site-packages\pip" -Recurse -Force -ErrorAction SilentlyContinue

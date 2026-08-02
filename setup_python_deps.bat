@@ -45,7 +45,7 @@ python -m pip install --upgrade pip -q
 :: ── 3. 安装 opencv + numpy ──────────────────
 echo.
 echo [3/3] 安装 opencv-python-headless + numpy ...
-python -m pip install opencv-python-headless numpy -q
+python -m pip install opencv-python-headless numpy rapidocr_onnxruntime -q
 
 if %errorlevel% equ 0 (
     echo.

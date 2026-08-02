@@ -83,3 +83,18 @@ INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
 CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
 ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 POSSIBILITY OF SUCH DAMAGE.
+
+====================================================================
+前处理板块新增依赖（v1.1）
+====================================================================
+
+RapidOCR (rapidocr_onnxruntime)
+  License: Apache License 2.0
+  https://github.com/RapidAI/RapidOCR
+  用于监控画面 OSD 时间戳识别（probe_timestamps.py）。
+
+ONNX Runtime (onnxruntime)
+  License: MIT License
+  https://github.com/microsoft/onnxruntime
+  RapidOCR 的推理运行时。
+

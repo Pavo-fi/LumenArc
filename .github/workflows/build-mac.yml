@@ -43,7 +43,7 @@ jobs:
           mkdir -p /tmp/pystand
           tar xzf python.tar.gz -C /tmp/pystand
           cp -R /tmp/pystand/python "build/LumenArc.app/Contents/MacOS/python"
-          "build/LumenArc.app/Contents/MacOS/python/bin/python3" -m pip install --quiet --no-warn-script-location numpy opencv-python-headless
+          "build/LumenArc.app/Contents/MacOS/python/bin/python3" -m pip install --quiet --no-warn-script-location numpy opencv-python-headless rapidocr_onnxruntime
           "build/LumenArc.app/Contents/MacOS/python/bin/python3" -c "import cv2, numpy; print('python bundle OK:', cv2.__version__, numpy.__version__)"
 
       - name: Bundle ffmpeg CLI
