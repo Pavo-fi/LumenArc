@@ -336,6 +336,46 @@ static void testPrecheck()
 }
 
 // ---------------------------------------------------------------------------
+static void testFilesNeedingTranscode()
+{
+    // 同参数 mp4 → 全部直接拼接（无需转码）
+    QVector<ProbeResult> same{
+        makeProbe(QStringLiteral("a.mp4"), 60000),
+        makeProbe(QStringLiteral("b.mp4"), 60000),
+    };
+    CHECK(filesNeedingTranscode(same).isEmpty());
+
+    // 单个非白名单文件（现场反馈：只转确实需要的文件）
+    same[1].videoCodec = QStringLiteral("mjpeg");   // mjpeg 不在 MP4 白名单（R-7）
+    auto need = filesNeedingTranscode(same);
+    CHECK(need.size() == 1 && need.contains(QLatin1String("b.mp4")));
+
+    // 探测失败的文件 → 需要转码（无法直接拼接）
+    same[1] = makeProbe(QStringLiteral("b.mp4"), 60000);
+    same[1].probeError = QStringLiteral("cannot open");
+    need = filesNeedingTranscode(same);
+    CHECK(need.size() == 1 && need.contains(QLatin1String("b.mp4")));
+
+    // 组内参数不一致（分辨率）→ 整组转码
+    same[1] = makeProbe(QStringLiteral("b.mp4"), 60000);
+    same[1].height = 720;
+    need = filesNeedingTranscode(same);
+    CHECK(need.size() == 2);
+
+    // 帧率大偏差 → 整组转码；小偏差 → 直接拼接
+    same[1] = makeProbe(QStringLiteral("b.mp4"), 60000);
+    same[1].fps = 30.0;
+    need = filesNeedingTranscode(same);
+    CHECK(need.size() == 2);
+    same[1].fps = 25.02;
+    need = filesNeedingTranscode(same);
+    CHECK(need.isEmpty());
+
+    // 空输入 → 空
+    CHECK(filesNeedingTranscode({}).isEmpty());
+}
+
+// ---------------------------------------------------------------------------
 static void testEvidenceCsv()
 {
     EvidenceReportInput in;
@@ -449,6 +489,7 @@ int main(int argc, char **argv)
     testSmartSorterConflictAdjudication();
     testTextUtils();
     testPrecheck();
+    testFilesNeedingTranscode();
     testEvidenceCsv();
     fprintf(stderr, "checks: %d failures: %d\n", g_checks, g_failures);
     return g_failures == 0 ? 0 : 1;

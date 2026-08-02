@@ -210,8 +210,16 @@ QWidget *PreprocessWindow::buildPageImport()
         lang("大小", "Size"), lang("状态", "Status")});
     m_fileTable->horizontalHeader()->setSectionResizeMode(0, QHeaderView::Stretch);
     m_fileTable->verticalHeader()->setVisible(false);
-    m_fileTable->setSelectionMode(QAbstractItemView::NoSelection);
+    m_fileTable->setSelectionMode(QAbstractItemView::SingleSelection);
     m_fileTable->setEditTriggers(QAbstractItemView::NoEditTriggers);
+    // 行拖拽排序（现场反馈：用户自己在列表排完即可直接拼接）
+    m_fileTable->setDragDropMode(QAbstractItemView::InternalMove);
+    m_fileTable->setDragEnabled(true);
+    m_fileTable->setAcceptDrops(true);
+    m_fileTable->setDropIndicatorShown(true);
+    m_fileTable->setDefaultDropAction(Qt::MoveAction);
+    connect(m_fileTable->model(), &QAbstractItemModel::rowsMoved,
+            this, [this]() { syncPendingFromTable(); });
     lay->addWidget(m_fileTable, 1);
 
     m_importProgress = new QProgressBar(w);
@@ -233,10 +241,16 @@ QWidget *PreprocessWindow::buildPageImport()
         "取消勾选则对所有片段做画面时间识别（交叉校验更充分但更慢）",
         "Clips like Dahua .dav carry record time internally; skipping OCR is "
         "orders of magnitude faster. Uncheck to OCR everything (slower cross-check)."));
-    m_btnBeginSort = new QPushButton(lang("下一步：自动排序 →", "Next: auto sort →"), w);
+    m_btnBeginSort = new QPushButton(lang("自动排序 ⚡（可选）", "Auto sort ⚡ (optional)"), w);
     m_btnBeginSort->setEnabled(false);
-    m_btnBeginSort->setMinimumHeight(36);
-    m_btnBeginSort->setStyleSheet(QStringLiteral(
+    m_btnBeginSort->setToolTip(lang(
+        "识别画面/流内时间并按时间自动重排（可选）。\n不点也能直接拼接——拖拽列表行即可手动定序。",
+        "OCR on-screen/in-stream times and reorder automatically (optional). "
+        "You can skip it: drag rows to order manually, then merge directly."));
+    m_btnQuickMerge = new QPushButton(lang("开始拼接 ▶", "Start merging ▶"), w);
+    m_btnQuickMerge->setEnabled(false);
+    m_btnQuickMerge->setMinimumHeight(36);
+    m_btnQuickMerge->setStyleSheet(QStringLiteral(
         "QPushButton { background:%1; color:%2; font-weight:bold; border-radius:8px; }"
         "QPushButton:disabled { background:%3; color:%4; }")
         .arg(Theme::Accent, Theme::AccentOnDark, Theme::BgCard, Theme::TextMuted));
@@ -245,11 +259,13 @@ QWidget *PreprocessWindow::buildPageImport()
     row->addWidget(m_skipOcrCheck);
     row->addStretch(1);
     row->addWidget(m_btnBeginSort);
+    row->addWidget(m_btnQuickMerge);
     lay->addLayout(row);
 
     connect(btnAdd, &QPushButton::clicked, this, &PreprocessWindow::onAddFiles);
     connect(btnClear, &QPushButton::clicked, this, &PreprocessWindow::onClearFiles);
     connect(m_btnBeginSort, &QPushButton::clicked, this, &PreprocessWindow::onBeginSort);
+    connect(m_btnQuickMerge, &QPushButton::clicked, this, &PreprocessWindow::onQuickMerge);
     return w;
 }
 
@@ -303,7 +319,24 @@ void PreprocessWindow::addFiles(const QStringList &files)
                                  .arg(m_pendingFiles.size())
                                  .arg(fmtBytes(totalBytes)));
     m_btnBeginSort->setEnabled(!m_pendingFiles.isEmpty());
+    m_btnQuickMerge->setEnabled(!m_pendingFiles.isEmpty());
     m_importStatus->clear();
+}
+
+/// 表格行拖拽后同步文件顺序（直接拼接按此行序执行）
+void PreprocessWindow::syncPendingFromTable()
+{
+    QStringList reordered;
+    for (int i = 0; i < m_fileTable->rowCount(); ++i) {
+        auto *nameItem = m_fileTable->item(i, 0);
+        if (nameItem)
+            reordered.append(nameItem->data(Qt::UserRole).toString());
+    }
+    if (reordered.size() == m_pendingFiles.size())
+        m_pendingFiles = reordered;
+    m_importSummary->setText(lang("已导入 %1 段（可拖拽行调整顺序；当前顺序即拼接顺序）",
+                                  "%1 clip(s) (drag rows to reorder; row order = merge order)")
+                                 .arg(m_pendingFiles.size()));
 }
 
 void PreprocessWindow::onClearFiles()
@@ -316,6 +349,7 @@ void PreprocessWindow::onClearFiles()
     m_fileTable->setRowCount(0);
     m_importSummary->setText(lang("尚未导入文件", "No files imported"));
     m_btnBeginSort->setEnabled(false);
+    m_btnQuickMerge->setEnabled(false);
     m_importStatus->clear();
     m_maxReachedStep = 0;
     setStep(0);
@@ -325,14 +359,57 @@ void PreprocessWindow::onBeginSort()
 {
     if (m_pendingFiles.isEmpty())
         return;
+    m_coord->setSkipOcrWhenAbsStart(m_skipOcrCheck->isChecked());
+    if (m_coord->phase() == TaskPhase::UserConfirm) {
+        // 已探测就绪：直接对当前列表重跑自动排序（覆盖顺序）
+        m_importStatus->setText(lang("正在分析素材（识别画面时间）…",
+                                     "Analyzing clips (reading on-screen time)…"));
+        m_coord->runAutoSort();
+        return;
+    }
     m_importProgress->setVisible(true);
     m_importProgress->setValue(0);
     m_btnBeginSort->setEnabled(false);
+    m_btnQuickMerge->setEnabled(false);
     m_importStatus->setText(lang("正在分析素材（识别画面时间）…",
                                  "Analyzing clips (reading on-screen time)…"));
+    m_coord->beginWithAutoSort(m_pendingFiles);
+    updateStepBar();
+}
+
+void PreprocessWindow::onQuickMerge()
+{
+    if (m_pendingFiles.isEmpty())
+        return;
     m_coord->setSkipOcrWhenAbsStart(m_skipOcrCheck->isChecked());
+    if (m_coord->phase() == TaskPhase::UserConfirm) {
+        // 已探测就绪：按当前列表顺序直接拼接（不识别画面时间）
+        m_coord->startProcessing(collectProcessingOptions());   // 内部自动确认顺序
+        return;
+    }
+    // 非强制一键：不识别画面时间，按列表当前顺序直接拼接；
+    // 需要转码的文件自动转码（逐文件判定），其余无损拼接。
+    m_importProgress->setVisible(true);
+    m_importProgress->setValue(0);
+    m_btnBeginSort->setEnabled(false);
+    m_btnQuickMerge->setEnabled(false);
+    m_importStatus->setText(lang("正在探测并拼接…", "Probing and merging…"));
+    m_pendingQuickMerge = true;
+    m_pendingOpts = collectProcessingOptions();
     m_coord->begin(m_pendingFiles);
     updateStepBar();
+}
+
+ProcessingOptions PreprocessWindow::collectProcessingOptions() const
+{
+    ProcessingOptions opts;
+    opts.outputDir = m_outputDirEdit ? m_outputDirEdit->text().trimmed() : QString();
+    opts.crf = m_crfSpin ? m_crfSpin->value() : 18;
+    opts.deinterlace = !m_deinterlaceCheck || m_deinterlaceCheck->isChecked();
+    opts.normalizeTimestamps = m_normalizeCheck && m_normalizeCheck->isChecked();
+    opts.ignoreWarnings = m_ignoreWarnCheck && m_ignoreWarnCheck->isChecked();
+    opts.withSha256 = !m_sha256Check || m_sha256Check->isChecked();
+    return opts;
 }
 
 // ---------------------------------------------------------------------------
@@ -748,11 +825,7 @@ void PreprocessWindow::onReIdentify()
              "Re-identify will repeat on-screen time recognition. Continue?"));
     if (ret != QMessageBox::Yes)
         return;
-    m_coord->cancel();              // → Cancelled 态后允许重新 begin
-    m_importProgress->setVisible(true);
-    m_importProgress->setValue(0);
-    setStep(0);
-    m_coord->begin(m_pendingFiles);
+    m_coord->runAutoSort();   // 校对页阶段（UserConfirm）重新 OCR 排序
 }
 
 void PreprocessWindow::onConfirmOrder()
@@ -904,17 +977,30 @@ void PreprocessWindow::updateSettingsPage()
         }
         m_anyBlock = m_anyBlock || it.value().hasBlock();
     }
+    // 逐文件转码判定（现场反馈：只转确实需要的文件）
+    int needTx = 0, total = 0;
+    for (const auto &g : m_groups) {
+        QVector<ProbeResult> ordered;
+        for (const auto &e : g.ordered)
+            ordered.append(m_coord->probeMap().value(e.filePath));
+        needTx += filesNeedingTranscode(ordered).size();
+        total += g.ordered.size();
+    }
     m_radioLossless->setChecked(!m_anyBlock);
     m_radioTranscode->setChecked(m_anyBlock);
     if (m_anyBlock) {
-        m_modeReason->setText(
-            lang("ⓘ 检测到 %1 项不一致（如：%2），不能直接拼接，将统一格式后拼接",
-                 "ⓘ %1 inconsistency(ies) detected (e.g. %2); will normalize format first")
-                .arg(blockCount).arg(firstBlock));
+        if (needTx >= total) {
+            m_modeReason->setText(
+                lang("ⓘ 检测到 %1 项不一致（如：%2），全部文件将转码后拼接",
+                     "ⓘ %1 inconsistency(ies) detected (e.g. %2); all clips will be normalized")
+                    .arg(blockCount).arg(firstBlock));
+        } else {
+            m_modeReason->setText(
+                lang("ⓘ %1 个文件需要转码（格式不兼容，如：%2），其余直接无损拼接",
+                     "ⓘ %1 clip(s) need transcoding (e.g. %2); the rest merge losslessly")
+                    .arg(needTx).arg(firstBlock));
+        }
     } else {
-        int total = 0;
-        for (const auto &g : m_groups)
-            total += g.ordered.size();
         m_modeReason->setText(
             lang("ⓘ %1 段参数一致，可直接无损拼接（速度快、画质零损失）",
                  "ⓘ %1 clips share identical parameters; lossless concat applies")
@@ -1132,10 +1218,14 @@ void PreprocessWindow::onPhaseChanged(TaskPhase phase)
 {
     switch (phase) {
     case TaskPhase::UserConfirm:
+        if (m_pendingQuickMerge)      // 直接拼接链：不切校对页
+            break;
         m_maxReachedStep = qMax(m_maxReachedStep, 1);
         setStep(1);
         break;
     case TaskPhase::Precheck:
+        if (m_pendingQuickMerge)      // 直接拼接链：不切设置页
+            break;
         m_maxReachedStep = qMax(m_maxReachedStep, 2);
         updateSettingsPage();
         setStep(2);
@@ -1198,8 +1288,15 @@ void PreprocessWindow::onEvidenceReady(const QVector<SortGroup> &groups)
 {
     m_groups = groups;
     m_importProgress->setVisible(false);
-    m_importStatus->setText(lang("分析完成，请校对顺序", "Analysis done; please review order"));
     rebuildReviewViews();
+    if (m_pendingQuickMerge) {
+        // 直接拼接链：列表顺序已就绪 → 自动确认并执行（不切校对页）
+        m_importStatus->setText(lang("就绪，开始拼接…", "Ready, merging…"));
+        m_coord->confirmOrder();
+        return;
+    }
+    m_importStatus->setText(lang("分析完成，请校对顺序（可直接开始拼接）",
+                                 "Analysis done; review order (or merge directly)"));
     m_maxReachedStep = qMax(m_maxReachedStep, 1);
     setStep(1);
 }
@@ -1207,6 +1304,10 @@ void PreprocessWindow::onEvidenceReady(const QVector<SortGroup> &groups)
 void PreprocessWindow::onPrecheckReady(const QMap<QString, PrecheckResult> &)
 {
     updateSettingsPage();
+    if (m_pendingQuickMerge) {
+        m_pendingQuickMerge = false;
+        m_coord->startProcessing(m_pendingOpts);
+    }
 }
 
 void PreprocessWindow::onFinished(const PreprocessReport &report)
@@ -1220,19 +1321,36 @@ void PreprocessWindow::onFinished(const PreprocessReport &report)
     m_outputDir = report.outputPath.isEmpty()
         ? report.evidenceDir : QFileInfo(report.outputPath).absolutePath();
 
-    m_resultTitle->setText(lang("✓ 拼接完成", "✓ Merge finished"));
-    m_resultTitle->setStyleSheet(QStringLiteral(
-        "font-size:18px; font-weight:bold; color:%1;").arg(Theme::Success));
     const QFileInfo fi(report.outputPath);
-    m_resultOutput->setText(lang("输出文件：%1（%2，用时 %3）", "Output: %1 (%2, took %3)")
-        .arg(report.outputPath, fmtBytes(fi.size()),
-             fmtDuration(m_runTimer.elapsed())));
+    const bool haveOutput = !report.outputPath.isEmpty()
+        && fi.isFile() && fi.size() > 0;
+    if (haveOutput) {
+        m_resultTitle->setText(lang("✓ 拼接完成", "✓ Merge finished"));
+        m_resultTitle->setStyleSheet(QStringLiteral(
+            "font-size:18px; font-weight:bold; color:%1;").arg(Theme::Success));
+        m_resultOutput->setText(lang("输出文件：%1（%2，用时 %3）", "Output: %1 (%2, took %3)")
+            .arg(report.outputPath, fmtBytes(fi.size()),
+                 fmtDuration(m_runTimer.elapsed())));
+        m_btnPlayOutput->setEnabled(true);
+    } else {
+        // 防现场反馈：未产出文件时禁止绿勾成功
+        m_resultTitle->setText(lang("⚠ 未产出输出文件", "⚠ No output file produced"));
+        m_resultTitle->setStyleSheet(QStringLiteral(
+            "font-size:18px; font-weight:bold; color:%1;").arg(Theme::Danger));
+        m_resultOutput->setText(lang(
+            "拼接流程已结束但没有任何输出文件（详见详细日志与证据报告）。",
+            "Merge finished but produced no output (see log and evidence report)."));
+        m_btnPlayOutput->setEnabled(false);
+    }
     m_resultEvidence->setText(lang("证据报告：%1\n（首/尾帧截图、CSV 明细、操作日志均已留档）",
                                    "Evidence report: %1\n(frames, CSV, operation log archived)")
                                   .arg(report.evidenceDir));
     m_resultCard->setVisible(true);
     m_maxReachedStep = qMax(m_maxReachedStep, 3);
     setStep(3);
+    // 任务结束：允许回导入页重试/换批次
+    m_btnBeginSort->setEnabled(!m_pendingFiles.isEmpty());
+    m_btnQuickMerge->setEnabled(!m_pendingFiles.isEmpty());
 }
 
 void PreprocessWindow::onFailed(PreprocessError error, const QString &detail)
@@ -1257,6 +1375,12 @@ void PreprocessWindow::onFailed(PreprocessError error, const QString &detail)
         plain = lang("处理超时。建议：分段处理或检查素材是否损坏。",
                      "Processing timed out. Split the batch or check for damaged clips.");
         break;
+    case PreprocessError::ConcatFailed:
+        plain = lang("拼接未产出任何输出文件（转码/拼接均未成功）。\n"
+                     "可在导入页重新导入后重试，或检查证据目录 operations.log 定位原因。",
+                     "No output produced (transcode/concat failed).\n"
+                     "Re-import and retry, or inspect operations.log in the evidence dir.");
+        break;
     default:
         plain = lang("处理失败。详细原因见日志；证据与日志已保留在证据目录。",
                      "Processing failed. See log; evidence and logs are preserved.");
@@ -1270,6 +1394,9 @@ void PreprocessWindow::onFailed(PreprocessError error, const QString &detail)
     m_resultCard->setVisible(true);
     m_maxReachedStep = qMax(m_maxReachedStep, 3);
     setStep(3);
+    // 失败后允许回导入页重试
+    m_btnBeginSort->setEnabled(!m_pendingFiles.isEmpty());
+    m_btnQuickMerge->setEnabled(!m_pendingFiles.isEmpty());
 }
 
 void PreprocessWindow::onLogLine(const QString &line)

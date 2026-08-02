@@ -161,3 +161,35 @@ PrecheckResult concatPrecheck(const QVector<ProbeResult> &g)
             QStringLiteral("全部一致，可无损拼接"));
     return res;
 }
+
+QStringList filesNeedingTranscode(const QVector<ProbeResult> &g)
+{
+    QStringList need;
+    if (g.isEmpty())
+        return need;
+
+    // 分辨率/像素/音轨等参数不一致 → 无法无损拼接，整组转码；
+    // 编码不一致 → 只转“与组基准编码不同/不在白名单”的文件（转码输出固定 h264，
+    // 追平基准即可无损拼接其余文件——现场反馈：转码非强制步骤）
+    const bool paramDivergent = DIVERGENT(width) || DIVERGENT(height)
+        || DIVERGENT(pixFmt) || DIVERGENT(audioStreams);
+    const double ref = g[0].fps;
+    double maxDev = 0.0;
+    for (const auto &p : g)
+        if (ref > 0 && p.fps > 0)
+            maxDev = qMax(maxDev, qAbs(p.fps - ref) / ref);
+    const bool fpsBlock = maxDev > 0.05;
+
+    for (int i = 0; i < g.size(); ++i) {
+        const auto &p = g[i];
+        bool selfNeed = !p.ok()
+            || !kMp4VideoWhitelist.contains(p.videoCodec)
+            || (p.audioStreams > 0
+                && !kMp4AudioWhitelist.contains(p.audioCodec));
+        if (!selfNeed && i > 0 && p.videoCodec != g[0].videoCodec)
+            selfNeed = true;             // 编码与基准不一致 → 转码追平
+        if (selfNeed || paramDivergent || fpsBlock)
+            need.append(p.filePath);
+    }
+    return need;
+}

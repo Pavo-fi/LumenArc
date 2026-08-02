@@ -147,6 +147,12 @@ void PreprocessingCoordinator::setAnalysisEngine(IAnalysisEngine *engine)
     m_analysis = engine;
 }
 
+void PreprocessingCoordinator::beginWithAutoSort(const QStringList &files)
+{
+    m_autoSortAfterProbe = true;
+    begin(files);
+}
+
 // ---------------------------------------------------------------------------
 // 状态机
 // ---------------------------------------------------------------------------
@@ -171,6 +177,7 @@ void PreprocessingCoordinator::begin(const QStringList &files)
         && m_phase != TaskPhase::Failed && m_phase != TaskPhase::Cancelled)
         return;
     // 会话复位
+    m_autoSortAfterProbe = false;
     m_files = files;
     m_probes.clear();
     m_ocrs.clear();
@@ -220,19 +227,59 @@ void PreprocessingCoordinator::onProbeFinished(const QVector<ProbeResult> &resul
     onTrustedDurationsReady({});
 }
 
-void PreprocessingCoordinator::onTrustedDurationsReady(const QMap<QString, qint64> &durations)
+QMap<QString, qint64> PreprocessingCoordinator::buildDurMap(
+    const QMap<QString, qint64> &trusted) const
 {
-    if (m_phase != TaskPhase::Probing)
-        return;
     // 组装时长表：可信时长优先，容器时长兜底
     QMap<QString, qint64> durMap;
     for (const QString &f : m_files) {
-        qint64 d = durations.value(f, 0);
+        qint64 d = trusted.value(f, 0);
         if (d <= 0)
             d = m_probes.value(f).durationMs;
         if (d > 0)
             durMap.insert(f, d);
     }
+    return durMap;
+}
+
+void PreprocessingCoordinator::onTrustedDurationsReady(const QMap<QString, qint64> &durations)
+{
+    if (m_phase != TaskPhase::Probing)
+        return;
+    const QMap<QString, qint64> durMap = buildDurMap(durations);
+    // 就绪：按导入顺序成组（自动排序为可选步骤，不强制——现场反馈）
+    setPhase(TaskPhase::UserConfirm);
+    buildListOrderGroups();
+    log(QStringLiteral("[%1] 探测完成，%2 个文件已按导入顺序就绪（可开始拼接或自动排序）")
+            .arg(tsLog()).arg(m_files.size()));
+    emit evidenceReady(m_groups);
+    if (m_autoSortAfterProbe) {
+        m_autoSortAfterProbe = false;
+        runAutoSort();
+    }
+}
+
+void PreprocessingCoordinator::buildListOrderGroups()
+{
+    m_groups.clear();
+    SortGroup g;
+    g.channel = QStringLiteral("(默认组)");
+    for (const QString &f : m_files) {
+        SortEntry e;
+        e.filePath = f;
+        e.durationMs = durationOf(f);
+        e.startMs = 0;                 // 未识别：时间未知（未知段排末尾由用户拖拽定序）
+        e.sourceKind = SortEvidenceKind::None;
+        g.ordered.append(e);
+    }
+    g.suspicious = false;
+    m_groups.append(g);
+}
+
+void PreprocessingCoordinator::runAutoSort()
+{
+    if (m_phase != TaskPhase::UserConfirm)
+        return;
     // OCR 依赖检测（§10.2：缺失 → 降级流程 + 引导安装，不静默）
     QString availErr;
     setPhase(TaskPhase::Ocr);
@@ -243,13 +290,14 @@ void PreprocessingCoordinator::onTrustedDurationsReady(const QMap<QString, qint6
         for (const QString &f : m_files) {
             OcrResult r;
             r.filePath = f;
-            r.durationMs = durMap.value(f);
+            r.durationMs = durationOf(f);
             r.ocrError = QStringLiteral("engine_missing");
             degraded.append(r);
         }
         onOcrFinished(degraded);
         return;
     }
+    const QMap<QString, qint64> durMap = buildDurMap({});
     // 流内绝对时间已可信的文件跳过 OCR 推理（现场反馈②：OCR 全失败的
     // DHAV 批次耗时 8.7min；仅截证据帧，排序依据 absStart）
     QStringList framesOnly;
@@ -385,15 +433,20 @@ void PreprocessingCoordinator::runPrecheck()
 // ---------------------------------------------------------------------------
 void PreprocessingCoordinator::startProcessing(const ProcessingOptions &opts)
 {
-    if (m_phase != TaskPhase::Precheck)
+    if (m_phase == TaskPhase::UserConfirm)
+        confirmOrder();               // 直接拼接：自动确认当前列表顺序
+    if (m_phase != TaskPhase::Precheck) {
+        log(QStringLiteral("[%1] 开始拼接被忽略：当前阶段 %2（需先探测就绪）")
+                .arg(tsLog()).arg(int(m_phase)));
         return;
+    }
     m_opts = opts;
 
-    // 输出目录（§5.5.2：默认素材目录下 LumenArc_Transcode_<时间戳>/）
+    // 输出目录（§5.5.2：默认素材目录下 LumenArc_Merged_<时间戳>/）
     m_outputDir = opts.outputDir;
     if (m_outputDir.isEmpty() && !m_files.isEmpty())
         m_outputDir = QFileInfo(m_files.first()).absolutePath()
-            + QStringLiteral("/LumenArc_Transcode_") + nowTag();
+            + QStringLiteral("/LumenArc_Merged_") + nowTag();
     if (!QDir().mkpath(m_outputDir)) {
         emit failed(PreprocessError::OutputConflict,
                     QStringLiteral("cannot create output dir: %1").arg(m_outputDir));
@@ -404,9 +457,14 @@ void PreprocessingCoordinator::startProcessing(const ProcessingOptions &opts)
     qint64 inputBytes = 0;
     for (const QString &f : m_files)
         inputBytes += QFileInfo(f).size();
-    bool anyTranscode = false;
-    for (auto it = m_prechecks.begin(); it != m_prechecks.end(); ++it)
-        anyTranscode = anyTranscode || it.value().hasBlock();
+    int needTxCount = 0;
+    for (const auto &g : m_groups) {
+        QVector<ProbeResult> ordered;
+        for (const auto &e : g.ordered)
+            ordered.append(m_probes.value(e.filePath));
+        needTxCount += filesNeedingTranscode(ordered).size();
+    }
+    const bool anyTranscode = needTxCount > 0;
     const qint64 estimate = qint64(inputBytes * (anyTranscode ? 1.2 : 1.05));
     const QStorageInfo storage(m_outputDir);
     if (storage.isValid() && storage.bytesAvailable() > 0
@@ -417,12 +475,15 @@ void PreprocessingCoordinator::startProcessing(const ProcessingOptions &opts)
         return;
     }
 
-    // 路由：BLOCK 组 → 全组转码后拼接；OK/WARN 组（或用户忽略）→ 直接拼接
+    // 逐文件转码路由（现场反馈：转码非强制步骤，仅确实需要的文件转码）：
+    // 白名单外/探测失败/组内参数不一致 → 转码；其余直接无损拼接
     for (const auto &g : m_groups) {
-        const PrecheckResult pc = m_prechecks.value(g.channel);
-        const bool needTranscode = pc.hasBlock();
+        QVector<ProbeResult> ordered;
+        for (const auto &e : g.ordered)
+            ordered.append(m_probes.value(e.filePath));
+        const QStringList needTx = filesNeedingTranscode(ordered);
         for (const auto &e : g.ordered) {
-            if (needTranscode) {
+            if (needTx.contains(e.filePath)) {
                 if (!m_transcodeQueue.contains(e.filePath))
                     m_transcodeQueue.append(e.filePath);
                 m_actions.insert(e.filePath, QStringLiteral("转码"));
@@ -432,6 +493,9 @@ void PreprocessingCoordinator::startProcessing(const ProcessingOptions &opts)
         }
         m_concatQueue.append(g.channel);
     }
+    log(QStringLiteral("[%1] 转码 %2 个 / 直接拼接 %3 个")
+            .arg(tsLog()).arg(m_transcodeQueue.size())
+            .arg(m_files.size() - m_transcodeQueue.size()));
 
     if (!m_transcodeQueue.isEmpty()) {
         setPhase(TaskPhase::Transcoding);
@@ -660,8 +724,27 @@ void PreprocessingCoordinator::finalize()
 
     m_report.evidenceDir = finalEvidence;
     m_report.reportCsvPath = csvPath;
-    m_report.outputPath = m_concatOutputs.isEmpty()
-        ? m_outputDir : m_concatOutputs.values().first();
+    if (m_concatOutputs.isEmpty()) {
+        // 全组失败：必须显式失败，禁止绿勾“完成”（现场反馈：显示完成但无输出）
+        const QString detail = QStringLiteral(
+            "拼接未产出任何输出文件：转码失败 %1 个，拼接失败 %2 组；"
+            "详见证据目录 operations.log / report.csv")
+            .arg(m_transcodeFailed.size())
+            .arg(m_groups.size());
+        m_report.error = PreprocessError::ConcatFailed;
+        m_report.errorDetail = detail;
+        m_report.outputPath.clear();
+        writeOperationsLog(finalEvidence);
+        setPhase(TaskPhase::Failed);
+        log(QStringLiteral("[%1] %2").arg(tsLog(), detail));
+        emit failed(PreprocessError::ConcatFailed, detail);
+        return;
+    }
+    m_report.outputPath = m_concatOutputs.values().first();
+    // 部分失败：报告留痕（C2 不静默），日志汇总
+    if (!m_transcodeFailed.isEmpty())
+        log(QStringLiteral("[%1] 注意：%2 个文件转码失败，已从拼接中剔除")
+                .arg(tsLog()).arg(m_transcodeFailed.size()));
     setPhase(TaskPhase::Done);
     emit progress(100, QStringLiteral("完成"));
     emit finished(m_report);

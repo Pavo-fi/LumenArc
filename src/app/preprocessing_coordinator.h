@@ -46,8 +46,13 @@ public:
     void setSkipOcrWhenAbsStart(bool on) { m_skipOcrWhenAbsStart = on; }
 
     void begin(const QStringList &files);
+    /// 导入即自动排序：探测完成后自动执行画面时间识别与排序（可选，非强制）
+    void beginWithAutoSort(const QStringList &files);
+    /// 手动触发自动排序（UserConfirm 阶段可选：以画面/流内时间重排）
+    void runAutoSort();
     void confirmOrder();                    // UserConfirm → Precheck
-    void startProcessing(const ProcessingOptions &opts);   // Precheck → 执行
+    /// 开始执行。UserConfirm 或 Precheck 阶段均可调用（前者自动先确认顺序）。
+    void startProcessing(const ProcessingOptions &opts);
     void cancel();
 
     TaskPhase phase() const { return m_phase; }
@@ -93,6 +98,8 @@ private slots:
 private:
     void setPhase(TaskPhase phase);
     void log(const QString &line);
+    QMap<QString, qint64> buildDurMap(const QMap<QString, qint64> &trusted) const;
+    void buildListOrderGroups();            // 未自动排序：按导入顺序成组
     void runSorting();
     void runPrecheck();
     void startNextTranscode();
@@ -104,6 +111,7 @@ private:
 
     IAnalysisEngine *m_analysis = nullptr;      // 不持有
     bool m_skipOcrWhenAbsStart = true;
+    bool m_autoSortAfterProbe = false;          // beginWithAutoSort 链式标志
     MediaProbeEngine *m_probeEngine;
     TimestampOcrEngine *m_ocrEngine;
     ConcatEngine *m_concatEngine;

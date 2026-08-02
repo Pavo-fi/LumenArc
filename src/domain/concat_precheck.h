@@ -32,3 +32,11 @@ struct PrecheckResult {
 
 /// 对同组有序文件做两两并集校验。输入为探测结果（有序）。
 PrecheckResult concatPrecheck(const QVector<ProbeResult> &orderedGroup);
+
+/// 逐文件转码判定（现场反馈：转码不是强制步骤，只转确实需要的文件）：
+/// - 探测失败 / 编解码不在 MP4 白名单 → 该文件需要转码；
+/// - 组内参数不一致（编码/分辨率/像素格式/音轨数/帧率大偏差）→ 整组转码
+///   （无法无损拼接）；
+/// - 其余 → 直接无损拼接。
+/// 返回需要转码的文件路径。
+QStringList filesNeedingTranscode(const QVector<ProbeResult> &orderedGroup);

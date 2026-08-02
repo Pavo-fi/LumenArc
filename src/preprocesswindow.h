@@ -52,6 +52,9 @@ private slots:
     void onAddFiles();
     void onClearFiles();
     void onBeginSort();
+    void onQuickMerge();
+    void syncPendingFromTable();
+    ProcessingOptions collectProcessingOptions() const;
     // ② 校对
     void onMoveSelected(int delta);
     void onManualTimestamp();
@@ -120,8 +123,11 @@ private:
     QProgressBar *m_importProgress = nullptr;
     QLabel *m_importStatus = nullptr;
     QPushButton *m_btnBeginSort = nullptr;
+    QPushButton *m_btnQuickMerge = nullptr;
     QCheckBox *m_skipOcrCheck = nullptr;
     QStringList m_pendingFiles;
+    bool m_pendingQuickMerge = false;      // 直接拼接链式标志（列表顺序）
+    ProcessingOptions m_pendingOpts;
 
     // ② 校对
     QLabel *m_reviewSummary = nullptr;
