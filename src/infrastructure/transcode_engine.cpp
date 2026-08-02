@@ -1,0 +1,179 @@
+/**
+ * @file transcode_engine.cpp
+ * @brief 统一转码引擎实现
+ * @author Huang Jingyun, Liu xinghua, Huang Wenhua
+ * @date 2026-08-02
+ * @version 1.0
+ *
+ * Copyright 2026 Huang Jingyun/Liu xinghua/Huang Wenhua. All rights reserved.
+ * Licensed under the Apache License, Version 2.0
+ */
+#include "transcode_engine.h"
+#include "python_analysis_engine.h"
+#include "domain/preprocess_text.h"
+
+#include <QProcess>
+#include <QTimer>
+#include <QFile>
+#include <QDir>
+
+TranscodeEngine::TranscodeEngine(QObject *parent)
+    : QObject(parent)
+{
+}
+
+TranscodeEngine::~TranscodeEngine()
+{
+    cancel();
+}
+
+QStringList TranscodeEngine::buildArgs(const TranscodeRequest &req,
+                                       const QString &tempOutput)
+{
+    // 默认参数预设（§5.5.1）：分析引擎与播放内核最优路径
+    QStringList args{
+        QStringLiteral("-i"), req.input,
+        QStringLiteral("-map"), QStringLiteral("0:v:0"),
+        QStringLiteral("-map"), QStringLiteral("0:a?"),   // 无音轨不报错
+        QStringLiteral("-c:v"), QStringLiteral("libx264"),
+        QStringLiteral("-preset"), QStringLiteral("veryfast"),
+        QStringLiteral("-crf"), QString::number(req.crf),
+        QStringLiteral("-pix_fmt"), QStringLiteral("yuv420p"),
+    };
+    if (req.deinterlace) {
+        // 隔行源默认 yadif（探测到 field_order≠progressive 时由调用方置位）
+        args << QStringLiteral("-vf") << QStringLiteral("yadif");
+    }
+    if (req.copyAudio) {
+        args << QStringLiteral("-c:a") << QStringLiteral("copy");
+    } else {
+        args << QStringLiteral("-c:a") << QStringLiteral("aac")
+             << QStringLiteral("-b:a") << QStringLiteral("128k")
+             << QStringLiteral("-ac") << QStringLiteral("2")
+             << QStringLiteral("-ar") << QStringLiteral("48000");
+    }
+    args << QStringLiteral("-movflags") << QStringLiteral("+faststart")
+         << QStringLiteral("-avoid_negative_ts") << QStringLiteral("make_zero")
+         << QStringLiteral("-f") << QStringLiteral("mp4")
+         << QStringLiteral("-progress") << QStringLiteral("pipe:1")
+         << QStringLiteral("-nostats")
+         << tempOutput;
+    return args;
+}
+
+void TranscodeEngine::run(const TranscodeRequest &req)
+{
+    if (isRunning())
+        return;
+    m_cancelled = false;
+    m_lastPercent = -1;
+    m_durationMs = req.durationMs;
+    m_finalOutput = req.output;
+    // 临时输出必须保留 .mp4 扩展名（否则 muxer 无法推断格式）
+    m_tempOutput = req.output;
+    if (m_tempOutput.endsWith(QLatin1String(".mp4"), Qt::CaseInsensitive))
+        m_tempOutput.chop(4);
+    m_tempOutput += QStringLiteral(".part.mp4");
+
+    m_stdoutBuf.clear();
+    m_stderrBuf.clear();
+    m_process = new QProcess(this);
+    m_process->setProgram(PythonAnalysisEngine::findFfmpegPath());
+    m_process->setArguments(buildArgs(req, m_tempOutput));
+    connect(m_process, &QProcess::readyReadStandardOutput,
+            this, &TranscodeEngine::onProgressLine);
+    connect(m_process, &QProcess::readyReadStandardError, this, [this]() {
+        m_stderrBuf += m_process->readAllStandardError();
+    });
+    connect(m_process, qOverload<int, QProcess::ExitStatus>(&QProcess::finished),
+            this, [this](int code, QProcess::ExitStatus) { onFinished(code); });
+
+    if (!m_watchdog) {
+        m_watchdog = new QTimer(this);
+        m_watchdog->setSingleShot(true);
+        connect(m_watchdog, &QTimer::timeout, this, [this]() {
+            if (m_process)
+                m_process->kill();
+            emit failed(PreprocessError::Timeout, QStringLiteral("transcode timeout"));
+        });
+    }
+    // 超时：每文件默认 60 分钟（可配项由 v2 参数面开放，§10.2）
+    m_watchdog->start(60 * 60 * 1000);
+    m_process->start();
+    if (!m_process->waitForStarted(5000)) {
+        emit failed(PreprocessError::TranscodeFailed,
+                    QStringLiteral("failed to start ffmpeg"));
+    }
+}
+
+void TranscodeEngine::cancel()
+{
+    m_cancelled = true;
+    if (m_watchdog)
+        m_watchdog->stop();
+    if (m_process) {
+        m_process->terminate();
+        if (!m_process->waitForFinished(3000))
+            m_process->kill();
+        m_process->deleteLater();
+        m_process = nullptr;
+    }
+    if (!m_tempOutput.isEmpty() && QFile::exists(m_tempOutput))
+        QFile::remove(m_tempOutput);   // 半成品清理（§5.6）
+}
+
+bool TranscodeEngine::isRunning() const
+{
+    return m_process && m_process->state() != QProcess::NotRunning;
+}
+
+void TranscodeEngine::onProgressLine()
+{
+    m_stdoutBuf += m_process->readAllStandardOutput();
+    int nl;
+    while ((nl = m_stdoutBuf.indexOf('\n')) >= 0) {
+        const QByteArray line = m_stdoutBuf.left(nl).trimmed();
+        m_stdoutBuf.remove(0, nl + 1);
+        // R-5：out_time_ms 单位是微秒，parseFfmpegProgressMs 已换算为毫秒
+        const qint64 ms = preprocess_text::parseFfmpegProgressMs(line);
+        if (ms < 0 || m_durationMs <= 0)
+            continue;
+        const int pct = qBound(0, int(ms * 100 / m_durationMs), 99);
+        if (pct != m_lastPercent) {
+            m_lastPercent = pct;
+            emit progress(pct, m_finalOutput);
+        }
+    }
+}
+
+void TranscodeEngine::onFinished(int exitCode)
+{
+    if (m_watchdog)
+        m_watchdog->stop();
+    QProcess *proc = m_process;
+    m_process = nullptr;
+    if (proc)
+        proc->deleteLater();
+    if (m_cancelled)
+        return;     // 取消由状态机接管（C1）
+
+    if (exitCode != 0) {
+        if (QFile::exists(m_tempOutput))
+            QFile::remove(m_tempOutput);   // 不产生半成品（规范 C2）
+        emit failed(PreprocessError::TranscodeFailed,
+                    QStringLiteral("exit %1: %2").arg(exitCode)
+                        .arg(QString::fromUtf8(m_stderrBuf.right(500))));
+        return;
+    }
+    // 原子改名进输出位置（§5.5.2）
+    if (QFile::exists(m_finalOutput))
+        QFile::remove(m_finalOutput);   // 输出避让由命名保证，此处仅为幂等
+    if (!QFile::rename(m_tempOutput, m_finalOutput)) {
+        emit failed(PreprocessError::OutputConflict,
+                    QStringLiteral("rename failed: %1 -> %2")
+                        .arg(m_tempOutput, m_finalOutput));
+        return;
+    }
+    emit progress(100, m_finalOutput);
+    emit finished(m_finalOutput);
+}
