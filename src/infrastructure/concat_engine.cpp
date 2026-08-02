@@ -209,12 +209,16 @@ void ConcatEngine::onFinished(int exitCode)
     }
     if (m_normalizing) {
         m_normFiles.append(m_actualOutput);
+        m_actualOutput.clear();   // 中间文件已入 m_normFiles 跟踪（失败/取消才清理）
         ++m_normIndex;
         startConcat({}, {});    // 下一段 / 进入拼接
         return;
     }
     emit progress(100, m_actualOutput);
     emit finished(m_actualOutput);
+    // 成功产物不再属于“半成品”：任何后续 cancel()（含析构、关闭窗口）
+    // 都不得删除它（现场反馈：关闭子窗口后拼接文件消失）
+    m_actualOutput.clear();
 }
 
 void ConcatEngine::cleanupPartial()
