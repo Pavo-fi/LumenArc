@@ -5,6 +5,7 @@
 > 提交历史：`77c8e44`→`abd7b11`→`ff4c9a4`→`adb429b`→`5bbb59b`→`6b61a8d`→`25efc66`→`d978496`→`f496680`→`4447ca7`→`66b2b8f`→`0306427`→`e812e0c`→`f073804`→`16a64de`→`d9cc07a`→`977cb96`→`f9141f8`→`9d1230a`
 > 前处理批次：`9c97072`→`2ba4776`→`772c97f`→`7f5f20b`→`e34bdd9`→`40abd96`→`4b87a5a`（见第十三章）
 > 现场反馈批次：`95f6dba`→`a8a2fe1`→`62a1c76`（见第十四章）
+> DAV 批次：见第十五章（GBK 编码崩溃根因 + DHAV 流内绝对时间证据层）
 
 ---
 
@@ -825,3 +826,52 @@ build/Release/lumenarc_preprocess_integration.exe <clips_dir> <out_dir> 17198352
 5. 发版手工点检清单需补新版四幕流程（窗口打开→导入→校对→拼接→报告出口）。
 6. 分组若真出现多组（含通道号文件名），卡片支持组内拖拽，跨组移动需走 applyGrouping
    （UI 未暴露，v1.2 有意隐藏通道概念）。
+
+
+---
+
+## 十五、Dahua .dav 支持：GBK 崩溃根因 + 流内绝对时间证据层（2026-08-02 第三批）
+
+> 用户反馈 `20260722广州增城/.../06` 目录下 12 个 .dav "没法截出来，时间帧全错"。
+
+### 15.1 根因链（两层，逐一定位）
+
+1. **GBK 编码崩溃（致命）**：嵌入式 Python 子进程 `text=True` 用本机 locale（GBK）
+   解码 ffmpeg stderr；DAV 路径含中文（广州增城/监控视频/…），UTF-8 字节喂给 GBK
+   解码器 → reader 线程 `UnicodeDecodeError` → `r.stderr=None` → 脚本在时长预取
+   阶段整体崩溃 exit 1 → OCR 全无 → 排序退化为 mtime（导出时间 7-21 22:0x）→
+   "没法截出来 时间帧全错"。修复：`probe_timestamps.py` 全部 subprocess 调用改
+   `encoding="utf-8", errors="replace"`；`_force_utf8_io()` 强制 stdout/stderr UTF-8；
+   C++ 引擎启动参数加 `-X utf8`（双保险）。
+2. **OCR 仍全部失败（真实素材差异）**：该摄像头 OSD 在右上，RapidOCR 把日期行切碎
+   误读（"2026-07-22 06:00:03" → "12026-07"+"06:00:03"），完整日期正则全不中。
+   帧提取本身正常（含 dhav 尾帧），属识别层最佳努力范畴。
+
+### 15.2 关键发现：DHAV 流内绝对起始墙钟（新证据②'）
+
+`dhav` demuxer 暴露 `start_time` = 录制时刻 epoch 秒（1784700002 ↔ 文件名/OSD
+06:00:02）。**时区约定**：DVR 把本地墙钟当 UTC 秒写入 → 取 UTC 分量按本地时间
+重解释（与 OCR 本地墙钟语义对齐，实测一致）。落地：
+- `ProbeResult.absStartEpochMs`（仅接受 2000-01-01 ~ 当前+1天，防垃圾 PTS 误判）
+- 排序证据层级：OCR(1.0) > 文件名(0.8) > **absStart(0.6)** > creation(0.5) > mtime(0.2)；
+  持 absStart 的组不标 suspicious；OCR↔absStart 偏差>2min 出 EvidenceConflict（不改序）
+- `SortEntry.sourceKind`（枚举 int，UI 映射文案：画面时间/人工/文件名/流内录制时间/
+  拍摄时间(元数据)/文件修改时间）——顺带修正了"非 OCR 证据一律显示需人工输入"的旧 UX 误标
+- 证据报告 CSV 新增"流内起始墙钟(派生)"列
+- Dahua 文件名 `HH.MM.SS-HH.MM.SS[...]` 是纯时间段（无日期/通道），**刻意不解析**
+
+### 15.3 实测结果（12 段 dav 全链路）
+
+探测 12/12 ✓ → 单组 suspicious=0、时间完美衔接（06:00:02+133s=06:02:15 链式连续、
+无警告）→ precheck BLOCK（dhav/hevc/1fps↔15fps 混合）→ 转码 MP4（h264/yuv420p，
+1fps 段保持 1fps，PTS 正确）→ 混 fps 流拷贝拼接验证通过（133s+51s→185s，
+Non-monotonic DTS 警告无害）。诊断工具：`--probe/--sort <files...>`（集成测试二进制）、
+`--group-debug`（单测二进制）。
+
+### 15.4 遗留
+
+- 混 fps 段拼接的输出为变帧率 MP4（PTS 驱动播放正确）；如需恒定帧率导出（仲裁/演示）
+  后续加 `-r` 统一选项（会帧复制 1fps 段，体积膨胀 15×）。
+- 音轨 copyAudio 策略与方案 §5.5.1 "48k 立体声统一"存在偏差（8k/16k DVR 音轨直拷保留），
+  属既有偏差，未在本批处理。
+- 报告 HTML 版仍未实现；2GB 无索引尾帧 seek 现场验证仍挂起。
