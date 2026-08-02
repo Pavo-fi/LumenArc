@@ -197,6 +197,7 @@ target_include_directories(lumenarc_preprocess_integration PRIVATE
 target_link_libraries(lumenarc_preprocess_integration PRIVATE
     Qt6::Core
     Qt6::Gui
+    Qt6::Concurrent   # python_analysis_engine.cpp 后台解析
     ${FFMPEG_LIBRARIES}
 )
 
@@ -254,6 +255,7 @@ target_link_libraries(${PROJECT_NAME} PRIVATE
     Qt6::Charts
     Qt6::OpenGL
     Qt6::Multimedia
+    Qt6::Concurrent   # 分析结果解析 / .vla 保存后台线程（分析结束不再卡死 UI）
     ${FFMPEG_LIBRARIES}
 )
 

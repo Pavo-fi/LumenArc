@@ -80,4 +80,5 @@ private:
     // Stored for current analysis run (populated in startAnalysis, used in onFinished)
     QVector<int> m_pendingRectRoiIds;
     QVector<int> m_pendingPolygonRoiIds;
+    bool m_cancelled = false;   // 后台解析完成回投时抑制误报（用户取消后）
 };

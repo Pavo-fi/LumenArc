@@ -19,6 +19,7 @@
 #include <QFile>
 #include <QCoreApplication>
 #include <QThread>
+#include <QtConcurrent>
 #include <QDebug>
 #include <QSettings>
 #include <algorithm>
@@ -392,6 +393,7 @@ void PythonAnalysisEngine::startAudioAnalysis(const QString &videoPath)
 
 void PythonAnalysisEngine::cancelAnalysis()
 {
+    m_cancelled = true;   // 后台解析回投前检查，避免取消后误报完成
     QProcess *proc = m_process;
     if (!proc)
         return;
@@ -527,6 +529,76 @@ static AudioData parseAudioData(const QJsonObject &audioObj)
     return audio;
 }
 
+/// 解析分析结果（纯函数，后台线程执行；不触碰引擎成员，避免跨线程竞争）：
+/// stdout JSON → AnalysisSnapshot。失败返回 false。
+static bool parseAnalysisBuffer(const QByteArray &buf,
+                                const QVector<int> &rectRoiIds,
+                                const QVector<int> &polygonRoiIds,
+                                AnalysisSnapshot *out)
+{
+    QJsonDocument doc = QJsonDocument::fromJson(buf);
+    if (!doc.isObject())
+        return false;
+
+    const QJsonObject obj = doc.object();
+    const QJsonArray timestampsArray = obj["timestamps"].toArray();
+    const QJsonArray luminancesArray = obj["luminances"].toArray();
+
+    QVector<qint64> timestamps;
+    timestamps.reserve(timestampsArray.size());
+    for (const auto &v : timestampsArray)
+        timestamps.append(static_cast<qint64>(v.toDouble()));
+
+    const int expectedPoints = timestamps.size();
+    QVector<QVector<qreal>> values;
+    values.reserve(luminancesArray.size());
+    for (const auto &regionArr : luminancesArray) {
+        const QJsonArray arr = regionArr.toArray();
+        QVector<qreal> series;
+        series.reserve(expectedPoints);
+        for (int i = 0; i < expectedPoints; ++i) {
+            if (i < arr.size())
+                series.append(arr[i].toDouble());
+            else
+                series.append(0.0);
+        }
+        values.append(std::move(series));
+    }
+
+    // 音频数据（体积大：频谱矩阵走二进制文件快速路径）
+    AudioData audio;
+    if (obj.contains("audio")) {
+        audio = parseAudioData(obj["audio"].toObject());
+        if (audio.hasVolume() && !audio.hasSpectrogram()) {
+            qWarning() << "Audio parsed: volume has" << audio.volume.size()
+                       << "points but spectrogram is empty (file may have been deleted)";
+        }
+    }
+
+    AnalysisSnapshot snapshot;
+    snapshot.timestamps = std::move(timestamps);
+    snapshot.values = std::move(values);
+
+    // dataEntries 与存储的 ROI ID 对齐
+    const int totalRois = snapshot.values.size();
+    const int rectCount = rectRoiIds.size();
+    for (int i = 0; i < totalRois; ++i) {
+        DataEntry entry;
+        if (i < rectCount) {
+            entry.type = DataEntry::Rect;
+            entry.roiId = i < rectRoiIds.size() ? rectRoiIds[i] : -1;
+        } else {
+            entry.type = DataEntry::Polygon;
+            const int pi = i - rectCount;
+            entry.roiId = pi < polygonRoiIds.size() ? polygonRoiIds[pi] : -1;
+        }
+        snapshot.dataEntries.append(entry);
+    }
+    snapshot.audio = audio;
+    *out = snapshot;
+    return true;
+}
+
 void PythonAnalysisEngine::onFinished(int exitCode)
 {
     QProcess *proc = m_process;
@@ -556,73 +628,29 @@ void PythonAnalysisEngine::onFinished(int exitCode)
         if (!finalOut.isEmpty())
             m_outputBuffer.append(finalOut);
 
-        QJsonDocument doc = QJsonDocument::fromJson(m_outputBuffer);
-        if (!doc.isObject()) {
-            emit analysisFailed("Invalid analysis result format.");
-            proc->deleteLater();
-            return;
-        }
-
-        QJsonObject obj = doc.object();
-        QJsonArray timestampsArray = obj["timestamps"].toArray();
-        QJsonArray luminancesArray = obj["luminances"].toArray();
-
-        QVector<qint64> timestamps;
-        timestamps.reserve(timestampsArray.size());
-        for (const auto &v : timestampsArray)
-            timestamps.append(static_cast<qint64>(v.toDouble()));
-
-        int expectedPoints = timestamps.size();
-        QVector<QVector<qreal>> values;
-        values.reserve(luminancesArray.size());
-        for (const auto &regionArr : luminancesArray) {
-            QJsonArray arr = regionArr.toArray();
-            QVector<qreal> series;
-            series.reserve(expectedPoints);
-            for (int i = 0; i < expectedPoints; ++i) {
-                if (i < arr.size())
-                    series.append(arr[i].toDouble());
-                else
-                    series.append(0.0);
-            }
-            values.append(std::move(series));
-        }
-
-        // Parse audio data if present
-        AudioData audio;
-        if (obj.contains("audio")) {
-            audio = parseAudioData(obj["audio"].toObject());
-            if (audio.hasVolume() && !audio.hasSpectrogram()) {
-                qWarning() << "Audio parsed: volume has" << audio.volume.size()
-                           << "points but spectrogram is empty (file may have been deleted)";
-            }
-        }
-
-        AnalysisSnapshot snapshot;
-        snapshot.timestamps = std::move(timestamps);
-        snapshot.values = std::move(values);
-
-        // Populate dataEntries from stored roiIds
-        int totalRois = snapshot.values.size();
-        int rectCount = m_pendingRectRoiIds.size();
-        for (int i = 0; i < totalRois; ++i) {
-            DataEntry entry;
-            if (i < rectCount) {
-                entry.type = DataEntry::Rect;
-                entry.roiId = (i < m_pendingRectRoiIds.size()) ? m_pendingRectRoiIds[i] : -1;
-            } else {
-                entry.type = DataEntry::Polygon;
-                int pi = i - rectCount;
-                entry.roiId = (pi < m_pendingPolygonRoiIds.size()) ? m_pendingPolygonRoiIds[pi] : -1;
-            }
-            snapshot.dataEntries.append(entry);
-        }
+        // 解析移出 UI 线程：频谱矩阵可达数百 MB，fromJson/拷贝在主线程会卡死界面
+        // （现场反馈：音频分析到结束程序未响应）。数据为值拷贝，后台线程安全。
+        const QByteArray buf = m_outputBuffer;   // COW：离开 UI 线程后不再触碰成员
+        m_outputBuffer.clear();
+        const QVector<int> rectRoiIds = m_pendingRectRoiIds;
+        const QVector<int> polyRoiIds = m_pendingPolygonRoiIds;
         m_pendingRectRoiIds.clear();
         m_pendingPolygonRoiIds.clear();
 
-        snapshot.audio = audio;
-        emit progressUpdated(100, 100, 100.0);
-        emit analysisFinished(snapshot);
+        QtConcurrent::run([this, buf, rectRoiIds, polyRoiIds]() {
+            AnalysisSnapshot snap;
+            const bool ok = parseAnalysisBuffer(buf, rectRoiIds, polyRoiIds, &snap);
+            QMetaObject::invokeMethod(this, [this, ok, snap]() {
+                if (m_cancelled)
+                    return;   // 用户已取消：不误报完成
+                if (ok) {
+                    emit progressUpdated(100, 100, 100.0);
+                    emit analysisFinished(snap);
+                } else {
+                    emit analysisFailed(QStringLiteral("Invalid analysis result format."));
+                }
+            }, Qt::QueuedConnection);
+        });
     }
 
     proc->deleteLater();
