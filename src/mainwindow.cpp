@@ -449,7 +449,7 @@ MainWindow::MainWindow(QWidget *parent)
     m_videoListPlaceholder->setVisible(false);
 
     // v1.2: 前处理改为独立任务窗口（docs/PREPROCESSING_UI_REDESIGN_CN.md），
-    // 经工具栏「素材整理拼接」按钮/文件菜单打开（见 openPreprocessWindow）
+    // 经工具栏「素材转码拼接」按钮/文件菜单打开（见 openPreprocessWindow）
 
     connect(phExpandBtn, &QPushButton::clicked, this, [this]() {
         m_videoListPlaceholder->setVisible(false);
@@ -503,7 +503,7 @@ MainWindow::~MainWindow()
     m_analysisEngine->cancelAnalysis();
 }
 
-/// @brief 打开素材整理拼接独立任务窗口（每次开启新会话；WA_DeleteOnClose 自销毁）
+/// @brief 打开素材转码拼接独立任务窗口（每次开启新会话；WA_DeleteOnClose 自销毁）
 void MainWindow::openPreprocessWindow()
 {
     auto *w = new PreprocessWindow(m_analysisEngine, this);
@@ -519,7 +519,7 @@ void MainWindow::createMenus()
 {
     QMenu *fileMenu = menuBar()->addMenu(lang("文件(&F)", "&File"));
     fileMenu->addAction(lang("打开视频(&O)...", "&Open Video..."), this, &MainWindow::onOpenFile, QKeySequence::Open);
-    fileMenu->addAction(lang("素材整理拼接(&M)...", "&Merge Clips..."), this, &MainWindow::openPreprocessWindow, QKeySequence(QStringLiteral("Ctrl+M")));
+    fileMenu->addAction(lang("素材转码拼接(&M)...", "&Transcode & Merge..."), this, &MainWindow::openPreprocessWindow, QKeySequence(QStringLiteral("Ctrl+M")));
     fileMenu->addAction(lang("加载图片为叠加(&I)...", "Load Image as &Overlay..."), this, &MainWindow::onLoadOverlayImage);
     fileMenu->addSeparator();
     fileMenu->addAction(lang("保存分析结果(&S)...", "&Save Analysis Result..."), this, &MainWindow::onSaveAnalysis, QKeySequence::Save);
@@ -933,11 +933,11 @@ void MainWindow::createToolBar()
     m_timeLabel->setStyleSheet(timeLabelStyle);
     toolBar->addWidget(m_timeLabel);
 
-    // v1.2: 素材整理拼接入口（独立任务窗口，显眼入口，UI 重设计 D1）
+    // v1.2: 素材转码拼接入口（独立任务窗口，显眼入口，UI 重设计 D1）
     auto *tbSpacer = new QWidget(this);
     tbSpacer->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
     toolBar->addWidget(tbSpacer);
-    auto *preprocessBtn = new QPushButton(lang("素材整理拼接", "Merge Clips"), this);
+    auto *preprocessBtn = new QPushButton(lang("素材转码拼接", "Transcode & Merge"), this);
     preprocessBtn->setToolTip(lang("多段监控录像智能排序、无损拼接与统一格式",
                                    "Sort, losslessly merge and normalize surveillance clips"));
     preprocessBtn->setMinimumHeight(30);

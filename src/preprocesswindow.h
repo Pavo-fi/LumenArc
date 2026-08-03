@@ -1,6 +1,6 @@
 /**
  * @file preprocesswindow.h
- * @brief 前处理-素材整理拼接独立任务窗口（四幕流程，ui 层）
+ * @brief 前处理-素材转码拼接独立任务窗口（四幕流程，ui 层）
  * @author Huang Jingyun, Liu xinghua, Huang Wenhua
  * @date 2026-08-02
  * @version 1.0
@@ -87,14 +87,13 @@ protected:
     bool eventFilter(QObject *watched, QEvent *event) override;
 
 private:
-    QWidget *buildStepBar();
+    QWidget *buildFormatBanner();
     QWidget *buildPageImport();
     QWidget *buildPageReview();
     QWidget *buildPageSettings();
     QWidget *buildPageRun();
 
     void setStep(int idx);
-    void updateStepBar();
     void addFiles(const QStringList &files);
     void rebuildReviewViews();          // 时间线+卡片（m_groups → UI）
     void refreshReviewSummary();
@@ -110,10 +109,7 @@ private:
 
     PreprocessingCoordinator *m_coord;
 
-    // 步骤条
-    QVector<QPushButton *> m_stepBtns;
     int m_currentStep = 0;
-    int m_maxReachedStep = 0;
 
     QStackedWidget *m_stack = nullptr;
 
@@ -124,7 +120,6 @@ private:
     QLabel *m_importStatus = nullptr;
     QPushButton *m_btnBeginSort = nullptr;
     QPushButton *m_btnQuickMerge = nullptr;
-    QCheckBox *m_skipOcrCheck = nullptr;
     QStringList m_pendingFiles;
     int m_tableDragRow = -1;               // 导入表拖拽起点行（自建拖拽，不依赖 Qt 内置）
     bool m_pendingQuickMerge = false;      // 直接拼接链式标志（列表顺序）

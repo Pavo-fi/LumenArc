@@ -1,6 +1,6 @@
 /**
  * @file preprocesswindow.cpp
- * @brief 前处理-素材整理拼接独立任务窗口实现
+ * @brief 前处理-素材转码拼接独立任务窗口实现
  * @author Huang Jingyun, Liu xinghua, Huang Wenhua
  * @date 2026-08-02
  * @version 1.0
@@ -80,7 +80,7 @@ PreprocessWindow::PreprocessWindow(IAnalysisEngine *analysis, QWidget *parent)
     : QMainWindow(parent)
     , m_coord(new PreprocessingCoordinator(this))
 {
-    setWindowTitle(lang("素材整理拼接", "Clip Organizer & Merger"));
+    setWindowTitle(lang("素材转码拼接", "Clip Transcode & Merge"));
     setAttribute(Qt::WA_DeleteOnClose);
     resize(1120, 780);
     m_coord->setAnalysisEngine(analysis);
@@ -89,7 +89,7 @@ PreprocessWindow::PreprocessWindow(IAnalysisEngine *analysis, QWidget *parent)
     auto *root = new QVBoxLayout(central);
     root->setContentsMargins(10, 8, 10, 8);
     root->setSpacing(8);
-    root->addWidget(buildStepBar());
+    root->addWidget(buildFormatBanner());
     m_stack = new QStackedWidget(central);
     m_stack->addWidget(buildPageImport());
     m_stack->addWidget(buildPageReview());
@@ -114,72 +114,43 @@ PreprocessWindow::PreprocessWindow(IAnalysisEngine *analysis, QWidget *parent)
             this, &PreprocessWindow::onFailed);
     connect(m_coord, &PreprocessingCoordinator::logLine,
             this, &PreprocessWindow::onLogLine);
-    updateStepBar();
 }
 
 // ---------------------------------------------------------------------------
-// 步骤条
+// 顶部横幅：支持格式说明（替代原 1234 步骤条）
 // ---------------------------------------------------------------------------
-QWidget *PreprocessWindow::buildStepBar()
+QWidget *PreprocessWindow::buildFormatBanner()
 {
-    auto *bar = new QWidget(this);
-    auto *lay = new QHBoxLayout(bar);
-    lay->setContentsMargins(0, 0, 0, 0);
+    auto *banner = new QFrame(this);
+    banner->setStyleSheet(QStringLiteral(
+        "QFrame { background:%1; border:1px solid %2; border-radius:8px; }"
+        "QLabel { border:none; background:transparent; }")
+        .arg(Theme::BgPanel, Theme::Border));
+    auto *lay = new QVBoxLayout(banner);
+    lay->setContentsMargins(12, 8, 12, 8);
     lay->setSpacing(4);
-    const QStringList labels = {
-        lang("① 导入素材", "① Import"),
-        lang("② 校对顺序", "② Review order"),
-        lang("③ 拼接设置", "③ Merge settings"),
-        lang("④ 执行与报告", "④ Run & report"),
-    };
-    for (int i = 0; i < labels.size(); ++i) {
-        auto *btn = new QPushButton(labels[i], bar);
-        btn->setFlat(true);
-        btn->setMinimumHeight(34);
-        btn->setCursor(Qt::PointingHandCursor);
-        connect(btn, &QPushButton::clicked, this, [this, i]() {
-            if (i <= m_maxReachedStep && m_coord->phase() != TaskPhase::Transcoding
-                && m_coord->phase() != TaskPhase::Concat)
-                setStep(i);
-        });
-        m_stepBtns.append(btn);
-        lay->addWidget(btn);
-        if (i < labels.size() - 1) {
-            auto *sep = new QLabel(QStringLiteral("─"), bar);
-            sep->setStyleSheet(QStringLiteral("color:%1;").arg(Theme::TextMuted));
-            lay->addWidget(sep);
-        }
-    }
-    lay->addStretch(1);
-    return bar;
-}
-
-void PreprocessWindow::updateStepBar()
-{
-    const bool locked = m_coord->phase() == TaskPhase::Transcoding
-        || m_coord->phase() == TaskPhase::Concat
-        || m_coord->phase() == TaskPhase::Probing
-        || m_coord->phase() == TaskPhase::Ocr;
-    for (int i = 0; i < m_stepBtns.size(); ++i) {
-        const bool current = i == m_currentStep;
-        const bool reachable = i <= m_maxReachedStep;
-        m_stepBtns[i]->setEnabled(reachable && !locked);
-        m_stepBtns[i]->setStyleSheet(QStringLiteral(
-            "QPushButton { background: %1; color: %2; border-radius: 8px; "
-            "padding: 4px 14px; font-weight: %3; }"
-            "QPushButton:disabled { color: %4; background: transparent; }")
-            .arg(current ? Theme::Accent : QStringLiteral("transparent"),
-                 current ? Theme::AccentOnDark : Theme::TextPrimary,
-                 current ? QStringLiteral("bold") : QStringLiteral("normal"),
-                 Theme::TextMuted));
-    }
+    auto *title = new QLabel(lang("支持格式", "Supported formats"), banner);
+    title->setStyleSheet(QStringLiteral("font-weight:bold; color:%1;")
+                             .arg(Theme::TextPrimary));
+    lay->addWidget(title);
+    auto *desc = new QLabel(
+        lang("DAV（大华）、AVI、WMV、FLV、TS / MTS / M2TS、MOV、MKV、MPG / MPEG、"
+             "3GP、WebM 等 —— 自动统一转码为 MP4（H.264，2 秒关键帧）后拼接，"
+             "拖拽播放顺滑连续；参数一致的 MP4 直接无损拼接。",
+             "DAV (Dahua), AVI, WMV, FLV, TS/MTS/M2TS, MOV, MKV, MPG/MPEG, "
+             "3GP, WebM etc. are auto-transcoded to MP4 (H.264, 2s keyframes) "
+             "for smooth scrubbing; identical MP4s merge losslessly."),
+        banner);
+    desc->setWordWrap(true);
+    desc->setStyleSheet(QStringLiteral("color:%1;").arg(Theme::TextSecond));
+    lay->addWidget(desc);
+    return banner;
 }
 
 void PreprocessWindow::setStep(int idx)
 {
     m_currentStep = idx;
     m_stack->setCurrentIndex(idx);
-    updateStepBar();
 }
 
 // ---------------------------------------------------------------------------
@@ -238,20 +209,11 @@ QWidget *PreprocessWindow::buildPageImport()
     auto *row = new QHBoxLayout();
     auto *btnAdd = new QPushButton(lang("添加文件…", "Add files…"), w);
     auto *btnClear = new QPushButton(lang("清空重选", "Clear all"), w);
-    m_skipOcrCheck = new QCheckBox(
-        lang("已有流内录制时间的片段跳过画面识别（快，推荐）",
-             "Skip on-screen OCR for clips with in-stream record time (fast, recommended)"), w);
-    m_skipOcrCheck->setChecked(true);
-    m_skipOcrCheck->setToolTip(lang(
-        "Dahua .dav 等片段内部已写录制时刻，足以排序；跳过识别可提速数十倍。"
-        "取消勾选则对所有片段做画面时间识别（交叉校验更充分但更慢）",
-        "Clips like Dahua .dav carry record time internally; skipping OCR is "
-        "orders of magnitude faster. Uncheck to OCR everything (slower cross-check)."));
-    m_btnBeginSort = new QPushButton(lang("自动排序 ⚡（可选）", "Auto sort ⚡ (optional)"), w);
+    m_btnBeginSort = new QPushButton(lang("自动排序 ⚡（实验性）", "Auto sort ⚡ (experimental)"), w);
     m_btnBeginSort->setEnabled(false);
     m_btnBeginSort->setToolTip(lang(
-        "识别画面/流内时间并按时间自动重排（可选）。\n不点也能直接拼接——拖拽列表行即可手动定序。",
-        "OCR on-screen/in-stream times and reorder automatically (optional). "
+        "实验性功能：识别画面/流内时间并按时间自动重排。\n不点也能直接拼接——拖拽列表行即可手动定序。",
+        "Experimental: reorders by on-screen/in-stream time. "
         "You can skip it: drag rows to order manually, then merge directly."));
     m_btnQuickMerge = new QPushButton(lang("开始拼接 ▶", "Start merging ▶"), w);
     m_btnQuickMerge->setEnabled(false);
@@ -262,7 +224,6 @@ QWidget *PreprocessWindow::buildPageImport()
         .arg(Theme::Accent, Theme::AccentOnDark, Theme::BgCard, Theme::TextMuted));
     row->addWidget(btnAdd);
     row->addWidget(btnClear);
-    row->addWidget(m_skipOcrCheck);
     row->addStretch(1);
     row->addWidget(m_btnBeginSort);
     row->addWidget(m_btnQuickMerge);
@@ -357,7 +318,6 @@ void PreprocessWindow::onClearFiles()
     m_btnBeginSort->setEnabled(false);
     m_btnQuickMerge->setEnabled(false);
     m_importStatus->clear();
-    m_maxReachedStep = 0;
     setStep(0);
 }
 
@@ -365,7 +325,7 @@ void PreprocessWindow::onBeginSort()
 {
     if (m_pendingFiles.isEmpty())
         return;
-    m_coord->setSkipOcrWhenAbsStart(m_skipOcrCheck->isChecked());
+
     if (m_coord->phase() == TaskPhase::UserConfirm) {
         // 已探测就绪：直接对当前列表重跑自动排序（覆盖顺序）
         m_importStatus->setText(lang("正在分析素材（识别画面时间）…",
@@ -380,14 +340,14 @@ void PreprocessWindow::onBeginSort()
     m_importStatus->setText(lang("正在分析素材（识别画面时间）…",
                                  "Analyzing clips (reading on-screen time)…"));
     m_coord->beginWithAutoSort(m_pendingFiles);
-    updateStepBar();
+
 }
 
 void PreprocessWindow::onQuickMerge()
 {
     if (m_pendingFiles.isEmpty())
         return;
-    m_coord->setSkipOcrWhenAbsStart(m_skipOcrCheck->isChecked());
+
     if (m_coord->phase() == TaskPhase::UserConfirm) {
         // 已探测就绪：按当前列表顺序直接拼接（不识别画面时间）
         m_coord->startProcessing(collectProcessingOptions());   // 内部自动确认顺序
@@ -403,7 +363,7 @@ void PreprocessWindow::onQuickMerge()
     m_pendingQuickMerge = true;
     m_pendingOpts = collectProcessingOptions();
     m_coord->begin(m_pendingFiles);
-    updateStepBar();
+
 }
 
 ProcessingOptions PreprocessWindow::collectProcessingOptions() const
@@ -1226,19 +1186,19 @@ void PreprocessWindow::onPhaseChanged(TaskPhase phase)
     case TaskPhase::UserConfirm:
         if (m_pendingQuickMerge)      // 直接拼接链：不切校对页
             break;
-        m_maxReachedStep = qMax(m_maxReachedStep, 1);
+
         setStep(1);
         break;
     case TaskPhase::Precheck:
         if (m_pendingQuickMerge)      // 直接拼接链：不切设置页
             break;
-        m_maxReachedStep = qMax(m_maxReachedStep, 2);
+
         updateSettingsPage();
         setStep(2);
         break;
     case TaskPhase::Transcoding:
     case TaskPhase::Concat:
-        m_maxReachedStep = qMax(m_maxReachedStep, 3);
+
         setStep(3);
         m_btnCancel->setEnabled(true);
         if (!m_runTimer.isValid())
@@ -1247,7 +1207,7 @@ void PreprocessWindow::onPhaseChanged(TaskPhase phase)
     default:
         break;
     }
-    updateStepBar();
+
 }
 
 void PreprocessWindow::onProgress(int percent, const QString &detail)
@@ -1303,7 +1263,7 @@ void PreprocessWindow::onEvidenceReady(const QVector<SortGroup> &groups)
     }
     m_importStatus->setText(lang("分析完成，请校对顺序（可直接开始拼接）",
                                  "Analysis done; review order (or merge directly)"));
-    m_maxReachedStep = qMax(m_maxReachedStep, 1);
+
     setStep(1);
 }
 
@@ -1352,7 +1312,7 @@ void PreprocessWindow::onFinished(const PreprocessReport &report)
                                    "Evidence report: %1\n(frames, CSV, operation log archived)")
                                   .arg(report.evidenceDir));
     m_resultCard->setVisible(true);
-    m_maxReachedStep = qMax(m_maxReachedStep, 3);
+
     setStep(3);
     // 任务结束：允许回导入页重试/换批次
     m_btnBeginSort->setEnabled(!m_pendingFiles.isEmpty());
@@ -1398,7 +1358,7 @@ void PreprocessWindow::onFailed(PreprocessError error, const QString &detail)
     m_resultOutput->setText(plain);
     m_resultEvidence->setText(lang("错误信息：%1", "Error: %1").arg(detail));
     m_resultCard->setVisible(true);
-    m_maxReachedStep = qMax(m_maxReachedStep, 3);
+
     setStep(3);
     // 失败后允许回导入页重试
     m_btnBeginSort->setEnabled(!m_pendingFiles.isEmpty());
