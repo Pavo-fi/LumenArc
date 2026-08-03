@@ -175,6 +175,8 @@ public:
     void clearSnapshot();
     /// @brief Clear the displayed video frame (back to "no video" placeholder).
     void clearFrame();
+    /// @brief 大视频加载期间的“导入中…”提示（首帧到达后由调用方关闭）
+    void setLoading(bool on);
     void grabFrameSnapshot();
     const QImage& currentFrame() const { return m_frameImage; }
 
@@ -195,6 +197,7 @@ private:
     OverlayWidget *m_overlay = nullptr;
     QPointer<IVideoEngine> m_engine;
     QImage m_frameImage;
+    bool m_loading = false;   // 大视频加载提示（首帧到达后清除）
 
     // Snapshot fusion data
     QImage m_snapshot;

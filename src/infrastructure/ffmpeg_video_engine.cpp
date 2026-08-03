@@ -1041,6 +1041,7 @@ void FfmpegVideoEngine::workerMain()
             case Command::Stop:
                 handleSeek(0);
                 m_state = static_cast<int>(PlaybackState::Stopped);
+                m_stepOnce = false;   // 清空列表后不再显示加载中的首帧（回到空状态）
                 suspendAudio();
                 emit stateChanged(PlaybackState::Stopped);
                 break;

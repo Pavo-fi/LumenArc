@@ -1264,7 +1264,7 @@ void MainWindow::setupConnections()
                     m_snapshotOverlay->clearSnapshot();
                 if (m_videoWidget) {
                     m_videoWidget->clearSnapshot();
-                    m_videoWidget->clearFrame();
+                    m_videoWidget->clearFrame();   // 清空 m_frameImage → 回到初始空状态
                 }
 
                 m_playBtn->setEnabled(false);
@@ -1476,6 +1476,12 @@ void MainWindow::openVideoFile(const QString &filePath)
     m_currentDurationMs = 0;  // 等待 durationChanged 校准
 
     if (m_videoEngine->load(filePath)) {
+        // 大视频加载需要数秒：主窗口显示“导入中…”（首帧到达自动清除），
+        // 避免用户误以为程序无响应
+        m_videoWidget->setLoading(true);
+        QObject::connect(m_videoEngine, &IVideoEngine::frameReady, this,
+                         [this](const QImage &) { m_videoWidget->setLoading(false); },
+                         Qt::SingleShotConnection);
         // 加入视频列表（“在主窗口播放输出”路径此前漏加；hasVideo 去重避免
         // 每次切换视频重复跑 videoTiming）
         if (m_videoListPanel && !m_videoListPanel->hasVideo(filePath)) {

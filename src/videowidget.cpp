@@ -1194,9 +1194,16 @@ void VideoWidget::onFrameReady(const QImage &image)
 void VideoWidget::clearFrame()
 {
     m_frameImage = QImage();
+    m_loading = false;
     update();
     if (m_overlay)
         m_overlay->update();
+}
+
+void VideoWidget::setLoading(bool on)
+{
+    m_loading = on;
+    update();
 }
 
 void VideoWidget::setSnapshot(const QImage &snapshot, int brightness, int contrast, int opacity)
@@ -1296,7 +1303,24 @@ void VideoWidget::paintEvent(QPaintEvent *event)
             painter.setOpacity(1.0);
         }
     } else if (m_frameImage.isNull()) {
-        // 品牌空状态：logo 水印 + 引导语
+        // 品牌空状态：logo 水印 + 引导语（加载大视频期间显示“导入中…”）
+        if (m_loading) {
+            // 半透明圆角提示块
+            const int boxW = qMin(320, width() - 40);
+            const int boxH = 64;
+            const QRect box((width() - boxW) / 2, (height() - boxH) / 2, boxW, boxH);
+            painter.setRenderHint(QPainter::Antialiasing);
+            painter.setBrush(QColor(24, 28, 34, 210));
+            painter.setPen(QColor(Theme::Border));
+            painter.drawRoundedRect(box, 10, 10);
+            QFont f = painter.font();
+            f.setPointSize(12);
+            painter.setFont(f);
+            painter.setPen(QColor(Theme::TextPrimary));
+            painter.drawText(box, Qt::AlignCenter, lang("导入中… 正在解析视频\n请稍候",
+                                                         "Importing… parsing video\nplease wait"));
+            return;
+        }
         static const QImage logo(QStringLiteral(":/logo.png"));
         if (!logo.isNull()) {
             const int side = qMin(width(), height()) / 3;
