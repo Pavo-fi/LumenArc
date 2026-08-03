@@ -1242,7 +1242,8 @@ void MainWindow::setupConnections()
             this, [this](int count) {
                 if (count > 0)
                     return;
-                m_videoEngine->stop();
+                m_videoEngine->unload();   // 彻底卸载：停线程+释放文件+duration 归零
+                                          // （仅 stop() 时空格快捷键仍可继续播放——现场反馈）
                 removeMagnifier();
                 m_currentVideoPath.clear();
                 m_trustedDurationMs = 0;

@@ -49,6 +49,7 @@ public:
     void play() override;
     void pause() override;
     void stop() override;
+    void unload() override;
     void seek(qint64 timeMs) override;
 
     qint64 position() const override;

@@ -198,6 +198,8 @@ private:
     QPointer<IVideoEngine> m_engine;
     QImage m_frameImage;
     bool m_loading = false;   // 大视频加载提示（首帧到达后清除）
+    int m_loadingAngle = 0;   // 加载旋转动画角度
+    QTimer *m_loadingTimer = nullptr;
 
     // Snapshot fusion data
     QImage m_snapshot;

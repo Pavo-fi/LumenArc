@@ -16,6 +16,7 @@
 #include "i18n.h"
 #include "theme.h"
 
+#include <QTimer>
 #include <QPainter>
 #include <QMouseEvent>
 #include <QKeyEvent>
@@ -1194,7 +1195,7 @@ void VideoWidget::onFrameReady(const QImage &image)
 void VideoWidget::clearFrame()
 {
     m_frameImage = QImage();
-    m_loading = false;
+    setLoading(false);   // 停旋转动画 + 清标志（清空列表后回到初始空状态）
     update();
     if (m_overlay)
         m_overlay->update();
@@ -1202,7 +1203,23 @@ void VideoWidget::clearFrame()
 
 void VideoWidget::setLoading(bool on)
 {
+    if (m_loading == on)
+        return;
     m_loading = on;
+    if (on) {
+        m_loadingAngle = 0;
+        if (!m_loadingTimer) {
+            m_loadingTimer = new QTimer(this);
+            m_loadingTimer->setInterval(50);
+            connect(m_loadingTimer, &QTimer::timeout, this, [this]() {
+                m_loadingAngle = (m_loadingAngle + 24) % 360;
+                update();
+            });
+        }
+        m_loadingTimer->start();
+    } else if (m_loadingTimer) {
+        m_loadingTimer->stop();
+    }
     update();
 }
 
@@ -1305,20 +1322,54 @@ void VideoWidget::paintEvent(QPaintEvent *event)
     } else if (m_frameImage.isNull()) {
         // 品牌空状态：logo 水印 + 引导语（加载大视频期间显示“导入中…”）
         if (m_loading) {
-            // 半透明圆角提示块
-            const int boxW = qMin(320, width() - 40);
-            const int boxH = 64;
+            // 导入中卡片：旋转金色圆弧 + 标题/副标题（大视频解析数秒期间的反馈）
+            const int boxW = qMin(380, width() - 48);
+            const int boxH = 92;
             const QRect box((width() - boxW) / 2, (height() - boxH) / 2, boxW, boxH);
             painter.setRenderHint(QPainter::Antialiasing);
-            painter.setBrush(QColor(24, 28, 34, 210));
-            painter.setPen(QColor(Theme::Border));
-            painter.drawRoundedRect(box, 10, 10);
+            // 投影底
+            painter.setBrush(QColor(8, 10, 13, 180));
+            painter.setPen(Qt::NoPen);
+            painter.drawRoundedRect(box.adjusted(0, 3, 0, 3), 14, 14);
+            // 卡片
+            painter.setBrush(QColor(26, 30, 37, 232));
+            painter.setPen(QColor(70, 78, 92, 200));
+            painter.drawRoundedRect(box, 14, 14);
+            // 旋转圆弧（金色，缺口弧）
+            const int cx = box.left() + 46;
+            const int cy = box.center().y();
+            const int r = 17;
+            painter.save();
+            painter.translate(cx, cy);
+            painter.rotate(m_loadingAngle);
+            const QString accentColor = Theme::Accent;
+            QPen arcPen{ QColor(accentColor) };
+            arcPen.setWidthF(3.2);
+            arcPen.setCapStyle(Qt::RoundCap);
+            painter.setPen(arcPen);
+            painter.drawArc(QRect(-r, -r, r * 2, r * 2), 30 * 16, 280 * 16);
+            // 内圈暗环
+            QPen ring(QColor(90, 100, 116, 90));
+            ring.setWidthF(2);
+            painter.setPen(ring);
+            painter.drawEllipse(QPointF(0, 0), r - 8, r - 8);
+            painter.restore();
+            // 标题 + 副标题
             QFont f = painter.font();
-            f.setPointSize(12);
+            f.setPointSize(13);
+            f.setBold(true);
             painter.setFont(f);
             painter.setPen(QColor(Theme::TextPrimary));
-            painter.drawText(box, Qt::AlignCenter, lang("导入中… 正在解析视频\n请稍候",
-                                                         "Importing… parsing video\nplease wait"));
+            painter.drawText(QRect(box.left() + 76, box.top() + 18, box.width() - 92, 26),
+                             Qt::AlignLeft | Qt::AlignVCenter,
+                             lang("导入中…", "Importing…"));
+            f.setPointSize(10);
+            f.setBold(false);
+            painter.setFont(f);
+            painter.setPen(QColor(Theme::TextSecond));
+            painter.drawText(QRect(box.left() + 76, box.top() + 48, box.width() - 92, 24),
+                             Qt::AlignLeft | Qt::AlignVCenter,
+                             lang("正在解析视频，请稍候…", "Parsing video, please wait…"));
             return;
         }
         static const QImage logo(QStringLiteral(":/logo.png"));

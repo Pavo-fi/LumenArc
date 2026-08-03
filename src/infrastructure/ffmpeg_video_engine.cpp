@@ -133,6 +133,30 @@ bool FfmpegVideoEngine::load(const QString &filePath)
 void FfmpegVideoEngine::play()  { postCommand(Command::Play); }
 void FfmpegVideoEngine::pause() { postCommand(Command::Pause); }
 void FfmpegVideoEngine::stop()  { postCommand(Command::Stop); }
+
+void FfmpegVideoEngine::unload()
+{
+    // 停工作线程（workerMain 退出路径自动 closeFile 释放全部上下文）
+    if (m_thread) {
+        m_quit = true;
+        postCommand(Command::Stop);
+        m_thread->quit();
+        m_thread->wait(5000);
+        m_thread = nullptr;
+        m_quit = false;
+    }
+    // UI 可见状态全部归零：duration=0 → 全局快捷键（空格播放等）自动失效
+    m_positionMs = 0;
+    m_durationMs = 0;
+    m_fps = 0;
+    m_width = 0;
+    m_height = 0;
+    m_pendingPath.clear();
+    m_state = static_cast<int>(PlaybackState::Idle);
+    emit durationChanged(0);
+    emit stateChanged(PlaybackState::Idle);
+}
+
 void FfmpegVideoEngine::seek(qint64 timeMs) { postCommand(Command::Seek, timeMs); }
 
 qint64 FfmpegVideoEngine::position() const { return m_positionMs.load(); }
