@@ -1267,6 +1267,13 @@ void MainWindow::setupConnections()
                     m_videoWidget->clearSnapshot();
                     m_videoWidget->clearFrame();   // 清空 m_frameImage → 回到初始空状态
                 }
+                // 竞态：worker 已 emit、UI 尚未处理的在途 frameReady 会在
+                // clearFrame 之后到达又把帧画回去（现场反馈：第二次清空画面留存）。
+                // unload 已停线程不会再产生新帧，事件循环尾部再清一次即可兜住。
+                QTimer::singleShot(0, this, [this]() {
+                    if (m_videoWidget && m_currentVideoPath.isEmpty())
+                        m_videoWidget->clearFrame();
+                });
 
                 m_playBtn->setEnabled(false);
                 m_pauseBtn->setEnabled(false);
