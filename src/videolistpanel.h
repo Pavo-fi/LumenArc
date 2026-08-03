@@ -38,6 +38,8 @@ public:
     explicit VideoListPanel(QWidget *parent = nullptr);
 
     void addVideo(const QString &path, qint64 durationMs, float fps);
+    /// 列表是否已含该文件（canonical 比较，与 addVideo 去重一致）
+    bool hasVideo(const QString &path) const;
     void updateDuration(const QString &path, qint64 durationMs);
     void removeVideo(int index);
     void clearVideos();

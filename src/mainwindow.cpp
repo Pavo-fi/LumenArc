@@ -1476,6 +1476,18 @@ void MainWindow::openVideoFile(const QString &filePath)
     m_currentDurationMs = 0;  // 等待 durationChanged 校准
 
     if (m_videoEngine->load(filePath)) {
+        // 加入视频列表（“在主窗口播放输出”路径此前漏加；hasVideo 去重避免
+        // 每次切换视频重复跑 videoTiming）
+        if (m_videoListPanel && !m_videoListPanel->hasVideo(filePath)) {
+            IAnalysisEngine::VideoTiming timing;
+            if (m_analysisEngine)
+                timing = m_analysisEngine->videoTiming(filePath);
+            float fps = timing.fps > 0 ? timing.fps : m_videoEngine->fps();
+            qint64 dur = timing.durationMs;
+            if (dur <= 0)
+                dur = m_videoEngine->duration();
+            m_videoListPanel->addVideo(filePath, dur, fps);
+        }
         // Check if we have a saved state for this video (memory state takes priority)
         VideoState savedState;
         if (m_stateManager->restoreState(filePath, savedState)) {

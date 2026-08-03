@@ -17,6 +17,7 @@
 #include <QTableWidget>
 #include <QDropEvent>
 #include <QMimeData>
+#include <QPainter>
 #include <functional>
 
 class SortableFileTable : public QTableWidget
@@ -24,6 +25,28 @@ class SortableFileTable : public QTableWidget
 public:
     using QTableWidget::QTableWidget;
     std::function<void()> orderChanged;   // 拖拽落定后回调（同步文件顺序）
+
+    // --- 拖拽视觉：目的地金色插入线（与校对页卡片拖拽一致的指示效果） ---
+    int  dropRow = -1;        // 目标行（-1=无指示）
+    bool dropAfter = false;   // true=插到该行之后（下缘）
+    bool dragActive = false;  // 拖拽进行中（吞掉 MouseMove 防 Qt 默认 current/hover 蓝框）
+
+    void setDropIndicator(int row, bool after)
+    {
+        if (dropRow != row || dropAfter != after) {
+            dropRow = row;
+            dropAfter = after;
+            viewport()->update();
+        }
+    }
+
+    void clearDropIndicator()
+    {
+        if (dropRow >= 0) {
+            dropRow = -1;
+            viewport()->update();
+        }
+    }
 
     /// 将 srcRow 整行移动到"插到 targetRow 之前"的位置；insertAfter=true 时
     /// 插到 targetRow 之后。返回是否发生移动。位置不变时返回 false。
@@ -71,6 +94,20 @@ public:
     }
 
 protected:
+    void paintEvent(QPaintEvent *event) override
+    {
+        QTableWidget::paintEvent(event);
+        if (dropRow < 0)
+            return;
+        const QRect vr = visualRect(model()->index(dropRow, 0));
+        if (!vr.isValid())
+            return;
+        const int y = dropAfter ? vr.bottom() : vr.top();
+        QPainter p(viewport());
+        p.setRenderHint(QPainter::Antialiasing, false);
+        p.fillRect(0, y - 1, viewport()->width(), 3, QColor("#F0B429"));   // 金色插入线
+    }
+
     void dropEvent(QDropEvent *event) override
     {
         if (event->source() == this

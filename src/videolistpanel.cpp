@@ -66,6 +66,15 @@ VideoListPanel::VideoListPanel(QWidget *parent)
     updateStatusLabel();
 }
 
+bool VideoListPanel::hasVideo(const QString &path) const
+{
+    const QString canonical = QFileInfo(path).canonicalFilePath();
+    for (const auto &v : m_videos)
+        if (QFileInfo(v.filePath).canonicalFilePath() == canonical)
+            return true;
+    return false;
+}
+
 void VideoListPanel::addVideo(const QString &path, qint64 durationMs, float fps)
 {
     // B8: Unified duplicate check so all callers (onOpenFile, dropEvent, addClicked)

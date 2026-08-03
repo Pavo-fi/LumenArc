@@ -48,6 +48,7 @@
 #include <QMimeData>
 #include <QDrag>
 #include <QMouseEvent>
+#include <QKeyEvent>
 #include <QStorageInfo>
 #include <QCloseEvent>
 #include <QRegularExpression>
@@ -224,6 +225,7 @@ QWidget *PreprocessWindow::buildPageImport()
     // NoDragDrop 会连 viewport acceptDrops 一并关掉 → 自建 drop 无法到达；手动开回
     m_fileTable->setAcceptDrops(true);
     m_fileTable->viewport()->installEventFilter(this);
+    m_fileTable->installEventFilter(this);   // 键盘事件（Del 删除选中行）
     lay->addWidget(m_fileTable, 1);
 
     m_importProgress = new QProgressBar(w);
@@ -1434,6 +1436,31 @@ int insertIndexForChan(QWidget *host, const QString &chan, int x,
 
 bool PreprocessWindow::eventFilter(QObject *watched, QEvent *event)
 {
+    // --- 导入表键盘：Del/Backspace 删除选中行（现场反馈：个别错了无法删除） ---
+    if (m_fileTable && watched == m_fileTable) {
+        if (event->type() == QEvent::KeyPress) {
+            auto *ke = static_cast<QKeyEvent *>(event);
+            if (ke->key() == Qt::Key_Delete || ke->key() == Qt::Key_Backspace) {
+                const int row = m_fileTable->currentRow();
+                const TaskPhase ph = m_coord->phase();
+                if (row >= 0 && (ph == TaskPhase::Idle || ph == TaskPhase::Done
+                                 || ph == TaskPhase::Failed
+                                 || ph == TaskPhase::Cancelled)) {
+                    m_fileTable->removeRow(row);
+                    syncPendingFromTable();
+                    m_btnBeginSort->setEnabled(!m_pendingFiles.isEmpty());
+                    m_btnQuickMerge->setEnabled(!m_pendingFiles.isEmpty());
+                    m_importSummary->setText(
+                        lang("已导入 %1 段（可拖拽行调整顺序；当前顺序即拼接顺序）",
+                             "%1 clip(s) (drag rows to reorder; row order = merge order)")
+                            .arg(m_pendingFiles.size()));
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
     // --- 导入表 viewport：自建行拖拽（插入语义，不依赖 Qt 内置拖放） ---
     if (m_fileTable && watched == m_fileTable->viewport()) {
         switch (event->type()) {
@@ -1450,6 +1477,11 @@ bool PreprocessWindow::eventFilter(QObject *watched, QEvent *event)
             break;
         case QEvent::MouseMove: {
             auto *me = static_cast<QMouseEvent *>(event);
+            // 拖拽进行中：吞掉 MouseMove，防 Qt 默认 current/hover 蓝框
+            // （现场反馈“文件名下方有一条蓝色不美观”）
+            auto *st = static_cast<SortableFileTable *>(m_fileTable);
+            if (st->dragActive)
+                return true;
             if (m_tableDragRow >= 0 && (me->buttons() & Qt::LeftButton)
                 && (me->pos() - m_dragStartPos).manhattanLength() > 10) {
                 auto *drag = new QDrag(m_fileTable);
@@ -1486,14 +1518,35 @@ bool PreprocessWindow::eventFilter(QObject *watched, QEvent *event)
             auto *de = static_cast<QDragMoveEvent *>(event);
             if (de->mimeData()->hasFormat(
                     QStringLiteral("application/x-lumenarc-filerow"))) {
+                auto *st = static_cast<SortableFileTable *>(m_fileTable);
+                st->dragActive = true;
+                // 目的地指示：目标行 + 行中心上/下缘（与校对页卡片一致）
+                const QModelIndex idx = m_fileTable->indexAt(
+                    de->position().toPoint());
+                if (idx.isValid()) {
+                    const QRect vr = m_fileTable->visualRect(idx);
+                    st->setDropIndicator(idx.row(),
+                        (de->position().toPoint().y() - vr.top())
+                            > vr.height() / 2);
+                } else {
+                    st->setDropIndicator(m_fileTable->rowCount() - 1, true);
+                }
                 de->acceptProposedAction();
                 return true;
             }
             break;
         }
+        case QEvent::DragLeave: {
+            auto *st = static_cast<SortableFileTable *>(m_fileTable);
+            st->dragActive = false;
+            st->clearDropIndicator();
+            break;
+        }
         case QEvent::Drop: {
             auto *de = static_cast<QDropEvent *>(event);
             auto *st = static_cast<SortableFileTable *>(m_fileTable);
+            st->dragActive = false;
+            st->clearDropIndicator();
             if (st->handleRowDrop(de->mimeData(), de->position().toPoint())) {
                 syncPendingFromTable();
                 de->acceptProposedAction();
