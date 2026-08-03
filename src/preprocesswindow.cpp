@@ -31,6 +31,7 @@
 #include <QLineEdit>
 #include <QSpinBox>
 #include <QCheckBox>
+#include <QTimer>
 #include <QFont>
 #include <QRadioButton>
 #include <QScrollArea>
@@ -1313,6 +1314,38 @@ void PreprocessWindow::onFinished(const PreprocessReport &report)
     const QFileInfo fi(report.outputPath);
     const bool haveOutput = !report.outputPath.isEmpty()
         && fi.isFile() && fi.size() > 0;
+    // 单文件已是合格 MP4：未执行转码/拼接（协调器该路径不生成 CSV 证据）
+    const bool noOp = haveOutput && report.reportCsvPath.isEmpty()
+        && m_pendingFiles.size() == 1
+        && report.outputPath == m_pendingFiles.first();
+    if (noOp) {
+        m_resultTitle->setText(lang("✓ 无需处理", "✓ Nothing to do"));
+        m_resultTitle->setStyleSheet(QStringLiteral(
+            "font-size:18px; font-weight:bold; color:%1;").arg(Theme::Success));
+        m_resultOutput->setText(lang(
+            "该文件已是合格 MP4（H.264、关键帧 ≤2.5 秒），可直接在主窗口播放；"
+            "无需转码或拼接。",
+            "This file is already a valid MP4 (H.264, keyframes ≤2.5s); "
+            "playable in the main window. No transcode or merge needed."));
+        m_btnPlayOutput->setEnabled(true);
+        m_resultEvidence->setText(lang("未执行转码/拼接，未生成证据报告。",
+                                       "Nothing was processed; no evidence report."));
+        m_resultCard->setVisible(true);
+        setStep(3);
+        m_btnBeginSort->setEnabled(!m_pendingFiles.isEmpty());
+        m_btnQuickMerge->setEnabled(!m_pendingFiles.isEmpty());
+        // 明确弹窗（与“分析完成”同风格，5 秒自动关）
+        QTimer::singleShot(0, this, [this]() {
+            auto *box = new QMessageBox(QMessageBox::Information, windowTitle(),
+                lang("该文件已是合格 MP4（H.264、关键帧 ≤2.5 秒），无需处理。",
+                     "Already a valid MP4 (H.264, keyframes ≤2.5s); nothing to do."),
+                QMessageBox::Ok, this);
+            box->setAttribute(Qt::WA_DeleteOnClose);
+            QTimer::singleShot(5000, box, &QWidget::close);
+            box->show();
+        });
+        return;
+    }
     if (haveOutput) {
         m_resultTitle->setText(lang("✓ 拼接完成", "✓ Merge finished"));
         m_resultTitle->setStyleSheet(QStringLiteral(

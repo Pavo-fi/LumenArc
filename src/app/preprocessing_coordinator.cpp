@@ -484,7 +484,7 @@ void PreprocessingCoordinator::startProcessing(const ProcessingOptions &opts)
             log(QStringLiteral("[%1] 单文件已是合格 MP4（H.264 且关键帧 ≤2.5s），无需处理")
                     .arg(tsLog()));
             m_report.outputPath = f;
-            m_report.evidenceDir = m_evidenceDir;
+            m_report.evidenceDir.clear();   // 未执行任何处理：不留临时证据目录
             m_report.reportCsvPath.clear();
             setPhase(TaskPhase::Done);
             emit progress(100, QStringLiteral("无需处理"));
