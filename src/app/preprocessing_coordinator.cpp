@@ -475,8 +475,33 @@ void PreprocessingCoordinator::startProcessing(const ProcessingOptions &opts)
         return;
     }
 
+    // 单文件（GO = 单独转码导出）：合格 MP4 直接完成；否则转码导出不拼接
+    if (m_files.size() == 1) {
+        const QString f = m_files.first();
+        const bool needTx = filesNeedingTranscode({m_probes.value(f)})
+                                .contains(f);
+        if (!needTx) {
+            log(QStringLiteral("[%1] 单文件已是合格 MP4（H.264 且关键帧 ≤2.5s），无需处理")
+                    .arg(tsLog()));
+            m_report.outputPath = f;
+            m_report.evidenceDir = m_evidenceDir;
+            m_report.reportCsvPath.clear();
+            setPhase(TaskPhase::Done);
+            emit progress(100, QStringLiteral("无需处理"));
+            emit finished(m_report);
+            return;
+        }
+        m_transcodeQueue = QStringList{f};
+        m_actions.insert(f, QStringLiteral("转码"));
+        log(QStringLiteral("[%1] 单文件转码导出：%2").arg(tsLog(), f));
+        setPhase(TaskPhase::Transcoding);
+        m_currentTranscode.clear();
+        startNextTranscode();
+        return;
+    }
+
     // 逐文件转码路由（现场反馈：转码非强制步骤，仅确实需要的文件转码）：
-    // 白名单外/探测失败/组内参数不一致 → 转码；其余直接无损拼接
+    // 白名单外/探测失败/关键帧稀疏/组内参数不一致 → 转码；其余直接无损拼接
     for (const auto &g : m_groups) {
         QVector<ProbeResult> ordered;
         for (const auto &e : g.ordered)
@@ -728,22 +753,28 @@ void PreprocessingCoordinator::finalize()
     m_report.evidenceDir = finalEvidence;
     m_report.reportCsvPath = csvPath;
     if (m_concatOutputs.isEmpty()) {
-        // 全组失败：必须显式失败，禁止绿勾“完成”（现场反馈：显示完成但无输出）
-        const QString detail = QStringLiteral(
-            "拼接未产出任何输出文件：转码失败 %1 个，拼接失败 %2 组；"
-            "详见证据目录 operations.log / report.csv")
-            .arg(m_transcodeFailed.size())
-            .arg(m_groups.size());
-        m_report.error = PreprocessError::ConcatFailed;
-        m_report.errorDetail = detail;
-        m_report.outputPath.clear();
-        writeOperationsLog(finalEvidence);
-        setPhase(TaskPhase::Failed);
-        log(QStringLiteral("[%1] %2").arg(tsLog(), detail));
-        emit failed(PreprocessError::ConcatFailed, detail);
-        return;
+        if (!m_outputs.isEmpty()) {
+            // 单文件转码导出：无拼接但有转码产物
+            m_report.outputPath = m_outputs.values().first();
+        } else {
+            // 全组失败：必须显式失败，禁止绿勾"完成"（现场反馈：显示完成但无输出）
+            const QString detail = QStringLiteral(
+                "拼接未产出任何输出文件：转码失败 %1 个，拼接失败 %2 组；"
+                "详见证据目录 operations.log / report.csv")
+                .arg(m_transcodeFailed.size())
+                .arg(m_groups.size());
+            m_report.error = PreprocessError::ConcatFailed;
+            m_report.errorDetail = detail;
+            m_report.outputPath.clear();
+            writeOperationsLog(finalEvidence);
+            setPhase(TaskPhase::Failed);
+            log(QStringLiteral("[%1] %2").arg(tsLog(), detail));
+            emit failed(PreprocessError::ConcatFailed, detail);
+            return;
+        }
+    } else {
+        m_report.outputPath = m_concatOutputs.values().first();
     }
-    m_report.outputPath = m_concatOutputs.values().first();
     // 部分失败：报告留痕（C2 不静默），日志汇总
     if (!m_transcodeFailed.isEmpty())
         log(QStringLiteral("[%1] 注意：%2 个文件转码失败，已从拼接中剔除")

@@ -31,6 +31,7 @@
 #include <QLineEdit>
 #include <QSpinBox>
 #include <QCheckBox>
+#include <QFont>
 #include <QRadioButton>
 #include <QScrollArea>
 #include <QFileDialog>
@@ -134,12 +135,24 @@ QWidget *PreprocessWindow::buildFormatBanner()
                              .arg(Theme::TextPrimary));
     lay->addWidget(title);
     auto *desc = new QLabel(
-        lang("DAV（大华）、AVI、WMV、FLV、TS / MTS / M2TS、MOV、MKV、MPG / MPEG、"
-             "3GP、WebM 等 —— 自动统一转码为 MP4（H.264，2 秒关键帧）后拼接，"
-             "拖拽播放顺滑连续；参数一致的 MP4 直接无损拼接。",
-             "DAV (Dahua), AVI, WMV, FLV, TS/MTS/M2TS, MOV, MKV, MPG/MPEG, "
-             "3GP, WebM etc. are auto-transcoded to MP4 (H.264, 2s keyframes) "
-             "for smooth scrubbing; identical MP4s merge losslessly."),
+        lang("用法：拖入视频文件 → 按顺序排好（拖拽行）→ 点右下角 GO\n"
+             "│\n"
+             "│ GO 会自动判断：\n"
+             "│ - 全部是参数一致的 MP4 且关键帧间隔 ≤2 秒 → 直接无损拼接（不重编码、画质零损失）\n"
+             "│ - 有非 MP4 格式（DAV/AVI/WMV/FLV/TS/MOV/MKV 等），或 MP4 关键帧间隔超过 2 秒"
+             "（拖拽不流畅）→ 自动转码后拼接（统一为 MP4·H.264·2 秒关键帧）\n"
+             "│ - 只拖入 1 个文件 → 单独转码导出为 MP4\n"
+             "│\n"
+             "│ 输出：MP4（H.264）拼接产物可直接在主窗口播放；证据报告自动生成。",
+             "Usage: drop video clips → order them (drag rows) → hit GO (bottom right)\n"
+             "│\n"
+             "│ GO decides automatically:\n"
+             "│ - identical MP4s with ≤2s keyframes → lossless merge (no re-encode, zero quality loss)\n"
+             "│ - any non-MP4 (DAV/AVI/WMV/FLV/TS/MOV/MKV…) or MP4 with keyframes >2s "
+             "(jerky scrubbing) → auto transcode to MP4·H.264·2s keyframes, then merge\n"
+             "│ - a single file → transcode & export as MP4\n"
+             "│\n"
+             "│ Output: MP4 (H.264), playable in the main window; evidence report auto-generated."),
         banner);
     desc->setWordWrap(true);
     desc->setStyleSheet(QStringLiteral("color:%1;").arg(Theme::TextSecond));
@@ -215,11 +228,21 @@ QWidget *PreprocessWindow::buildPageImport()
         "实验性功能：识别画面/流内时间并按时间自动重排。\n不点也能直接拼接——拖拽列表行即可手动定序。",
         "Experimental: reorders by on-screen/in-stream time. "
         "You can skip it: drag rows to order manually, then merge directly."));
-    m_btnQuickMerge = new QPushButton(lang("开始拼接 ▶", "Start merging ▶"), w);
+    m_btnQuickMerge = new QPushButton(lang("GO", "GO"), w);
     m_btnQuickMerge->setEnabled(false);
-    m_btnQuickMerge->setMinimumHeight(36);
+    m_btnQuickMerge->setMinimumHeight(40);
+    m_btnQuickMerge->setMinimumWidth(88);
+    m_btnQuickMerge->setToolTip(lang(
+        "GO 自动判断：同参数 MP4（关键帧 ≤2s）无损直拼；非 MP4 或关键帧稀疏自动转码后拼接；"
+        "单文件则单独转码导出为 MP4。",
+        "GO decides: identical MP4s (≤2s keyframes) merge losslessly; non-MP4 or "
+        "sparse-keyframe clips are transcoded first; a single file is exported as MP4."));
+    QFont goFont = m_btnQuickMerge->font();
+    goFont.setPointSize(16);
+    goFont.setBold(true);
+    m_btnQuickMerge->setFont(goFont);
     m_btnQuickMerge->setStyleSheet(QStringLiteral(
-        "QPushButton { background:%1; color:%2; font-weight:bold; border-radius:8px; }"
+        "QPushButton { background:%1; color:%2; font-weight:bold; border-radius:10px; }"
         "QPushButton:disabled { background:%3; color:%4; }")
         .arg(Theme::Accent, Theme::AccentOnDark, Theme::BgCard, Theme::TextMuted));
     row->addWidget(btnAdd);

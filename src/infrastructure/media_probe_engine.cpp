@@ -238,19 +238,47 @@ ProbeResult MediaProbeEngine::probeOne(const QString &path)
         }
     }
 
-    // 首视频包：PTS（相对换算）+ 关键帧标志（拼接前置校验输入）
+    // 首视频包（PTS 相对换算 + 关键帧标志）+ 关键帧间隔采样：
+    // GO 智能路由依据——MP4 也可能关键帧稀疏（>2.5s），同样需要转码重排
+    // （现场反馈：原 MP4 关键帧不行时拖拽不流畅）。读包上限 600 防呆。
     AVPacket *pkt = av_packet_alloc();
-    for (int i = 0; i < 256 && av_read_frame(fmt, pkt) >= 0; ++i) {
-        if (pkt->stream_index == vIdx) {
-            const int64_t pts = pkt->pts != AV_NOPTS_VALUE ? pkt->pts : pkt->dts;
-            r.firstFramePtsMs = tsToMs(pts, vs->time_base) - r.startTimeMs;
-            r.firstPktKeyframe = (pkt->flags & AV_PKT_FLAG_KEY) != 0;
+    QVector<qint64> keyPts;
+    int vPkts = 0;
+    for (int i = 0; i < 600 && av_read_frame(fmt, pkt) >= 0; ++i) {
+        if (pkt->stream_index != vIdx) {
             av_packet_unref(pkt);
-            break;
+            continue;
         }
+        ++vPkts;
+        const int64_t pts = pkt->pts != AV_NOPTS_VALUE ? pkt->pts : pkt->dts;
+        const qint64 rel = tsToMs(pts, vs->time_base) - r.startTimeMs;
+        if (vPkts == 1) {
+            r.firstFramePtsMs = rel;
+            r.firstPktKeyframe = (pkt->flags & AV_PKT_FLAG_KEY) != 0;
+        }
+        if (pkt->flags & AV_PKT_FLAG_KEY)
+            keyPts.append(rel);
         av_packet_unref(pkt);
+        if (keyPts.size() >= 5)
+            break;
     }
     av_packet_free(&pkt);
+    if (keyPts.size() >= 2 && keyPts[1] > keyPts[0]) {
+        qint64 gap = keyPts[1] - keyPts[0];
+        if (keyPts.size() > 2) {
+            // 中位间隔抗噪（B 帧/时间戳抖动）
+            QVector<qint64> gaps;
+            for (int i = 1; i < keyPts.size(); ++i)
+                if (keyPts[i] - keyPts[i - 1] > 0)
+                    gaps.append(keyPts[i] - keyPts[i - 1]);
+            if (!gaps.isEmpty()) {
+                std::sort(gaps.begin(), gaps.end());
+                gap = gaps[gaps.size() / 2];
+            }
+        }
+        r.keyframeIntervalMs = int(qBound<qint64>(0, gap, 2147483647LL));
+        r.keyframeSparse = r.keyframeIntervalMs > 2500;
+    }
 
     // 时长：容器 vs 流 交叉验证（截断文件虚报 → 存疑标记）
     const qint64 fmtDurMs = fmt->duration != AV_NOPTS_VALUE

@@ -185,7 +185,8 @@ QStringList filesNeedingTranscode(const QVector<ProbeResult> &g)
         bool selfNeed = !p.ok()
             || !kMp4VideoWhitelist.contains(p.videoCodec)
             || (p.audioStreams > 0
-                && !kMp4AudioWhitelist.contains(p.audioCodec));
+                && !kMp4AudioWhitelist.contains(p.audioCodec))
+            || p.keyframeSparse;         // MP4 关键帧 >2.5s：拖拽不流畅 → 转码重排
         if (!selfNeed && i > 0 && p.videoCodec != g[0].videoCodec)
             selfNeed = true;             // 编码与基准不一致 → 转码追平
         if (selfNeed || paramDivergent || fpsBlock)

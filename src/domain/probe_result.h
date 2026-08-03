@@ -24,6 +24,8 @@ struct ProbeResult {
     int     width = 0, height = 0;
     double  fps = 0.0;        // avg_frame_rate 换算
     bool    fpsDubious = false;   // avg 与 r_frame_rate 双源偏差 > 1‰
+    int     keyframeIntervalMs = 0;  // 实测中位关键帧间隔（<2 个关键帧=0）
+    bool    keyframeSparse = false;  // 关键帧间隔 > 2.5s（拖拽需从上一关键帧解码）
     QString pixFmt;           // yuv420p / yuvj420p ...
     QString colorRange, colorSpace;
     int     fieldOrder = 0;   // AVFieldOrder

@@ -67,13 +67,14 @@ int main(int argc, char **argv)
                 : QStringLiteral("-");
             fprintf(stderr,
                 "[PROBE] %s | ok=%d %s/%s %dx%d fps=%.3f %s dur=%lldms "
-                "startRel=%lldms absStart=%lldms(%s) audio=%d/%s err=%s\n",
+                "startRel=%lldms absStart=%lldms(%s) audio=%d/%s kf=%dms(sparse=%d) err=%s\n",
                 QFileInfo(f).fileName().toUtf8().constData(), int(r.ok()),
                 r.container.toUtf8().constData(), r.videoCodec.toUtf8().constData(),
                 r.width, r.height, r.fps, r.pixFmt.toUtf8().constData(),
                 (long long)r.durationMs, (long long)r.startTimeMs,
                 (long long)r.absStartEpochMs, absStr.toUtf8().constData(),
                 r.audioStreams, r.audioCodec.toUtf8().constData(),
+                r.keyframeIntervalMs, int(r.keyframeSparse),
                 r.probeError.toUtf8().constData());
         }
         if (sortMode) {

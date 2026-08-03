@@ -375,6 +375,16 @@ static void testFilesNeedingTranscode()
     need = filesNeedingTranscode(same);
     CHECK(need.isEmpty());
 
+    // MP4 关键帧稀疏（>2.5s，拖拽不流畅）→ 仅该文件转码重排（现场反馈）
+    same[1].fps = 25.0;
+    same[1].keyframeIntervalMs = 8000;
+    same[1].keyframeSparse = true;
+    need = filesNeedingTranscode(same);
+    CHECK(need.size() == 1 && need.contains(QLatin1String("b.mp4")));
+    same[1].keyframeSparse = false;
+    need = filesNeedingTranscode(same);
+    CHECK(need.isEmpty());
+
     // 空输入 → 空
     CHECK(filesNeedingTranscode({}).isEmpty());
 }
