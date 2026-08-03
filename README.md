@@ -105,7 +105,7 @@ Release 包已内置 Python 和 ffmpeg，无需手动安装。
 
 完整操作手册见：
 
-- **PDF 版**：`追光者 Lumen Arc v1.1 — 操作手册.pdf`（程序内通过 `帮助 → 使用手册` 打开）
+- **PDF 版**：`追光者 Lumen Arc v1.0 — 操作手册.pdf`（程序内通过 `帮助 → 使用手册` 打开）
 - **Markdown 版**：[MANUAL.md](MANUAL.md)
 
 ---

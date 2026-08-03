@@ -1,0 +1,13 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="17.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <CustomBuild Include="C:\code\LumenArc\LumenArc_v1.0 remake\build_tmp\CMakeFiles\6a8ef7a7c2e6a39cc26699bd0e947d88\generate.stamp.rule">
+      <Filter>CMake Rules</Filter>
+    </CustomBuild>
+  </ItemGroup>
+  <ItemGroup>
+    <Filter Include="CMake Rules">
+      <UniqueIdentifier>{9DEB0251-9760-37B0-BCF7-547F09A4C7DA}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+</Project>

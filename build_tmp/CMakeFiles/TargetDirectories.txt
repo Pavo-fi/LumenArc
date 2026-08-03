@@ -1,0 +1,5 @@
+C:/code/LumenArc/LumenArc_v1.0 remake/build_tmp/CMakeFiles/diagdev.dir
+C:/code/LumenArc/LumenArc_v1.0 remake/build_tmp/CMakeFiles/seektest.dir
+C:/code/LumenArc/LumenArc_v1.0 remake/build_tmp/CMakeFiles/seekbench.dir
+C:/code/LumenArc/LumenArc_v1.0 remake/build_tmp/CMakeFiles/ALL_BUILD.dir
+C:/code/LumenArc/LumenArc_v1.0 remake/build_tmp/CMakeFiles/ZERO_CHECK.dir

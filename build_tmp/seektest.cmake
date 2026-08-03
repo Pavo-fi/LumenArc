@@ -1,0 +1,7 @@
+cmake_minimum_required(VERSION 3.20)
+project(seektest C)
+set(CMAKE_C_STANDARD 11)
+include_directories("C:/code/LumenArc/LumenArc_v1.0 remake/third_party/ffmpeg/include")
+link_directories("C:/code/LumenArc/LumenArc_v1.0 remake/third_party/ffmpeg/lib")
+add_executable(seektest seektest.c)
+target_link_libraries(seektest avformat avcodec avutil)

@@ -590,7 +590,7 @@ void MainWindow::createMenus()
 
     helpMenu->addSeparator();
     helpMenu->addAction(lang("使用手册", "User Manual"), []() {
-        QString path = QCoreApplication::applicationDirPath() + "/追光者 Lumen Arc v1.1 — 操作手册.pdf";
+        QString path = QCoreApplication::applicationDirPath() + "/追光者 Lumen Arc v1.0 — 操作手册.pdf";
         QDesktopServices::openUrl(QUrl::fromLocalFile(path));
     });
 

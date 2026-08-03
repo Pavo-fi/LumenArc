@@ -1,0 +1,17 @@
+devices: 7
+dev: 扬声器 (Realtek(R) Audio)
+preferred: 48000Hz 2ch fmt=4
+  8000Hz 1ch Int16: 0
+  8000Hz 2ch Int16: 0
+  16000Hz 1ch Int16: 1
+  16000Hz 2ch Int16: 1
+  22050Hz 1ch Int16: 1
+  22050Hz 2ch Int16: 1
+  32000Hz 1ch Int16: 1
+  32000Hz 2ch Int16: 1
+  44100Hz 1ch Int16: 1
+  44100Hz 2ch Int16: 1
+  48000Hz 1ch Int16: 1
+  48000Hz 2ch Int16: 1
+  96000Hz 1ch Int16: 1
+  96000Hz 2ch Int16: 1
