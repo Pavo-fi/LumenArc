@@ -498,8 +498,10 @@ bool FfmpegVideoEngine::ensureScrubDecoder()
     if (!m_scDec)
         return false;
     avcodec_parameters_to_context(m_scDec, vs->codecpar);
-    // 多线程软解：scrub 追赶专用（VLC 路线，实测 D17 1440p ~3140fps）
-    m_scDec->thread_count = 0;
+    // 单线程软解：scrub 追赶专用。多线程（thread_count=0）flush 后线程池重建
+    // 首帧代价 100ms+（实测 2304×1296），单线程首帧 ~30ms——scrub 每轮一次
+    // seek+flush，单线程总吞吐更高（VLC 软解 scrub 同思路）
+    m_scDec->thread_count = 1;
     m_scDec->pkt_timebase = vs->time_base;
     if (avcodec_open2(m_scDec, codec, nullptr) < 0) {
         avcodec_free_context(&m_scDec);
@@ -557,10 +559,15 @@ void FfmpegVideoEngine::chaseCacheClear()
 
 void FfmpegVideoEngine::diagScrubDisplay(const char *site, qint64 relMs, qint64 target)
 {
+    static qint64 lastElapsed = 0;
+    const qint64 now = m_monotonic.elapsed();
+    const qint64 roundMs = lastElapsed > 0 ? now - lastElapsed : 0;
+    lastElapsed = now;
     audioDiag(QStringLiteral("scrub display[%1]: rel=%2 target=%3 err=%4 gopLearn=%5 "
-              "chaseWall=%6 hopArmed=%7")
+              "chaseWall=%6 hopArmed=%7 vel=%8 round=%9ms")
               .arg(QString::fromLatin1(site)).arg(relMs).arg(target).arg(target - relMs)
-              .arg(m_gopLearnMs).arg(m_lastChaseWallMs).arg(m_hopFirstFrame ? 1 : 0));
+              .arg(m_gopLearnMs).arg(m_lastChaseWallMs).arg(m_hopFirstFrame ? 1 : 0)
+              .arg(m_scrubVel, 0, 'f', 0).arg(roundMs));
 }
 
 void FfmpegVideoEngine::diagScrubFlush()
@@ -687,6 +694,7 @@ bool FfmpegVideoEngine::scrubChaseMainFrame()
         ++m_diagScrubReseeks;   // 临时诊断
         // 大跳/后退：主管线 seek + flush（落在上一个关键帧，下方解码追赶到目标窗口）
         // 追赶过滤由下方目标窗口完成，不走 drainDecoder 的 discard 路径
+        m_lastReseekWallMs = m_monotonic.elapsed();   // 诊断：seek 段计时起点
         scrubRedirectDemuxer(target);   // 内含 m_vdec/m_scDec flush
         // 超长 GOP / 密 GOP 超吞吐快拖：布防关键帧跳显。仅前进布防——
         // 后退步进是精细回看，照常追赶到精确目标窗口
@@ -694,8 +702,13 @@ bool FfmpegVideoEngine::scrubChaseMainFrame()
         m_hopTargetMs = -1;             // 方向/落点变更：旧抑制锚点失效
         // 短追赶用硬解（thread_count=1 无管线填充延迟）；
         // 长 GOP（实测 >4s）用多线程软解（~3000fps 吞吐）
-        m_chaseDec = (m_gopLearnMs > 4000 && !sparseGop && ensureScrubDecoder())
-                     ? m_scDec : m_vdec;
+        // scrub chase 优先硬解（主管线 m_vdec）：2304×1296 IDR 硬解 ~5ms vs 软解
+        // ~110ms（实测），总 ~40ms/轮 → ~25fps 拖拽显示；软解（m_scDec）仅
+        // 硬解不可用时兜底。退出 scrub 后主管线先经 scrubRedirectDemuxer
+        // （scrubMode=false）正常 flush，状态干净。
+        m_chaseDec = m_hwDecodeEnabled
+                     ? m_vdec
+                     : (ensureScrubDecoder() ? m_scDec : m_vdec);
         m_chaseStartElapsed = m_monotonic.elapsed();   // 追赶墙钟计时起点
         m_chaseDecodePosMs = -1;
         m_chaseSeekTargetMs = target;
@@ -772,9 +785,13 @@ bool FfmpegVideoEngine::scrubChaseMainFrame()
                 qint64 relMs = ptsToRelMs(frame->best_effort_timestamp);
                 if (!catchupMeasured) {
                     catchupMeasured = true;
-                    m_lastCatchupMs = target - relMs;   // 学习本文件 GOP 长度
+                    // 学习本文件 GOP 长度（用 seek 发起时的目标，避免快拖中
+                    // 光标已前移数十秒的污染——实测 gopLearn 被写成 96s）
+                    const qint64 seekT = m_chaseSeekTargetMs >= 0
+                        ? m_chaseSeekTargetMs : target;
+                    m_lastCatchupMs = seekT - relMs;
                     if (didReseek)
-                        m_gopLearnMs = target - relMs;  // reseek 落点间距 = 干净的 GOP 代理
+                        m_gopLearnMs = seekT - relMs;
                     // 首帧实测追赶长度：>4s 且还在硬解 → 切多线程软解重 seek。
                     // 硬解短追赶低延迟，软解长追赶高吞吐，一次额外 seek ≪ 长追赶节省
                     if (dec == m_vdec && m_gopLearnMs > 4000 && !m_hopFirstFrame
@@ -799,7 +816,12 @@ bool FfmpegVideoEngine::scrubChaseMainFrame()
                 // decode-through 继续向目标窗口推进，decodePos 前进防 reseek 空转
                 if (m_hopFirstFrame && !shown) {
                     m_hopFirstFrame = false;
-                    const qint64 err = target - relMs;
+                    // 误差以“seek 发起时的目标”为基准：快拖时解码追赶期间光标
+                    // 已前移数十秒，用当前 target 判定会把跳显全部误拒（实测
+                    // merged 快拖 err≈96s > errCap→hop-reject→不显示=拖拽无连续帧）
+                    const qint64 seekTarget = m_chaseSeekTargetMs >= 0
+                        ? m_chaseSeekTargetMs : target;
+                    const qint64 err = seekTarget - relMs;
                     // 跳显误差闸随拖拽速度缩放：可接受的落后量 = 光标 100ms 墙钟
                     // 内走过的距离（v×100ms）。100× 快拖时落后 10s 时间轴 = 100ms
                     // 墙钟延迟，人眼不可察——这个文件可 seek 的 IDR 每 10s 一个
@@ -813,22 +835,32 @@ bool FfmpegVideoEngine::scrubChaseMainFrame()
                         if (relMs == m_positionMs.load()) {
                             // 同一关键帧重复命中（边界速度/悬停）：免 sws/emit/重绘，
                             // 仅刷新抑制锚点——每次重复跳显省 ~10ms 墙钟
-                            m_hopTargetMs = target;
+                            m_hopTargetMs = seekTarget;
                             m_hopGapMs = err;
                         } else {
-                            diagScrubDisplay("hop", relMs, target);
+                            const qint64 tNow = m_monotonic.elapsed();
+                            diagScrubDisplay("hop", relMs, seekTarget);
+                            if (qEnvironmentVariableIsSet("LUMEN_DIAG_TIMING"))
+                                audioDiag(QStringLiteral("  chase: seek=%1ms dec=%2")
+                                          .arg(m_lastReseekWallMs > 0
+                                               ? tNow - m_lastReseekWallMs : -1)
+                                          .arg(dec == m_scDec ? "soft" : "hw"));
                             displayFrame(frame);
                             m_lastScrubDisplayElapsed = m_monotonic.elapsed();
-                            m_hopTargetMs = target;   // 抑制锚点：目标越过 target+gap 才允许下一跳
+                            m_hopTargetMs = seekTarget;   // 抑制锚点：目标越过 seekTarget+gap 才允许下一跳
                             m_hopGapMs = err;
+                            // 快拖/超长 GOP（hopMode）：decode-through 追不上已跑远
+                            // 的目标，继续解码纯属浪费——立即交外层 reseek 下一关键帧
+                            if (hopMode)
+                                shown = true;
                         }
                     } else {
                         // 拒绝也必须设抑制锚点：否则目标未越过下一关键帧前无限
                         // 重 seek 同一落点（日志实测同帧 10-20 次/ms 的 seek 循环）
-                        m_hopTargetMs = target;
+                        m_hopTargetMs = seekTarget;
                         m_hopGapMs = err;
                         if (!sparseGop && err > 2000)
-                            diagScrubDisplay("hop-reject", relMs, target);
+                            diagScrubDisplay("hop-reject", relMs, seekTarget);
                     }
                 }
                 if (dec == m_scDec)
@@ -1205,10 +1237,9 @@ bool FfmpegVideoEngine::openFile(const QString &filePath)
             av_packet_unref(probePkt);
         }
         av_packet_free(&probePkt);
-        // 倒回文件起始（probe 消耗了 demux 位置），解码器同步清空
-        int64_t startTs = static_cast<int64_t>(m_startPtsMs) * 1000;
-        if (avformat_seek_file(m_fmt, -1, INT64_MIN, startTs, startTs, AVSEEK_FLAG_BACKWARD) < 0)
-            av_seek_frame(m_fmt, -1, 0, AVSEEK_FLAG_BACKWARD);
+        // 倒回文件起始（probe 消耗了 demux 位置），解码器同步清空。
+        // seek 必须用流时基（见 scrubRedirectDemuxer 注释：-1/AV_TIME_BASE 超前回归）
+        seekToRelMs(m_fmt, m_vstream, m_startPtsMs, 0, m_indexed);
         avcodec_flush_buffers(m_vdec);
         if (ptsList.size() >= 8) {
             std::sort(ptsList.begin(), ptsList.end());   // B 帧重排后 pts 非单调
@@ -1359,6 +1390,30 @@ void FfmpegVideoEngine::handleSeek(qint64 timeMs)
     }
 }
 
+// ---------------------------------------------------------------------------
+// 精确 seek（流时基）
+// ---------------------------------------------------------------------------
+bool FfmpegVideoEngine::seekToRelMs(AVFormatContext *fmt, int vstream,
+                                    qint64 startPtsMs, qint64 relMs,
+                                    bool indexed)
+{
+    if (!fmt || vstream < 0 || vstream >= static_cast<int>(fmt->nb_streams))
+        return false;
+    AVStream *st = fmt->streams[vstream];
+    const qint64 targetMs = startPtsMs + qMax<qint64>(0, relMs);
+    // 目标 PTS（流时基）。毫秒→流时基用 av_rescale_q 精确换算。
+    const int64_t pts = av_rescale_q(targetMs, AVRational{1, 1000}, st->time_base);
+    if (avformat_seek_file(fmt, vstream, INT64_MIN, pts, pts,
+                           AVSEEK_FLAG_BACKWARD) >= 0)
+        return true;
+    if (av_seek_frame(fmt, vstream, pts, AVSEEK_FLAG_BACKWARD) >= 0)
+        return true;
+    if (!indexed)
+        return avformat_seek_file(fmt, vstream, INT64_MIN, pts, INT64_MAX,
+                                  AVSEEK_FLAG_BYTE | AVSEEK_FLAG_BACKWARD) >= 0;
+    return false;
+}
+
 void FfmpegVideoEngine::scrubRedirectDemuxer(qint64 timeMs)
 {
     qint64 demuxTargetMs = timeMs;
@@ -1367,14 +1422,17 @@ void FfmpegVideoEngine::scrubRedirectDemuxer(qint64 timeMs)
 
     m_demuxTargetRelMs = demuxTargetMs;
     m_needMarginMeasure = !m_indexed;
-    int64_t ts = static_cast<int64_t>(m_startPtsMs + demuxTargetMs) * 1000;
 
-    int ret = avformat_seek_file(m_fmt, -1, INT64_MIN, ts, ts, AVSEEK_FLAG_BACKWARD);
-    if (ret < 0)
-        ret = avformat_seek_file(m_fmt, -1, INT64_MIN, ts, INT64_MAX,
-                                 AVSEEK_FLAG_BYTE | AVSEEK_FLAG_BACKWARD);
-    if (ret < 0)
-        av_seek_frame(m_fmt, -1, ts, AVSEEK_FLAG_BACKWARD);
+    // ffmpeg 回归（N-125752 实测）：avformat_seek_file(fmt, -1, …) 用 AV_TIME_BASE
+    // 换算会严重超前（merged 55min 视频 seek 1500s 落 3307s）；显式指定视频流 +
+    // 流时基精确（±1 GOP ≈2.5s，chase 追赶即可）。引擎所有 seek 必须走此路径。
+    const int ret = seekToRelMs(m_fmt, m_vstream, m_startPtsMs, demuxTargetMs,
+                                m_indexed);
+    (void)ret;
+    if (qEnvironmentVariableIsSet("LUMEN_DIAG_TIMING")) {
+        const qint64 tSeek = m_monotonic.elapsed() - m_lastReseekWallMs;
+        audioDiag(QStringLiteral("  seekToRelMs took %1ms").arg(tSeek));
+    }
 
     // 始终清空解码器（frame-threading 下"不清空前进"会导致乱序帧）
     avcodec_flush_buffers(m_vdec);
@@ -1382,6 +1440,10 @@ void FfmpegVideoEngine::scrubRedirectDemuxer(qint64 timeMs)
         avcodec_flush_buffers(m_scDec);
     if (m_adec)
         avcodec_flush_buffers(m_adec);
+    if (qEnvironmentVariableIsSet("LUMEN_DIAG_TIMING")) {
+        audioDiag(QStringLiteral("  flushes took %1ms")
+                  .arg(m_monotonic.elapsed() - m_lastReseekWallMs));
+    }
     // scrub 期间音频静音，跳过 WASAPI sink 重置（每次 seek 省 10-50ms 固定开销）
     if (m_sink && !m_scrubMode.load()) {
         m_sink->reset();
@@ -1431,8 +1493,7 @@ void FfmpegVideoEngine::prefetchStart(qint64 fromRelMs)
         return;
     }
 
-    int64_t ts = static_cast<int64_t>(m_startPtsMs + fromRelMs) * 1000;
-    avformat_seek_file(m_pfFmt, -1, INT64_MIN, ts, ts, AVSEEK_FLAG_BACKWARD);
+    seekToRelMs(m_pfFmt, m_pfVstream, m_startPtsMs, fromRelMs, m_indexed);
     avcodec_flush_buffers(m_pfDec);
     m_pfEndMs = fromRelMs + CACHE_SPAN_MS;
     m_pfPendingFromMs = -1;
@@ -1761,14 +1822,18 @@ void FfmpegVideoEngine::displayFrame(AVFrame *frame)
         srcFrame = swFrame;
     }
 
-    // 帧格式/尺寸变化时重建 swscale 上下文
+    // 帧格式/尺寸变化时重建 swscale 上下文。scrub 跳显预览降采样输出
+    // （2304×1296 全尺寸回传+sws 每帧 50-100ms → 拖拽帧率上不去；预览
+    // 1280 宽够看清内容，松手后精确 seek 回到全分辨率）
+    const int outW = m_scrubMode.load() ? qMin(srcFrame->width, 1280) : srcFrame->width;
+    const int outH = qMax(1, outW * srcFrame->height / srcFrame->width);
     if (!m_sws || m_swsW != srcFrame->width || m_swsH != srcFrame->height
-        || m_swsFmt != srcFrame->format) {
+        || m_swsFmt != srcFrame->format || m_swsOutW != outW || m_swsOutH != outH) {
         if (m_sws)
             sws_freeContext(m_sws);
         m_sws = sws_getContext(srcFrame->width, srcFrame->height,
                                static_cast<AVPixelFormat>(srcFrame->format),
-                               srcFrame->width, srcFrame->height, AV_PIX_FMT_RGB24,
+                               outW, outH, AV_PIX_FMT_RGB24,
                                SWS_BILINEAR, nullptr, nullptr, nullptr);
         if (!m_sws) {
             if (swFrame)
@@ -1778,9 +1843,11 @@ void FfmpegVideoEngine::displayFrame(AVFrame *frame)
         m_swsW = srcFrame->width;
         m_swsH = srcFrame->height;
         m_swsFmt = srcFrame->format;
+        m_swsOutW = outW;
+        m_swsOutH = outH;
     }
 
-    QImage img(srcFrame->width, srcFrame->height, QImage::Format_RGB888);
+    QImage img(outW, outH, QImage::Format_RGB888);
     uint8_t *dst[4] = { img.bits(), nullptr, nullptr, nullptr };
     int dstLinesize[4] = { static_cast<int>(img.bytesPerLine()), 0, 0, 0 };
     sws_scale(m_sws, srcFrame->data, srcFrame->linesize, 0, srcFrame->height,

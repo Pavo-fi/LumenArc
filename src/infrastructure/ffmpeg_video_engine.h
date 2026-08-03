@@ -109,6 +109,11 @@ private:
     void closeFile();                         // 工作线程内调用
     void handleSeek(qint64 timeMs);          // 工作线程内调用
     void scrubRedirectDemuxer(qint64 timeMs);  // Scrub 模式：主管线 demuxer 重定向
+    /// 精确 seek（流时基）：ffmpeg nightly 回归——avformat_seek_file(fmt,-1,…)
+    /// 用 AV_TIME_BASE 换算严重超前（实测 merged 55min seek 1500s 落 3307s）；
+    /// 显式指定视频流+流时基误差 ≤1 GOP（≈2.5s），chase 追赶即可。
+    static bool seekToRelMs(AVFormatContext *fmt, int vstream, qint64 startPtsMs,
+                            qint64 relMs, bool indexed);
     void processVideoPacket(AVPacket *pkt);   // 送包 + 排干解码器
     void processAudioPacket(AVPacket *pkt);   // 音频解码 → 重采样 → 环形缓冲
     bool ensureAudioOutput();                 // 惰性创建 QAudioSink（工作线程内）
@@ -168,6 +173,8 @@ private:
     AVCodecContext *m_scDec = nullptr;  // scrub 长追赶专用软解上下文（多线程吞吐优先）
     SwsContext *m_sws = nullptr;
     int m_swsW = 0, m_swsH = 0, m_swsFmt = -1;
+    int m_swsOutW = 0, m_swsOutH = 0;   // sws 输出尺寸（scrub 降采样预览）
+    qint64 m_lastReseekWallMs = 0;      // 诊断：本轮 reseek 起点
     int m_vstream = -1;
     qint64 m_startPtsMs = 0;        // 流起始 PTS（绝对），用于相对时间换算
     bool m_indexed = true;          // 容器是否有 seek 索引（PS/TS 无索引）

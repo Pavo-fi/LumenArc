@@ -28,6 +28,7 @@ extern "C" {
 }
 #include <cstdio>
 #include <cmath>
+#include <numeric>
 #ifdef Q_OS_WIN
 #include <windows.h>
 #include <psapi.h>
@@ -47,6 +48,7 @@ struct Recorder {
     qint64 lastPos = -1;
     QVector<qint64> positions;
     int frameCount = 0;
+    int lastImgW = 0;
     PlaybackState state = PlaybackState::Idle;
     qint64 duration = 0;
 };
@@ -195,9 +197,11 @@ int main(int argc, char *argv[])
     }
 
     FfmpegVideoEngine engine;
+    if (args.contains(QStringLiteral("--sw")))
+        engine.setHardwareDecode(false);   // 软解对比（诊断 scrub 回传瓶颈）
     Recorder rec;
     QObject::connect(&engine, &IVideoEngine::frameReady,
-                     &app, [&](const QImage &) { rec.frameCount++; engine.ackFrame(); });
+                     &app, [&](const QImage &img) { rec.frameCount++; rec.lastImgW = img.width(); engine.ackFrame(); });
     QObject::connect(&engine, &IVideoEngine::positionChanged,
                      &app, [&](qint64 t) {
         rec.lastPos = t;
@@ -463,6 +467,47 @@ int main(int argc, char *argv[])
             printf("[ OK ] audio alive after scrub (clock %lldms)\n", clk);
         }
         engine.pause();
+    } else if (scenario == "scrub-sim") {
+        // 模拟拖拽：匀速从 20%→80% 拖 dragMs，统计显示帧数/帧间隔。
+        // 现场反馈：拼接产物“完全没有拖拽的连续帧”（seek 超前回归已修）
+        int dragMs = args.size() > 3 ? args[3].toInt() : 2500;
+        const qint64 start = rec.duration / 5;
+        const qint64 span = rec.duration * 3 / 5;
+        engine.seek(start);
+        pumpFor(400);
+        engine.setScrubMode(true);
+        QElapsedTimer wall; wall.start();
+        QVector<int> gapMs;
+        int shown = 0, last = rec.frameCount;
+        qint64 lastShowElapsed = 0;
+        while (wall.elapsed() < dragMs) {
+            const qreal f = qMin(1.0, wall.elapsed() / qreal(dragMs));
+            engine.setScrubTarget(start + qint64(span * f));
+            pumpFor(8);
+            if (rec.frameCount != last) {
+                const qint64 now = wall.elapsed();
+                if (shown > 0)
+                    gapMs.append(int(now - lastShowElapsed));
+                lastShowElapsed = now;
+                last = rec.frameCount;
+                ++shown;
+            }
+        }
+        engine.setScrubMode(false);
+        const int expectMin = dragMs / 80;   // ≥12.5fps 显示
+        printf("[info] scrub %dms: shown=%d frames (expect>=%d) maxGap=%dms avgGap=%dms "
+               "imgW=%d\n",
+               dragMs, shown, expectMin,
+               gapMs.isEmpty() ? 0 : *std::max_element(gapMs.begin(), gapMs.end()),
+               gapMs.isEmpty() ? 0
+                   : std::accumulate(gapMs.begin(), gapMs.end(), 0) / gapMs.size(),
+               rec.lastImgW);
+        if (shown < expectMin) {
+            printf("[FAIL] scrub shows too few frames (seek regression?)\n");
+            failures++;
+        } else {
+            printf("[ OK ] scrub shows continuous frames\n");
+        }
     } else if (scenario == "play") {
         int seconds = args.size() > 3 ? args[3].toInt() : 3;
         engine.seek(0);
