@@ -8,6 +8,7 @@
 > DAV 批次：见第十五章（GBK 编码崩溃根因 + DHAV 流内绝对时间证据层）
 > 性能批次：见第十六章（absStart 跳过 88×、子进程低优先级、merged 命名+播放出口）
 > 流程批次：见第十七章（非强制一键拼接、逐文件转码、假成功修复）
+> 拖拽批次：见第十八章（seek 回归三连修、34fps 拖拽、金色插入线、Del 删除、列表收录）
 
 ---
 
@@ -961,3 +962,48 @@ return（写日志）。
   仍可能失败（concat demuxer 限制）。单相机批次（同参）不受影响；跨相机混拼需后续在
   TranscodeEngine 增加 scale/fps 统一参数（v2）。
 - 直接拼接的报告按"人工顺序"记录（sourceKind=None），证据 CSV 如实呈现。
+
+
+---
+
+## 十八、拖拽连续帧三连根因 + 拖拽视觉/删除/列表（2026-08-03）
+
+> 现场反馈：①dav 转码拼接产物（55min/2.1GB/1fps+15fps 混合）拖拽"完全没有连续帧"；
+> ②拖拽动画要整行半透明；③导入列表要 Del 删除；④"主窗口播放输出"要进视频列表；
+> ⑤频谱长视频 X 轴仍糊。
+
+### 18.1 拖拽无连续帧（三连根因，全部实测定位）
+
+1. **ffmpeg nightly 的 seek 回归**（N-125752-20260724）：`avformat_seek_file(fmt,-1,…)`
+   用 AV_TIME_BASE 换算严重超前——merged 视频 seek 1500s 落 3307s（ffmpeg -ss 实测同样）。
+   修复 `seekToRelMs()`：显式视频流 + 流时基 pts → 误差 ≤1 GOP（~2.5s），
+   seek-matrix 实测 err 36-560ms。三处 seek（scrub/加载倒回/prefetch）统一走此路径。
+   注：该回归是 bundled ffmpeg nightly 特有，稳定版无此问题；引擎层修复后无需换库。
+
+2. **跳显误拒**：关键帧跳显的 err 用"显示时刻最新 target"计算——快拖 794× 时
+   解码 70ms 内光标已前移 83s → err=96s > errCap → 全部 hop-reject → 不显示。
+   改用 seek 发起时目标（m_chaseSeekTargetMs）判定；gopLearn 同样用 seek 时目标
+   （原被污染成 96s）。
+
+3. **chase 解码器选择**：gopLearn>4000 门槛导致选了软解（2304×1296 IDR 软解
+   ~110ms/帧）；改硬解优先（m_vdec，IDR ~5ms，flush 实测仅 0-11ms），软解仅兜底。
+   另：scrub 显示降采样 1280 宽（回传+sws 成本），快拖跳显后立即返回（decode-through
+   追不上跑远的目标，纯浪费）。
+
+**结果**：引擎 scrub-sim（794× 快拖 2.5s）：1 帧 → **80 帧，avgGap 29ms（34fps）**。
+慢拖（vel<30）走 decode-through 精确帧路径不受影响；seek-matrix/play/集成全绿。
+
+### 18.2 拖拽视觉与列表
+
+- 整行原比例 72% 半透明拖拽卡（18.1 同批）；**金色插入线**（3px，目标行上/下缘）
+  与校对页卡片拖拽一致；拖拽期吞 MouseMove 去掉 Qt 默认 current 蓝框。
+- **Del/Backspace 删除选中行**（空闲阶段），同步 m_pendingFiles 与按钮状态。
+- **「在主窗口播放输出」进视频列表**（hasVideo 去重，仅新文件跑 videoTiming）。
+- 频谱 X 轴刻度算法提取为 domain/tick_utils.h `computeXAxisStepMs()`，35 项单测
+  （10min~48h×宽度，≥72px 间距性质），166/166。
+
+### 18.3 遗留
+
+- 引擎 scrub-sim 模式保留（`lumenarc_engine_test scrub-sim <file> [ms]`）作回归。
+- bundled ffmpeg 为 2026-07-24 nightly；后续可换稳定版消除 seek 回归（引擎已免疫，
+  换库属可选优化）。
