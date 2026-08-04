@@ -2107,8 +2107,13 @@ void MainWindow::showVideoContextMenu(const QPoint &pos)
 
 void MainWindow::updatePinnedImage(const QImage &frame)
 {
-    if (m_pinned && !m_pinnedRect.isEmpty() && !frame.isNull())
-        m_pinned->setPinnedImage(frame, m_pinnedRect);
+    if (!m_pinned || m_pinnedRect.isEmpty() || frame.isNull())
+        return;
+    // 同步源视频原生分辨率（帧坐标换算基准；videoSizeChanged 仅在 load 时发出一次，
+    // 而 PinnedWidget 跨视频存活，故每帧同步，赋值零开销）
+    if (m_videoEngine)
+        m_pinned->setVideoSize(m_videoEngine->videoWidth(), m_videoEngine->videoHeight());
+    m_pinned->setPinnedImage(frame, m_pinnedRect);
 }
 
 /// @brief 启动离线分析：前置检查→状态栏进度→Python进程

@@ -25,6 +25,9 @@ class PinnedWidget : public QWidget
 public:
     explicit PinnedWidget(QWidget *parent = nullptr);
 
+    /// 源视频原生分辨率（视频坐标换算基准）。由调用方在视频加载/切换时同步；
+    /// 不设置时退化：不换算（按传入矩形原样裁剪）。
+    void setVideoSize(int width, int height);
     void setPinnedImage(const QImage &fullFrame, const QRect &videoRect);
     void clear();
 
@@ -33,4 +36,5 @@ protected:
 
 private:
     QImage m_pinnedImage;
+    QSize m_videoSize;   // 源视频原生分辨率（空 = 未知）
 };

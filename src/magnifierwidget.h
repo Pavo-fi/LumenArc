@@ -71,7 +71,6 @@ public:
 
 private slots:
     void onInternalOverlayWheelZoom(int delta, QPoint videoPos);
-    void onInternalOverlayCursorMoved(QPoint videoPos);
 
 private:
     class ContentWidget;
@@ -94,6 +93,9 @@ private:
     bool m_invertPan = false;
 
     void recalcSourceRect();
+    /// 视频坐标源矩形 → 图像帧坐标（等比换算）。帧 = 原生分辨率时恒等；
+    /// scrub 拖拽期间引擎输出降采样预览帧（宽 ≤1280）时按比例缩放。
+    QRect sourceRectForImage(const QImage &img) const;
 
     static constexpr qreal MIN_ZOOM = 1.5;
     static constexpr qreal MAX_ZOOM = 10.0;

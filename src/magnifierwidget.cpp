@@ -254,25 +254,6 @@ void MagnifierWidget::onInternalOverlayWheelZoom(int delta, QPoint videoPos)
     zoomAtPoint(delta, videoPos);
 }
 
-/// @brief 放大镜内光标移动：映射到全视频坐标
-void MagnifierWidget::onInternalOverlayCursorMoved(QPoint videoPos)
-{
-    if (m_videoWidth <= 0 || m_videoHeight <= 0)
-        return;
-
-    // videoPos is in the overlay's local video coordinates (within sourceRect).
-    // Convert to full video coordinates by adding the origin offset.
-    QPoint fullVideoPos = videoPos + m_sourceRect.topLeft();
-    fullVideoPos.setX(qBound(0, fullVideoPos.x(), m_videoWidth - 1));
-    fullVideoPos.setY(qBound(0, fullVideoPos.y(), m_videoHeight - 1));
-
-    if (fullVideoPos == m_cursorPos)
-        return;
-
-    m_cursorPos = fullVideoPos;
-    recalcSourceRect();
-}
-
 void MagnifierWidget::setRegionModel(RegionModel *model)
 {
     if (m_overlay)
@@ -295,7 +276,7 @@ void MagnifierWidget::setVideoSize(int width, int height)
 {
     m_videoWidth = qMax(1, width);
     m_videoHeight = qMax(1, height);
-    m_cursorPos = QPoint(m_videoWidth / 2, m_videoHeight / 2);
+    m_cursorPos = QPoint((m_videoWidth / 2) & ~1, (m_videoHeight / 2) & ~1);  // 偶数网格
     recalcSourceRect();
 }
 
@@ -321,16 +302,18 @@ void MagnifierWidget::zoomAtPoint(int delta, QPoint videoPos)
         return;
 
     qreal newZoom = qBound(MIN_ZOOM, m_zoomLevel + ZOOM_STEP * (delta > 0 ? 1 : -1), MAX_ZOOM);
-    int newSrcW = qMax(1, int(m_videoWidth / newZoom));
-    int newSrcH = qMax(1, int(m_videoHeight / newZoom));
+    // 源区域全部取偶：scrub 降采样帧为偶数网格（0.5 缩放），奇数坐标/尺寸会
+    // 在换算 round(v*0.5) 时引入 ±1 视频像素误差（高 zoom 显示下可见漂移）
+    const int newSrcW = qMax(2, (int(m_videoWidth / newZoom)) & ~1);
+    const int newSrcH = qMax(2, (int(m_videoHeight / newZoom)) & ~1);
 
     // 鼠标在当前源区域内的相对比例 (0.0~1.0)
     qreal tX = qreal(videoPos.x() - m_sourceRect.x()) / m_sourceRect.width();
     qreal tY = qreal(videoPos.y() - m_sourceRect.y()) / m_sourceRect.height();
 
     // 锚点缩放：保持鼠标下的像素不动
-    int newSrcX = qBound(0, int(videoPos.x() - tX * newSrcW), m_videoWidth - newSrcW);
-    int newSrcY = qBound(0, int(videoPos.y() - tY * newSrcH), m_videoHeight - newSrcH);
+    int newSrcX = (qBound(0, int(videoPos.x() - tX * newSrcW), m_videoWidth - newSrcW)) & ~1;
+    int newSrcY = (qBound(0, int(videoPos.y() - tY * newSrcH), m_videoHeight - newSrcH)) & ~1;
 
     m_zoomLevel = newZoom;
     m_sourceRect = QRect(newSrcX, newSrcY, newSrcW, newSrcH);
@@ -342,13 +325,40 @@ void MagnifierWidget::zoomAtPoint(int delta, QPoint videoPos)
     }
 
     if (!m_snapshotOriginal.isNull() && m_content->hasSnapshot())
-        m_content->reCropSnapshot(m_sourceRect, m_snapshotOriginal);
+        m_content->reCropSnapshot(sourceRectForImage(m_snapshotOriginal), m_snapshotOriginal);
 
     // 暂停/停止时无新帧到达：缩放后立即用最近一帧重裁（与 recalcSourceRect 同理）
     if (!m_lastFullFrame.isNull())
         onFrameReady(m_lastFullFrame);
 
     m_content->update();
+}
+
+/**
+ * @brief 视频坐标源矩形 → 图像帧坐标（等比换算，clamp 到帧内）。
+ *
+ * scrub 拖拽期间引擎输出降采样预览帧（displayFrame：宽 ≤1280），
+ * 与全分辨率视频尺寸不一致。直接用视频坐标矩形 intersect 降采样帧
+ * 会导致裁剪区域漂移（交集落在帧内错误位置）或为空（黑屏）。
+ * 帧 = 原生分辨率时换算为恒等，零开销。
+ */
+QRect MagnifierWidget::sourceRectForImage(const QImage &img) const
+{
+    if (img.isNull() || m_sourceRect.isEmpty()
+        || m_videoWidth <= 0 || m_videoHeight <= 0)
+        return QRect();
+
+    if (img.size() == QSize(m_videoWidth, m_videoHeight))
+        return m_sourceRect.intersected(img.rect());
+
+    // 降采样帧：按 帧/视频 比例换算（qRound64 保留亚像素精度，误差 <1px）
+    const qreal sx = qreal(img.width()) / m_videoWidth;
+    const qreal sy = qreal(img.height()) / m_videoHeight;
+    const int x = qRound64(m_sourceRect.x() * sx);
+    const int y = qRound64(m_sourceRect.y() * sy);
+    const int w = qMax(1, qRound64(m_sourceRect.width() * sx));
+    const int h = qMax(1, qRound64(m_sourceRect.height() * sy));
+    return QRect(x, y, w, h).intersected(img.rect());
 }
 
 void MagnifierWidget::updateCursorPosition(QPoint videoPos)
@@ -372,10 +382,11 @@ void MagnifierWidget::restoreFromRect(const QRect &videoRect, int videoWidth, in
     m_videoHeight = qMax(1, videoHeight);
 
     if (videoRect.isEmpty()) {
-        m_cursorPos = QPoint(m_videoWidth / 2, m_videoHeight / 2);
+        m_cursorPos = QPoint((m_videoWidth / 2) & ~1, (m_videoHeight / 2) & ~1);
         m_zoomLevel = 2.0;
     } else {
-        m_cursorPos = videoRect.center();
+        // 偶数网格（scrub 换算零舍入前提）
+        m_cursorPos = QPoint(videoRect.center().x() & ~1, videoRect.center().y() & ~1);
         qreal zoomX = qreal(m_videoWidth) / qMax(1, videoRect.width());
         qreal zoomY = qreal(m_videoHeight) / qMax(1, videoRect.height());
         m_zoomLevel = qBound(MIN_ZOOM, qMin(zoomX, zoomY), MAX_ZOOM);
@@ -391,14 +402,19 @@ void MagnifierWidget::recalcSourceRect()
     if (m_videoWidth <= 0 || m_videoHeight <= 0)
         return;
 
-    int srcW = qMax(1, int(m_videoWidth / m_zoomLevel));
-    int srcH = qMax(1, int(m_videoHeight / m_zoomLevel));
+    // 源区域全部取偶（scrub 偶数网格换算零舍入）：
+    // 奇数坐标/尺寸在 sourceRectForImage 的 round(v*0.5) 中引入
+    // ±1 视频像素误差，高 zoom 显示下放大为可见漂移（GUI 实测 zoom6 → +3px）
+    const int srcW = qMax(2, (int(m_videoWidth / m_zoomLevel)) & ~1);
+    const int srcH = qMax(2, (int(m_videoHeight / m_zoomLevel)) & ~1);
 
-    int srcX = m_cursorPos.x() - srcW / 2;
-    int srcY = m_cursorPos.y() - srcH / 2;
+    int srcX = (m_cursorPos.x() - srcW / 2) & ~1;
+    int srcY = (m_cursorPos.y() - srcH / 2) & ~1;
 
     srcX = qBound(0, srcX, m_videoWidth - srcW);
     srcY = qBound(0, srcY, m_videoHeight - srcH);
+    srcX &= ~1;
+    srcY &= ~1;
 
     m_sourceRect = QRect(srcX, srcY, srcW, srcH);
     m_content->updateOverlayGeometry();
@@ -410,10 +426,10 @@ void MagnifierWidget::recalcSourceRect()
 
     // Re-crop snapshot overlay to match new source rect
     if (!m_snapshotOriginal.isNull() && m_content->hasSnapshot()) {
-        m_content->reCropSnapshot(m_sourceRect, m_snapshotOriginal);
+        m_content->reCropSnapshot(sourceRectForImage(m_snapshotOriginal), m_snapshotOriginal);
     } else if (!m_snapshotOriginal.isNull() && !m_content->hasSnapshot()) {
         // Edge case: m_snapshotOriginal set but content doesn't have snapshot yet
-        QRect src = m_sourceRect.intersected(m_snapshotOriginal.rect());
+        QRect src = sourceRectForImage(m_snapshotOriginal);
         if (!src.isEmpty()) {
             m_content->setSnapshotOverlay(m_snapshotOriginal.copy(src),
                                          m_snapshotBrightness, m_snapshotContrast, m_snapshotOpacity);
@@ -439,11 +455,10 @@ void MagnifierWidget::onFrameReady(const QImage &fullFrame)
         m_content->update();
     }
 
-    QRect src = m_sourceRect.intersected(fullFrame.rect());
-    if (src.isEmpty()) {
-        m_content->onFrameReady(QImage());
-        return;
-    }
+    // 源矩形换算到帧坐标（scrub 降采样帧 ≠ 原生分辨率时按比例缩放）
+    const QRect src = sourceRectForImage(fullFrame);
+    if (src.isEmpty())
+        return;   // 保留上一帧：scrub 快速拖拽丢帧期间避免黑屏闪烁
 
     m_content->onFrameReady(fullFrame.copy(src));
 }
@@ -467,7 +482,7 @@ void MagnifierWidget::setSnapshotOverlay(const QImage &img, int brightness, int 
     m_snapshotBrightness = brightness;
     m_snapshotContrast = contrast;
     m_snapshotOpacity = opacity;
-    QRect src = m_sourceRect.intersected(img.rect());
+    QRect src = sourceRectForImage(img);
     if (!src.isEmpty()) {
         m_content->setSnapshotOverlay(img.copy(src), brightness, contrast, opacity);
     } else {

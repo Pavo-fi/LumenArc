@@ -20,9 +20,25 @@ PinnedWidget::PinnedWidget(QWidget *parent)
     setVisible(false);
 }
 
+void PinnedWidget::setVideoSize(int width, int height)
+{
+    m_videoSize = QSize(qMax(1, width), qMax(1, height));
+}
+
 void PinnedWidget::setPinnedImage(const QImage &fullFrame, const QRect &videoRect)
 {
-    QRect src = videoRect.intersected(fullFrame.rect());
+    // scrub 拖拽期间引擎输出降采样预览帧（宽 ≤1280），尺寸 ≠ 原生分辨率：
+    // 视频坐标矩形必须按比例换算到帧坐标，否则裁剪区域漂移/为空（黑屏）。
+    QRect src = videoRect;
+    if (!m_videoSize.isEmpty() && fullFrame.size() != m_videoSize) {
+        const qreal sx = qreal(fullFrame.width()) / m_videoSize.width();
+        const qreal sy = qreal(fullFrame.height()) / m_videoSize.height();
+        src = QRect(qRound64(videoRect.x() * sx),
+                    qRound64(videoRect.y() * sy),
+                    qMax(1, qRound64(videoRect.width() * sx)),
+                    qMax(1, qRound64(videoRect.height() * sy)));
+    }
+    src = src.intersected(fullFrame.rect());
     if (src.isEmpty()) {
         clear();
         return;
