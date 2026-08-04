@@ -317,8 +317,10 @@ def _analyze_luminance_ffmpeg(video_path, rois, ffmpeg, processes,
     if processes > 1 and span >= 300000.0:
         n_chunks = max(1, min(processes * 2, int(span // 300000.0)))
 
-    # 解码线程配额：总线程数 ≈ CPU 核数，防止 n_chunks×auto 超额订阅卡死系统
-    cores = os.cpu_count() or 4
+    # 解码线程配额：总线程数 ≈ CPU 核数 - 2（留核给主窗口播放/操作），
+    # 防 n_chunks×auto 超额订阅卡死系统；分析进程已恢复正常优先级
+    # （BELOW_NORMAL 在有后台负载的机器上会被饿死，现场反馈分析变慢）
+    cores = max(4, (os.cpu_count() or 4) - 2)
     threads_per_chunk = max(1, cores // n_chunks)
 
     if reporter.auto_total:
@@ -837,27 +839,7 @@ def analyze_multi_videos(video_paths, rois, ffmpeg, processes=1):
     return result
 
 
-def _lower_process_priority():
-    """分析进程降为低优先级（不抢占 UI/系统前台任务），子进程(ffmpeg)默认继承。
-
-    低优先级只在 CPU 竞争时让步——机器空闲时分析仍吃满全部算力，不牺牲速度。"""
-    try:
-        if os.name == "nt":
-            import ctypes
-            k = ctypes.windll.kernel32
-            # 64 位下必须显式声明签名，否则 HANDLE 被默认 int 截断导致静默失败
-            k.GetCurrentProcess.restype = ctypes.c_void_p
-            k.SetPriorityClass.argtypes = [ctypes.c_void_p, ctypes.c_uint32]
-            BELOW_NORMAL_PRIORITY_CLASS = 0x00004000
-            k.SetPriorityClass(k.GetCurrentProcess(), BELOW_NORMAL_PRIORITY_CLASS)
-        else:
-            os.nice(10)
-    except Exception:
-        pass
-
-
 def main():
-    _lower_process_priority()
     parser = argparse.ArgumentParser(description="Video luminance + audio analyzer")
     parser.add_argument("video_path", nargs="?", help="Path to video file")
     parser.add_argument("roi_json", nargs="?", help="ROI JSON array")

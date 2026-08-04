@@ -13,12 +13,6 @@
 
 #include <QProcess>
 #include <QProcessEnvironment>
-#ifdef Q_OS_WIN
-#include <qt_windows.h>
-#ifndef CREATE_BELOW_NORMAL_PRIORITY_CLASS
-#define CREATE_BELOW_NORMAL_PRIORITY_CLASS 0x00004000
-#endif
-#endif
 #include <QTimer>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -28,6 +22,9 @@
 #include <QFileInfo>
 #include <QDir>
 #include <QRegularExpression>
+
+// OCR 是用户等待的前处理任务：恢复正常优先级（BELOW_NORMAL 在后台负载下
+// 会被饿死）。防主窗口饿殍改由线程数限制承担（OMP_NUM_THREADS=1，见 run()）
 
 namespace {
 
@@ -190,12 +187,6 @@ void TimestampOcrEngine::run(const QStringList &paths, const QString &workDir,
     env.insert(QStringLiteral("OPENBLAS_NUM_THREADS"), QStringLiteral("1"));
     env.insert(QStringLiteral("MKL_NUM_THREADS"), QStringLiteral("1"));
     m_process->setProcessEnvironment(env);
-#ifdef Q_OS_WIN
-    m_process->setCreateProcessArgumentsModifier(
-        [](QProcess::CreateProcessArguments *a) {
-            a->flags |= CREATE_BELOW_NORMAL_PRIORITY_CLASS;
-        });
-#endif
     connect(m_process, &QProcess::readyReadStandardOutput, this, [this]() {
         m_stdoutBuf += m_process->readAllStandardOutput();
     });

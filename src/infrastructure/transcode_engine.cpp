@@ -13,15 +13,14 @@
 #include "domain/preprocess_text.h"
 
 #include <QProcess>
-#ifdef Q_OS_WIN
-#include <qt_windows.h>
-#ifndef CREATE_BELOW_NORMAL_PRIORITY_CLASS
-#define CREATE_BELOW_NORMAL_PRIORITY_CLASS 0x00004000
-#endif
-#endif
+#include <QThread>
 #include <QTimer>
 #include <QFile>
 #include <QDir>
+
+// 转码是用户盯进度等待的前台任务：恢复正常优先级（此前 BELOW_NORMAL 在
+// 有后台负载的机器上会被饿死，现场反馈转码巨慢）；同时限制编码线程数
+// 留核给主窗口（反馈③诉求：转码期间 UI 保持响应）
 
 TranscodeEngine::TranscodeEngine(QObject *parent)
     : QObject(parent)
@@ -46,6 +45,9 @@ QStringList TranscodeEngine::buildArgs(const TranscodeRequest &req,
         QStringLiteral("-crf"), QString::number(req.crf),
         QStringLiteral("-pix_fmt"), QStringLiteral("yuv420p"),
     };
+    // 编码线程上限 = 核心数 - 2（≥2）：转码期间主窗口播放/操作保持响应
+    args << QStringLiteral("-threads")
+         << QString::number(qMax(2, QThread::idealThreadCount() - 2));
     if (req.deinterlace) {
         // 隔行源默认 yadif（探测到 field_order≠progressive 时由调用方置位）
         args << QStringLiteral("-vf") << QStringLiteral("yadif");
@@ -90,13 +92,6 @@ void TranscodeEngine::run(const TranscodeRequest &req)
     m_stdoutBuf.clear();
     m_stderrBuf.clear();
     m_process = new QProcess(this);
-#ifdef Q_OS_WIN
-    // 低于普通优先级：转码期间主窗口分析/播放保持响应（现场反馈③）
-    m_process->setCreateProcessArgumentsModifier(
-        [](QProcess::CreateProcessArguments *a) {
-            a->flags |= CREATE_BELOW_NORMAL_PRIORITY_CLASS;
-        });
-#endif
     m_process->setProgram(PythonAnalysisEngine::findFfmpegPath());
     m_process->setArguments(buildArgs(req, m_tempOutput));
     connect(m_process, &QProcess::readyReadStandardOutput,

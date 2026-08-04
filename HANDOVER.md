@@ -910,10 +910,15 @@ MainWindow::openVideoFile，信号解耦 R2），消除"拖入"动作。
 ### 16.3 问题③：主窗口饿殍（进程优先级隔离）
 
 根因：4 worker × onnxruntime 默认全核线程池 → 线程过订阅 + 同优先级抢占。
-修复：OCR/转码/拼接子进程一律 `CREATE_BELOW_NORMAL_PRIORITY_CLASS`（Qt
-`setCreateProcessArgumentsModifier`，qt_windows.h 未导出该常量，回退定义 0x00004000）；
-OCR 进程环境 OMP/OPENBLAS/MKL_NUM_THREADS=1。Windows 调度器保证主分析进程优先，
-I/O 优先级随进程级一并降低。
+修复：OCR 进程环境 OMP/OPENBLAS/MKL_NUM_THREADS=1（线程配额是防饿殍的
+根本手段）。**2026-08-04 修订**：原方案对 OCR/转码/拼接子进程一律
+`CREATE_BELOW_NORMAL_PRIORITY_CLASS` 被推翻——这些是用户盯进度等待的前台
+任务，BELOW_NORMAL 在存在任何后台负载（杀软/索引/浏览器）的机器上会被
+饿死（现场反馈：转码拼接巨慢、14900K 分析体感慢）。现改为：
+- 转码/拼接/OCR 子进程恢复正常优先级；
+- 转码 ffmpeg 加 `-threads 核数-2`（留核给主窗口）；
+- 亮度分析（analyze_video.py）删除进程降级，解码线程配额改为 `核数-2`。
+验证：30min 1440p 分析 29.6s；转码 ~3x 实时；168 单测 + 29 集成全绿。
 
 ### 16.4 遗留
 
