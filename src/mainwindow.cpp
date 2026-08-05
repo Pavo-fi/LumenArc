@@ -81,7 +81,7 @@ MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent)
 {
     loadLanguage();
-    setWindowTitle(lang("追光者 Lumen Arc v1.0", "Lumen Arc v1.0"));
+    setWindowTitle(lang("追光者 Lumen Arc v1.1.1", "Lumen Arc v1.1.1"));
     resize(1280, 720);
 
     m_regionModel = new RegionModel(this);
@@ -1284,7 +1284,7 @@ void MainWindow::setupConnections()
                 m_setTimeBtn->setEnabled(false);
                 m_captureBtn->setEnabled(false);
 
-                setWindowTitle(lang("追光者 Lumen Arc v1.0", "Lumen Arc v1.0"));
+                setWindowTitle(lang("追光者 Lumen Arc v1.1.1", "Lumen Arc v1.1.1"));
                 updateTimeDisplay();
                 showOperationStatus(lang("已清空视频列表", "Video list cleared"));
             });
@@ -1445,7 +1445,7 @@ void MainWindow::openVideoFile(const QString &filePath)
 
         // Do NOT overwrite m_currentVideoPath with the .vla path: it is an
         // analysis file, not a playable video, and it keys VideoStateManager.
-        setWindowTitle("Lumen Arc v1.0 - [Loaded: " +
+        setWindowTitle("Lumen Arc v1.1.1 - [Loaded: " +
                            QFileInfo(filePath).fileName() + "]");
         } else {
             QMessageBox::critical(this, lang("错误", "Error"),
@@ -1726,7 +1726,7 @@ void MainWindow::onLoadAnalysis()
                 m_guideLineModel->addLine(line);
 
             // Do NOT overwrite m_currentVideoPath with the .vla path (see openVideoFile).
-        setWindowTitle("Lumen Arc v1.0 - [Loaded: " +
+        setWindowTitle("Lumen Arc v1.1.1 - [Loaded: " +
                        QFileInfo(filePath).fileName() + "]");
         QMessageBox::information(this, lang("已加载", "Loaded"),
             lang("分析结果加载成功。", "Analysis result loaded successfully."));
