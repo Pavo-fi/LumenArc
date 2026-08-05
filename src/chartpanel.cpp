@@ -29,6 +29,13 @@
 #include <QColorDialog>
 #include <QDialog>
 #include <QVBoxLayout>
+#include <QGraphicsTextItem>
+#include <QTextDocument>
+#include <QFontMetricsF>
+#include <QToolTip>
+#include <QScreen>
+#include <QGuiApplication>
+#include <algorithm>
 #include <QHBoxLayout>
 #include <QLineEdit>
 #include <QPushButton>
@@ -42,6 +49,7 @@ ChartPanel::ChartPanel(QWidget *parent)
     setRenderHint(QPainter::Antialiasing);
     setRubberBand(QChartView::NoRubberBand);
     setDragMode(QGraphicsView::NoDrag);
+    setMouseTracking(true);   // 标签标记点悬停悬浮窗依赖 hover 事件
     setBackgroundBrush(QBrush(QColor(Theme::BgPanel)));
     setFocusPolicy(Qt::NoFocus);  // 防止图表窃取键盘焦点导致快捷键失效
 
@@ -62,6 +70,9 @@ ChartPanel::ChartPanel(QWidget *parent)
     m_axisX = new QValueAxis();
     m_axisX->setLabelFormat("%.0f");
     m_axisX->setLabelsVisible(false);
+    // 隐藏 Qt 自绘轴线/刻度（与自定义刻度线叠加会产生“额外刻度线”）；
+    // 刻度样式统一由 updateTimeLabels 自绘控制
+    m_axisX->setLineVisible(false);
     m_axisX->setTitleBrush(QBrush(QColor(0xF5, 0xF0, 0xE8)));
     m_axisX->setLabelsColor(QColor(0xF5, 0xF0, 0xE8));
     m_axisX->setGridLineVisible(false);
@@ -188,6 +199,11 @@ ChartPanel::ChartPanel(QWidget *parent)
         }
         QAction *undoLabelAction = menu.addAction(lang("删除光标处标签", "Delete Label at Cursor"));
         undoLabelAction->setEnabled(nearestIdx >= 0 && nearestDist < 5000);  // within 5s
+        QAction *labelTextAction = menu.addAction(lang("显示标签文字", "Show Label Text"));
+        labelTextAction->setCheckable(true);
+        // 勾选状态 = 当前实际可见性（自动模式按折线数判定）
+        labelTextAction->setChecked((m_labelsTextMode == 1)
+            || (m_labelsTextMode == 0 && visibleSeriesCount() < 2));
         QAction *setAAction = menu.addAction(lang("设置 A 点", "Set Point A"));
         QAction *setBAction = menu.addAction(lang("设置 B 点", "Set Point B"));
         QAction *clearABAction = menu.addAction(lang("清除 A/B 区域", "Clear A/B Region"));
@@ -221,6 +237,10 @@ ChartPanel::ChartPanel(QWidget *parent)
                 m_labels.removeAt(nearestIdx);
                 updateLabelItems();
             }
+        } else if (chosen == labelTextAction) {
+            // 用户手动切换：固定显示/隐藏（自动模式由菜单再次点击退出）
+            m_labelsTextMode = labelTextAction->isChecked() ? 1 : 2;
+            updateLabelItems();
         } else if (chosen == setAAction) {
             setPointA(cursorTime);
         } else if (chosen == setBAction) {
@@ -258,6 +278,7 @@ ChartPanel::ChartPanel(QWidget *parent)
 ChartPanel::~ChartPanel()
 {
     clearChartGuideLines();
+    delete m_labelTip;   // 独立顶层悬浮窗（无 parent），析构时回收
 
     for (auto *item : m_timeLabelItems) {
         if (item->scene()) item->scene()->removeItem(item);
@@ -589,6 +610,56 @@ void ChartPanel::updateYAxisRange()
     }
 }
 
+/// 标签多行避让布局的行走位槽（文件级：MSVC 对局部类型作模板实参解析不稳）
+struct Slot { int labelIdx; qreal x; qreal fullW; };
+typedef QVector<Slot> SlotRow;
+
+/// 标签标记点：悬停 250ms 后经 ChartPanel 显示自控悬浮窗（点右上方，
+/// 标签色文字 + 时间行）；离开立即隐藏。悬浮窗由 ChartPanel 持有，
+/// 显示/隐藏/时长完全自控（QToolTip 平台行为不可控，已弃用）。
+class LabelDotItem : public QGraphicsEllipseItem
+{
+public:
+    LabelDotItem(qreal x, qreal y, qreal size, const QColor &color,
+                 const QString &text, const QString &timeStr,
+                 QGraphicsItem *parent, QWidget *host)
+        : QGraphicsEllipseItem(x, y, size, size, parent)
+        , m_color(color), m_text(text), m_timeStr(timeStr), m_host(host)
+    {
+        setBrush(color);
+        setPen(QPen(QColor(22, 24, 29), 1.5));
+        setAcceptHoverEvents(true);
+    }
+
+protected:
+    void hoverEnterEvent(QGraphicsSceneHoverEvent *event) override
+    {
+        if (auto *panel = static_cast<ChartPanel *>(m_host))
+            panel->scheduleLabelTip(m_color, m_text, m_timeStr, anchorGlobal());
+        QGraphicsEllipseItem::hoverEnterEvent(event);
+    }
+    void hoverLeaveEvent(QGraphicsSceneHoverEvent *event) override
+    {
+        if (auto *panel = static_cast<ChartPanel *>(m_host))
+            panel->hideLabelTip();
+        QGraphicsEllipseItem::hoverLeaveEvent(event);
+    }
+
+private:
+    /// 点右上角的全局坐标（悬浮窗锚点）
+    QPoint anchorGlobal() const
+    {
+        const QPointF scenePos = mapToScene(rect().center());
+        auto *view = static_cast<QGraphicsView *>(m_host);
+        return m_host->mapToGlobal(view->mapFromScene(scenePos)) + QPoint(8, -6);
+    }
+
+    QColor m_color;
+    QString m_text;
+    QString m_timeStr;
+    QWidget *m_host = nullptr;   // ChartPanel（QGraphicsView），场景→全局坐标用
+};
+
 void ChartPanel::updateLabelItems()
 {
     for (auto *item : m_labelGraphicsItems) {
@@ -598,29 +669,131 @@ void ChartPanel::updateLabelItems()
     m_labelGraphicsItems.clear();
     m_labelHitAreas.clear();
 
-    for (const auto &label : m_labels) {
-        qreal x = mapTimeToX(label.timeMs);
-        QRectF plotArea = m_chart->plotArea();
+    if (m_labels.isEmpty())
+        return;
+
+    const QRectF plotArea = m_chart->plotArea();
+    // 标签文字可见性：0=自动（折线 ≥2 时只显示彩色标记点，避免画面杂乱），
+    // 1=强制显示，2=强制隐藏（右键菜单切换）。隐藏时标记点 tooltip 显示全文。
+    const int seriesCount = visibleSeriesCount();
+    const bool textVisible = (m_labelsTextMode == 1)
+        || (m_labelsTextMode == 0 && seriesCount < 2);
+    if (!textVisible) {
+        // 标记点模式：每个标签 = 彩色圆点 + 悬停悬浮窗（右上方，标签色文字 + 时间）
+        for (const ChartLabel &label : m_labels) {
+            const qreal x = mapTimeToX(label.timeMs);
+            if (x < plotArea.left() || x > plotArea.right())
+                continue;
+            const QString timeStr = formatTimeHMS(label.timeMs + m_startTimeOfDayMs);
+            auto *dot = new LabelDotItem(x - 4, plotArea.top() + 0.5, 8, label.color,
+                                         label.text, timeStr, m_chart, this);
+            dot->setZValue(USER_LABEL_Z_VALUE);
+            m_labelGraphicsItems.append(dot);
+            m_labelHitAreas.append({QRectF(x - 8, plotArea.top() - 2, 16, 16), label.timeMs});
+        }
+        return;
+    }
+
+    // 多行避让布局（两遍法）：
+    //  第一遍 按完整文字宽度分行走位（行内间距 >= GAP，行数有界 MAX_ROWS）；
+    //  第二遍 仅在同行内按“下一个同行标签间距”截断——文字尽量完整显示，
+    //         密集/超长时省略号截断，全文经 tooltip 查看。
+    constexpr int MAX_ROWS = 3;
+    constexpr qreal GAP = 10.0;        // 同行标签最小间距
+    constexpr qreal MIN_TEXT_W = 16.0; // 截断后最小宽度
+    const QFont f = fontSans(9);
+    const QFontMetricsF fm(f);
+    const qreal ROW_H = fm.height() + 3.0;   // 每行高度（随字体度量，防行间贴叠）
+    const qreal top = plotArea.top();
+
+    // 按时间点排序后依次放置（m_labels 本身保持添加顺序不变）
+    QVector<int> order;
+    order.reserve(m_labels.size());
+    for (int i = 0; i < m_labels.size(); ++i)
+        order.append(i);
+    std::stable_sort(order.begin(), order.end(), [&](int a, int b) {
+        return mapTimeToX(m_labels[a].timeMs) < mapTimeToX(m_labels[b].timeMs);
+    });
+
+    // 第一遍：分行走位（用完整宽度，保守换行）
+    QVector<SlotRow> rows;
+    rows.resize(MAX_ROWS);
+    qreal rowEnd[MAX_ROWS] = {};
+    for (int r = 0; r < MAX_ROWS; ++r)
+        rowEnd[r] = plotArea.left();
+    for (int i : order) {
+        const ChartLabel &label = m_labels[i];
+        const qreal x = mapTimeToX(label.timeMs);
         if (x < plotArea.left() || x > plotArea.right())
             continue;
+        const qreal fullW = fm.horizontalAdvance(label.text);
+        int row = 0;
+        while (row < MAX_ROWS - 1 && x < rowEnd[row] + GAP)
+            ++row;
+        rows[row].append({ i, x, fullW });
+        rowEnd[row] = qMax(rowEnd[row], x + fullW + GAP);
+    }
 
-        auto *line = new QGraphicsLineItem(m_chart);
-        QPen pen(label.color);
-        pen.setWidth(2);
-        line->setPen(pen);
-        line->setLine(x, plotArea.top() + 10, x, plotArea.top() + 30);
-        line->setZValue(USER_LABEL_Z_VALUE);
-        m_labelGraphicsItems.append(line);
+    // 第二遍：同行内按实际间距截断，生成图形项
+    for (int row = 0; row < MAX_ROWS; ++row) {
+        const SlotRow &rowSlots = rows[row];
+        for (int j = 0; j < rowSlots.size(); ++j) {
+            const ChartLabel &label = m_labels[rowSlots[j].labelIdx];
+            const qreal x = rowSlots[j].x;
+            // 同行内下一个标签（或右边界）决定可用宽度
+            const qreal nextX = (j + 1 < rowSlots.size())
+                ? rowSlots[j + 1].x : plotArea.right();
+            const qreal rawAvail = qMin(nextX - x - GAP, plotArea.right() - x - 6.0);
 
-        auto *textItem = new QGraphicsSimpleTextItem(label.text, m_chart);
-        textItem->setBrush(QBrush(label.color));
-        textItem->setFont(fontSans(9));
-        textItem->setZValue(USER_LABEL_Z_VALUE);
-        textItem->setPos(x + 4, plotArea.top() + 2);
-        m_labelGraphicsItems.append(textItem);
+            // 时间点竖线：从图表顶边延伸到该标签行文字中线
+            const qreal rowY = top + 2.0 + row * ROW_H;
+            auto *line = new QGraphicsLineItem(m_chart);
+            QPen pen(label.color);
+            pen.setWidth(2);
+            line->setPen(pen);
+            line->setLine(x, top + 4, x, rowY + fm.height() / 2.0);
+            line->setZValue(USER_LABEL_Z_VALUE);
+            m_labelGraphicsItems.append(line);
 
-        QRectF hitRect(x - 4, plotArea.top(), textItem->boundingRect().width() + 12, 32);
-        m_labelHitAreas.append({hitRect, label.timeMs});
+            if (rowSlots[j].fullW > rawAvail && rawAvail < MIN_TEXT_W) {
+                // 空间不足（密集标签）：降级为圆点标记，悬停悬浮窗显示全文
+                const QString timeStr = formatTimeHMS(label.timeMs + m_startTimeOfDayMs);
+                auto *dot = new LabelDotItem(x - 4, rowY + fm.height() / 2.0 - 4, 8,
+                                             label.color, label.text, timeStr, m_chart, this);
+                dot->setZValue(USER_LABEL_Z_VALUE);
+                m_labelGraphicsItems.append(dot);
+                m_labelHitAreas.append({QRectF(x - 6, top + row * ROW_H, 12, ROW_H + 8),
+                                        label.timeMs});
+                continue;
+            }
+
+            // 截断：超长文字加省略号，全文经 tooltip 查看
+            const qreal availW = qMax(MIN_TEXT_W, rawAvail);
+            QString shown = label.text;
+            if (rowSlots[j].fullW > availW) {
+                while (!shown.isEmpty()
+                       && fm.horizontalAdvance(shown + QStringLiteral("…")) > availW)
+                    shown.chop(1);
+                shown += QStringLiteral("…");
+            }
+            const qreal textW = fm.horizontalAdvance(shown);
+
+            // 文字（QGraphicsTextItem 支持 tooltip 显示全文）
+            auto *textItem = new QGraphicsTextItem(shown, m_chart);
+            textItem->setDefaultTextColor(label.color);
+            textItem->setFont(f);
+            textItem->setTextInteractionFlags(Qt::NoTextInteraction);
+            textItem->document()->setDocumentMargin(0);
+            if (shown != label.text)
+                textItem->setToolTip(label.text);   // 截断时悬停显示完整文字
+            textItem->setZValue(USER_LABEL_Z_VALUE);
+            textItem->setPos(x + 4, rowY);
+            m_labelGraphicsItems.append(textItem);
+
+            m_labelHitAreas.append({QRectF(x - 4, top + row * ROW_H,
+                                           textW + 12, ROW_H + 8),
+                                    label.timeMs});
+        }
     }
 }
 
@@ -864,16 +1037,16 @@ void ChartPanel::updateTimeLabels()
 
         QString text = formatTimeHMS(tReal);
         auto *item = new QGraphicsSimpleTextItem(text, m_chart);
-        item->setFont(fontSans(9));
+        item->setFont(fontMono(9, QFont::Bold));
         item->setBrush(QBrush(QColor(0xF5, 0xF0, 0xE8)));
         item->setZValue(LABEL_Z_VALUE);
         m_timeLabelItems.append(item);
         m_labelVideoTimes.append(tVideo);
 
-        // Major tick mark
+        // Major tick mark（亮灰，2px）
         if (m_showTickMarks) {
             auto *tick = new QGraphicsLineItem(m_chart);
-            tick->setPen(QPen(QColor(180, 180, 180), 2));
+            tick->setPen(QPen(QColor(154, 160, 171), 2));
             qreal x = mapTimeToX(tVideo);
             tick->setLine(x, bottom, x, bottom + 10);
             tick->setZValue(LABEL_Z_VALUE - 1);
@@ -881,12 +1054,20 @@ void ChartPanel::updateTimeLabels()
         }
     }
 
-    // --- Minor tick marks (ruler-style sub-divisions) ---
+    // --- 底部基线（贯穿整个绘图区，弱化分隔感） ---
+    if (m_showTickMarks) {
+        auto *baseline = new QGraphicsLineItem(m_chart);
+        baseline->setPen(QPen(QColor(58, 65, 82), 1));
+        baseline->setLine(plotArea.left(), bottom, plotArea.right(), bottom);
+        baseline->setZValue(LABEL_Z_VALUE - 4);
+        m_tickMarkItems.append(baseline);
+    }
+
+    // --- Minor tick marks（ruler-style sub-divisions，暗灰 1px） ---
     if (m_showTickMarks) {
         int minorDivisions = 4;
         qint64 minorStep = step / minorDivisions;
         if (minorStep >= 1) {
-            // Draw minor ticks between each pair of major ticks
             for (qint64 tReal = firstLabel; tReal < lastLabel; tReal += step) {
                 for (int m = 1; m < minorDivisions; ++m) {
                     qint64 tMinor = tReal + m * minorStep;
@@ -897,36 +1078,11 @@ void ChartPanel::updateTimeLabels()
                         break;
 
                     auto *tick = new QGraphicsLineItem(m_chart);
-                    tick->setPen(QPen(QColor(140, 140, 140), 1));
+                    tick->setPen(QPen(QColor(74, 80, 96), 1));
                     qreal x = mapTimeToX(tMinorVideo);
                     tick->setLine(x, bottom, x, bottom + 5);
                     tick->setZValue(LABEL_Z_VALUE - 2);
                     m_tickMarkItems.append(tick);
-                }
-            }
-
-            // --- Micro tick marks (4 subdivisions between each minor tick) ---
-            int microDivisions = 4;
-            qint64 microStep = minorStep / microDivisions;
-            if (microStep >= 1) {
-                for (qint64 tReal = firstLabel; tReal < lastLabel; tReal += step) {
-                    for (int mi = 1; mi < minorDivisions * microDivisions; ++mi) {
-                        if (mi % microDivisions == 0)
-                            continue; // skip positions that coincide with minor ticks
-                        qint64 tMicro = tReal + mi * microStep;
-                        qint64 tMicroVideo = tMicro - offset;
-                        if (tMicroVideo < static_cast<qint64>(visibleMin))
-                            continue;
-                        if (tMicroVideo > static_cast<qint64>(visibleMax))
-                            break;
-
-                        auto *tick = new QGraphicsLineItem(m_chart);
-                        tick->setPen(QPen(QColor(100, 100, 100), 1));
-                        qreal x = mapTimeToX(tMicroVideo);
-                        tick->setLine(x, bottom, x, bottom + 3);
-                        tick->setZValue(LABEL_Z_VALUE - 3);
-                        m_tickMarkItems.append(tick);
-                    }
                 }
             }
         }
@@ -1204,6 +1360,75 @@ qint64 ChartPanel::mapXToTime(qreal x) const
     qreal min = m_axisX->min();
     qreal max = m_axisX->max();
     return static_cast<qint64>(min + ratio * (max - min));
+}
+
+/// 标签标记点悬浮窗：250ms 延迟后显示（划过不弹，停留才出）
+void ChartPanel::scheduleLabelTip(const QColor &color, const QString &text,
+                                  const QString &timeStr, const QPoint &anchorGlobal)
+{
+    m_labelTipColor = color;
+    m_labelTipText = text;
+    m_labelTipTime = timeStr;
+    m_labelTipAnchor = anchorGlobal;
+    if (!m_labelTipTimer) {
+        m_labelTipTimer = new QTimer(this);
+        m_labelTipTimer->setSingleShot(true);
+        m_labelTipTimer->setInterval(250);
+        connect(m_labelTipTimer, &QTimer::timeout, this, &ChartPanel::showLabelTipNow);
+    }
+    m_labelTipTimer->start();
+}
+
+/// 立即隐藏悬浮窗（并取消未触发的延迟显示）
+void ChartPanel::hideLabelTip()
+{
+    if (m_labelTipTimer)
+        m_labelTipTimer->stop();
+    if (m_labelTip)
+        m_labelTip->hide();
+}
+
+void ChartPanel::showLabelTipNow()
+{
+    if (!m_labelTip) {
+        // 自控悬浮窗：鼠标穿透、不抢焦点、半透明深色圆角（样式与主题一致）
+        m_labelTip = new QLabel(nullptr, Qt::ToolTip | Qt::FramelessWindowHint);
+        m_labelTip->setAttribute(Qt::WA_TransparentForMouseEvents);
+        m_labelTip->setAttribute(Qt::WA_ShowWithoutActivating);
+        m_labelTip->setStyleSheet(QStringLiteral(
+            "QLabel { background-color: rgba(30, 33, 40, 0.92); color: #EDE8DF;"
+            "  border: 1px solid rgba(51, 57, 71, 0.85); border-radius: 6px;"
+            "  padding: 4px 8px; }"));
+    }
+    m_labelTip->setText(QStringLiteral(
+        "<div style='color:%1; font-size:12px;'>%2</div>"
+        "<div style='color:#9AA0AB; font-size:11px; margin-top:2px;'>%3</div>")
+        .arg(m_labelTipColor.name(), m_labelTipText.toHtmlEscaped(),
+             m_labelTipTime.toHtmlEscaped()));
+    m_labelTip->adjustSize();
+
+    // 整体对齐点右上方：悬浮窗底部 = 点右上角锚点；屏幕边缘自动避让
+    const QSize tipSize = m_labelTip->size();
+    QPoint tipPos(m_labelTipAnchor.x(), m_labelTipAnchor.y() - tipSize.height());
+    if (QScreen *screen = QGuiApplication::screenAt(m_labelTipAnchor)) {
+        const QRect avail = screen->availableGeometry();
+        if (tipPos.x() + tipSize.width() > avail.right())
+            tipPos.setX(avail.right() - tipSize.width());
+        if (tipPos.y() < avail.top())
+            tipPos.setY(m_labelTipAnchor.y() + 6);
+    }
+    m_labelTip->move(tipPos);
+    m_labelTip->show();
+}
+
+/// 当前可见折线数（图例条目数：含无数据骨架 ROI——空 series 也占图例位；
+/// 音量曲线有数据时 +1）。标签文字自动隐藏判定用：≥2 时只显示标记点
+int ChartPanel::visibleSeriesCount() const
+{
+    int n = m_seriesList.size();
+    if (m_volumeSeries && m_volumeSeries->count() > 0)
+        ++n;
+    return n;
 }
 
 qreal ChartPanel::mapTimeToX(qint64 timeMs) const

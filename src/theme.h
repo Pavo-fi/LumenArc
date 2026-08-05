@@ -63,7 +63,8 @@ inline QString globalStyleSheet()
         // ---- 基础 ----
         "QMainWindow, QWidget { background-color: %1; color: %2; }"
         "QLabel { color: %2; background: transparent; }"
-        "QToolTip { background: %3; color: %2; border: 1px solid %4; padding: 6px 8px; }"
+        "QToolTip { background-color: rgba(37, 41, 50, 0.92); color: %2;"
+        "  border: 1px solid rgba(51, 57, 71, 0.85); border-radius: 6px; padding: 4px 8px; }"
 
         // ---- 菜单栏与菜单 ----
         "QMenuBar { background: %5; border-bottom: 1px solid %6; padding: 2px; }"

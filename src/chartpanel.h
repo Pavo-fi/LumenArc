@@ -27,6 +27,7 @@
 class RegionModel;
 class PolygonModel;
 class TimelineModel;
+class QLabel;
 
 /**
  * @brief QChartView subclass with custom time labels, draggable cursor,
@@ -61,6 +62,8 @@ public:
 
     QVector<ChartLabel> labels() const { return m_labels; }
     void setLabels(const QVector<ChartLabel> &l) { m_labels = l; updateLabelItems(); }
+    /// 当前可见折线数（有数据的亮度曲线 + 音量曲线）——标签文字自动隐藏判定用
+    int visibleSeriesCount() const;
 
     /// @brief 在指定时间点添加图表标签
     void addLabelAtTime(qint64 timeMs);
@@ -84,6 +87,12 @@ public:
     /// 图表辅助线的可序列化数据（逐视频状态保存/恢复用）
     QVector<ChartGuideData> chartGuideLinesData() const;
     void setChartGuideLinesData(const QVector<ChartGuideData> &lines);
+
+    /// 标签标记点悬浮窗（LabelDotItem 调用）：250ms 延迟后显示在点右上方
+    void scheduleLabelTip(const QColor &color, const QString &text,
+                          const QString &timeStr, const QPoint &anchorGlobal);
+    /// 立即隐藏悬浮窗（取消未触发的延迟显示）
+    void hideLabelTip();
 
 signals:
     void seekRequested(qint64 timeMs);
@@ -169,6 +178,16 @@ private:
 
     // Tick marks
     bool m_showTickMarks = true;
+    /// 标签文字显示模式：0=自动（折线 ≥2 时隐藏文字只留标记点），1=强制显示，2=强制隐藏
+    int m_labelsTextMode = 0;
+    // 标签标记点悬浮窗（自控 QLabel，替代 QToolTip——QToolTip 显示时长/隐藏时序不可控）
+    QLabel *m_labelTip = nullptr;
+    QTimer *m_labelTipTimer = nullptr;
+    QColor m_labelTipColor;
+    QString m_labelTipText;
+    QString m_labelTipTime;
+    QPoint m_labelTipAnchor;
+    void showLabelTipNow();
     QVector<QGraphicsLineItem *> m_tickMarkItems;
     QGraphicsSimpleTextItem *m_startTimeLabel = nullptr;
     QGraphicsSimpleTextItem *m_endTimeLabel = nullptr;
