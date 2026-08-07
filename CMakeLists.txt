@@ -84,6 +84,7 @@ set(SOURCES
     src/domain/smart_sorter.cpp
     src/domain/concat_precheck.cpp
     src/domain/evidence_report.cpp
+    src/domain/time_calibration.cpp
     src/app/preprocessing_coordinator.cpp
     src/infrastructure/ffmpeg_video_engine.cpp
     src/infrastructure/python_analysis_engine.cpp
@@ -129,6 +130,7 @@ set(HEADERS
     src/domain/concat_precheck.h
     src/domain/evidence_report.h
     src/domain/preprocess_text.h
+    src/domain/time_calibration.h
     src/app/preprocessing_coordinator.h
     src/infrastructure/ivideo_engine.h
     src/infrastructure/ianalysis_engine.h
@@ -173,6 +175,18 @@ target_link_libraries(lumenarc_preprocess_test PRIVATE
     Qt6::Core
     Qt6::Gui
     Qt6::Widgets   # SortableFileTable 拖拽插入语义 GUI 单测（offscreen）
+)
+
+# --- Headless calibration domain test harness ---
+add_executable(lumenarc_calibration_test
+    tests/calibration_test_main.cpp
+    src/domain/time_calibration.cpp
+)
+target_include_directories(lumenarc_calibration_test PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+)
+target_link_libraries(lumenarc_calibration_test PRIVATE
+    Qt6::Core
 )
 
 # --- Preprocess engine integration test (real ffmpeg/Python subprocesses) ---
