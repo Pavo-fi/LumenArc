@@ -1,0 +1,104 @@
+/**
+ * @file timesettingsdialog.h
+ * @brief 校时窗口：三点自动识别/absStart/手动 + 北京时间校验（v1.2.0）
+ * @author Huang Jingyun, Liu xinghua, Huang Wenhua
+ * @date 2026-08-05
+ * @version 1.0
+ *
+ * Copyright 2026 Huang Jingyun/Liu xinghua/Huang Wenhua. All rights reserved.
+ * Licensed under the Apache License, Version 2.0
+ *
+ * 设计见 docs/V1_ERA_TECH_PLAN_CN.md §3.7（Q-3：一切候选仅预填，「采用」才生效）。
+ */
+#pragma once
+
+#include <QDialog>
+#include <QString>
+#include "domain/time_calibration.h"
+
+class CalibrationService;
+class QLabel;
+class QPushButton;
+class QTableWidget;
+class QTableWidgetItem;
+class QDateTimeEdit;
+class QLineEdit;
+class QCheckBox;
+
+class TimeSettingsDialog : public QDialog
+{
+    Q_OBJECT
+
+public:
+    /// sidecarWarning：拼接缺口警告（Q-4，空=无）
+    TimeSettingsDialog(const QString &videoPath,
+                       qint64 currentPosMs,
+                       qint64 durationMs,
+                       const TimeCalibration &current,
+                       const QString &sidecarWarning,
+                       CalibrationService *service,
+                       QWidget *parent = nullptr);
+
+    /// 用户点过「采用」时为真；calibration() 为应生效的新校时值
+    bool applied() const { return m_applied; }
+    TimeCalibration calibration() const { return m_working; }
+
+private slots:
+    void onRunThreePoint();
+    void onServiceProgress(const QString &stage);
+    void onThreePointReady(const QString &videoPath,
+                           const TimeCalibration &proposed);
+    void onServiceFailed(const QString &videoPath, const QString &error);
+    void onAbsStartReady(const QString &videoPath, qint64 absStartEpochMs);
+    void onSampleItemChanged(QTableWidgetItem *item);
+    void onAdoptFit();
+    void onAdoptAbsStart();
+    void onAdoptManual();
+    void onTruthInputChanged();
+    void onAdoptTruth();
+    void onClearTruth();
+    void onNoDriftCorrectionToggled(bool on);
+
+private:
+    void buildUi();
+    void refreshWorkingSummary();
+    void refitFromTable();
+    void refitSummaryRefresh();
+    void setBusy(bool busy, const QString &text = QString());
+    static QString fmtWall(qint64 epochMs);
+    static QString fmtOffset(qint64 offsetMs);
+
+    QString m_videoPath;
+    qint64 m_currentPosMs = 0;
+    qint64 m_durationMs = 0;
+    TimeCalibration m_working;          // 工作副本（采用候选时更新）
+    TimeCalibration m_fitResult;        // 最近一次三点拟合候选
+    QString m_sidecarWarning;
+    CalibrationService *m_service = nullptr;   // 不持有
+    bool m_applied = false;
+    bool m_updatingTable = false;
+    qint64 m_absStartMs = 0;
+
+    // UI
+    QLabel *m_videoLabel = nullptr;
+    QLabel *m_currentLabel = nullptr;
+    QLabel *m_workingSummary = nullptr;
+    QPushButton *m_runBtn = nullptr;
+    QLabel *m_progressLabel = nullptr;
+    QTableWidget *m_sampleTable = nullptr;
+    QLabel *m_fitLabel = nullptr;
+    QLabel *m_fitWarningLabel = nullptr;
+    QPushButton *m_adoptFitBtn = nullptr;
+    QLabel *m_absLabel = nullptr;
+    QPushButton *m_adoptAbsBtn = nullptr;
+    QDateTimeEdit *m_manualEdit = nullptr;
+    QPushButton *m_adoptManualBtn = nullptr;
+    QLabel *m_monitorTimeLabel = nullptr;
+    QDateTimeEdit *m_beijingEdit = nullptr;
+    QLabel *m_truthPreviewLabel = nullptr;
+    QLineEdit *m_truthNoteEdit = nullptr;
+    QPushButton *m_adoptTruthBtn = nullptr;
+    QPushButton *m_clearTruthBtn = nullptr;
+    QCheckBox *m_noDriftCheck = nullptr;
+    QLabel *m_sidecarWarnLabel = nullptr;
+};

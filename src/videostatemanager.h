@@ -9,6 +9,7 @@
 #include "domain/analysis_snapshot.h"
 #include "domain/timeline_model.h"
 #include "domain/guide_line.h"
+#include "domain/time_calibration.h"
 
 struct VideoState {
     QString filePath;
@@ -19,7 +20,7 @@ struct VideoState {
     QVector<int> polygonRoiIds;     // 与 polygons 一一对应
     QVector<GuideLine> guideLines;
     QVector<ChartGuideData> chartGuideLines;   // 图表辅助线（逐视频，防跨视频泄漏）
-    qint64 timeOffsetMs = 0;
+    TimeCalibration calibration;    // 校时模型（SSOT，仿射+北京时间偏移）
     QRect magnifierRect;
     QVector<ChartLabel> labels;
     QRect pinnedRect;
@@ -31,7 +32,7 @@ struct VideoState {
     bool hasData() const {
         return !snapshot.isEmpty() || !regions.isEmpty() || !polygons.isEmpty() || snapshot.hasAudio()
                || !guideLines.isEmpty() || !chartGuideLines.isEmpty() || !labels.isEmpty() || snapshotFusion.isValid()
-               || abPointA >= 0 || abPointB >= 0;
+               || abPointA >= 0 || abPointB >= 0 || calibration.isValid();
     }
 };
 
@@ -45,7 +46,7 @@ public:
     void saveState(const QString &videoPath,
                    const AnalysisSnapshot &snapshot,
                    const QVector<QRect> &regions,
-                   qint64 timeOffsetMs,
+                   const TimeCalibration &calibration,
                    const QRect &magnifierRect,
                    const QVector<ChartLabel> &labels,
                    const QRect &pinnedRect,

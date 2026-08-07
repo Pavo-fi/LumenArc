@@ -16,6 +16,7 @@
 #include <QPolygon>
 #include "analysis_snapshot.h"
 #include "guide_line.h"
+#include "time_calibration.h"
 
 /**
  * @brief Snapshot fusion parameters for VLA persistence.
@@ -71,10 +72,10 @@ public:
     /// Returns a copy of the current snapshot (cheap thanks to implicit sharing).
     AnalysisSnapshot snapshot() const;
 
-    /// Serialize current snapshot to .vla JSON file (v5 format).
-    /// Saves timestamps, luminance data, ROIs (rect+polygon+guide_lines), time offset, magnifier, labels, pinned, snapshot fusion.
+    /// Serialize current snapshot to .vla JSON file (v8 format).
+    /// Saves timestamps, luminance data, ROIs (rect+polygon+guide_lines), time calibration, magnifier, labels, pinned, snapshot fusion.
     bool saveToFile(const QString &filePath, const QVector<QRect> &regions,
-                    qint64 timeOffsetMs = 0, const QRect &magnifier = QRect(),
+                    const TimeCalibration &calibration, const QRect &magnifier = QRect(),
                     const QVector<ChartLabel> &labels = {},
                     const QRect &pinned = QRect(),
                     const SnapshotFusionData &snapshotFusion = SnapshotFusionData(),
@@ -84,10 +85,10 @@ public:
                     const QVector<int> &polygonRoiIds = {}) const;
 
     /// Deserialize snapshot from .vla JSON file. Emits dataReplaced() on success.
-    /// Output params restore ROI, time offset, magnifier, labels, pinned, snapshot fusion, polygons, guide lines.
+    /// Output params restore ROI, time calibration, magnifier, labels, pinned, snapshot fusion, polygons, guide lines.
     bool loadFromFile(const QString &filePath,
                       QVector<QRect> *regions = nullptr,
-                      qint64 *timeOffsetMs = nullptr,
+                      TimeCalibration *calibration = nullptr,
                       QRect *magnifier = nullptr,
                       QVector<ChartLabel> *labels = nullptr,
                       QRect *pinned = nullptr,

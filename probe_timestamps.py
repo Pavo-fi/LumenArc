@@ -550,6 +550,56 @@ def process_file_frames_only(video_path, ffmpeg_path, frame_dir, duration_ms):
     return out
 
 
+def process_file_at(video_path, ffmpeg_path, frame_dir, duration_ms, positions):
+    """Calibration sampling mode (V1 plan §3.2, --at-json): for each requested
+    stream position, extract ±0.25s candidate frames, OCR with incremental
+    voting, and return ONE wall-clock sample per position.
+
+    Sample semantics: relMs = MEASURED true position of the chosen evidence
+    frame; wallMs = implied wall-start + relMs. Seek inaccuracy is corrected
+    by the showinfo measurement inside extract_frame (same as head/tail mode).
+    """
+    os.makedirs(frame_dir, exist_ok=True)
+    out = {"file": video_path, "ok": False, "samples": [],
+           "durationMs": duration_ms}
+    for pos in positions:
+        pos = max(0, int(pos))
+        cands = []
+        for off_ms in (-250, 0, 250):
+            ss = pos + off_ms
+            if ss < 0:
+                continue
+            if duration_ms and ss >= duration_ms:
+                continue
+            p = os.path.join(frame_dir, f"at_{pos}_{off_ms:+d}.png")
+            el, actual = extract_frame(ffmpeg_path, video_path, p,
+                                       ss=ss / 1000.0)
+            if el >= 0:
+                cands.append((actual if actual is not None and actual >= 0
+                              else ss, p))
+        w, conf, chosen, used = ocr_side(cands, os.path.basename(video_path))
+        if w > 0 and chosen is not None:
+            img = ""
+            for rel, path in used:
+                if rel == chosen["relMs"]:
+                    img = path
+                    break
+            out["samples"].append({
+                "relMs": int(chosen["relMs"]),
+                "wallMs": int(w + chosen["relMs"]),
+                "text": chosen["raw"]["rawText"],
+                "conf": round(conf, 3),
+                "frameImg": img,
+            })
+        else:
+            out["samples"].append({"relMs": pos, "wallMs": 0,
+                                   "error": "ocr_failed"})
+    out["ok"] = any(s.get("wallMs", 0) > 0 for s in out["samples"])
+    if not out["ok"]:
+        out["error"] = "ocr_all_failed"
+    return out
+
+
 def _worker_init(ffmpeg_path, frame_root, durations, sha256,
                  frames_only=frozenset()):
     # 模型加载惰性化（首个 OCR 调用时）：纯 frames-only 批次不加载模型
@@ -583,6 +633,9 @@ def main():
                          "but skip OCR (in-stream absolute time already trusted)")
     ap.add_argument("--evidence-dir", default="",
                     help="persistent dir for evidence frames; default=temp")
+    ap.add_argument("--at-json", default="",
+                    help="calibration sampling mode: JSON {file: [posMs,...]}; "
+                         "one wall-clock sample per position (V1 plan §3.2)")
     args = ap.parse_args()
 
     if not os.path.isfile(args.ffmpeg_path):
@@ -617,6 +670,43 @@ def main():
     frame_root = args.evidence_dir or tmp_root
     if args.evidence_dir:
         os.makedirs(args.evidence_dir, exist_ok=True)
+
+    # ---- calibration sampling mode (--at-json) ----
+    # Single process (positions are few; model lazy-loads once). Progress is
+    # per position: PROGRESS:<done>|<total>|<pct>.
+    at_positions = {}
+    if args.at_json and os.path.isfile(args.at_json):
+        try:
+            with open(args.at_json, "r", encoding="utf-8") as f:
+                at_positions = {os.path.normpath(k): [int(x) for x in v]
+                                for k, v in json.load(f).items()}
+        except (json.JSONDecodeError, ValueError, AttributeError) as e:
+            print(f"WARNING:at-json parse failed: {e}", file=sys.stderr)
+
+    if at_positions:
+        ordered = []
+        total = sum(max(1, len(at_positions.get(f, []))) for f in files)
+        done = 0
+        try:
+            for f in files:
+                positions = at_positions.get(f, [])
+                tag = hashlib.sha1(f.encode("utf-8")).hexdigest()[:12]
+                frame_dir = os.path.join(frame_root, tag + "_at")
+                res = process_file_at(f, args.ffmpeg_path, frame_dir,
+                                      durations.get(f, 0), positions)
+                ordered.append(res)
+                done += max(1, len(positions))
+                if not res.get("ok"):
+                    print(f"ERROR:{f}:{res.get('error', 'unknown')}",
+                          file=sys.stderr, flush=True)
+                print(f"PROGRESS:{done}|{total}|{done * 100.0 / total:.1f}",
+                      file=sys.stderr, flush=True)
+        finally:
+            if not args.evidence_dir:
+                _cleanup_dir(tmp_root)
+        json.dump(ordered, sys.stdout, ensure_ascii=False)
+        sys.stdout.write("\n")
+        return
 
     results = {}
     total = len(files)

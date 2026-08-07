@@ -14,6 +14,8 @@
 #pragma once
 
 #include <QString>
+#include <QVector>
+#include <QMetaType>
 
 struct ProbeResult {
     QString filePath;
@@ -49,3 +51,8 @@ struct ProbeResult {
 
     bool ok() const { return probeError.isEmpty(); }
 };
+
+// 元类型声明随类型定义走（C1）：任何包含本头的 moc 聚合单元都能在
+// 隐式实例化之前看到特化，避免 Q_DECLARE_METATYPE 重复定义错（v1.2.0 实战）
+Q_DECLARE_METATYPE(ProbeResult)
+Q_DECLARE_METATYPE(QVector<ProbeResult>)

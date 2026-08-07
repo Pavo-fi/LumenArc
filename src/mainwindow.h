@@ -13,6 +13,7 @@
 #include <QMainWindow>
 #include "domain/analysis_snapshot.h"
 #include "domain/timeline_model.h"
+#include "domain/time_calibration.h"
 #include "videolistpanel.h"
 #include "videostatemanager.h"
 
@@ -23,6 +24,7 @@ class SnapshotOverlay;
 class PinnedWidget;
 class IVideoEngine;
 class IAnalysisEngine;
+class CalibrationService;
 class RegionModel;
 class PolygonModel;
 class GuideLineModel;
@@ -115,9 +117,9 @@ private:
     void updatePlaybackButtons();
     /// @brief 在状态栏左侧显示操作反馈（5秒后自动清除）
     void showOperationStatus(const QString &text);
-    /// @brief 恢复分析状态（区域/时间偏移/标签/截图融合）
+    /// @brief 恢复分析状态（区域/校时/标签/截图融合）
     void restoreAnalysisState(const QVector<QRect> &regions,
-                               qint64 timeOffset,
+                               const TimeCalibration &calibration,
                                const QVector<ChartLabel> &labels,
                                const QRect &pinnedRect,
                                const SnapshotFusionData &fusion,
@@ -137,6 +139,8 @@ protected:
     SnapshotOverlay *m_snapshotOverlay = nullptr;
     IVideoEngine *m_videoEngine = nullptr;
     IAnalysisEngine *m_analysisEngine = nullptr;
+    CalibrationService *m_calibrationService = nullptr;
+    TimeCalibration m_calibration;   // 当前视频校时 SSOT（.vla v8 持久化）
     RegionModel *m_regionModel = nullptr;
     PolygonModel *m_polygonModel = nullptr;
     GuideLineModel *m_guideLineModel = nullptr;

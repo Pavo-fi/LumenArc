@@ -23,6 +23,7 @@
 #include <QByteArray>
 #include "domain/ocr_result.h"
 #include "domain/preprocess_task.h"
+#include "domain/time_calibration.h"
 
 class QProcess;
 class QTimer;
@@ -51,6 +52,13 @@ public:
              const QMap<QString, qint64> &trustedDurationsMs,
              const QString &evidenceDir, bool withSha256,
              const QStringList &framesOnlyFiles = {});
+
+    /// 校时取样（V1 方案 §3.2）：单文件多位置，每位置 ±0.25s 候选帧投票，
+    /// 产出每位置一个墙钟测点（TimeCalibration::Sample，relMs 为实测真值）。
+    /// evidenceDir：证据帧持久目录（空 = 临时目录，任务结束清理）。
+    /// 与 run() 互斥（isRunning 守卫）。
+    void runAtPositions(const QString &path, const QVector<qint64> &positionsMs,
+                        qint64 trustedDurationMs, const QString &evidenceDir);
     void cancel();
     bool isRunning() const;
 
@@ -59,6 +67,8 @@ signals:
     void ocrFinished(const QVector<OcrResult> &results);
     void ocrFailed(const QString &file, const QString &error);   // 可继续（人工兜底）
     void engineError(PreprocessError error, const QString &detail);
+    void atPositionsFinished(const QVector<TimeCalibration::Sample> &samples);
+    void atPositionsFailed(const QString &error);
 
 private slots:
     void onReadyReadStderr();
@@ -74,6 +84,7 @@ private:
     QByteArray m_stderrBuf;
     int m_total = 0;
     bool m_cancelled = false;
+    bool m_atMode = false;      // true = runAtPositions 取样模式（onFinished 分流）
     int m_availability = -1;    // -1 未检测 / 0 不可用 / 1 可用
     QString m_availError;
 };

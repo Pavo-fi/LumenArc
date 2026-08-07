@@ -12,6 +12,7 @@
 #include "domain/region_model.h"
 #include "domain/polygon_model.h"
 #include "domain/timeline_model.h"
+#include "domain/time_calibration.h"
 #include "i18n.h"
 #include "theme.h"
 
@@ -24,6 +25,7 @@
 #include <QWheelEvent>
 #include <QTimer>
 #include <QDebug>
+#include <QDateTime>
 #include <QMenu>
 #include <QAction>
 #include <QColorDialog>
@@ -383,10 +385,41 @@ void ChartPanel::setDuration(qint64 durationMs)
     updateTimeLabels();
 }
 
-void ChartPanel::setTimeOffset(qint64 offsetMs)
+void ChartPanel::setCalibration(const TimeCalibration &cal)
 {
-    m_startTimeOfDayMs = offsetMs;
+    m_calibration = cal;
     updateTimeLabels();
+}
+
+qint64 ChartPanel::displayMsOf(qint64 streamMs) const
+{
+    if (!m_calibration.dateKnown)
+        return streamMs + m_calibration.offsetMs;   // 旧路径：日内偏移（v7 行为）
+    return m_calibration.beijingMsOf(streamMs);     // 新路径：北京时间
+}
+
+qint64 ChartPanel::streamMsFromDisplay(qint64 displayMs) const
+{
+    if (!m_calibration.dateKnown)
+        return displayMs - m_calibration.offsetMs;
+    return m_calibration.streamMsOf(displayMs - m_calibration.truthOffsetMs);
+}
+
+QString ChartPanel::formatDisplayTime(qint64 displayMs) const
+{
+    if (!m_calibration.dateKnown)
+        return formatTimeHMS(displayMs);
+    const QDateTime dt = QDateTime::fromMSecsSinceEpoch(displayMs);
+    return m_spanCrossDay ? dt.toString(QStringLiteral("MM-dd HH:mm"))
+                          : dt.toString(QStringLiteral("HH:mm:ss"));
+}
+
+QString ChartPanel::formatDisplayTimeFull(qint64 displayMs) const
+{
+    if (!m_calibration.dateKnown)
+        return formatTimeMs(displayMs);
+    return QDateTime::fromMSecsSinceEpoch(displayMs)
+        .toString(QStringLiteral("yyyy-MM-dd HH:mm:ss.zzz"));
 }
 
 void ChartPanel::setAutoYRange(bool enabled)
@@ -684,7 +717,7 @@ void ChartPanel::updateLabelItems()
             const qreal x = mapTimeToX(label.timeMs);
             if (x < plotArea.left() || x > plotArea.right())
                 continue;
-            const QString timeStr = formatTimeHMS(label.timeMs + m_startTimeOfDayMs);
+            const QString timeStr = formatDisplayTime(displayMsOf(label.timeMs));
             auto *dot = new LabelDotItem(x - 4, plotArea.top() + 0.5, 8, label.color,
                                          label.text, timeStr, m_chart, this);
             dot->setZValue(USER_LABEL_Z_VALUE);
@@ -757,7 +790,7 @@ void ChartPanel::updateLabelItems()
 
             if (rowSlots[j].fullW > rawAvail && rawAvail < MIN_TEXT_W) {
                 // 空间不足（密集标签）：降级为圆点标记，悬停悬浮窗显示全文
-                const QString timeStr = formatTimeHMS(label.timeMs + m_startTimeOfDayMs);
+                const QString timeStr = formatDisplayTime(displayMsOf(label.timeMs));
                 auto *dot = new LabelDotItem(x - 4, rowY + fm.height() / 2.0 - 4, 8,
                                              label.color, label.text, timeStr, m_chart, this);
                 dot->setZValue(USER_LABEL_Z_VALUE);
@@ -1016,26 +1049,33 @@ void ChartPanel::updateTimeLabels()
         return;
 
     qint64 step = computeTimeStep(visibleDurationMs, static_cast<int>(plotArea.width()));
-    qint64 offset = m_startTimeOfDayMs;
     qreal bottom = plotArea.bottom();
 
-    // Align first label to step boundary
-    qint64 visualStartWithOffset = static_cast<qint64>(visibleMin) + offset;
-    qint64 firstLabel = (visualStartWithOffset / step) * step;
-    if (firstLabel > visualStartWithOffset)
+    // 跨天检测（dateKnown 路径的刻度格式选择）
+    if (m_calibration.dateKnown) {
+        m_spanCrossDay =
+            QDateTime::fromMSecsSinceEpoch(displayMsOf(static_cast<qint64>(visibleMin))).date()
+            != QDateTime::fromMSecsSinceEpoch(displayMsOf(static_cast<qint64>(visibleMax))).date();
+    } else {
+        m_spanCrossDay = false;
+    }
+
+    // Align first label to step boundary（显示域对齐，逆运算回流内；仿射下两侧均均匀）
+    const qint64 dispStart = displayMsOf(static_cast<qint64>(visibleMin));
+    const qint64 dispEnd = displayMsOf(static_cast<qint64>(visibleMax));
+    qint64 firstLabel = (dispStart / step) * step;
+    if (firstLabel > dispStart)
         firstLabel -= step;
 
-    qint64 lastLabel = static_cast<qint64>(visibleMax) + offset;
-
     // --- Major tick labels (regular time labels) ---
-    for (qint64 tReal = firstLabel; tReal <= lastLabel; tReal += step) {
-        qint64 tVideo = tReal - offset;
+    for (qint64 tReal = firstLabel; tReal <= dispEnd; tReal += step) {
+        qint64 tVideo = streamMsFromDisplay(tReal);
         if (tVideo < static_cast<qint64>(visibleMin))
             continue;
         if (tVideo > static_cast<qint64>(visibleMax))
             break;
 
-        QString text = formatTimeHMS(tReal);
+        QString text = formatDisplayTime(tReal);
         auto *item = new QGraphicsSimpleTextItem(text, m_chart);
         item->setFont(fontMono(9, QFont::Bold));
         item->setBrush(QBrush(QColor(0xF5, 0xF0, 0xE8)));
@@ -1068,10 +1108,10 @@ void ChartPanel::updateTimeLabels()
         int minorDivisions = 4;
         qint64 minorStep = step / minorDivisions;
         if (minorStep >= 1) {
-            for (qint64 tReal = firstLabel; tReal < lastLabel; tReal += step) {
+            for (qint64 tReal = firstLabel; tReal < dispEnd; tReal += step) {
                 for (int m = 1; m < minorDivisions; ++m) {
                     qint64 tMinor = tReal + m * minorStep;
-                    qint64 tMinorVideo = tMinor - offset;
+                    qint64 tMinorVideo = streamMsFromDisplay(tMinor);
                     if (tMinorVideo < static_cast<qint64>(visibleMin))
                         continue;
                     if (tMinorVideo > static_cast<qint64>(visibleMax))
@@ -1090,8 +1130,8 @@ void ChartPanel::updateTimeLabels()
 
     // --- Start time label at left edge (black, bold, larger) ---
     {
-        qint64 startReal = static_cast<qint64>(visibleMin) + offset;
-        QString text = formatTimeHMS(startReal);
+        const qint64 startReal = displayMsOf(static_cast<qint64>(visibleMin));
+        QString text = formatDisplayTime(startReal);
         auto *item = new QGraphicsSimpleTextItem(text, m_chart);
         item->setFont(fontMono(10, QFont::Bold));
         item->setBrush(QBrush(QColor(0xF5, 0xF0, 0xE8)));
@@ -1109,8 +1149,8 @@ void ChartPanel::updateTimeLabels()
 
     // --- End time label at right edge (black, bold, larger) ---
     {
-        qint64 endReal = static_cast<qint64>(visibleMax) + offset;
-        QString text = formatTimeHMS(endReal);
+        const qint64 endReal = displayMsOf(static_cast<qint64>(visibleMax));
+        QString text = formatDisplayTime(endReal);
         auto *item = new QGraphicsSimpleTextItem(text, m_chart);
         item->setFont(fontMono(10, QFont::Bold));
         item->setBrush(QBrush(QColor(0xF5, 0xF0, 0xE8)));
@@ -1276,8 +1316,8 @@ void ChartPanel::updateCursorPosition()
     // Show two-line info label above cursor line
     if (m_cursorTimeLabel) {
         // Line 1: time
-        qint64 displayTime = m_cursorTimeMs + m_startTimeOfDayMs;
-        m_cursorTimeLabel->setText(formatTimeMs(displayTime));
+        const qint64 displayTime = displayMsOf(m_cursorTimeMs);
+        m_cursorTimeLabel->setText(formatDisplayTimeFull(displayTime));
         m_cursorTimeLabel->setVisible(true);
 
         // Line 2: region luminance + volume
@@ -2030,7 +2070,7 @@ void ChartPanel::drawChartGuideLines()
             qreal x = mapTimeToX(static_cast<qint64>(gl.value));
             gl.lineItem->setLine(x, pa.top(), x, pa.bottom());
             if (gl.labelItem) {   // 时间文本每次 draw 刷新 → 拖动联动
-                gl.labelItem->setText(formatTimeMs(static_cast<qint64>(gl.value) + m_startTimeOfDayMs));
+                gl.labelItem->setText(formatDisplayTimeFull(displayMsOf(static_cast<qint64>(gl.value))));
                 gl.labelItem->setPos(x + 3, pa.top() + 2);
             }
         }

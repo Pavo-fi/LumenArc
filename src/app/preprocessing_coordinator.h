@@ -143,7 +143,6 @@ private:
     PreprocessReport m_report;
 };
 
-Q_DECLARE_METATYPE(QVector<ProbeResult>)
 Q_DECLARE_METATYPE(QVector<OcrResult>)
 Q_DECLARE_METATYPE(QVector<SortGroup>)
 Q_DECLARE_METATYPE(PreprocessReport)

@@ -16,6 +16,8 @@
 
 #include <QVector>
 #include <QString>
+#include <QJsonObject>
+#include <QJsonArray>
 #include <QtGlobal>
 #include <cmath>
 
@@ -49,10 +51,16 @@ struct TimeCalibration
     double  sigmaRate = 0.0;       ///< 拟合速率标准误（报告用）
     qint64  calibratedAtMs = 0;    ///< 校时操作时刻
 
+    // ---- 北京时间校验（人工：监控时间 ↔ 真实北京时间整体偏移）----
+    qint64  truthOffsetMs = 0;     ///< 北京时间偏移：beijing = wall + truthOffset
+    bool    truthSet = false;      ///< 是否做过北京时间校验
+    qint64  truthCheckedAtMs = 0;  ///< 校验操作时刻
+    QString truthNote;             ///< 校验说明（如对时来源，留档）
+
     bool   isValid() const { return source != Source::None; }
     double effectiveRate() const { return rateApplied ? rate : 1.0; }
 
-    /// 全应用唯一换算入口（C3）：墙钟 = offset + rate×stream
+    /// 全应用唯一换算入口（C3）：监控墙钟 = offset + rate×stream
     qint64 wallMsOf(qint64 streamMs) const
     {
         return offsetMs + static_cast<qint64>(
@@ -63,6 +71,11 @@ struct TimeCalibration
     {
         return static_cast<qint64>(
             std::llround((wallMs - offsetMs) / effectiveRate()));
+    }
+    /// 北京时间（最终报时口径）= 监控墙钟 + 北京时间偏移
+    qint64 beijingMsOf(qint64 streamMs) const
+    {
+        return wallMsOf(streamMs) + truthOffsetMs;
     }
     /// 报告口径：偏快/偏慢秒/天（正值=偏快；按拟合 rate，与是否应用无关）
     double driftSecondsPerDay() const { return (rate - 1.0) * 86400.0; }
@@ -117,4 +130,11 @@ struct TimeCalibration
         c.dateKnown = false;
         return c;
     }
+
+    // ---- 序列化（.vla v8 META / 未来 case.json 共用，QtCore only）----
+    QJsonObject toJson() const;
+    static TimeCalibration fromJson(const QJsonObject &o);
+    /// source ↔ 字符串（F5：写/读/文档三处同步）
+    static QString sourceToString(Source s);
+    static Source sourceFromString(const QString &s);
 };

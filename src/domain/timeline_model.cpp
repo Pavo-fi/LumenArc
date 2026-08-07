@@ -125,9 +125,10 @@ AnalysisSnapshot TimelineModel::snapshot() const
 //     rawLength: quint32（解压后长度）| storedLength: quint32 | payload
 //
 // 块定义：
-//   META  QJsonDocument(compact)：version(7 语义)/analyzed_at/time_offset/
+//   META  QJsonDocument(compact)：version(8 语义)/analyzed_at/time_calibration/
 //         regions[+roi_id]/polygons[+roi_id]/guide_lines/magnifier/labels/
 //         pinned/snapshot_fusion(含 base64 PNG)/audio 参数/data_entries
+//         （v8：time_calibration 仿射校时模型取代 time_offset；v≤7 迁移见 loadFromFile）
 //   TMS   quint64 count + count×qint64 时间戳（毫秒）
 //   LUM   quint32 roiCount + quint64 sampleCount + roiCount×sampleCount×float32
 //   VOL   quint64 count + count×float32 音量
@@ -140,6 +141,8 @@ AnalysisSnapshot TimelineModel::snapshot() const
 // ---------------------------------------------------------------------------
 static const char VLA2_MAGIC[4] = {'V', 'L', 'A', '2'};
 static constexpr quint32 VLA2_VERSION = 2;
+/// .vla 语义版本上限（META version 字段；v8 = time_calibration 仿射校时）
+static constexpr int kCurrentVlaVersion = 8;
 
 static QByteArray vlaPackChunk(const char *tag4, const QByteArray &payload)
 {
@@ -193,7 +196,7 @@ static bool vlaUnpackAll(const QByteArray &data, QMap<QByteArray, QByteArray> *c
 
 bool TimelineModel::saveToFile(const QString &filePath,
                                 const QVector<QRect> &regions,
-                                qint64 timeOffsetMs,
+                                const TimeCalibration &calibration,
                                 const QRect &magnifier,
                                 const QVector<ChartLabel> &labels,
                                 const QRect &pinned,
@@ -209,9 +212,11 @@ bool TimelineModel::saveToFile(const QString &filePath,
         return false;
 
     QJsonObject root;
-    root["version"] = 7;
+    root["version"] = 8;
     root["analyzed_at"] = QDateTime::currentDateTime().toString(Qt::ISODate);
-    root["time_offset"] = static_cast<double>(timeOffsetMs);
+    // v8：仿射校时模型（含北京时间偏移与测点证据）；不再写 time_offset（Q-19 严格升版）
+    if (calibration.isValid())
+        root["time_calibration"] = calibration.toJson();
 
     // ROI rectangles（v7: 附带 roi_id，恢复时保持与分析数据对齐）
     QJsonArray regionsArray;
@@ -420,7 +425,7 @@ bool TimelineModel::saveToFile(const QString &filePath,
 
 bool TimelineModel::loadFromFile(const QString &filePath,
                                   QVector<QRect> *regions,
-                                  qint64 *timeOffsetMs,
+                                  TimeCalibration *calibration,
                                   QRect *magnifier,
                                   QVector<ChartLabel> *labels,
                                   QRect *pinned,
@@ -456,7 +461,7 @@ bool TimelineModel::loadFromFile(const QString &filePath,
             return false;
         root = metaDoc.object();
         version = root["version"].toInt();
-        if (version < 1)
+        if (version < 1 || version > kCurrentVlaVersion)   // F4：超上限明确拒绝
             return false;
 
         // TMS：时间戳（qint64 毫秒）
@@ -540,7 +545,7 @@ bool TimelineModel::loadFromFile(const QString &filePath,
 
         root = doc.object();
         version = root["version"].toInt();
-        if (version < 1)
+        if (version < 1 || version > kCurrentVlaVersion)   // F4：超上限明确拒绝
             return false;
     }
 
@@ -599,9 +604,15 @@ bool TimelineModel::loadFromFile(const QString &filePath,
         }
     }
 
-    // v2+: time offset
-    if (version >= 2 && timeOffsetMs) {
-        *timeOffsetMs = static_cast<qint64>(root["time_offset"].toDouble());
+    // v8+: time calibration（v≤7 旧文件走 time_offset 迁移）
+    if (calibration) {
+        if (version >= 8 && root.contains("time_calibration")) {
+            *calibration = TimeCalibration::fromJson(
+                root["time_calibration"].toObject());
+        } else if (version >= 2) {
+            *calibration = TimeCalibration::fromLegacyOffset(
+                static_cast<qint64>(root["time_offset"].toDouble()));
+        }
     }
 
     // v3+: magnifier

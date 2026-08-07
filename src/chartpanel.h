@@ -50,8 +50,9 @@ public:
     void setDuration(qint64 durationMs);
     /// 设置视频帧时长（拖拽匀速化量化用；0=未知，退化为原始直通）
     void setFrameDuration(qint64 frameMs) { m_frameMs = frameMs; }
-    void setTimeOffset(qint64 offsetMs);
-    qint64 timeOffset() const { return m_startTimeOfDayMs; }
+    /// 设置校时模型（SSOT 由 VideoState 持有，此处仅为渲染派生值）
+    void setCalibration(const TimeCalibration &cal);
+    TimeCalibration calibration() const { return m_calibration; }
     bool isDraggingCursor() const { return m_draggingCursor; }
     QRectF plotArea() const;
     QValueAxis *axisX() const { return m_axisX; }
@@ -134,6 +135,14 @@ private:
     qreal clampX(qreal x) const;
     static QString formatTimeMs(qint64 ms);
     static QString formatTimeHMS(qint64 ms);
+    /// 显示域换算：dateKnown=false → 旧日内偏移（行为不变）；true → 北京时间
+    qint64 displayMsOf(qint64 streamMs) const;
+    /// 显示域 → 流内（刻度对齐逆运算）
+    qint64 streamMsFromDisplay(qint64 displayMs) const;
+    /// 显示域格式化：dateKnown 时跨天带日期；否则 HH:MM:SS
+    QString formatDisplayTime(qint64 displayMs) const;
+    /// 光标用完整格式：dateKnown 时 yyyy-MM-dd HH:mm:ss.zzz
+    QString formatDisplayTimeFull(qint64 displayMs) const;
 
     RegionModel *m_regionModel = nullptr;
     PolygonModel *m_polygonModel = nullptr;
@@ -165,7 +174,8 @@ private:
     qint64 quantizeDragTarget(qint64 t);
     static constexpr qint64 DRAG_DISPLAY_CADENCE_MS = 25; // 显示节拍（与引擎节拍闸一致）
     qint64 m_durationMs = 0;
-    qint64 m_startTimeOfDayMs = 0;
+    TimeCalibration m_calibration;      // 校时模型（渲染派生值，SSOT 在 VideoState）
+    bool m_spanCrossDay = false;        // 当前可视范围跨天（updateTimeLabels 刷新）
 
     QVector<QLineSeries *> m_seriesList;
     QLineSeries *m_volumeSeries = nullptr;       // v0.3: Volume line

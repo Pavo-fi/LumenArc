@@ -107,3 +107,89 @@ void TimeCalibration::applyFit(const FitResult &fr)
     sigmaRate = fr.sigmaRate;
     rateApplied = fr.rateSignificant && fr.rateSane;
 }
+
+// ---------------------------------------------------------------------------
+// 序列化（.vla v8 META 的 time_calibration 对象；F5 三处同步）
+// ---------------------------------------------------------------------------
+QString TimeCalibration::sourceToString(Source s)
+{
+    switch (s) {
+    case Source::Manual:    return QStringLiteral("manual");
+    case Source::Ocr:       return QStringLiteral("ocr");
+    case Source::AbsStart:  return QStringLiteral("absstart");
+    case Source::Inherited: return QStringLiteral("inherited");
+    case Source::None:      break;
+    }
+    return QStringLiteral("none");
+}
+
+TimeCalibration::Source TimeCalibration::sourceFromString(const QString &s)
+{
+    if (s == QLatin1String("manual"))    return Source::Manual;
+    if (s == QLatin1String("ocr"))       return Source::Ocr;
+    if (s == QLatin1String("absstart"))  return Source::AbsStart;
+    if (s == QLatin1String("inherited")) return Source::Inherited;
+    return Source::None;
+}
+
+QJsonObject TimeCalibration::toJson() const
+{
+    QJsonObject o;
+    o[QStringLiteral("source")] = sourceToString(source);
+    o[QStringLiteral("offsetMs")] = static_cast<double>(offsetMs);
+    o[QStringLiteral("rate")] = rate;
+    o[QStringLiteral("rateApplied")] = rateApplied;
+    o[QStringLiteral("conf")] = conf;
+    o[QStringLiteral("dateKnown")] = dateKnown;
+    o[QStringLiteral("sigmaRate")] = sigmaRate;
+    o[QStringLiteral("calibratedAtMs")] = static_cast<double>(calibratedAtMs);
+    o[QStringLiteral("truthOffsetMs")] = static_cast<double>(truthOffsetMs);
+    o[QStringLiteral("truthSet")] = truthSet;
+    o[QStringLiteral("truthCheckedAtMs")] = static_cast<double>(truthCheckedAtMs);
+    if (!truthNote.isEmpty())
+        o[QStringLiteral("truthNote")] = truthNote;
+    QJsonArray arr;
+    for (const Sample &s : samples) {
+        QJsonObject so;
+        so[QStringLiteral("streamMs")] = static_cast<double>(s.streamMs);
+        so[QStringLiteral("wallMs")] = static_cast<double>(s.wallMs);
+        so[QStringLiteral("rawText")] = s.rawText;
+        so[QStringLiteral("frameImg")] = s.frameImgPath;
+        so[QStringLiteral("conf")] = s.conf;
+        so[QStringLiteral("used")] = s.used;
+        arr.append(so);
+    }
+    if (!arr.isEmpty())
+        o[QStringLiteral("samples")] = arr;
+    return o;
+}
+
+TimeCalibration TimeCalibration::fromJson(const QJsonObject &o)
+{
+    TimeCalibration c;
+    c.source = sourceFromString(o[QStringLiteral("source")].toString());
+    c.offsetMs = static_cast<qint64>(o[QStringLiteral("offsetMs")].toDouble());
+    c.rate = o[QStringLiteral("rate")].toDouble(1.0);
+    c.rateApplied = o[QStringLiteral("rateApplied")].toBool();
+    c.conf = o[QStringLiteral("conf")].toDouble();
+    c.dateKnown = o[QStringLiteral("dateKnown")].toBool();
+    c.sigmaRate = o[QStringLiteral("sigmaRate")].toDouble();
+    c.calibratedAtMs = static_cast<qint64>(o[QStringLiteral("calibratedAtMs")].toDouble());
+    c.truthOffsetMs = static_cast<qint64>(o[QStringLiteral("truthOffsetMs")].toDouble());
+    c.truthSet = o[QStringLiteral("truthSet")].toBool();
+    c.truthCheckedAtMs = static_cast<qint64>(o[QStringLiteral("truthCheckedAtMs")].toDouble());
+    c.truthNote = o[QStringLiteral("truthNote")].toString();
+    const QJsonArray arr = o[QStringLiteral("samples")].toArray();
+    for (const QJsonValue &v : arr) {
+        const QJsonObject so = v.toObject();
+        Sample s;
+        s.streamMs = static_cast<qint64>(so[QStringLiteral("streamMs")].toDouble(-1));
+        s.wallMs = static_cast<qint64>(so[QStringLiteral("wallMs")].toDouble());
+        s.rawText = so[QStringLiteral("rawText")].toString();
+        s.frameImgPath = so[QStringLiteral("frameImg")].toString();
+        s.conf = so[QStringLiteral("conf")].toDouble();
+        s.used = so[QStringLiteral("used")].toBool(true);
+        c.samples.append(s);
+    }
+    return c;
+}

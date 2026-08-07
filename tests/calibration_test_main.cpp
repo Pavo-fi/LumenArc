@@ -254,6 +254,64 @@ static void testLegacyMigration()
     CHECK(c.wallMsOf(5000) == 3605000);
 }
 
+static void testTruthOffset()
+{
+    // 北京时间校验：监控 06:00:02 时实际北京 06:05:32 → truthOffset = +330s
+    TimeCalibration c;
+    c.source = TimeCalibration::Source::Ocr;
+    c.offsetMs = kOff;            // 监控钟模型：流内 0 = 监控 06:00:02
+    c.dateKnown = true;
+    c.truthOffsetMs = 330000;     // 人工校验得出
+    c.truthSet = true;
+    c.truthCheckedAtMs = kOff + 86400000;
+    // 监控时间不变
+    CHECK(c.wallMsOf(0) == kOff);
+    // 北京时间 = 监控 + 330s（全局应用）
+    CHECK(c.beijingMsOf(0) == kOff + 330000);
+    CHECK(c.beijingMsOf(2820000) == kOff + 2820000 + 330000);
+    // 未校验时 truthOffsetMs=0 → 北京时间 == 监控时间（安全退化）
+    TimeCalibration d;
+    d.offsetMs = kOff;
+    CHECK(d.beijingMsOf(1000) == d.wallMsOf(1000));
+}
+
+static void testJsonRoundTrip()
+{
+    TimeCalibration c;
+    c.source = TimeCalibration::Source::Ocr;
+    c.offsetMs = kOff;
+    c.rate = 1.0000004;
+    c.rateApplied = true;
+    c.conf = 0.95;
+    c.dateKnown = true;
+    c.sigmaRate = 1.2e-8;
+    c.calibratedAtMs = kOff + 3600000;
+    c.truthOffsetMs = 300000;
+    c.truthSet = true;
+    c.truthCheckedAtMs = kOff + 3700000;
+    c.truthNote = QStringLiteral("与指挥中心对时");
+    c.samples = {pt(0, kOff), pt(2820000, kOff + 2820000 + 1128)};
+    c.samples[0].rawText = QStringLiteral("2026-07-22 06:00:02");
+    c.samples[0].frameImgPath = QStringLiteral("evidence/a.png");
+    c.samples[0].conf = 0.95;
+    c.samples[1].used = false;
+
+    const TimeCalibration r = TimeCalibration::fromJson(c.toJson());
+    CHECK(r.source == c.source);
+    CHECK(r.offsetMs == c.offsetMs);
+    CHECK(std::fabs(r.rate - c.rate) < 1e-15);
+    CHECK(r.rateApplied == c.rateApplied);
+    CHECK(r.dateKnown == c.dateKnown);
+    CHECK(r.truthSet && r.truthOffsetMs == 300000);
+    CHECK(r.truthNote == c.truthNote);
+    CHECK(r.samples.size() == 2);
+    CHECK(r.samples[0].rawText == c.samples[0].rawText);
+    CHECK(r.samples[0].frameImgPath == c.samples[0].frameImgPath);
+    CHECK(r.samples[1].used == false);
+    // 空对象 → None
+    CHECK(TimeCalibration::fromJson({}).source == TimeCalibration::Source::None);
+}
+
 // ---------------------------------------------------------------------------
 int main(int argc, char *argv[])
 {
@@ -272,6 +330,8 @@ int main(int argc, char *argv[])
     testSameStreamPosition();
     testRoundTrip();
     testLegacyMigration();
+    testTruthOffset();
+    testJsonRoundTrip();
 
     printf("calibration_test: %d checks, %d failures\n", g_checks, g_failures);
     return g_failures ? 1 : 0;

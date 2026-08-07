@@ -29,16 +29,25 @@ static int testFile(ChartPanel *chart, RegionModel *rm, PolygonModel *pm,
     QVector<QPolygon> polys;
     QVector<GuideLine> guideLines;
     QVector<int> rIds, pIds;
-    qint64 timeOffset = 0;
+    TimeCalibration calibration;   // v8：校时（v≤7 自动迁移 time_offset）
     QRect magRect, pinnedRect;
     QVector<ChartLabel> labels;
     SnapshotFusionData fusion;
 
-    bool ok = tm->loadFromFile(path, &regions, &timeOffset, &magRect, &labels,
+    bool ok = tm->loadFromFile(path, &regions, &calibration, &magRect, &labels,
                                &pinnedRect, &fusion, &polys, &guideLines, &rIds, &pIds);
     if (!ok) {
         fprintf(stderr, "  loadFromFile FAILED\n");
         return -1;
+    }
+    // v8 迁移校验：旧文件 time_offset → legacy 校时（dateKnown=false, rate=1.0）
+    if (calibration.isValid()) {
+        bool migOk = !calibration.dateKnown
+                     && qAbs(calibration.rate - 1.0) < 1e-12
+                     && calibration.source == TimeCalibration::Source::Manual;
+        fprintf(stderr, "[tf] v<=7 time_offset migrated: offset=%lld %s\n",
+                (long long)calibration.offsetMs, migOk ? "OK" : "MISMATCH <<<");
+        if (!migOk) return -1;
     }
     fprintf(stderr, "[tf] loaded: regions=%d rIds=%lld polys=%d pIds=%lld entries=%lld ts=%lld values=%lld\n",
             regions.size(), (long long)rIds.size(), polys.size(), (long long)pIds.size(),
@@ -82,7 +91,8 @@ static int testFile(ChartPanel *chart, RegionModel *rm, PolygonModel *pm,
     const QVector<QVector<qreal>> oldVals = tm->snapshot().values;
     QString tmp = QDir::temp().filePath("vla2_roundtrip_test.vla");
     QFile::remove(tmp);
-    bool saved = tm->saveToFile(tmp, rm->regions(), 12345, QRect(1, 2, 3, 4), {},
+    TimeCalibration saveCal = TimeCalibration::fromLegacyOffset(12345);
+    bool saved = tm->saveToFile(tmp, rm->regions(), saveCal, QRect(1, 2, 3, 4), {},
                                 QRect(), SnapshotFusionData(), pm->polygons(), {},
                                 rm->roiIds(), pm->roiIds());
     if (!saved) {
@@ -97,11 +107,11 @@ static int testFile(ChartPanel *chart, RegionModel *rm, PolygonModel *pm,
         QVector<QPolygon> p2;
         QVector<GuideLine> g2;
         QVector<int> rIds2, pIds2;
-        qint64 to2 = 0;
+        TimeCalibration cal2;
         QRect m2, pin2;
         QVector<ChartLabel> l2;
         SnapshotFusionData f2;
-        if (tm->loadFromFile(tmp, &r2, &to2, &m2, &l2, &pin2, &f2, &p2, &g2, &rIds2, &pIds2)) {
+        if (tm->loadFromFile(tmp, &r2, &cal2, &m2, &l2, &pin2, &f2, &p2, &g2, &rIds2, &pIds2)) {
             const auto snap = tm->snapshot();
             bool dataOk = (snap.timestamps == oldTs) && (snap.values.size() == oldVals.size());
             if (dataOk) {
@@ -113,10 +123,13 @@ static int testFile(ChartPanel *chart, RegionModel *rm, PolygonModel *pm,
             }
             // roiId 保持：VLA2 必须原样带回
             bool idsOk = (rIds2 == rm->roiIds()) && (pIds2 == pm->roiIds());
-            rtOk = dataOk && idsOk;
-            fprintf(stderr, "[tf] VLA2 roundtrip: data=%s roiIds=%s => %s\n",
+            // v8 校时往返：legacy 偏移原样带回（Q-19：v8 不再写 time_offset）
+            bool calOk = cal2.isValid() && cal2.offsetMs == 12345
+                         && !cal2.dateKnown && qAbs(cal2.rate - 1.0) < 1e-12;
+            rtOk = dataOk && idsOk && calOk;
+            fprintf(stderr, "[tf] VLA2 roundtrip: data=%s roiIds=%s calibration=%s => %s\n",
                     dataOk ? "OK" : "MISMATCH", idsOk ? "OK" : "MISMATCH",
-                    rtOk ? "PASS" : "FAIL <<<");
+                    calOk ? "OK" : "MISMATCH", rtOk ? "PASS" : "FAIL <<<");
         } else {
             fprintf(stderr, "[tf] VLA2 reload FAILED <<<\n");
         }
@@ -137,7 +150,7 @@ static int testFile(ChartPanel *chart, RegionModel *rm, PolygonModel *pm,
         tm2.setData(ts, vals, entries, audio);
         QString tmp2 = QDir::temp().filePath("vla2_audio_test.vla");
         QFile::remove(tmp2);
-        bool okS = tm2.saveToFile(tmp2, {QRect(0, 0, 10, 10)}, 0, {}, {}, {}, {}, {}, {}, {1}, {});
+        bool okS = tm2.saveToFile(tmp2, {QRect(0, 0, 10, 10)}, TimeCalibration(), {}, {}, {}, {}, {}, {}, {1}, {});
         TimelineModel tm3;
         bool okL = okS && tm3.loadFromFile(tmp2, nullptr, nullptr, nullptr, nullptr,
                                            nullptr, nullptr, nullptr, nullptr, nullptr, nullptr);

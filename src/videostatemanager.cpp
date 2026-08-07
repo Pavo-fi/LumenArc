@@ -8,7 +8,7 @@ VideoStateManager::VideoStateManager(QObject *parent)
 void VideoStateManager::saveState(const QString &videoPath,
                                    const AnalysisSnapshot &snapshot,
                                    const QVector<QRect> &regions,
-                                   qint64 timeOffsetMs,
+                                   const TimeCalibration &calibration,
                                    const QRect &magnifierRect,
                                    const QVector<ChartLabel> &labels,
                                    const QRect &pinnedRect,
@@ -34,7 +34,7 @@ void VideoStateManager::saveState(const QString &videoPath,
     state.polygonRoiIds = polygonRoiIds;
     state.guideLines = guideLines;
     state.chartGuideLines = chartGuideLines;
-    state.timeOffsetMs = timeOffsetMs;
+    state.calibration = calibration;
     state.magnifierRect = magnifierRect;
     state.labels = labels;
     state.pinnedRect = pinnedRect;

@@ -9,6 +9,7 @@
  * Licensed under the Apache License, Version 2.0
  */
 #include "preprocessing_coordinator.h"
+#include "calibration_service.h"
 
 #include "infrastructure/ianalysis_engine.h"
 #include "infrastructure/media_probe_engine.h"
@@ -774,6 +775,19 @@ void PreprocessingCoordinator::finalize()
         }
     } else {
         m_report.outputPath = m_concatOutputs.values().first();
+    }
+    // v1.2.0：拼接输出随附校时 sidecar（§3.5；主程序打开输出时自动继承。
+    // C2：写入失败仅记日志不静默，不阻断完成态）
+    for (auto it = m_concatOutputs.constBegin();
+         it != m_concatOutputs.constEnd(); ++it) {
+        for (const auto &g : m_groups) {
+            if (g.channel != it.key())
+                continue;
+            QString serr;
+            if (!CalibrationService::writeSidecar(it.value(), g.ordered, &serr))
+                log(QStringLiteral("[%1] sidecar 写入失败：%2")
+                        .arg(tsLog(), serr));
+        }
     }
     // 部分失败：报告留痕（C2 不静默），日志汇总
     if (!m_transcodeFailed.isEmpty())

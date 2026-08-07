@@ -17,6 +17,8 @@
 #include <QString>
 #include <QFile>
 #include <QTextStream>
+#include <QDateTime>
+#include "time_calibration.h"
 
 struct ChartLabel
 {
@@ -279,11 +281,11 @@ struct AnalysisSnapshot
      * @brief Export data to a CSV file.
      * @param filePath  target file path
      * @param regions   ROI rectangles (for header)
-     * @param timeOffsetMs  chart time offset from "Set Time" (0 = use raw ms)
+     * @param calibration  校时模型（dateKnown 时 Time 列输出北京时间完整日期，否则 HH:MM:SS）
      * @return true on success, false on failure.
      */
     bool exportToCsv(const QString &filePath, const QVector<QRect> &regions,
-                     qint64 timeOffsetMs = 0) const
+                     const TimeCalibration &calibration = TimeCalibration()) const
     {
         QFile file(filePath);
         if (!file.open(QIODevice::WriteOnly | QIODevice::Text))
@@ -316,7 +318,7 @@ struct AnalysisSnapshot
         for (int i = 0; i < timestamps.size(); ++i) {
             qint64 ts = timestamps[i];
             out << ts;
-            out << "," << formatTime(ts + timeOffsetMs);
+            out << "," << formatDisplayTime(ts, calibration);
             for (int r = 0; r < values.size(); ++r) {
                 out << "," << ((i < values[r].size()) ? values[r][i] : 0.0);
             }
@@ -335,6 +337,17 @@ struct AnalysisSnapshot
     }
 
 private:
+    /// dateKnown：北京时间完整日期（C6 显式精度：秒级，毫秒见 Time(ms) 列）；
+    /// 否则维持旧版 HH:MM:SS（语义=日内偏移，行为与 v7 一致）
+    static QString formatDisplayTime(qint64 streamMs, const TimeCalibration &cal)
+    {
+        if (cal.dateKnown) {
+            return QDateTime::fromMSecsSinceEpoch(cal.beijingMsOf(streamMs))
+                .toString(QStringLiteral("yyyy-MM-dd HH:mm:ss"));
+        }
+        return formatTime(streamMs + cal.offsetMs);
+    }
+
     static QString formatTime(qint64 ms)
     {
         if (ms < 0) ms = 0;

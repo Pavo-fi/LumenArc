@@ -86,6 +86,8 @@ set(SOURCES
     src/domain/evidence_report.cpp
     src/domain/time_calibration.cpp
     src/app/preprocessing_coordinator.cpp
+    src/app/calibration_service.cpp
+    src/timesettingsdialog.cpp
     src/infrastructure/ffmpeg_video_engine.cpp
     src/infrastructure/python_analysis_engine.cpp
     src/infrastructure/media_probe_engine.cpp
@@ -132,6 +134,8 @@ set(HEADERS
     src/domain/preprocess_text.h
     src/domain/time_calibration.h
     src/app/preprocessing_coordinator.h
+    src/app/calibration_service.h
+    src/timesettingsdialog.h
     src/infrastructure/ivideo_engine.h
     src/infrastructure/ianalysis_engine.h
     src/infrastructure/ffmpeg_video_engine.h
@@ -189,6 +193,26 @@ target_link_libraries(lumenarc_calibration_test PRIVATE
     Qt6::Core
 )
 
+# --- OCR engine runAtPositions smoke test (bundled python/ffmpeg subprocess) ---
+add_executable(lumenarc_ocr_atpositions_test
+    tests/ocr_atpositions_test_main.cpp
+    src/infrastructure/ianalysis_engine.h
+    src/infrastructure/timestamp_ocr_engine.cpp
+    src/infrastructure/python_analysis_engine.cpp
+    src/i18n.cpp
+    src/domain/time_calibration.cpp
+)
+target_include_directories(lumenarc_ocr_atpositions_test PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+    ${FFMPEG_INCLUDE_DIR}
+)
+target_link_libraries(lumenarc_ocr_atpositions_test PRIVATE
+    Qt6::Core
+    Qt6::Gui
+    Qt6::Concurrent   # python_analysis_engine.cpp 后台解析
+    ${FFMPEG_LIBRARIES}
+)
+
 # --- Preprocess engine integration test (real ffmpeg/Python subprocesses) ---
 add_executable(lumenarc_preprocess_integration
     tests/preprocess_integration_main.cpp
@@ -224,6 +248,7 @@ add_executable(lumenarc_vla_test
     src/domain/polygon_model.cpp
     src/domain/timeline_model.cpp
     src/domain/guide_line_model.cpp
+    src/domain/time_calibration.cpp
 )
 target_include_directories(lumenarc_vla_test PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src

@@ -18,6 +18,7 @@
 #include <QJsonObject>
 #include <QJsonArray>
 #include <QCoreApplication>
+#include <QDateTime>
 #include <QFile>
 #include <QFileInfo>
 #include <QDir>
@@ -213,6 +214,108 @@ void TimestampOcrEngine::run(const QStringList &paths, const QString &workDir,
     }
 }
 
+void TimestampOcrEngine::runAtPositions(const QString &path,
+                                        const QVector<qint64> &positionsMs,
+                                        qint64 trustedDurationMs,
+                                        const QString &evidenceDir)
+{
+    if (isRunning() || path.isEmpty() || positionsMs.isEmpty())
+        return;
+    QString err;
+    if (!available(&err)) {
+        emit atPositionsFailed(err);
+        return;
+    }
+    const QString ffmpeg = PythonAnalysisEngine::findFfmpegPath();
+    const QString workDir = QDir::temp().absoluteFilePath(
+        QStringLiteral("lumenarc_at_%1").arg(
+            QDateTime::currentMSecsSinceEpoch()));
+    QDir().mkpath(workDir);
+
+    // 可信时长（单文件）→ durations.json（与批模式同协议）
+    QJsonObject durObj;
+    if (trustedDurationMs > 0)
+        durObj.insert(QDir::toNativeSeparators(path),
+                      static_cast<double>(trustedDurationMs));
+    const QString durPath = workDir + QStringLiteral("/durations.json");
+    {
+        QFile f(durPath);
+        if (!f.open(QIODevice::WriteOnly | QIODevice::Text)) {
+            emit atPositionsFailed(QStringLiteral("cannot write %1").arg(durPath));
+            return;
+        }
+        f.write(QJsonDocument(durObj).toJson(QJsonDocument::Compact));
+    }
+
+    // 取样位置 → at.json
+    QJsonArray posArr;
+    for (qint64 p : positionsMs)
+        posArr.append(static_cast<double>(p));
+    QJsonObject atObj;
+    atObj.insert(QDir::toNativeSeparators(path), posArr);
+    const QString atPath = workDir + QStringLiteral("/at.json");
+    {
+        QFile f(atPath);
+        if (!f.open(QIODevice::WriteOnly | QIODevice::Text)) {
+            emit atPositionsFailed(QStringLiteral("cannot write %1").arg(atPath));
+            return;
+        }
+        f.write(QJsonDocument(atObj).toJson(QJsonDocument::Compact));
+    }
+
+    const QString script = QCoreApplication::applicationDirPath()
+        + QStringLiteral("/probe_timestamps.py");
+    QStringList args{QStringLiteral("-X"), QStringLiteral("utf8"),
+                     script,
+                     QStringLiteral("--ffmpeg-path"), ffmpeg,
+                     QStringLiteral("--work-dir"), workDir,
+                     QStringLiteral("--duration-json"), durPath,
+                     QStringLiteral("--at-json"), atPath};
+    if (!evidenceDir.isEmpty())
+        args << QStringLiteral("--evidence-dir") << evidenceDir;
+    args << path;
+
+    m_total = positionsMs.size();
+    m_cancelled = false;
+    m_atMode = true;
+    m_stdoutBuf.clear();
+    m_stderrBuf.clear();
+
+    m_process = new QProcess(this);
+    m_process->setProgram(pythonExecutable());
+    m_process->setArguments(args);
+    QProcessEnvironment env = QProcessEnvironment::systemEnvironment();
+    env.insert(QStringLiteral("OMP_NUM_THREADS"), QStringLiteral("1"));
+    env.insert(QStringLiteral("OPENBLAS_NUM_THREADS"), QStringLiteral("1"));
+    env.insert(QStringLiteral("MKL_NUM_THREADS"), QStringLiteral("1"));
+    m_process->setProcessEnvironment(env);
+    connect(m_process, &QProcess::readyReadStandardOutput, this, [this]() {
+        m_stdoutBuf += m_process->readAllStandardOutput();
+    });
+    connect(m_process, &QProcess::readyReadStandardError,
+            this, &TimestampOcrEngine::onReadyReadStderr);
+    connect(m_process, qOverload<int, QProcess::ExitStatus>(&QProcess::finished),
+            this, [this](int code, QProcess::ExitStatus) { onFinished(code); });
+
+    // 看门狗：每位置 90s + 5min 基线（取样含尾部 seek，可慢）
+    m_watchdog = new QTimer(this);
+    m_watchdog->setSingleShot(true);
+    connect(m_watchdog, &QTimer::timeout, this, [this]() {
+        if (m_process) {
+            m_process->kill();
+            m_atMode = false;
+            emit atPositionsFailed(QStringLiteral("ocr watchdog timeout"));
+        }
+    });
+    m_watchdog->start(300000 + m_total * 90000);
+
+    m_process->start();
+    if (!m_process->waitForStarted(5000)) {
+        m_atMode = false;
+        emit atPositionsFailed(QStringLiteral("failed to start python"));
+    }
+}
+
 void TimestampOcrEngine::cancel()
 {
     m_cancelled = true;
@@ -267,6 +370,12 @@ void TimestampOcrEngine::onFinished(int exitCode)
         return;     // 取消路径由 Coordinator 状态机接管（C1 类型化）
 
     if (exitCode != 0 && m_stdoutBuf.trimmed().isEmpty()) {
+        if (m_atMode) {
+            m_atMode = false;
+            emit atPositionsFailed(
+                QStringLiteral("probe_timestamps.py exit %1").arg(exitCode));
+            return;
+        }
         failAll(PreprocessError::OcrAllFailed,
                 QStringLiteral("probe_timestamps.py exit %1").arg(exitCode));
         return;
@@ -274,10 +383,49 @@ void TimestampOcrEngine::onFinished(int exitCode)
     QJsonParseError jerr{};
     const QJsonDocument doc = QJsonDocument::fromJson(m_stdoutBuf.trimmed(), &jerr);
     if (!doc.isArray()) {
+        if (m_atMode) {
+            m_atMode = false;
+            emit atPositionsFailed(QStringLiteral("bad json: %1").arg(jerr.errorString()));
+            return;
+        }
         failAll(PreprocessError::OcrAllFailed,
                 QStringLiteral("bad json: %1").arg(jerr.errorString()));
         return;
     }
+
+    // ---- 校时取样模式解析 ----
+    if (m_atMode) {
+        m_atMode = false;
+        QVector<TimeCalibration::Sample> samples;
+        const QJsonArray arr = doc.array();
+        for (const QJsonValue &fv : arr) {
+            const QJsonArray sarr = fv.toObject()[QStringLiteral("samples")].toArray();
+            for (const QJsonValue &sv : sarr) {
+                const QJsonObject s = sv.toObject();
+                const qint64 wall = static_cast<qint64>(
+                    s[QStringLiteral("wallMs")].toDouble());
+                if (wall <= 0)
+                    continue;   // 该位置识别失败：跳过（拟合用成功测点）
+                TimeCalibration::Sample smp;
+                smp.streamMs = static_cast<qint64>(
+                    s[QStringLiteral("relMs")].toDouble());
+                smp.wallMs = wall;
+                smp.rawText = s[QStringLiteral("text")].toString();
+                smp.conf = s[QStringLiteral("conf")].toDouble();
+                smp.frameImgPath = QDir::fromNativeSeparators(
+                    s[QStringLiteral("frameImg")].toString());
+                smp.used = true;
+                samples.append(smp);
+            }
+        }
+        if (samples.isEmpty()) {
+            emit atPositionsFailed(QStringLiteral("ocr_all_failed"));
+            return;
+        }
+        emit atPositionsFinished(samples);
+        return;
+    }
+
     QVector<OcrResult> results;
     const QJsonArray arr = doc.array();
     results.reserve(arr.size());

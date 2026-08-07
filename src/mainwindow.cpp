@@ -19,6 +19,8 @@
 #include "infrastructure/ianalysis_engine.h"
 #include "infrastructure/ffmpeg_video_engine.h"
 #include "infrastructure/python_analysis_engine.h"
+#include "app/calibration_service.h"
+#include "timesettingsdialog.h"
 #include "magnifierwidget.h"
 #include "snapshotoverlay.h"
 #include "pinnedwidget.h"
@@ -488,6 +490,11 @@ MainWindow::MainWindow(QWidget *parent)
     pyEngine->setPythonExecutable(detectPythonPath());
     m_analysisEngine = pyEngine;
 
+    // 校时服务（v1.2.0：三点识别/absStart/sidecar 继承；产出仅预填，
+    // 「采用」由 TimeSettingsDialog 决定）
+    m_calibrationService = new CalibrationService(m_analysisEngine, this);
+    m_calibrationService->setPythonExecutable(detectPythonPath());
+
     // Snapshot overlay (floating on video area)
     m_snapshotOverlay = new SnapshotOverlay(m_videoWidget);
     m_snapshotOverlay->hide();
@@ -806,8 +813,9 @@ void MainWindow::createToolBar()
     m_audioAnalysisBtn->setStyleSheet(audioBtnStyle);
     m_audioAnalysisBtn->setEnabled(false);
 
-    m_setTimeBtn = new QPushButton(lang("设置时间", "Set Time"), this);
-    m_setTimeBtn->setToolTip(lang("设置图表起始时间 (HH:MM:SS)", "Set start time for the chart axis (HH:MM:SS)"));
+    m_setTimeBtn = new QPushButton(lang("校时…", "Calibrate…"), this);
+    m_setTimeBtn->setToolTip(lang("视频校时：自动识别/手动/北京时间校验",
+                                  "Time calibration: auto OCR / manual / Beijing-time check"));
     m_setTimeBtn->setFixedHeight(32);
     m_setTimeBtn->setStyleSheet(btnBase);
     m_setTimeBtn->setEnabled(false);
@@ -1257,7 +1265,8 @@ void MainWindow::setupConnections()
                     m_spectrogramEnhanced->clear();
 
                 m_chartPanel->setLabels({});
-                m_chartPanel->setTimeOffset(0);
+                m_calibration = TimeCalibration();
+                m_chartPanel->setCalibration(m_calibration);
                 m_chartPanel->clearAB();
                 m_pinnedRect = QRect();
                 m_snapshotFusion = SnapshotFusionData();
@@ -1422,16 +1431,16 @@ void MainWindow::openVideoFile(const QString &filePath)
     QVector<GuideLine> loadedGuideLines;
     QVector<int> loadedRegionRoiIds;
     QVector<int> loadedPolygonRoiIds;
-    qint64 timeOffset = 0;
+    TimeCalibration calibration;
     QRect magnifierRect;
     QVector<ChartLabel> labels;
     QRect pinnedRect;
     SnapshotFusionData snapshotFusion;
-    if (m_timelineModel->loadFromFile(filePath, &regions, &timeOffset,
+    if (m_timelineModel->loadFromFile(filePath, &regions, &calibration,
                                        &magnifierRect, &labels, &pinnedRect,
                                        &snapshotFusion, &loadedPolygons, &loadedGuideLines,
                                        &loadedRegionRoiIds, &loadedPolygonRoiIds)) {
-        restoreAnalysisState(regions, timeOffset, labels, pinnedRect, snapshotFusion, loadedRegionRoiIds);
+        restoreAnalysisState(regions, calibration, labels, pinnedRect, snapshotFusion, loadedRegionRoiIds);
         if (loadedPolygonRoiIds.size() == loadedPolygons.size())
             m_polygonModel->restorePolygons(loadedPolygons, loadedPolygonRoiIds);
         else {
@@ -1462,7 +1471,7 @@ void MainWindow::openVideoFile(const QString &filePath)
             m_currentVideoPath,
             m_timelineModel->snapshot(),
             m_regionModel->regions(),
-            m_chartPanel->timeOffset(),
+            m_calibration,
             magRect,
             m_chartPanel->labels(),
             m_pinnedRect,
@@ -1533,7 +1542,8 @@ void MainWindow::openVideoFile(const QString &filePath)
                 savedState.snapshot.audio
             );
 
-            m_chartPanel->setTimeOffset(savedState.timeOffsetMs);
+            m_calibration = savedState.calibration;
+            m_chartPanel->setCalibration(m_calibration);
             m_chartPanel->setLabels(savedState.labels);
             m_chartPanel->setChartGuideLinesData(savedState.chartGuideLines);
 
@@ -1584,7 +1594,8 @@ void MainWindow::openVideoFile(const QString &filePath)
         // from the previous video do not leak into this one.
         m_chartPanel->setLabels({});
         m_chartPanel->clearChartGuideLines();
-        m_chartPanel->setTimeOffset(0);
+        m_calibration = TimeCalibration();
+        m_chartPanel->setCalibration(m_calibration);
         m_chartPanel->clearAB();
         m_pinnedRect = QRect();
         m_snapshotFusion = SnapshotFusionData();
@@ -1618,16 +1629,16 @@ void MainWindow::openVideoFile(const QString &filePath)
                 QVector<GuideLine> loadedGuideLines;
                 QVector<int> loadedRegionRoiIds;
                 QVector<int> loadedPolygonRoiIds;
-                qint64 timeOffset = 0;
+                TimeCalibration calibration;
                 QRect magnifierRect;
                 QVector<ChartLabel> labels;
                 QRect pinnedRect;
                 SnapshotFusionData snapshotFusion;
-                if (m_timelineModel->loadFromFile(vlaPath, &regions, &timeOffset,
+                if (m_timelineModel->loadFromFile(vlaPath, &regions, &calibration,
                                                     &magnifierRect, &labels, &pinnedRect,
                                                     &snapshotFusion, &loadedPolygons, &loadedGuideLines,
                                                     &loadedRegionRoiIds, &loadedPolygonRoiIds)) {
-                    restoreAnalysisState(regions, timeOffset, labels, pinnedRect, snapshotFusion, loadedRegionRoiIds);
+                    restoreAnalysisState(regions, calibration, labels, pinnedRect, snapshotFusion, loadedRegionRoiIds);
                     if (loadedPolygonRoiIds.size() == loadedPolygons.size())
                         m_polygonModel->restorePolygons(loadedPolygons, loadedPolygonRoiIds);
                     else {
@@ -1638,6 +1649,31 @@ void MainWindow::openVideoFile(const QString &filePath)
                     m_guideLineModel->clearLines();
                     for (const GuideLine &line : loadedGuideLines)
                         m_guideLineModel->addLine(line);
+                }
+            }
+        }
+
+        // v1.2.0 sidecar 继承：拼接输出的校时自动带入（仅无现有校时时，Q-4）
+        if (!m_calibration.isValid()) {
+            TimeCalibration inherited;
+            QString sidecarWarning;
+            if (CalibrationService::loadSidecar(filePath, &inherited,
+                                                &sidecarWarning)
+                && inherited.isValid()) {
+                m_calibration = inherited;
+                m_chartPanel->setCalibration(m_calibration);
+                if (sidecarWarning.isEmpty()) {
+                    showOperationStatus(
+                        lang("已继承前处理校时",
+                             "Inherited calibration from preprocessing"));
+                } else {
+                    QMessageBox::warning(this,
+                        lang("拼接时间缺口提示", "Time Gap Notice"),
+                        lang("已继承前处理校时。注意：此拼接文件段间存在时间缺口/重叠，\n"
+                             "首段之后的墙钟可能不准（将写入报告）。",
+                             "Calibration inherited. Note: this concatenated file has "
+                             "time gaps/overlaps;\nwall clock after the first segment "
+                             "may drift (will be noted in reports)."));
                 }
             }
         }
@@ -1672,7 +1708,7 @@ void MainWindow::onSaveAnalysis()
 
     QRect magnifierRect = m_magnifier ? m_magnifier->currentSourceRect() : QRect();
     if (m_timelineModel->saveToFile(filePath, m_regionModel->regions(),
-                                     m_chartPanel->timeOffset(),
+                                     m_calibration,
                                      magnifierRect,
                                      m_chartPanel->labels(),
                                      m_pinnedRect,
@@ -1704,16 +1740,16 @@ void MainWindow::onLoadAnalysis()
         QVector<GuideLine> loadedGuideLines;
         QVector<int> loadedRegionRoiIds;
         QVector<int> loadedPolygonRoiIds;
-        qint64 timeOffset = 0;
+        TimeCalibration calibration;
         QRect magnifierRect;
         QVector<ChartLabel> labels;
         QRect pinnedRect;
         SnapshotFusionData snapshotFusion;
-        if (m_timelineModel->loadFromFile(filePath, &regions, &timeOffset,
+        if (m_timelineModel->loadFromFile(filePath, &regions, &calibration,
                                             &magnifierRect, &labels, &pinnedRect,
                                             &snapshotFusion, &loadedPolygons, &loadedGuideLines,
                                             &loadedRegionRoiIds, &loadedPolygonRoiIds)) {
-            restoreAnalysisState(regions, timeOffset, labels, pinnedRect, snapshotFusion, loadedRegionRoiIds);
+            restoreAnalysisState(regions, calibration, labels, pinnedRect, snapshotFusion, loadedRegionRoiIds);
             if (loadedPolygonRoiIds.size() == loadedPolygons.size())
                 m_polygonModel->restorePolygons(loadedPolygons, loadedPolygonRoiIds);
             else {
@@ -1764,30 +1800,44 @@ void MainWindow::onLoadOverlayImage()
 
 void MainWindow::onSetStartTime()
 {
-    bool ok = false;
-    QString text = QInputDialog::getText(this,
-        lang("设置时间", "Set Time"),
-        lang("请输入当前真实时间（HH:MM:SS）：",
-             "Enter current real-world time (HH:MM:SS):"),
-        QLineEdit::Normal, "00:00:00", &ok);
-    if (!ok || text.isEmpty())
+    // v1.2.0 校时窗口（Q-3：一切候选仅预填，「采用」才生效）
+    if (m_currentVideoPath.isEmpty())
         return;
+    const qint64 curPos = m_videoEngine ? m_videoEngine->position() : 0;
+    QString sidecarWarning;
+    if (m_calibration.source == TimeCalibration::Source::Inherited)
+        CalibrationService::loadSidecar(m_currentVideoPath, nullptr,
+                                        &sidecarWarning);
+    TimeSettingsDialog dlg(m_currentVideoPath, curPos,
+                           m_currentDurationMs > 0 ? m_currentDurationMs
+                                                   : m_trustedDurationMs,
+                           m_calibration, sidecarWarning,
+                           m_calibrationService, this);
+    dlg.exec();   // 模态；各「采用」按钮实时更新 m_calibration
+    if (!dlg.applied())
+        return;
+    m_calibration = dlg.calibration();
+    m_chartPanel->setCalibration(m_calibration);
 
-    QTime time = QTime::fromString(text, "hh:mm:ss");
-    if (!time.isValid()) {
-        QMessageBox::warning(this,
-            lang("时间格式无效", "Invalid Time"),
-            lang("请输入 HH:MM:SS 格式的时间。",
-                 "Please enter time in HH:MM:SS format."));
-        return;
+    // 状态栏反馈（C2：结果可见）
+    QString msg;
+    if (!m_calibration.isValid()) {
+        msg = lang("校时已清除", "Calibration cleared");
+    } else if (m_calibration.dateKnown) {
+        msg = lang("校时已应用：流内 0 点 = %1", "Calibration applied: stream 0 = %1")
+            .arg(QDateTime::fromMSecsSinceEpoch(m_calibration.offsetMs)
+                     .toString(QStringLiteral("yyyy-MM-dd HH:mm:ss")));
+        if (m_calibration.rateApplied)
+            msg += lang("；漂移 %1 秒/天", "; drift %1 s/day")
+                .arg(m_calibration.driftSecondsPerDay(), 0, 'f', 1);
+        if (m_calibration.truthSet)
+            msg += lang("；北京时间偏移 %1s", "; Beijing offset %1s")
+                .arg(m_calibration.truthOffsetMs / 1000.0, 0, 'f', 1);
+    } else {
+        msg = lang("时间偏移已应用：%1s", "Time offset applied: %1s")
+            .arg(m_calibration.offsetMs / 1000.0, 0, 'f', 1);
     }
-
-    qint64 inputMs = time.hour() * 3600000LL +
-                     time.minute() * 60000LL +
-                     time.second() * 1000LL;
-    qint64 currentPos = m_videoEngine ? m_videoEngine->position() : 0;
-    qint64 offset = inputMs - currentPos;
-    m_chartPanel->setTimeOffset(offset);
+    showOperationStatus(msg);
 }
 
 void MainWindow::dragEnterEvent(QDragEnterEvent *event)
@@ -2290,7 +2340,7 @@ void MainWindow::onAnalysisFinished(const AnalysisSnapshot &snapshot)
         const QRect magRect = m_magnifier ? m_magnifier->currentSourceRect() : QRect();
         // 全部参数为值拷贝（各 model 的 getter 返回副本），后台线程安全
         const QVector<QRect> regions = m_regionModel->regions();
-        const qint64 timeOffset = m_chartPanel->timeOffset();
+        const TimeCalibration calibration = m_calibration;
         const QVector<ChartLabel> labels = m_chartPanel->labels();
         const QRect pinned = m_pinnedRect;
         const SnapshotFusionData fusion = m_snapshotFusion;
@@ -2299,10 +2349,10 @@ void MainWindow::onAnalysisFinished(const AnalysisSnapshot &snapshot)
         const QVector<int> regionRoiIds = m_regionModel->roiIds();
         const QVector<int> polygonRoiIds = m_polygonModel->roiIds();
         TimelineModel *model = m_timelineModel;
-        QtConcurrent::run([model, vlaPath, regions, timeOffset, magRect, labels,
+        QtConcurrent::run([model, vlaPath, regions, calibration, magRect, labels,
                            pinned, fusion, polygons, lines,
                            regionRoiIds, polygonRoiIds]() {
-            model->saveToFile(vlaPath, regions, timeOffset, magRect, labels,
+            model->saveToFile(vlaPath, regions, calibration, magRect, labels,
                               pinned, fusion, polygons, lines,
                               regionRoiIds, polygonRoiIds);
         });
@@ -2389,7 +2439,7 @@ void MainWindow::onExportCsv()
         return;
 
     QVector<QRect> regions = m_regionModel->regions();
-    if (snapshot.exportToCsv(filePath, regions, m_chartPanel->timeOffset())) {
+    if (snapshot.exportToCsv(filePath, regions, m_calibration)) {
         // Export labels to separate file
         QVector<ChartLabel> labels = m_chartPanel->labels();
         if (!labels.isEmpty()) {
@@ -2413,8 +2463,16 @@ void MainWindow::onExportCsv()
                 QTextStream out(&labelsFile);
                 out << "Time(ms),Time,Text,Color\n";
                 for (const auto &label : labels) {
+                    QString timeStr;
+                    if (m_calibration.dateKnown) {
+                        timeStr = QDateTime::fromMSecsSinceEpoch(
+                            m_calibration.beijingMsOf(label.timeMs))
+                            .toString(QStringLiteral("yyyy-MM-dd HH:mm:ss"));
+                    } else {
+                        timeStr = formatTime(label.timeMs + m_calibration.offsetMs);
+                    }
                     out << label.timeMs << ","
-                        << formatTime(label.timeMs + m_chartPanel->timeOffset()) << ","
+                        << timeStr << ","
                         << csvField(label.text) << ","
                         << label.color.name(QColor::HexArgb) << "\n";
                 }
@@ -2561,9 +2619,9 @@ void MainWindow::showOperationStatus(const QString &text)
     });
 }
 
-/// @brief 恢复分析状态：区域/时间偏移/标签/截图融合/音频
+/// @brief 恢复分析状态：区域/校时/标签/截图融合/音频
 void MainWindow::restoreAnalysisState(const QVector<QRect> &regions,
-                                       qint64 timeOffset,
+                                       const TimeCalibration &calibration,
                                        const QVector<ChartLabel> &labels,
                                        const QRect &pinnedRect,
                                        const SnapshotFusionData &fusion,
@@ -2577,7 +2635,8 @@ void MainWindow::restoreAnalysisState(const QVector<QRect> &regions,
         for (const QRect &rc : regions)
             m_regionModel->addRegion(rc);
     }
-    m_chartPanel->setTimeOffset(timeOffset);
+    m_calibration = calibration;
+    m_chartPanel->setCalibration(m_calibration);
     m_chartPanel->setLabels(labels);
     if (!pinnedRect.isEmpty())
         m_pinnedRect = pinnedRect;
@@ -2675,8 +2734,10 @@ bool MainWindow::eventFilter(QObject *watched, QEvent *event)
                 if (wasPlaying)
                     m_videoEngine->pause();
                 qint64 pos = m_videoEngine->position();
-                qint64 offset = m_chartPanel->timeOffset();
-                m_chartPanel->addLabelAtTime(pos + offset);
+                // 标签一律流内时间存储（显示时走校时换算）。修复：旧代码把
+                // 显示偏移加进存储值，设置过时间后标签错位一个 offset 且
+                // 悬停/导出时间加了两次 offset。
+                m_chartPanel->addLabelAtTime(pos);
                 if (wasPlaying)
                     m_videoEngine->play();
                 showOperationStatus(lang("标签已添加", "Label added"));

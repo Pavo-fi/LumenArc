@@ -59,4 +59,3 @@ private:
     std::atomic<bool> m_cancelled{false};
 };
 
-Q_DECLARE_METATYPE(ProbeResult)
