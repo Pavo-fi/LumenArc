@@ -52,12 +52,13 @@ FFMPEG_HEAD_TIMEOUT_S = 30
 FFMPEG_TAIL_TIMEOUT_S = 90   # indexless pseudo-MP4 tail seek can be slow
 
 # Regex priority list (design §5.2.4). Hit = stop.
+# 秒组前允许空格（OCR 常把冒号读成空格："15:03 :25" 仍解析为 15:03:25）
 RE_FULL = re.compile(
     r"(\d{4})[-/年.](\d{1,2})[-/月.](\d{1,2})[日号]?\s*[T\s]?"
-    r"(\d{1,2}):(\d{2})(?::(\d{2}))?(?:[:.](\d{1,3}))?")
+    r"(\d{1,2}):(\d{2})(?:\s*:(\d{2}))?(?:[:.](\d{1,3}))?")
 RE_NO_YEAR = re.compile(
-    r"(?<!\d)(\d{1,2})[-/月.](\d{1,2})[日号]?\s+(\d{1,2}):(\d{2}):(\d{2})(?!\d)")
-RE_TIME_ONLY = re.compile(r"(?<!\d)(\d{1,2}):(\d{2}):(\d{2})(?!\d)")
+    r"(?<!\d)(\d{1,2})[-/月.](\d{1,2})[日号]?\s+(\d{1,2}):(\d{2})\s*:(\d{2})(?!\d)")
+RE_TIME_ONLY = re.compile(r"(?<!\d)(\d{1,2}):(\d{2})\s*:(\d{2})(?!\d)")
 RE_FILENAME_YEAR = re.compile(r"(20\d{2})")
 
 # OCR digit-confusion normalization (applied to a DERIVED copy only; the raw

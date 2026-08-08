@@ -141,8 +141,9 @@ AnalysisSnapshot TimelineModel::snapshot() const
 // ---------------------------------------------------------------------------
 static const char VLA2_MAGIC[4] = {'V', 'L', 'A', '2'};
 static constexpr quint32 VLA2_VERSION = 2;
-/// .vla 语义版本上限（META version 字段；v8 = time_calibration 仿射校时）
-static constexpr int kCurrentVlaVersion = 8;
+/// .vla 语义版本上限（META version 字段；v9 = time_calibration 含分段重建）
+/// v8 = time_calibration 仿射校时；v≤7 迁移见 loadFromFile
+static constexpr int kCurrentVlaVersion = 9;
 
 static QByteArray vlaPackChunk(const char *tag4, const QByteArray &payload)
 {
@@ -212,9 +213,10 @@ bool TimelineModel::saveToFile(const QString &filePath,
         return false;
 
     QJsonObject root;
-    root["version"] = 8;
+    root["version"] = 9;
     root["analyzed_at"] = QDateTime::currentDateTime().toString(Qt::ISODate);
-    // v8：仿射校时模型（含北京时间偏移与测点证据）；不再写 time_offset（Q-19 严格升版）
+    // v9：time_calibration 含分段重建（piecewise）；v8 及以下旧文件可读（迁移），
+    // v9 不再写 time_offset（Q-19 严格升版）
     if (calibration.isValid())
         root["time_calibration"] = calibration.toJson();
 

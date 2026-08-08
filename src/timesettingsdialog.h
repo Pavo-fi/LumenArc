@@ -45,13 +45,17 @@ public:
 
 private slots:
     void onRunThreePoint();
+    void onRunRecon();
     void onServiceProgress(const QString &stage);
     void onThreePointReady(const QString &videoPath,
                            const TimeCalibration &proposed);
+    void onReconstructionReady(const QString &videoPath,
+                               const TimeCalibration &proposed);
     void onServiceFailed(const QString &videoPath, const QString &error);
     void onAbsStartReady(const QString &videoPath, qint64 absStartEpochMs);
     void onSampleItemChanged(QTableWidgetItem *item);
     void onAdoptFit();
+    void onAdoptRecon();
     void onAdoptAbsStart();
     void onAdoptManual();
     void onTruthInputChanged();
@@ -89,6 +93,12 @@ private:
     QLabel *m_fitLabel = nullptr;
     QLabel *m_fitWarningLabel = nullptr;
     QPushButton *m_adoptFitBtn = nullptr;
+    // 时间重建（v1.2.1：变速/抽帧文件）
+    QPushButton *m_reconBtn = nullptr;
+    QLabel *m_reconSummaryLabel = nullptr;
+    QTableWidget *m_segmentTable = nullptr;
+    QPushButton *m_adoptReconBtn = nullptr;
+    TimeCalibration m_reconResult;   // 最近一次重建候选
     QLabel *m_absLabel = nullptr;
     QPushButton *m_adoptAbsBtn = nullptr;
     QDateTimeEdit *m_manualEdit = nullptr;

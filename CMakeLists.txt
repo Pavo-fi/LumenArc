@@ -85,6 +85,7 @@ set(SOURCES
     src/domain/concat_precheck.cpp
     src/domain/evidence_report.cpp
     src/domain/time_calibration.cpp
+    src/domain/time_piecewise.cpp
     src/app/preprocessing_coordinator.cpp
     src/app/calibration_service.cpp
     src/timesettingsdialog.cpp
@@ -133,6 +134,7 @@ set(HEADERS
     src/domain/evidence_report.h
     src/domain/preprocess_text.h
     src/domain/time_calibration.h
+    src/domain/time_piecewise.h
     src/app/preprocessing_coordinator.h
     src/app/calibration_service.h
     src/timesettingsdialog.h
@@ -185,12 +187,49 @@ target_link_libraries(lumenarc_preprocess_test PRIVATE
 add_executable(lumenarc_calibration_test
     tests/calibration_test_main.cpp
     src/domain/time_calibration.cpp
+    src/domain/time_piecewise.cpp
 )
 target_include_directories(lumenarc_calibration_test PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src
 )
 target_link_libraries(lumenarc_calibration_test PRIVATE
     Qt6::Core
+)
+
+# --- Piecewise reconstruction domain test (v1.2.1) ---
+add_executable(lumenarc_piecewise_test
+    tests/piecewise_test_main.cpp
+    src/domain/time_piecewise.cpp
+)
+target_include_directories(lumenarc_piecewise_test PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+)
+target_link_libraries(lumenarc_piecewise_test PRIVATE
+    Qt6::Core
+)
+
+# --- Reconstruction golden-case integration test (B3 elevator clip) ---
+add_executable(lumenarc_reconstruction_test
+    tests/reconstruction_integration_main.cpp
+    src/app/calibration_service.cpp
+    src/infrastructure/ianalysis_engine.h
+    src/infrastructure/media_probe_engine.cpp
+    src/infrastructure/timestamp_ocr_engine.cpp
+    src/infrastructure/python_analysis_engine.cpp
+    src/i18n.cpp
+    src/domain/time_calibration.cpp
+    src/domain/time_piecewise.cpp
+    src/domain/probe_result.h
+)
+target_include_directories(lumenarc_reconstruction_test PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+    ${FFMPEG_INCLUDE_DIR}
+)
+target_link_libraries(lumenarc_reconstruction_test PRIVATE
+    Qt6::Core
+    Qt6::Gui
+    Qt6::Concurrent   # python_analysis_engine.cpp 后台解析
+    ${FFMPEG_LIBRARIES}
 )
 
 # --- OCR engine runAtPositions smoke test (bundled python/ffmpeg subprocess) ---
@@ -201,6 +240,7 @@ add_executable(lumenarc_ocr_atpositions_test
     src/infrastructure/python_analysis_engine.cpp
     src/i18n.cpp
     src/domain/time_calibration.cpp
+    src/domain/time_piecewise.cpp
 )
 target_include_directories(lumenarc_ocr_atpositions_test PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src
@@ -249,6 +289,7 @@ add_executable(lumenarc_vla_test
     src/domain/timeline_model.cpp
     src/domain/guide_line_model.cpp
     src/domain/time_calibration.cpp
+    src/domain/time_piecewise.cpp
 )
 target_include_directories(lumenarc_vla_test PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src

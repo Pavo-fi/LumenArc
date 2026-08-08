@@ -161,6 +161,16 @@ QJsonObject TimeCalibration::toJson() const
     }
     if (!arr.isEmpty())
         o[QStringLiteral("samples")] = arr;
+    // v1.2.1：分段重建（变速/抽帧文件查表校时）
+    if (piecewise.isValid()) {
+        o[QStringLiteral("piecewise")] = piecewise.toJson();
+        o[QStringLiteral("piecewiseApplied")] = piecewiseApplied;
+        o[QStringLiteral("speedVariant")] = speedVariant;
+        o[QStringLiteral("boundaryCount")] = boundaryCount;
+        o[QStringLiteral("totalWallSpanSec")] = totalWallSpanSec;
+        o[QStringLiteral("audioConsistent")] = audioConsistent;
+        o[QStringLiteral("audioKnown")] = audioKnown;
+    }
     return o;
 }
 
@@ -190,6 +200,17 @@ TimeCalibration TimeCalibration::fromJson(const QJsonObject &o)
         s.conf = so[QStringLiteral("conf")].toDouble();
         s.used = so[QStringLiteral("used")].toBool(true);
         c.samples.append(s);
+    }
+    // v1.2.1：分段重建字段（老文件无此字段 → piecewise 无效，行为不变）
+    const QJsonArray parr = o[QStringLiteral("piecewise")].toArray();
+    if (!parr.isEmpty()) {
+        c.piecewise = PiecewiseTimeMap::fromJson(parr, 0);
+        c.piecewiseApplied = o[QStringLiteral("piecewiseApplied")].toBool();
+        c.speedVariant = o[QStringLiteral("speedVariant")].toBool();
+        c.boundaryCount = o[QStringLiteral("boundaryCount")].toInt();
+        c.totalWallSpanSec = o[QStringLiteral("totalWallSpanSec")].toDouble();
+        c.audioConsistent = o[QStringLiteral("audioConsistent")].toBool(true);
+        c.audioKnown = o[QStringLiteral("audioKnown")].toBool();
     }
     return c;
 }

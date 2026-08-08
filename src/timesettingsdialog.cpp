@@ -64,6 +64,8 @@ TimeSettingsDialog::TimeSettingsDialog(const QString &videoPath,
                 this, &TimeSettingsDialog::onServiceProgress);
         connect(m_service, &CalibrationService::threePointReady,
                 this, &TimeSettingsDialog::onThreePointReady);
+        connect(m_service, &CalibrationService::reconstructionReady,
+                this, &TimeSettingsDialog::onReconstructionReady);
         connect(m_service, &CalibrationService::failed,
                 this, &TimeSettingsDialog::onServiceFailed);
         connect(m_service, &CalibrationService::absStartReady,
@@ -144,6 +146,42 @@ void TimeSettingsDialog::buildUi()
     ga->addLayout(row2);
     lay->addWidget(grpAuto);
 
+    // ---- ⑤ 时间重建（变速/抽帧文件：两级采样分段查表）----
+    auto *grpRecon = new QGroupBox(lang("⑤ 时间重建（变速/抽帧文件专用）",
+                                        "⑤ Time reconstruction (variable-rate files)"), this);
+    auto *gr = new QVBoxLayout(grpRecon);
+    auto *rr1 = new QHBoxLayout();
+    m_reconBtn = new QPushButton(lang("开始时间重建", "Run reconstruction"), this);
+    m_reconBtn->setToolTip(lang(
+        "对疑似变速/抽帧文件（三点识别速率异常时）做全片密集取样："
+        "粗采样分段 + 边界加密，按画面 OSD 重建时间映射表。",
+        "For variable-rate files (when 3-point OCR reports odd rate): dense sampling "
+        "over the whole clip, segmenting by OSD slope and rebuilding the time map."));
+    rr1->addWidget(m_reconBtn);
+    rr1->addStretch(1);
+    gr->addLayout(rr1);
+    m_reconSummaryLabel = new QLabel(lang(
+        "未运行。", "Not run yet."), this);
+    m_reconSummaryLabel->setWordWrap(true);
+    gr->addWidget(m_reconSummaryLabel);
+    m_segmentTable = new QTableWidget(0, 5, this);
+    m_segmentTable->setHorizontalHeaderLabels(
+        {lang("段", "Seg"), lang("流内范围", "Stream range"),
+         lang("斜率", "Rate"), lang("OSD 起点", "OSD start"),
+         lang("说明", "Note")});
+    m_segmentTable->horizontalHeader()->setStretchLastSection(true);
+    m_segmentTable->verticalHeader()->setVisible(false);
+    m_segmentTable->setMinimumHeight(90);
+    m_segmentTable->setMaximumHeight(160);
+    gr->addWidget(m_segmentTable);
+    auto *rr2 = new QHBoxLayout();
+    m_adoptReconBtn = new QPushButton(lang("采用重建结果", "Adopt reconstruction"), this);
+    m_adoptReconBtn->setEnabled(false);
+    rr2->addWidget(m_adoptReconBtn);
+    rr2->addStretch(1);
+    gr->addLayout(rr2);
+    lay->addWidget(grpRecon);
+
     // ---- ② 流内录制时间（absStart，免识别） ----
     auto *grpAbs = new QGroupBox(lang("② 流内录制时间（录像机写入，免识别）",
                                       "② In-stream recording time (no OCR needed)"), this);
@@ -199,7 +237,9 @@ void TimeSettingsDialog::buildUi()
     lay->addWidget(bbox);
 
     connect(m_runBtn, &QPushButton::clicked, this, &TimeSettingsDialog::onRunThreePoint);
+    connect(m_reconBtn, &QPushButton::clicked, this, &TimeSettingsDialog::onRunRecon);
     connect(m_adoptFitBtn, &QPushButton::clicked, this, &TimeSettingsDialog::onAdoptFit);
+    connect(m_adoptReconBtn, &QPushButton::clicked, this, &TimeSettingsDialog::onAdoptRecon);
     connect(m_adoptAbsBtn, &QPushButton::clicked, this, &TimeSettingsDialog::onAdoptAbsStart);
     connect(m_adoptManualBtn, &QPushButton::clicked, this, &TimeSettingsDialog::onAdoptManual);
     connect(m_beijingEdit, &QDateTimeEdit::dateTimeChanged,
@@ -251,6 +291,9 @@ void TimeSettingsDialog::refreshWorkingSummary()
         if (m_working.rateApplied)
             text += lang("；漂移修正 %1 秒/天", "; drift %1 s/day")
                 .arg(m_working.driftSecondsPerDay(), 0, 'f', 1);
+        if (m_working.piecewiseMode())
+            text += lang("；分段重建 %1 段（变速）", "; piecewise %1 segs (variable-rate)")
+                .arg(m_working.piecewise.size());
         if (m_working.truthSet)
             text += lang("；北京时间偏移 %1", "; Beijing offset %1")
                 .arg(fmtOffset(m_working.truthOffsetMs));
@@ -274,6 +317,93 @@ void TimeSettingsDialog::onRunThreePoint()
                        "Sampling 3 points… (may take tens of seconds)"));
     m_adoptFitBtn->setEnabled(false);
     m_service->runThreePoint(m_videoPath, m_currentPosMs, m_durationMs);
+}
+
+void TimeSettingsDialog::onRunRecon()
+{
+    if (!m_service)
+        return;
+    m_adoptReconBtn->setEnabled(false);
+    m_segmentTable->setRowCount(0);
+    m_reconSummaryLabel->setText(lang(
+        "重建中…（粗采样分段 + 边界加密，全程可能数分钟）",
+        "Reconstructing… (coarse sampling + boundary refinement, may take minutes)"));
+    setBusy(true, lang("时间重建中…", "Reconstructing…"));
+    m_service->runReconstruction(m_videoPath, m_durationMs);
+}
+
+void TimeSettingsDialog::onReconstructionReady(const QString &videoPath,
+                                               const TimeCalibration &proposed)
+{
+    if (videoPath != m_videoPath)
+        return;
+    setBusy(false);
+    m_reconResult = proposed;
+
+    if (!proposed.piecewiseMode()) {
+        // 正常录像：无分段，走仿射（与三点识别等效）
+        m_reconSummaryLabel->setText(lang(
+            "检测结果：正常录像（无变速边界，整体速率 %1）。可切换用 ① 三点识别查看拟合详情。",
+            "Result: normal recording (no rate boundaries, overall rate %1). "
+            "Use ① 3-point OCR for fit details.")
+                .arg(proposed.rate, 0, 'f', 4));
+        m_segmentTable->setRowCount(0);
+        return;
+    }
+
+    // 分段表
+    const auto &segs = proposed.piecewise.segments;
+    m_segmentTable->setRowCount(segs.size());
+    for (int i = 0; i < segs.size(); ++i) {
+        const auto &s = segs[i];
+        m_segmentTable->setItem(i, 0,
+            new QTableWidgetItem(QString::number(i + 1)));
+        const QString range = (i + 1 < segs.size())
+            ? QStringLiteral("%1 – %2")
+                  .arg(fmtStreamMs(s.streamStartMs))
+                  .arg(fmtStreamMs(segs[i + 1].streamStartMs))
+            : QStringLiteral("%1 – …").arg(fmtStreamMs(s.streamStartMs));
+        m_segmentTable->setItem(i, 1, new QTableWidgetItem(range));
+        m_segmentTable->setItem(i, 2,
+            new QTableWidgetItem(QString::number(s.rate, 'f', 3)));
+        m_segmentTable->setItem(i, 3,
+            new QTableWidgetItem(fmtWall(s.wallStartMs)));
+        m_segmentTable->setItem(i, 4,
+            new QTableWidgetItem(lang(
+                "按画面 OSD 重建", "rebuilt from OSD")));
+    }
+
+    QString summary = lang(
+        "检测到 %1 个变速边界（%2 段），疑似抽帧/变速导出，"
+        "已按画面 OSD 重建时间映射。",
+        "%1 rate boundaries (%2 segments) found: variable-rate file; "
+        "time map rebuilt from OSD.")
+        .arg(proposed.boundaryCount).arg(segs.size());
+    if (proposed.audioKnown) {
+        summary += lang(
+            " 音频时长校验：%1（%2 分 vs OSD 跨度 %3 分）。",
+            " Audio check: %1 (%2 min vs OSD span %3 min).")
+            .arg(proposed.audioConsistent ? lang("吻合", "OK")
+                                          : lang("不吻合", "MISMATCH"))
+            .arg(proposed.totalWallSpanSec / 60.0, 0, 'f', 0);
+        // 上句里 audioKnown 分支的第二个参数复用同一跨度
+        if (!proposed.audioConsistent) {
+            summary += lang(
+                " 注意：OSD 跨度与音频时长不一致，边界可能漏检，建议复核。",
+                " OSD span differs from audio: boundaries may be missed, re-check.");
+        }
+    }
+    m_reconSummaryLabel->setText(summary);
+    m_adoptReconBtn->setEnabled(true);
+}
+
+void TimeSettingsDialog::onAdoptRecon()
+{
+    if (!m_reconResult.piecewiseMode())
+        return;
+    m_working = m_reconResult;
+    m_applied = true;
+    refreshWorkingSummary();
 }
 
 void TimeSettingsDialog::onServiceProgress(const QString &stage)
@@ -339,6 +469,10 @@ void TimeSettingsDialog::onServiceFailed(const QString &videoPath,
     m_fitLabel->setText(lang("自动识别失败：%1。可改用手动校时（③）",
                              "Auto OCR failed: %1. Use manual (③)").arg(error));
     m_adoptFitBtn->setEnabled(false);
+    m_reconSummaryLabel->setText(lang(
+        "重建失败：%1。可改用手动校时（③）。",
+        "Reconstruction failed: %1. Use manual (③).").arg(error));
+    m_adoptReconBtn->setEnabled(false);
 }
 
 void TimeSettingsDialog::onAbsStartReady(const QString &videoPath,
@@ -454,6 +588,7 @@ void TimeSettingsDialog::onClearTruth()
 void TimeSettingsDialog::setBusy(bool busy, const QString &text)
 {
     m_runBtn->setEnabled(!busy);
+    m_reconBtn->setEnabled(!busy);
     m_progressLabel->setText(busy ? text : QString());
 }
 

@@ -20,6 +20,7 @@
 #include <QJsonArray>
 #include <QtGlobal>
 #include <cmath>
+#include "time_piecewise.h"
 
 /**
  * @brief 校时数据：仿射时间模型 + 测点证据。
@@ -57,18 +58,38 @@ struct TimeCalibration
     qint64  truthCheckedAtMs = 0;  ///< 校验操作时刻
     QString truthNote;             ///< 校验说明（如对时来源，留档）
 
+    // ---- 分段重建（v1.2.1 时间重建：变速/抽帧文件查表校时）----
+    PiecewiseTimeMap piecewise;   ///< 分段映射表（isValid = 重建产物）
+    bool    piecewiseApplied = false; ///< 分段模式是否生效（优先于仿射）
+    bool    speedVariant = false;     ///< 检测结论：变速/抽帧文件
+    int     boundaryCount = 0;        ///< 变速边界数
+    double  totalWallSpanSec = 0.0;   ///< OSD 总跨度（秒，报告用）
+    bool    audioConsistent = true;   ///< 音频时长校验结论
+    bool    audioKnown = false;       ///< 是否取得音频时长做过校验
+
+    /// 分段模式生效（piecewise 有效且 piecewiseApplied）
+    bool piecewiseMode() const
+    {
+        return piecewiseApplied && piecewise.isValid();
+    }
+
     bool   isValid() const { return source != Source::None; }
     double effectiveRate() const { return rateApplied ? rate : 1.0; }
 
     /// 全应用唯一换算入口（C3）：监控墙钟 = offset + rate×stream
+    /// 分段模式（piecewiseMode）下走查表，否则仿射
     qint64 wallMsOf(qint64 streamMs) const
     {
+        if (piecewiseMode())
+            return piecewise.wallMsOf(streamMs);
         return offsetMs + static_cast<qint64>(
                    std::llround(effectiveRate() * static_cast<double>(streamMs)));
     }
     /// 反解：墙钟 → 流内毫秒
     qint64 streamMsOf(qint64 wallMs) const
     {
+        if (piecewiseMode())
+            return piecewise.streamMsOf(wallMs);
         return static_cast<qint64>(
             std::llround((wallMs - offsetMs) / effectiveRate()));
     }
