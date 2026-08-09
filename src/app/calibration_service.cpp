@@ -154,6 +154,30 @@ void CalibrationService::runReconstruction(const QString &videoPath,
                                 evidenceDirFor(videoPath));
 }
 
+void CalibrationService::runQuickCheck(const QString &videoPath,
+                                       qint64 durationMs)
+{
+    if (videoPath.isEmpty() || isRunning())
+        return;
+    qint64 dur = durationMs;
+    if (dur <= 0 && m_analysisEngine)
+        dur = m_analysisEngine->trustedDurationMs(videoPath);
+    const qint64 streamDur = probeVideoStreamDurationMs(videoPath);
+    if (streamDur > 0 && (dur <= 0 || streamDur < dur))
+        dur = streamDur;
+    if (dur <= 0)
+        return;
+    QVector<qint64> positions;
+    positions.append(1000);
+    if (dur > 6000)
+        positions.append(dur - 3000);
+    m_pendingVideo = videoPath;
+    m_quickPending = true;
+    emit progress(QStringLiteral("quick check"));
+    m_ocrEngine->runAtPositions(videoPath, positions, dur,
+                                evidenceDirFor(videoPath));
+}
+
 void CalibrationService::probeAbsStart(const QString &videoPath)
 {
     if (videoPath.isEmpty())
@@ -168,6 +192,7 @@ void CalibrationService::cancel()
     m_ocrEngine->cancel();
     m_pendingVideo.clear();
     m_absPending = false;
+    m_quickPending = false;
     m_reconStage = ReconStage::None;
     m_reconSamples.clear();
 }
@@ -186,6 +211,21 @@ void CalibrationService::onAtPositionsFinished(
     const QString video = m_pendingVideo;
     if (video.isEmpty())
         return;
+    if (m_quickPending) {
+        m_quickPending = false;
+        // 首尾两点：整体速率 + 疑似变速判定（>15% 偏差）
+        double rate = 1.0;
+        bool suspicious = false;
+        if (samples.size() >= 2) {
+            const qint64 ds = samples.last().streamMs - samples.first().streamMs;
+            const qint64 dw = samples.last().wallMs - samples.first().wallMs;
+            if (ds > 0 && samples.first().wallMs > 0 && samples.last().wallMs > 0)
+                rate = static_cast<double>(dw) / ds;
+            suspicious = std::fabs(rate - 1.0) > 0.15;
+        }
+        emit quickCheckReady(video, rate, suspicious);
+        return;
+    }
     if (m_reconStage != ReconStage::None) {
         onReconBatchFinished(samples);
         return;

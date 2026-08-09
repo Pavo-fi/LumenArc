@@ -494,6 +494,12 @@ MainWindow::MainWindow(QWidget *parent)
     // 「采用」由 TimeSettingsDialog 决定）
     m_calibrationService = new CalibrationService(m_analysisEngine, this);
     m_calibrationService->setPythonExecutable(detectPythonPath());
+    // v1.2.1 非模态：后台校时任务进度常驻状态栏（对话框关闭后仍可见）
+    connect(m_calibrationService, &CalibrationService::progress,
+            this, [this](const QString &stage) {
+                showOperationStatus(lang("校时任务：%1", "Calibration task: %1")
+                                        .arg(stage));
+            });
 
     // Snapshot overlay (floating on video area)
     m_snapshotOverlay = new SnapshotOverlay(m_videoWidget);
@@ -1800,44 +1806,57 @@ void MainWindow::onLoadOverlayImage()
 
 void MainWindow::onSetStartTime()
 {
-    // v1.2.0 校时窗口（Q-3：一切候选仅预填，「采用」才生效）
+    // v1.2.1 非模态校时窗口：重建/识别在后台进行，主窗口可继续操作；
+    // 关闭窗口不取消任务，重开可见进度与结果（Q-3 候选语义不变）。
     if (m_currentVideoPath.isEmpty())
         return;
+    if (m_calibrationDialog)
+        m_calibrationDialog->raise();
     const qint64 curPos = m_videoEngine ? m_videoEngine->position() : 0;
     QString sidecarWarning;
     if (m_calibration.source == TimeCalibration::Source::Inherited)
         CalibrationService::loadSidecar(m_currentVideoPath, nullptr,
                                         &sidecarWarning);
-    TimeSettingsDialog dlg(m_currentVideoPath, curPos,
-                           m_currentDurationMs > 0 ? m_currentDurationMs
-                                                   : m_trustedDurationMs,
-                           m_calibration, sidecarWarning,
-                           m_calibrationService, this);
-    dlg.exec();   // 模态；各「采用」按钮实时更新 m_calibration
-    if (!dlg.applied())
-        return;
-    m_calibration = dlg.calibration();
-    m_chartPanel->setCalibration(m_calibration);
-
-    // 状态栏反馈（C2：结果可见）
-    QString msg;
-    if (!m_calibration.isValid()) {
-        msg = lang("校时已清除", "Calibration cleared");
-    } else if (m_calibration.dateKnown) {
-        msg = lang("校时已应用：流内 0 点 = %1", "Calibration applied: stream 0 = %1")
-            .arg(QDateTime::fromMSecsSinceEpoch(m_calibration.offsetMs)
-                     .toString(QStringLiteral("yyyy-MM-dd HH:mm:ss")));
-        if (m_calibration.rateApplied)
-            msg += lang("；漂移 %1 秒/天", "; drift %1 s/day")
-                .arg(m_calibration.driftSecondsPerDay(), 0, 'f', 1);
-        if (m_calibration.truthSet)
-            msg += lang("；北京时间偏移 %1s", "; Beijing offset %1s")
-                .arg(m_calibration.truthOffsetMs / 1000.0, 0, 'f', 1);
-    } else {
-        msg = lang("时间偏移已应用：%1s", "Time offset applied: %1s")
-            .arg(m_calibration.offsetMs / 1000.0, 0, 'f', 1);
-    }
-    showOperationStatus(msg);
+    auto *dlg = new TimeSettingsDialog(
+        m_currentVideoPath, curPos,
+        m_currentDurationMs > 0 ? m_currentDurationMs : m_trustedDurationMs,
+        m_calibration, sidecarWarning, m_calibrationService, this);
+    dlg->setAttribute(Qt::WA_DeleteOnClose);
+    m_calibrationDialog = dlg;
+    // 应用校时（与旧模态路径等价：应用后更新图表与状态栏）
+    connect(dlg, &TimeSettingsDialog::calibrationApplied,
+            this, [this](const TimeCalibration &cal) {
+                m_calibration = cal;
+                m_chartPanel->setCalibration(m_calibration);
+                QString msg;
+                if (!cal.isValid()) {
+                    msg = lang("校时已清除", "Calibration cleared");
+                } else if (cal.dateKnown) {
+                    msg = lang("校时已应用：流内 0 点 = %1",
+                               "Calibration applied: stream 0 = %1")
+                              .arg(QDateTime::fromMSecsSinceEpoch(cal.offsetMs)
+                                       .toString(QStringLiteral("yyyy-MM-dd HH:mm:ss")));
+                    if (cal.rateApplied)
+                        msg += lang("；漂移 %1 秒/天", "; drift %1 s/day")
+                                   .arg(cal.driftSecondsPerDay(), 0, 'f', 1);
+                    if (cal.truthSet)
+                        msg += lang("；北京时间偏移 %1s", "; Beijing offset %1s")
+                                   .arg(cal.truthOffsetMs / 1000.0, 0, 'f', 1);
+                    if (cal.piecewiseMode())
+                        msg += lang("；分段重建 %1 段（变速）", "; piecewise %1 segs")
+                                   .arg(cal.piecewise.size());
+                } else {
+                    msg = lang("时间偏移已应用：%1s", "Time offset applied: %1s")
+                              .arg(cal.offsetMs / 1000.0, 0, 'f', 1);
+                }
+                showOperationStatus(msg);
+            });
+    connect(dlg, &QDialog::destroyed, this, [this]() {
+        m_calibrationDialog = nullptr;
+    });
+    dlg->show();
+    dlg->raise();
+    dlg->activateWindow();
 }
 
 void MainWindow::dragEnterEvent(QDragEnterEvent *event)

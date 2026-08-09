@@ -46,12 +46,13 @@ public:
     /// 正常录像（无边界且 |rate−1|≤1%）退化为单段仿射，行为与三点一致。
     /// 结果经 reconstructionReady 发出（候选，不生效）。
     void runReconstruction(const QString &videoPath, qint64 durationMs);
+    /// 秒级预检（v1.2.1）：首/尾两点 OCR 判"疑似变速文件"，
+    /// 供校时窗口智能推荐（正常→① 自动校时；变速→⑤ 时间重建）。
+    void runQuickCheck(const QString &videoPath, qint64 durationMs);
     /// absStart（流内绝对起始，DHAV 等）快速候选探测。
     void probeAbsStart(const QString &videoPath);
     void cancel();
-    bool isRunning() const;
-
-    /// 手动校时构造（单点，rate=1.0）
+    bool isRunning() const;    /// 手动校时构造（单点，rate=1.0）
     static TimeCalibration fromSinglePoint(qint64 streamMs, qint64 wallMs,
                                            TimeCalibration::Source src);
     /// absStart 构造（流内 0 点对齐，单点）
@@ -80,6 +81,9 @@ signals:
     /// 时间重建完成（候选，不生效；proposed 含 piecewise 分段表）
     void reconstructionReady(const QString &videoPath,
                              const TimeCalibration &proposed);
+    /// 秒级预检完成：overallRate 首尾速率；suspicious = 疑似变速
+    void quickCheckReady(const QString &videoPath, double overallRate,
+                         bool suspicious);
     void absStartReady(const QString &videoPath, qint64 absStartEpochMs);
     void failed(const QString &videoPath, const QString &error);
 
@@ -103,4 +107,5 @@ private:
     // 时间重建状态（两级采样）
     ReconStage m_reconStage = ReconStage::None;
     QVector<TimeCalibration::Sample> m_reconSamples;  ///< 粗采样+加密测点累积
+    bool m_quickPending = false;   ///< 秒级预检进行中
 };

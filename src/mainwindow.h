@@ -11,11 +11,14 @@
 #pragma once
 
 #include <QMainWindow>
+#include <QPointer>
 #include "domain/analysis_snapshot.h"
 #include "domain/timeline_model.h"
 #include "domain/time_calibration.h"
 #include "videolistpanel.h"
 #include "videostatemanager.h"
+
+class TimeSettingsDialog;
 
 class VideoWidget;
 class MagnifierWidget;
@@ -141,6 +144,7 @@ protected:
     IAnalysisEngine *m_analysisEngine = nullptr;
     CalibrationService *m_calibrationService = nullptr;
     TimeCalibration m_calibration;   // 当前视频校时 SSOT（.vla v8 持久化）
+    QPointer<TimeSettingsDialog> m_calibrationDialog;  // 非模态校时窗口（v1.2.1）
     RegionModel *m_regionModel = nullptr;
     PolygonModel *m_polygonModel = nullptr;
     GuideLineModel *m_guideLineModel = nullptr;

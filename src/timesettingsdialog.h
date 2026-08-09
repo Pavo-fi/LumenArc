@@ -43,10 +43,17 @@ public:
     bool applied() const { return m_applied; }
     TimeCalibration calibration() const { return m_working; }
 
+signals:
+    /// 校时已应用（非模态：主窗口收到后更新图表与状态栏）
+    void calibrationApplied(const TimeCalibration &cal);
+
 private slots:
     void onRunThreePoint();
     void onRunRecon();
     void onServiceProgress(const QString &stage);
+    void onQuickCheckReady(const QString &videoPath, double overallRate,
+                           bool suspicious);
+    void onToggleDetails();
     void onThreePointReady(const QString &videoPath,
                            const TimeCalibration &proposed);
     void onReconstructionReady(const QString &videoPath,
@@ -81,14 +88,19 @@ private:
     CalibrationService *m_service = nullptr;   // 不持有
     bool m_applied = false;
     bool m_updatingTable = false;
+    bool m_detailsVisible = false;      // 自动识别详情折叠
+    bool m_taskStarted = false;         // 已启动识别/重建（区分预检失败）
     qint64 m_absStartMs = 0;
 
     // UI
     QLabel *m_videoLabel = nullptr;
     QLabel *m_currentLabel = nullptr;
     QLabel *m_workingSummary = nullptr;
+    QLabel *m_quickLabel = nullptr;     // 秒级预检推荐条（v1.2.1）
     QPushButton *m_runBtn = nullptr;
     QLabel *m_progressLabel = nullptr;
+    QPushButton *m_detailsBtn = nullptr;    // 查看细节 ▸/▾
+    QWidget *m_detailsBox = nullptr;        // 详情折叠容器（测点表等）
     QTableWidget *m_sampleTable = nullptr;
     QLabel *m_fitLabel = nullptr;
     QLabel *m_fitWarningLabel = nullptr;
