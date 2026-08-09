@@ -24,6 +24,7 @@
 #include <QLineEdit>
 #include <QCheckBox>
 #include <QDialogButtonBox>
+#include <QFrame>
 #include <QDateTime>
 #include <QFileInfo>
 #include <QPixmap>
@@ -106,33 +107,31 @@ void TimeSettingsDialog::buildUi()
         lay->addWidget(m_sidecarWarnLabel);
     }
 
-    // ---- GO 主按钮（一键自动校时）----
+    // ---- 顶部用法横幅（参考拼接窗口格式横幅）----
+    lay->addWidget(buildUsageBanner());
+
+    // ---- 第 1 步：自动校时 ----
+    auto *grpGo = new QGroupBox(lang("第 1 步 · 自动校时", "Step 1 · Auto calibrate"), this);
+    auto *gg = new QVBoxLayout(grpGo);
     auto *goRow = new QHBoxLayout();
-    m_goBtn = new QPushButton(lang("🔍 自动校时", "🔍 Auto calibrate"), this);
-    m_goBtn->setMinimumHeight(40);
-    m_goBtn->setToolTip(lang(
-        "一键完成：自动检查文件 → 正常文件自动识别 / 变速文件自动重建，"
-        "全部自动判断，无需选择方式。",
-        "One click: quick check → auto OCR (normal) or reconstruction "
-        "(variable-rate). No manual choice needed."));
+    m_goBtn = new QPushButton(lang("🔍 GO 自动校时", "🔍 GO"), this);
+    m_goBtn->setMinimumHeight(44);
+    m_goBtn->setStyleSheet(QStringLiteral(
+        "QPushButton { font-size:15px; font-weight:bold; }"));
     m_cancelBtn = new QPushButton(lang("取消", "Cancel"), this);
     m_cancelBtn->setVisible(false);
     goRow->addWidget(m_goBtn, 3);
     goRow->addWidget(m_cancelBtn, 1);
-    lay->addLayout(goRow);
+    gg->addLayout(goRow);
     m_progressLabel = new QLabel(this);
     m_progressLabel->setStyleSheet(QStringLiteral("color:#666;"));
-    lay->addWidget(m_progressLabel);
-
-    // ---- 结果区 ----
-    auto *grpResult = new QGroupBox(lang("结果", "Result"), this);
-    auto *gr = new QVBoxLayout(grpResult);
+    gg->addWidget(m_progressLabel);
+    // 结果（GO 完成后出现）
     m_resultLabel = new QLabel(lang(
-        "点击上方「自动校时」，自动识别画面时间并校准。",
-        "Click \"Auto calibrate\" above."), this);
+        "（点击上方 GO 开始）", "(click GO above to start)"), this);
     m_resultLabel->setWordWrap(true);
     m_resultLabel->setStyleSheet(QStringLiteral("font-weight:bold;"));
-    gr->addWidget(m_resultLabel);
+    gg->addWidget(m_resultLabel);
     auto *rr = new QHBoxLayout();
     m_detailsBtn = new QPushButton(lang("查看细节 ▸", "Details ▸"), this);
     m_detailsBtn->setEnabled(false);
@@ -142,9 +141,8 @@ void TimeSettingsDialog::buildUi()
     rr->addWidget(m_detailsBtn);
     rr->addStretch(1);
     rr->addWidget(m_useBtn);
-    gr->addLayout(rr);
-
-    // 细节折叠容器（取样点表/警告/漂移开关）
+    gg->addLayout(rr);
+    // 细节折叠容器
     m_detailsBox = new QWidget(this);
     auto *gd = new QVBoxLayout(m_detailsBox);
     gd->setContentsMargins(0, 0, 0, 0);
@@ -170,42 +168,57 @@ void TimeSettingsDialog::buildUi()
                                         "Ignore clock drift (offset only)"), this);
     gd->addWidget(m_noDriftCheck);
     m_detailsBox->hide();
-    gr->addWidget(m_detailsBox);
-    lay->addWidget(grpResult);
+    gg->addWidget(m_detailsBox);
+    lay->addWidget(grpGo);
 
-    // ---- 高级区（折叠，默认收起）----
-    auto *grpMore = new QGroupBox(lang("高级（点击展开）", "Advanced (expand)"), this);
+    // ---- 第 2 步：对真实时间（北京时间，可选）----
+    auto *grpTruth = new QGroupBox(lang("第 2 步 · 对真实时间（可选）",
+                                        "Step 2 · Align to real time (optional)"), this);
+    auto *gt = new QVBoxLayout(grpTruth);
+    auto *truthExplain = new QLabel(lang(
+        "监控画面里的时间可能整体慢/快于真实北京时间（如监控主机从未对时）。\n"
+        "第 1 步解决「视频进度 ↔ 画面时间」，这一步解决「画面时间 ↔ 真实时间」。\n"
+        "做法：暂停画面读当前显示时间（或拍照同时拍到手机时间与画面时间），"
+        "把真实北京时间填到下方，软件自动算出偏移并应用。",
+        "The on-screen clock may be offset from real Beijing time (e.g. recorder "
+        "never synced). Step 1 maps playback↔on-screen time; this step maps "
+        "on-screen↔real time. Pause and read the on-screen time (or photograph "
+        "phone + screen together), enter the real Beijing time below."), this);
+    truthExplain->setWordWrap(true);
+    truthExplain->setStyleSheet(QStringLiteral("color:#666;"));
+    gt->addWidget(truthExplain);
+    auto *grid = new QGridLayout();
+    m_monitorTimeLabel = new QLabel(this);
+    grid->addWidget(new QLabel(lang("画面上的时间（自动读取）：", "On-screen time (auto): "), this), 0, 0);
+    grid->addWidget(m_monitorTimeLabel, 0, 1);
+    grid->addWidget(new QLabel(lang("真实北京时间：", "Actual Beijing time: "), this), 1, 0);
+    m_beijingEdit = new QDateTimeEdit(QDateTime::currentDateTime(), this);
+    m_beijingEdit->setDisplayFormat(QStringLiteral("yyyy-MM-dd HH:mm:ss"));
+    m_beijingEdit->setCalendarPopup(true);
+    grid->addWidget(m_beijingEdit, 1, 1);
+    m_truthPreviewLabel = new QLabel(this);
+    m_truthPreviewLabel->setStyleSheet(QStringLiteral("font-weight:bold;"));
+    grid->addWidget(m_truthPreviewLabel, 2, 1);
+    m_truthNoteEdit = new QLineEdit(this);
+    m_truthNoteEdit->setPlaceholderText(
+        lang("说明（如：与指挥中心对时），留档用", "Note (e.g. synced with HQ), for record"));
+    grid->addWidget(m_truthNoteEdit, 3, 0, 1, 2);
+    m_adoptTruthBtn = new QPushButton(lang("使用此偏移", "Use this offset"), this);
+    m_clearTruthBtn = new QPushButton(lang("清除偏移", "Clear"), this);
+    grid->addWidget(m_adoptTruthBtn, 4, 0);
+    grid->addWidget(m_clearTruthBtn, 4, 1);
+    gt->addLayout(grid);
+    lay->addWidget(grpTruth);
+
+    // ---- 第 3 步：高级（折叠）----
+    auto *grpMore = new QGroupBox(lang("第 3 步 · 高级（点击展开）",
+                                       "Step 3 · Advanced (expand)"), this);
     grpMore->setCheckable(true);
     grpMore->setChecked(false);
     auto *gm = new QVBoxLayout(grpMore);
     m_advancedBox = new QWidget(this);
     auto *ga = new QVBoxLayout(m_advancedBox);
     ga->setContentsMargins(0, 0, 0, 0);
-
-    // 对真实北京时间
-    auto *gt = new QGridLayout();
-    m_monitorTimeLabel = new QLabel(this);
-    gt->addWidget(new QLabel(lang("当前位置画面上的时间：", "On-screen time here: "), this), 0, 0);
-    gt->addWidget(m_monitorTimeLabel, 0, 1);
-    gt->addWidget(new QLabel(lang("真实北京时间：", "Actual Beijing time: "), this), 1, 0);
-    m_beijingEdit = new QDateTimeEdit(QDateTime::currentDateTime(), this);
-    m_beijingEdit->setDisplayFormat(QStringLiteral("yyyy-MM-dd HH:mm:ss"));
-    m_beijingEdit->setCalendarPopup(true);
-    gt->addWidget(m_beijingEdit, 1, 1);
-    m_truthPreviewLabel = new QLabel(this);
-    m_truthPreviewLabel->setStyleSheet(QStringLiteral("font-weight:bold;"));
-    gt->addWidget(m_truthPreviewLabel, 2, 1);
-    m_truthNoteEdit = new QLineEdit(this);
-    m_truthNoteEdit->setPlaceholderText(
-        lang("说明（如：与指挥中心对时），留档用", "Note (e.g. synced with HQ), for record"));
-    gt->addWidget(m_truthNoteEdit, 3, 0, 1, 2);
-    m_adoptTruthBtn = new QPushButton(lang("使用此偏移", "Use this offset"), this);
-    m_clearTruthBtn = new QPushButton(lang("清除偏移", "Clear"), this);
-    gt->addWidget(m_adoptTruthBtn, 4, 0);
-    gt->addWidget(m_clearTruthBtn, 4, 1);
-    auto *gTruth = new QGroupBox(lang("对真实北京时间", "Align to Beijing time"), this);
-    gTruth->setLayout(gt);
-    ga->addWidget(gTruth);
 
     // 手动输入
     auto *gManual = new QGroupBox(lang("手动输入画面时间", "Manual on-screen time"), this);
@@ -236,9 +249,9 @@ void TimeSettingsDialog::buildUi()
     m_reconForceBtn = new QPushButton(lang("强制变速重建", "Force reconstruction"), this);
     m_reconForceBtn->setToolTip(lang(
         "对疑似抽帧/变速文件做全片密集取样重建时间映射（耗时数分钟）。"
-        "通常「自动校时」会自动判断并执行，此按钮供手动触发。",
+        "通常「GO 自动校时」会自动判断并执行，此按钮供手动触发。",
         "Dense sampling over the whole clip to rebuild the time map for "
-        "variable-rate files (minutes). Auto-calibrate usually handles this."));
+        "variable-rate files (minutes). GO usually handles this automatically."));
     rrow->addWidget(m_reconForceBtn);
     rrow->addStretch(1);
     grec->addLayout(rrow);
@@ -262,8 +275,10 @@ void TimeSettingsDialog::buildUi()
     lay->addWidget(grpMore);
     connect(grpMore, &QGroupBox::toggled, this, [this, grpMore](bool on) {
         m_advancedBox->setVisible(on);
-        grpMore->setTitle(lang(on ? "高级（点击收起）" : "高级（点击展开）",
-                               on ? "Advanced (collapse)" : "Advanced (expand)"));
+        grpMore->setTitle(lang(on ? "第 3 步 · 高级（点击收起）"
+                                  : "第 3 步 · 高级（点击展开）",
+                               on ? "Step 3 · Advanced (collapse)"
+                                  : "Step 3 · Advanced (expand)"));
     });
 
     // ---- 底部 ----
@@ -292,6 +307,42 @@ void TimeSettingsDialog::buildUi()
     connect(m_clearTruthBtn, &QPushButton::clicked, this, &TimeSettingsDialog::onClearTruth);
     connect(m_noDriftCheck, &QCheckBox::toggled,
             this, &TimeSettingsDialog::onNoDriftCorrectionToggled);
+}
+
+QWidget *TimeSettingsDialog::buildUsageBanner()
+{
+    auto *banner = new QFrame(this);
+    banner->setStyleSheet(QStringLiteral(
+        "QFrame { background:#f4f7fb; border:1px solid #c8d4e4; border-radius:8px; }"
+        "QLabel { border:none; background:transparent; }"));
+    auto *lay = new QVBoxLayout(banner);
+    lay->setContentsMargins(12, 8, 12, 8);
+    lay->setSpacing(4);
+    auto *title = new QLabel(lang("用法", "Usage"), banner);
+    title->setStyleSheet(QStringLiteral("font-weight:bold;"));
+    lay->addWidget(title);
+    auto *desc = new QLabel(
+        lang("点下方 GO → 自动识别画面时间 → 自动应用\n"
+             "│\n"
+             "│ GO 会自动判断：\n"
+             "│ - 正常录像 → 自动三点识别（画面时间基准 + 时钟快慢）\n"
+             "│ - 抽帧/变速文件 → 自动重建（按画面时间恢复整片映射，需数分钟）\n"
+             "│ - 完成后自动应用，图表时间轴立即变为画面时间\n"
+             "│\n"
+             "│ 画面时间与真实时间对不上（如监控钟慢）？用第 2 步对真实时间。",
+             "Click GO below → auto-read on-screen time → auto-applied\n"
+             "│\n"
+             "│ GO decides automatically:\n"
+             "│ - normal recording → 3-point OCR (time base + clock drift)\n"
+             "│ - variable-rate / sampled file → reconstruction from frames (minutes)\n"
+             "│ - applied automatically; chart axis becomes on-screen time\n"
+             "│\n"
+             "│ On-screen time differs from real time? Use Step 2."),
+        banner);
+    desc->setWordWrap(true);
+    desc->setStyleSheet(QStringLiteral("color:#555;"));
+    lay->addWidget(desc);
+    return banner;
 }
 
 // ---------------------------------------------------------------------------

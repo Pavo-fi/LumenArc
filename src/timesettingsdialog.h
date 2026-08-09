@@ -79,6 +79,7 @@ private slots:
 
 private:
     void buildUi();
+    QWidget *buildUsageBanner();   ///< 顶部用法说明（参考拼接窗口格式横幅）
     void refreshWorkingSummary();
     void refitFromTable();
     void refitSummaryRefresh();
