@@ -1,9 +1,9 @@
 /**
  * @file timesettingsdialog.cpp
- * @brief 校时窗口实现（v1.2.0）
+ * @brief 校时窗口实现：GO 一键自动校时 + 高级折叠区（v1.2.1 重构）
  * @author Huang Jingyun, Liu xinghua, Huang Wenhua
- * @date 2026-08-05
- * @version 1.0
+ * @date 2026-08-09
+ * @version 2.0
  *
  * Copyright 2026 Huang Jingyun/Liu xinghua/Huang Wenhua. All rights reserved.
  * Licensed under the Apache License, Version 2.0
@@ -55,7 +55,7 @@ TimeSettingsDialog::TimeSettingsDialog(const QString &videoPath,
     , m_service(service)
 {
     setWindowTitle(lang("视频校时", "Time Calibration"));
-    setMinimumWidth(720);
+    setMinimumWidth(780);
     setWindowFlag(Qt::Window, true);   // 非模态：可最小化/关闭，主窗口照常操作
     buildUi();
     refreshWorkingSummary();
@@ -73,22 +73,8 @@ TimeSettingsDialog::TimeSettingsDialog(const QString &videoPath,
                 this, &TimeSettingsDialog::onServiceFailed);
         connect(m_service, &CalibrationService::absStartReady,
                 this, &TimeSettingsDialog::onAbsStartReady);
-        // absStart 候选探测（Q-3：仅预填）
+        // 录像机自带时间探测（不阻塞，结果放高级区）
         m_service->probeAbsStart(videoPath);
-        // v1.2.1 秒级预检：自动推荐合适方式（正常→① 自动；变速→③ 重建）
-        if (m_service->isRunning()) {
-            // 已有任务（识别/重建/预检）进行中：按钮可用，进度由状态栏展示
-            m_quickLabel->setText(lang(
-                "已有校时任务进行中，进度见主窗口状态栏。",
-                "A calibration task is running; see the status bar."));
-            m_runBtn->setEnabled(true);
-            m_reconBtn->setEnabled(true);
-        } else {
-            m_quickLabel->setText(lang("正在快速检查文件…", "Quick-checking file…"));
-            m_runBtn->setEnabled(false);
-            m_reconBtn->setEnabled(false);
-            m_service->runQuickCheck(videoPath, m_durationMs);
-        }
     }
     onTruthInputChanged();
 }
@@ -110,12 +96,6 @@ void TimeSettingsDialog::buildUi()
     m_workingSummary->setStyleSheet(QStringLiteral("color:#8a8;font-weight:bold;"));
     lay->addWidget(m_workingSummary);
 
-    // v1.2.1 秒级预检推荐条
-    m_quickLabel = new QLabel(this);
-    m_quickLabel->setWordWrap(true);
-    m_quickLabel->setStyleSheet(QStringLiteral("color:#4a7ab5;"));
-    lay->addWidget(m_quickLabel);
-
     if (!m_sidecarWarning.isEmpty()) {
         m_sidecarWarnLabel = new QLabel(
             lang("⚠ 此拼接文件段间存在时间缺口/重叠，首段之后的墙钟可能不准（详见报告）",
@@ -126,30 +106,45 @@ void TimeSettingsDialog::buildUi()
         lay->addWidget(m_sidecarWarnLabel);
     }
 
-    // ---- ① 自动校时（推荐）----
-    auto *grpAuto = new QGroupBox(lang("① 自动校时（推荐）", "① Auto calibration (recommended)"), this);
-    auto *ga = new QVBoxLayout(grpAuto);
-    auto *row1 = new QHBoxLayout();
-    m_runBtn = new QPushButton(lang("开始自动识别", "Run auto OCR"), this);
-    m_runBtn->setToolTip(lang(
-        "自动在开头/当前位置/结尾三处读取画面上的时间，"
-        "算出时间基准和画面时钟快慢。",
-        "Reads on-screen time at head/current/tail to establish the time base "
-        "and camera clock drift."));
+    // ---- GO 主按钮（一键自动校时）----
+    auto *goRow = new QHBoxLayout();
+    m_goBtn = new QPushButton(lang("🔍 自动校时", "🔍 Auto calibrate"), this);
+    m_goBtn->setMinimumHeight(40);
+    m_goBtn->setToolTip(lang(
+        "一键完成：自动检查文件 → 正常文件自动识别 / 变速文件自动重建，"
+        "全部自动判断，无需选择方式。",
+        "One click: quick check → auto OCR (normal) or reconstruction "
+        "(variable-rate). No manual choice needed."));
+    m_cancelBtn = new QPushButton(lang("取消", "Cancel"), this);
+    m_cancelBtn->setVisible(false);
+    goRow->addWidget(m_goBtn, 3);
+    goRow->addWidget(m_cancelBtn, 1);
+    lay->addLayout(goRow);
     m_progressLabel = new QLabel(this);
+    m_progressLabel->setStyleSheet(QStringLiteral("color:#666;"));
+    lay->addWidget(m_progressLabel);
+
+    // ---- 结果区 ----
+    auto *grpResult = new QGroupBox(lang("结果", "Result"), this);
+    auto *gr = new QVBoxLayout(grpResult);
+    m_resultLabel = new QLabel(lang(
+        "点击上方「自动校时」，自动识别画面时间并校准。",
+        "Click \"Auto calibrate\" above."), this);
+    m_resultLabel->setWordWrap(true);
+    m_resultLabel->setStyleSheet(QStringLiteral("font-weight:bold;"));
+    gr->addWidget(m_resultLabel);
+    auto *rr = new QHBoxLayout();
     m_detailsBtn = new QPushButton(lang("查看细节 ▸", "Details ▸"), this);
-    m_detailsBtn->setCheckable(false);
-    row1->addWidget(m_runBtn);
-    row1->addWidget(m_progressLabel, 1);
-    row1->addWidget(m_detailsBtn);
-    ga->addLayout(row1);
+    m_detailsBtn->setEnabled(false);
+    m_useBtn = new QPushButton(lang("✅ 使用此结果", "✅ Use this result"), this);
+    m_useBtn->setEnabled(false);
+    m_useBtn->setMinimumWidth(140);
+    rr->addWidget(m_detailsBtn);
+    rr->addStretch(1);
+    rr->addWidget(m_useBtn);
+    gr->addLayout(rr);
 
-    m_fitLabel = new QLabel(this);   // 一句话结果（始终可见）
-    m_fitLabel->setWordWrap(true);
-    m_fitLabel->setStyleSheet(QStringLiteral("font-weight:bold;"));
-    ga->addWidget(m_fitLabel);
-
-    // 详情折叠容器（默认收起：取样点表/警告/漂移开关/使用按钮）
+    // 细节折叠容器（取样点表/警告/漂移开关）
     m_detailsBox = new QWidget(this);
     auto *gd = new QVBoxLayout(m_detailsBox);
     gd->setContentsMargins(0, 0, 0, 0);
@@ -171,67 +166,85 @@ void TimeSettingsDialog::buildUi()
     m_fitWarningLabel->setWordWrap(true);
     m_fitWarningLabel->setStyleSheet(QStringLiteral("color:#e8a33d;"));
     gd->addWidget(m_fitWarningLabel);
-    auto *row2 = new QHBoxLayout();
-    m_adoptFitBtn = new QPushButton(lang("使用此结果", "Use this result"), this);
-    m_adoptFitBtn->setEnabled(false);
     m_noDriftCheck = new QCheckBox(lang("不修正时钟快慢（仅对基准）",
                                         "Ignore clock drift (offset only)"), this);
-    row2->addWidget(m_adoptFitBtn);
-    row2->addWidget(m_noDriftCheck);
-    row2->addStretch(1);
-    gd->addLayout(row2);
+    gd->addWidget(m_noDriftCheck);
     m_detailsBox->hide();
-    ga->addWidget(m_detailsBox);
-    lay->addWidget(grpAuto);
+    gr->addWidget(m_detailsBox);
+    lay->addWidget(grpResult);
 
-    // ---- ② 对真实时间（北京时间）----
-    auto *grpTruth = new QGroupBox(lang("② 对真实时间（北京时间）",
-                                        "② Align to real time (Beijing)"), this);
-    auto *gt = new QGridLayout(grpTruth);
-    m_monitorTimeLabel = new QLabel(this);
-    gt->addWidget(new QLabel(lang("当前位置画面上的时间：", "On-screen time here: "), this), 0, 0);
-    gt->addWidget(m_monitorTimeLabel, 0, 1, 1, 2);
-    m_beijingEdit = new QDateTimeEdit(QDateTime::currentDateTime(), this);
-    m_beijingEdit->setDisplayFormat(QStringLiteral("yyyy-MM-dd HH:mm:ss"));
-    m_beijingEdit->setCalendarPopup(true);
-    gt->addWidget(new QLabel(lang("真实北京时间：", "Actual Beijing time: "), this), 1, 0);
-    gt->addWidget(m_beijingEdit, 1, 1, 1, 2);
-    m_truthPreviewLabel = new QLabel(this);
-    m_truthPreviewLabel->setStyleSheet(QStringLiteral("font-weight:bold;"));
-    gt->addWidget(m_truthPreviewLabel, 2, 1, 1, 2);
-    m_truthNoteEdit = new QLineEdit(this);
-    m_truthNoteEdit->setPlaceholderText(
-        lang("说明（如：与指挥中心对时），留档用", "Note (e.g. synced with HQ), for record"));
-    gt->addWidget(m_truthNoteEdit, 3, 1, 1, 2);
-    m_adoptTruthBtn = new QPushButton(lang("使用此偏移", "Use this offset"), this);
-    m_clearTruthBtn = new QPushButton(lang("清除偏移", "Clear"), this);
-    gt->addWidget(m_adoptTruthBtn, 4, 1);
-    gt->addWidget(m_clearTruthBtn, 4, 2);
-    lay->addWidget(grpTruth);
-
-    // ---- ③ 更多方式（折叠，默认收起）----
-    auto *grpMore = new QGroupBox(lang("③ 更多方式 ▸", "③ More options ▸"), this);
+    // ---- 高级区（折叠，默认收起）----
+    auto *grpMore = new QGroupBox(lang("高级（点击展开）", "Advanced (expand)"), this);
     grpMore->setCheckable(true);
     grpMore->setChecked(false);
     auto *gm = new QVBoxLayout(grpMore);
+    m_advancedBox = new QWidget(this);
+    auto *ga = new QVBoxLayout(m_advancedBox);
+    ga->setContentsMargins(0, 0, 0, 0);
 
-    // 3a 时间重建（变速/抽帧文件）
-    auto *grpRecon = new QGroupBox(lang("变速文件时间重建（抽帧录像专用）",
-                                        "Variable-rate reconstruction (sampled recordings)"), this);
-    auto *gr = new QVBoxLayout(grpRecon);
-    auto *rr1 = new QHBoxLayout();
-    m_reconBtn = new QPushButton(lang("开始时间重建", "Run reconstruction"), this);
-    m_reconBtn->setToolTip(lang(
-        "对疑似变速/抽帧文件做全片密集取样，按画面上的时间重建时间映射表"
-        "（耗时数分钟，可最小化窗口继续操作）。",
-        "Dense sampling over the whole clip; rebuilds the time map from "
-        "on-screen time (takes minutes; window can be minimized)."));
-    rr1->addWidget(m_reconBtn);
-    rr1->addStretch(1);
-    gr->addLayout(rr1);
+    // 对真实北京时间
+    auto *gt = new QGridLayout();
+    m_monitorTimeLabel = new QLabel(this);
+    gt->addWidget(new QLabel(lang("当前位置画面上的时间：", "On-screen time here: "), this), 0, 0);
+    gt->addWidget(m_monitorTimeLabel, 0, 1);
+    gt->addWidget(new QLabel(lang("真实北京时间：", "Actual Beijing time: "), this), 1, 0);
+    m_beijingEdit = new QDateTimeEdit(QDateTime::currentDateTime(), this);
+    m_beijingEdit->setDisplayFormat(QStringLiteral("yyyy-MM-dd HH:mm:ss"));
+    m_beijingEdit->setCalendarPopup(true);
+    gt->addWidget(m_beijingEdit, 1, 1);
+    m_truthPreviewLabel = new QLabel(this);
+    m_truthPreviewLabel->setStyleSheet(QStringLiteral("font-weight:bold;"));
+    gt->addWidget(m_truthPreviewLabel, 2, 1);
+    m_truthNoteEdit = new QLineEdit(this);
+    m_truthNoteEdit->setPlaceholderText(
+        lang("说明（如：与指挥中心对时），留档用", "Note (e.g. synced with HQ), for record"));
+    gt->addWidget(m_truthNoteEdit, 3, 0, 1, 2);
+    m_adoptTruthBtn = new QPushButton(lang("使用此偏移", "Use this offset"), this);
+    m_clearTruthBtn = new QPushButton(lang("清除偏移", "Clear"), this);
+    gt->addWidget(m_adoptTruthBtn, 4, 0);
+    gt->addWidget(m_clearTruthBtn, 4, 1);
+    auto *gTruth = new QGroupBox(lang("对真实北京时间", "Align to Beijing time"), this);
+    gTruth->setLayout(gt);
+    ga->addWidget(gTruth);
+
+    // 手动输入
+    auto *gManual = new QGroupBox(lang("手动输入画面时间", "Manual on-screen time"), this);
+    auto *gman = new QHBoxLayout(gManual);
+    m_manualEdit = new QDateTimeEdit(QDateTime::currentDateTime(), this);
+    m_manualEdit->setDisplayFormat(QStringLiteral("yyyy-MM-dd HH:mm:ss"));
+    m_manualEdit->setCalendarPopup(true);
+    m_adoptManualBtn = new QPushButton(lang("使用", "Use"), this);
+    gman->addWidget(new QLabel(lang("当前播放位置画面显示：", "On-screen time here: "), this));
+    gman->addWidget(m_manualEdit, 1);
+    gman->addWidget(m_adoptManualBtn);
+    ga->addWidget(gManual);
+
+    // 录像机自带时间
+    auto *gAbs = new QGroupBox(lang("录像机自带时间（免识别）", "Recorder time (no OCR)"), this);
+    auto *gab = new QHBoxLayout(gAbs);
+    m_absLabel = new QLabel(lang("探测中…", "Probing…"), this);
+    m_adoptAbsBtn = new QPushButton(lang("使用", "Use"), this);
+    m_adoptAbsBtn->setEnabled(false);
+    gab->addWidget(m_absLabel, 1);
+    gab->addWidget(m_adoptAbsBtn);
+    ga->addWidget(gAbs);
+
+    // 变速文件重建（强制入口）
+    auto *gRecon = new QGroupBox(lang("变速文件时间重建", "Variable-rate reconstruction"), this);
+    auto *grec = new QVBoxLayout(gRecon);
+    auto *rrow = new QHBoxLayout();
+    m_reconForceBtn = new QPushButton(lang("强制变速重建", "Force reconstruction"), this);
+    m_reconForceBtn->setToolTip(lang(
+        "对疑似抽帧/变速文件做全片密集取样重建时间映射（耗时数分钟）。"
+        "通常「自动校时」会自动判断并执行，此按钮供手动触发。",
+        "Dense sampling over the whole clip to rebuild the time map for "
+        "variable-rate files (minutes). Auto-calibrate usually handles this."));
+    rrow->addWidget(m_reconForceBtn);
+    rrow->addStretch(1);
+    grec->addLayout(rrow);
     m_reconSummaryLabel = new QLabel(lang("未运行。", "Not run yet."), this);
     m_reconSummaryLabel->setWordWrap(true);
-    gr->addWidget(m_reconSummaryLabel);
+    grec->addWidget(m_reconSummaryLabel);
     m_segmentTable = new QTableWidget(0, 5, this);
     m_segmentTable->setHorizontalHeaderLabels(
         {lang("段", "Seg"), lang("播放范围", "Range"),
@@ -241,45 +254,23 @@ void TimeSettingsDialog::buildUi()
     m_segmentTable->verticalHeader()->setVisible(false);
     m_segmentTable->setMinimumHeight(90);
     m_segmentTable->setMaximumHeight(160);
-    gr->addWidget(m_segmentTable);
-    auto *rr2 = new QHBoxLayout();
-    m_adoptReconBtn = new QPushButton(lang("使用重建结果", "Use reconstruction"), this);
-    m_adoptReconBtn->setEnabled(false);
-    rr2->addWidget(m_adoptReconBtn);
-    rr2->addStretch(1);
-    gr->addLayout(rr2);
-    gm->addWidget(grpRecon);
+    grec->addWidget(m_segmentTable);
+    ga->addWidget(gRecon);
 
-    // 3b 录像机自带时间
-    auto *grpAbs = new QGroupBox(lang("录像机自带时间（免识别）",
-                                      "Recorder-provided time (no OCR)"), this);
-    auto *gb = new QHBoxLayout(grpAbs);
-    m_absLabel = new QLabel(lang("探测中…", "Probing…"), this);
-    m_adoptAbsBtn = new QPushButton(lang("使用", "Use"), this);
-    m_adoptAbsBtn->setEnabled(false);
-    gb->addWidget(m_absLabel, 1);
-    gb->addWidget(m_adoptAbsBtn);
-    gm->addWidget(grpAbs);
-
-    // 3c 手动输入
-    auto *grpManual = new QGroupBox(lang("手动输入（当前播放位置的画面时间）",
-                                         "Manual (on-screen time at current position)"), this);
-    auto *gman = new QHBoxLayout(grpManual);
-    m_manualEdit = new QDateTimeEdit(QDateTime::currentDateTime(), this);
-    m_manualEdit->setDisplayFormat(QStringLiteral("yyyy-MM-dd HH:mm:ss"));
-    m_manualEdit->setCalendarPopup(true);
-    m_adoptManualBtn = new QPushButton(lang("使用", "Use"), this);
-    gman->addWidget(new QLabel(lang("画面显示时间：", "On-screen time: "), this));
-    gman->addWidget(m_manualEdit, 1);
-    gman->addWidget(m_adoptManualBtn);
-    gm->addWidget(grpManual);
+    gm->addWidget(m_advancedBox);
+    m_advancedBox->hide();
     lay->addWidget(grpMore);
+    connect(grpMore, &QGroupBox::toggled, this, [this, grpMore](bool on) {
+        m_advancedBox->setVisible(on);
+        grpMore->setTitle(lang(on ? "高级（点击收起）" : "高级（点击展开）",
+                               on ? "Advanced (collapse)" : "Advanced (expand)"));
+    });
 
     // ---- 底部 ----
     auto *hint = new QLabel(lang(
         "提示：识别/重建在后台进行，可最小化窗口继续其他操作；"
         "关闭窗口不取消任务，重新打开可查看进度与结果。",
-        "Tip: recognition runs in background; minimize to keep working. "
+        "Tip: tasks run in background; minimize to keep working. "
         "Closing keeps the task running; reopen to see progress/result."), this);
     hint->setWordWrap(true);
     hint->setStyleSheet(QStringLiteral("color:#888;"));
@@ -288,11 +279,11 @@ void TimeSettingsDialog::buildUi()
     connect(bbox, &QDialogButtonBox::rejected, this, &QDialog::reject);
     lay->addWidget(bbox);
 
-    connect(m_runBtn, &QPushButton::clicked, this, &TimeSettingsDialog::onRunThreePoint);
+    connect(m_goBtn, &QPushButton::clicked, this, &TimeSettingsDialog::onRunGo);
+    connect(m_cancelBtn, &QPushButton::clicked, this, &TimeSettingsDialog::onCancelGo);
     connect(m_detailsBtn, &QPushButton::clicked, this, &TimeSettingsDialog::onToggleDetails);
-    connect(m_reconBtn, &QPushButton::clicked, this, &TimeSettingsDialog::onRunRecon);
-    connect(m_adoptFitBtn, &QPushButton::clicked, this, &TimeSettingsDialog::onAdoptFit);
-    connect(m_adoptReconBtn, &QPushButton::clicked, this, &TimeSettingsDialog::onAdoptRecon);
+    connect(m_useBtn, &QPushButton::clicked, this, &TimeSettingsDialog::onUseResult);
+    connect(m_reconForceBtn, &QPushButton::clicked, this, &TimeSettingsDialog::onRunReconForce);
     connect(m_adoptAbsBtn, &QPushButton::clicked, this, &TimeSettingsDialog::onAdoptAbsStart);
     connect(m_adoptManualBtn, &QPushButton::clicked, this, &TimeSettingsDialog::onAdoptManual);
     connect(m_beijingEdit, &QDateTimeEdit::dateTimeChanged,
@@ -332,17 +323,17 @@ void TimeSettingsDialog::refreshWorkingSummary()
         QString src;
         switch (m_working.source) {
         case TimeCalibration::Source::Ocr:       src = lang("画面识别", "OCR"); break;
-        case TimeCalibration::Source::AbsStart:  src = lang("流内录制时间", "In-stream"); break;
+        case TimeCalibration::Source::AbsStart:  src = lang("录像机自带", "In-stream"); break;
         case TimeCalibration::Source::Manual:    src = lang("手动", "Manual"); break;
         case TimeCalibration::Source::Inherited: src = lang("前处理继承", "Inherited"); break;
         default: src = QStringLiteral("—"); break;
         }
-        QString text = lang("当前状态：已校时（来源：%1）流内 0 点 = %2",
-                            "Calibrated (source: %1); stream 0 = %2")
+        QString text = lang("当前状态：已校时（来源：%1）画面时间基准 = %2",
+                            "Calibrated (source: %1); on-screen base = %2")
             .arg(src).arg(m_working.dateKnown ? fmtWall(m_working.offsetMs)
                                               : fmtStreamMs(m_working.offsetMs));
         if (m_working.rateApplied)
-            text += lang("；漂移修正 %1 秒/天", "; drift %1 s/day")
+            text += lang("；时钟每天快/慢 %1 秒", "; clock drift %1 s/day")
                 .arg(m_working.driftSecondsPerDay(), 0, 'f', 1);
         if (m_working.piecewiseMode())
             text += lang("；分段重建 %1 段（变速）", "; piecewise %1 segs (variable-rate)")
@@ -352,135 +343,46 @@ void TimeSettingsDialog::refreshWorkingSummary()
                 .arg(fmtOffset(m_working.truthOffsetMs));
         m_workingSummary->setText(text);
     }
-    // 北京时间校验区的监控时间随工作副本刷新
+    // 北京时间对齐区显示当前播放位置换算出的画面时间
     if (m_working.isValid() && m_working.dateKnown)
         m_monitorTimeLabel->setText(fmtWall(m_working.wallMsOf(m_currentPosMs)));
     else
-        m_monitorTimeLabel->setText(lang("（需先完成①/②/③校时）",
-                                         "(calibrate via ①/②/③ first)"));
+        m_monitorTimeLabel->setText(lang("（需先完成自动校时）",
+                                         "(run auto calibrate first)"));
     onTruthInputChanged();
 }
 
 // ---------------------------------------------------------------------------
-void TimeSettingsDialog::onRunThreePoint()
+// GO 状态机：快速检查 → 自动路由（正常→三点识别 / 变速→时间重建）
+// ---------------------------------------------------------------------------
+void TimeSettingsDialog::onRunGo()
 {
     if (!m_service)
         return;
-    m_taskStarted = true;
-    setBusy(true, lang("取样识别中…（首/当前/尾三点，可能需要几十秒）",
-                       "Sampling 3 points… (may take tens of seconds)"));
-    m_adoptFitBtn->setEnabled(false);
-    m_service->runThreePoint(m_videoPath, m_currentPosMs, m_durationMs);
+    if (m_goStage == GoStage::Quick || m_goStage == GoStage::Ocr
+        || m_goStage == GoStage::Recon)
+        return;
+    m_goStage = GoStage::Quick;
+    m_useBtn->setEnabled(false);
+    m_detailsBtn->setEnabled(false);
+    m_detailsBox->hide();
+    m_detailsVisible = false;
+    m_detailsBtn->setText(lang("查看细节 ▸", "Details ▸"));
+    m_resultLabel->setText(lang(
+        "快速检查中…（读取首尾画面时间，约 10 秒）",
+        "Quick-checking… (reading first/last on-screen time, ~10s)"));
+    setGoBusy(true, lang("快速检查中…", "Quick-checking…"));
+    m_service->runQuickCheck(m_videoPath, m_durationMs);
 }
 
-void TimeSettingsDialog::onRunRecon()
+void TimeSettingsDialog::onCancelGo()
 {
-    if (!m_service)
-        return;
-    m_taskStarted = true;
-    m_adoptReconBtn->setEnabled(false);
-    m_segmentTable->setRowCount(0);
-    m_reconSummaryLabel->setText(lang(
-        "重建中…（粗采样分段 + 边界加密，全程可能数分钟）",
-        "Reconstructing… (coarse sampling + boundary refinement, may take minutes)"));
-    setBusy(true, lang("时间重建中…", "Reconstructing…"));
-    m_service->runReconstruction(m_videoPath, m_durationMs);
-}
-
-void TimeSettingsDialog::onReconstructionReady(const QString &videoPath,
-                                               const TimeCalibration &proposed)
-{
-    if (videoPath != m_videoPath)
-        return;
-    setBusy(false);
-    m_reconResult = proposed;
-
-    if (!proposed.piecewiseMode()) {
-        // 正常录像：无分段，走仿射（与三点识别等效）
-        m_reconSummaryLabel->setText(lang(
-            "检测结果：正常录像（无变速边界，整体速率 %1）。可切换用 ① 三点识别查看拟合详情。",
-            "Result: normal recording (no rate boundaries, overall rate %1). "
-            "Use ① 3-point OCR for fit details.")
-                .arg(proposed.rate, 0, 'f', 4));
-        m_segmentTable->setRowCount(0);
-        return;
-    }
-
-    // 分段表
-    const auto &segs = proposed.piecewise.segments;
-    m_segmentTable->setRowCount(segs.size());
-    for (int i = 0; i < segs.size(); ++i) {
-        const auto &s = segs[i];
-        m_segmentTable->setItem(i, 0,
-            new QTableWidgetItem(QString::number(i + 1)));
-        const QString range = (i + 1 < segs.size())
-            ? QStringLiteral("%1 – %2")
-                  .arg(fmtStreamMs(s.streamStartMs))
-                  .arg(fmtStreamMs(segs[i + 1].streamStartMs))
-            : QStringLiteral("%1 – …").arg(fmtStreamMs(s.streamStartMs));
-        m_segmentTable->setItem(i, 1, new QTableWidgetItem(range));
-        m_segmentTable->setItem(i, 2,
-            new QTableWidgetItem(QString::number(s.rate, 'f', 3)));
-        m_segmentTable->setItem(i, 3,
-            new QTableWidgetItem(fmtWall(s.wallStartMs)));
-        m_segmentTable->setItem(i, 4,
-            new QTableWidgetItem(lang(
-                "按画面 OSD 重建", "rebuilt from OSD")));
-    }
-
-    QString summary = lang(
-        "检测到 %1 个变速边界（%2 段），疑似抽帧/变速导出，"
-        "已按画面 OSD 重建时间映射。",
-        "%1 rate boundaries (%2 segments) found: variable-rate file; "
-        "time map rebuilt from OSD.")
-        .arg(proposed.boundaryCount).arg(segs.size());
-    // v1.2.1：OCR 异常测点提示（错读点时间不可信，报告中须标注）
-    int suspicious = 0;
-    for (const auto &s : proposed.samples)
-        if (s.ocrSuspicious)
-            ++suspicious;
-    if (suspicious > 0) {
-        summary += lang(
-            " 检测到 %1 个 OCR 异常测点（⚠，已自动排除）："
-            "其 OSD 读数疑似错读，引用时须以证据帧为准。",
-            " %1 OCR-suspect samples (⚠, auto-excluded): readings may be "
-            "wrong; verify against evidence frames.")
-            .arg(suspicious);
-    }
-    if (proposed.audioKnown) {
-        summary += lang(
-            " 音频时长校验：%1（%2 分 vs OSD 跨度 %3 分）。",
-            " Audio check: %1 (%2 min vs OSD span %3 min).")
-            .arg(proposed.audioConsistent ? lang("吻合", "OK")
-                                          : lang("不吻合", "MISMATCH"))
-            .arg(proposed.totalWallSpanSec / 60.0, 0, 'f', 0);
-        // 上句里 audioKnown 分支的第二个参数复用同一跨度
-        if (!proposed.audioConsistent) {
-            summary += lang(
-                " 注意：OSD 跨度与音频时长不一致，边界可能漏检，建议复核。",
-                " OSD span differs from audio: boundaries may be missed, re-check.");
-        }
-    }
-    m_reconSummaryLabel->setText(summary);
-    m_adoptReconBtn->setEnabled(true);
-}
-
-void TimeSettingsDialog::onAdoptRecon()
-{
-    if (!m_reconResult.piecewiseMode())
-        return;
-    m_working = m_reconResult;
-    m_applied = true;
-    refreshWorkingSummary();
-    emit calibrationApplied(m_working);
-}
-
-void TimeSettingsDialog::onServiceProgress(const QString &stage)
-{
-    if (m_runBtn && !m_runBtn->isEnabled())
-        m_progressLabel->setText(stage);
-    // 进度同时转发主窗口状态栏（由 MainWindow 统一连 service，此处不再转发）
-    Q_UNUSED(stage)
+    if (m_service)
+        m_service->cancel();
+    m_goStage = GoStage::Idle;
+    setGoBusy(false, QString());
+    m_resultLabel->setText(lang("已取消。可重新点击「自动校时」。",
+                                "Cancelled. Click \"Auto calibrate\" to retry."));
 }
 
 void TimeSettingsDialog::onQuickCheckReady(const QString &videoPath,
@@ -489,28 +391,28 @@ void TimeSettingsDialog::onQuickCheckReady(const QString &videoPath,
 {
     if (videoPath != m_videoPath)
         return;
-    if (!suspicious) {
-        m_quickLabel->setText(lang(
-            "✅ 快速检查：文件时间正常。使用 ① 自动校时即可。",
-            "✅ Quick check: normal recording. Use ① auto calibration."));
-    } else {
-        m_quickLabel->setText(lang(
-            "⚠ 快速检查：画面时间与播放进度差异较大（约 %1 倍），"
-            "疑似抽帧/变速文件。请使用 ③ 更多方式 → 变速文件时间重建。",
-            "⚠ Quick check: on-screen time vs playback rate differs (~%1x); "
-            "likely a sampled/variable-rate file. Use ③ More → reconstruction.")
+    if (suspicious) {
+        // 疑似变速：自动进入时间重建
+        m_goStage = GoStage::Recon;
+        m_resultLabel->setText(lang(
+            "检测到疑似变速文件（画面时间约为播放进度的 %1 倍），"
+            "正在按画面时间重建…（需数分钟，可最小化窗口）",
+            "Variable-rate file detected (on-screen time ~%1x playback). "
+            "Reconstructing… (minutes; window can be minimized).")
                 .arg(overallRate, 0, 'f', 2));
+        m_reconSummaryLabel->setText(lang("重建中…", "Reconstructing…"));
+        m_segmentTable->setRowCount(0);
+        setGoBusy(true, lang("重建中…", "Reconstructing…"));
+        m_service->runReconstruction(m_videoPath, m_durationMs);
+    } else {
+        // 正常文件：自动进入三点识别
+        m_goStage = GoStage::Ocr;
+        m_resultLabel->setText(lang(
+            "文件时间正常。正在三点识别…（几十秒）",
+            "Normal recording. Running 3-point OCR… (tens of seconds)"));
+        setGoBusy(true, lang("识别中…", "Recognizing…"));
+        m_service->runThreePoint(m_videoPath, m_currentPosMs, m_durationMs);
     }
-    m_runBtn->setEnabled(true);
-    m_reconBtn->setEnabled(true);
-}
-
-void TimeSettingsDialog::onToggleDetails()
-{
-    m_detailsVisible = !m_detailsVisible;
-    m_detailsBox->setVisible(m_detailsVisible);
-    m_detailsBtn->setText(lang(m_detailsVisible ? "收起细节 ▾" : "查看细节 ▸",
-                               m_detailsVisible ? "Hide details ▾" : "Details ▸"));
 }
 
 void TimeSettingsDialog::onThreePointReady(const QString &videoPath,
@@ -518,10 +420,192 @@ void TimeSettingsDialog::onThreePointReady(const QString &videoPath,
 {
     if (videoPath != m_videoPath)
         return;
-    setBusy(false);
+    m_goStage = GoStage::Done;
+    setGoBusy(false, QString());
     m_fitResult = proposed;
+    fillSampleTable(proposed);
+    refitSummaryRefresh();
+}
 
-    // 填充测点表
+void TimeSettingsDialog::onReconstructionReady(const QString &videoPath,
+                                               const TimeCalibration &proposed)
+{
+    if (videoPath != m_videoPath)
+        return;
+    m_goStage = GoStage::Done;
+    setGoBusy(false, QString());
+    m_reconResult = proposed;
+    fillSampleTable(proposed);
+
+    if (!proposed.piecewiseMode()) {
+        // 预检误判或强制重建遇到正常文件：走仿射结果
+        m_resultLabel->setText(lang(
+            "结果：正常录像（无变速边界）。可用「自动校时」重新识别。",
+            "Result: normal recording (no rate boundaries). "
+            "Re-run \"Auto calibrate\" if needed."));
+        m_useBtn->setEnabled(true);
+        m_detailsBtn->setEnabled(true);
+        return;
+    }
+
+    fillSegmentTable(proposed);
+    int suspicious = 0;
+    for (const auto &s : proposed.samples)
+        if (s.ocrSuspicious)
+            ++suspicious;
+    QString summary = lang(
+        "检测到 %1 段变速（画面时间已按帧重建，精度 ±2 秒）。",
+        "%1 variable-rate segments found; time rebuilt from frames (±2s).")
+        .arg(proposed.piecewise.size());
+    if (suspicious > 0)
+        summary += lang(" %1 个异常测点已自动排除（⚠，见细节）。",
+                        " %1 OCR-suspect samples auto-excluded (⚠, see details).")
+                       .arg(suspicious);
+    if (proposed.audioKnown) {
+        summary += lang(" 音频校验：%1。",
+                        " Audio check: %1.")
+                       .arg(proposed.audioConsistent ? lang("吻合", "OK")
+                                                     : lang("不吻合", "MISMATCH"));
+    }
+    m_resultLabel->setText(summary);
+    m_reconSummaryLabel->setText(summary);
+    m_useBtn->setEnabled(true);
+    m_detailsBtn->setEnabled(true);
+}
+
+void TimeSettingsDialog::onUseResult()
+{
+    if (m_fitResult.isValid() && m_fitResult.source == TimeCalibration::Source::Ocr
+        && !m_fitResult.piecewiseMode()) {
+        if (m_noDriftCheck->isChecked())
+            m_fitResult.rateApplied = false;
+        m_working = m_fitResult;
+    } else if (m_reconResult.piecewiseMode()) {
+        m_working = m_reconResult;
+    } else {
+        return;
+    }
+    m_working.calibratedAtMs = QDateTime::currentMSecsSinceEpoch();
+    m_applied = true;
+    refreshWorkingSummary();
+    emit calibrationApplied(m_working);
+}
+
+void TimeSettingsDialog::onRunReconForce()
+{
+    if (!m_service)
+        return;
+    m_goStage = GoStage::Recon;
+    m_useBtn->setEnabled(false);
+    m_resultLabel->setText(lang(
+        "正在按画面时间重建…（需数分钟，可最小化窗口）",
+        "Reconstructing… (minutes; window can be minimized)."));
+    m_reconSummaryLabel->setText(lang("重建中…", "Reconstructing…"));
+    m_segmentTable->setRowCount(0);
+    setGoBusy(true, lang("重建中…", "Reconstructing…"));
+    m_service->runReconstruction(m_videoPath, m_durationMs);
+}
+
+void TimeSettingsDialog::onServiceProgress(const QString &stage)
+{
+    m_progressLabel->setText(stage);
+}
+
+void TimeSettingsDialog::onServiceFailed(const QString &videoPath,
+                                         const QString &error)
+{
+    if (videoPath != m_videoPath)
+        return;
+    if (m_goStage == GoStage::Quick || m_goStage == GoStage::Ocr
+        || m_goStage == GoStage::Recon) {
+        m_goStage = GoStage::Failed;
+        setGoBusy(false, QString());
+        m_resultLabel->setText(lang(
+            "失败：%1。可在「高级」中手动输入画面时间。",
+            "Failed: %1. Use Advanced → manual input.").arg(error));
+        return;
+    }
+    // 高级区强制重建失败
+    m_reconSummaryLabel->setText(lang("重建失败：%1。", "Reconstruction failed: %1.")
+                                     .arg(error));
+}
+
+void TimeSettingsDialog::onAbsStartReady(const QString &videoPath,
+                                         qint64 absStartEpochMs)
+{
+    if (videoPath != m_videoPath)
+        return;
+    m_absStartMs = absStartEpochMs;
+    if (absStartEpochMs > 0) {
+        m_absLabel->setText(lang("录像机记录：%1", "Recorder time: %1")
+                                .arg(fmtWall(absStartEpochMs)));
+        m_adoptAbsBtn->setEnabled(true);
+    } else {
+        m_absLabel->setText(lang("未检出（多数文件无此信息）",
+                                 "Not found (most files lack this)"));
+    }
+}
+
+void TimeSettingsDialog::onSampleItemChanged(QTableWidgetItem *item)
+{
+    Q_UNUSED(item)
+    if (!m_updatingTable && m_fitResult.isValid())
+        refitFromTable();
+}
+
+void TimeSettingsDialog::refitFromTable()
+{
+    if (m_updatingTable || m_fitResult.samples.isEmpty())
+        return;
+    m_updatingTable = true;
+    for (int i = 0; i < m_fitResult.samples.size()
+                    && i < m_sampleTable->rowCount(); ++i) {
+        auto *chk = m_sampleTable->item(i, 0);
+        m_fitResult.samples[i].used =
+            chk && chk->checkState() == Qt::Checked;
+    }
+    m_updatingTable = false;
+    refitSummaryRefresh();
+}
+
+void TimeSettingsDialog::onNoDriftCorrectionToggled(bool)
+{
+    if (m_fitResult.isValid())
+        refitSummaryRefresh();
+}
+
+void TimeSettingsDialog::refitSummaryRefresh()
+{
+    // 按勾选状态重拟合（野点剔除重拟合）后刷新一句话结果
+    const TimeCalibration::FitResult fr = TimeCalibration::fit(m_fitResult.samples);
+    m_fitResult.applyFit(fr);
+    QString text = fr.ok
+        ? lang("识别 %1 个取样点；画面时间基准 = %2",
+               "%1 samples; on-screen time base = %2")
+              .arg(fr.pointsUsed).arg(fmtWall(fr.offsetMs))
+        : lang("有效取样点不足", "Not enough samples");
+    if (fr.ok && fr.pointsUsed >= 2) {
+        text += lang("；时钟每天快/慢 %1 秒", "; clock drift %1 s/day")
+                    .arg(fr.driftSecondsPerDay(), 0, 'f', 1);
+    }
+    m_resultLabel->setText(text);
+    QString warn;
+    bool adoptable = fr.ok;
+    if (fr.warning == TimeCalibration::FitWarning::RateInsane) {
+        warn = lang("⚠ 识别速率异常（疑似误读），不予采用；可在高级区手动输入",
+                    "⚠ Insane fitted rate (likely misread); use manual input");
+        adoptable = false;
+    } else if (fr.warning == TimeCalibration::FitWarning::OutlierSuspected) {
+        warn = lang("⚠ 有取样点异常：可取消勾选该点，将自动重新计算",
+                    "⚠ Outlier suspected: uncheck the row to recompute");
+    }
+    m_fitWarningLabel->setText(warn);
+    m_useBtn->setEnabled(adoptable);
+    m_detailsBtn->setEnabled(true);
+}
+
+void TimeSettingsDialog::fillSampleTable(const TimeCalibration &proposed)
+{
     m_updatingTable = true;
     m_sampleTable->setRowCount(proposed.samples.size());
     for (int i = 0; i < proposed.samples.size(); ++i) {
@@ -554,7 +638,6 @@ void TimeSettingsDialog::onThreePointReady(const QString &videoPath,
         }
         img->setToolTip(s.frameImgPath);
         m_sampleTable->setItem(i, 5, img);
-        // v1.2.1：OCR 异常标注（错读点已自动排除，时间不可信）
         auto *sus = new QTableWidgetItem(
             s.ocrSuspicious ? QStringLiteral("⚠") : QString());
         sus->setFlags(sus->flags() & ~Qt::ItemIsEditable);
@@ -564,124 +647,68 @@ void TimeSettingsDialog::onThreePointReady(const QString &videoPath,
         m_sampleTable->setItem(i, 6, sus);
     }
     m_updatingTable = false;
-
-    // 拟合结果摘要（复用重拟合刷新逻辑）
-    refitSummaryRefresh();
 }
 
-void TimeSettingsDialog::onServiceFailed(const QString &videoPath,
-                                         const QString &error)
+void TimeSettingsDialog::fillSegmentTable(const TimeCalibration &proposed)
 {
-    if (videoPath != m_videoPath)
-        return;
-    // 未启动任何识别/重建 → 这是秒级预检失败（如无 OSD）：只更新推荐条
-    if (!m_taskStarted) {
-        m_quickLabel->setText(lang(
-            "⚠ 快速检查失败（%1）。可能是画面中没有时间显示，"
-            "可尝试 ③ 更多方式 → 手动输入。",
-            "⚠ Quick check failed (%1). No on-screen time? Try ③ More → manual.")
-                .arg(error));
-        m_runBtn->setEnabled(true);
-        m_reconBtn->setEnabled(true);
-        return;
+    const auto &segs = proposed.piecewise.segments;
+    m_segmentTable->setRowCount(segs.size());
+    for (int i = 0; i < segs.size(); ++i) {
+        const auto &s = segs[i];
+        m_segmentTable->setItem(i, 0,
+            new QTableWidgetItem(QString::number(i + 1)));
+        const QString range = (i + 1 < segs.size())
+            ? QStringLiteral("%1 – %2")
+                  .arg(fmtStreamMs(s.streamStartMs))
+                  .arg(fmtStreamMs(segs[i + 1].streamStartMs))
+            : QStringLiteral("%1 – …").arg(fmtStreamMs(s.streamStartMs));
+        m_segmentTable->setItem(i, 1, new QTableWidgetItem(range));
+        m_segmentTable->setItem(i, 2,
+            new QTableWidgetItem(QString::number(s.rate, 'f', 3)));
+        m_segmentTable->setItem(i, 3,
+            new QTableWidgetItem(fmtWall(s.wallStartMs)));
+        m_segmentTable->setItem(i, 4,
+            new QTableWidgetItem(lang(
+                "按画面时间重建", "rebuilt from frames")));
     }
-    setBusy(false);
-    m_fitLabel->setText(lang("自动识别失败：%1。可改用手动校时（③）",
-                             "Auto OCR failed: %1. Use manual (③)").arg(error));
-    m_adoptFitBtn->setEnabled(false);
-    m_reconSummaryLabel->setText(lang(
-        "重建失败：%1。可改用手动校时（③）。",
-        "Reconstruction failed: %1. Use manual (③).").arg(error));
-    m_adoptReconBtn->setEnabled(false);
 }
 
-void TimeSettingsDialog::onAbsStartReady(const QString &videoPath,
-                                         qint64 absStartEpochMs)
+void TimeSettingsDialog::onToggleDetails()
 {
-    if (videoPath != m_videoPath)
-        return;
-    m_absStartMs = absStartEpochMs;
-    m_absLabel->setText(lang("检测到流内录制起点：%1", "In-stream start detected: %1")
-        .arg(fmtWall(absStartEpochMs)));
-    m_adoptAbsBtn->setEnabled(true);
+    m_detailsVisible = !m_detailsVisible;
+    m_detailsBox->setVisible(m_detailsVisible);
+    m_detailsBtn->setText(lang(m_detailsVisible ? "收起细节 ▾" : "查看细节 ▸",
+                               m_detailsVisible ? "Hide details ▾" : "Details ▸"));
 }
 
-void TimeSettingsDialog::onSampleItemChanged(QTableWidgetItem *item)
+void TimeSettingsDialog::setGoBusy(bool busy, const QString &stageText)
 {
-    if (m_updatingTable || !item || item->column() != 0)
-        return;
-    refitFromTable();
-}
-
-void TimeSettingsDialog::refitFromTable()
-{
-    // 按勾选状态更新测点（Q-2 方案：野点剔除重拟合）
-    for (int i = 0; i < m_sampleTable->rowCount() && i < m_fitResult.samples.size(); ++i)
-        m_fitResult.samples[i].used =
-            m_sampleTable->item(i, 0)->checkState() == Qt::Checked;
-    refitSummaryRefresh();
-}
-
-void TimeSettingsDialog::onNoDriftCorrectionToggled(bool on)
-{
-    // 仅影响采用时的 rateApplied 标志（摘要行在采用时一并处理）
-    if (on)
-        m_fitResult.rateApplied = false;
-    else
-        m_fitResult.applyFit(TimeCalibration::fit(m_fitResult.samples));
-}
-
-void TimeSettingsDialog::refitSummaryRefresh()
-{
-    // 按勾选状态重拟合（Q-2 方案：野点剔除重拟合）后重刷摘要与警告
-    const TimeCalibration::FitResult fr = TimeCalibration::fit(m_fitResult.samples);
-    m_fitResult.applyFit(fr);
-    const double drift = fr.driftSecondsPerDay();
-    QString fitText = fr.ok
-        ? lang("拟合：%1 个测点；流内 0 点 = %2",
-               "Fit: %1 samples; stream 0 = %2")
-              .arg(fr.pointsUsed).arg(fmtWall(fr.offsetMs))
-        : lang("有效测点不足", "Not enough samples");
-    if (fr.ok && fr.pointsUsed >= 2) {
-        fitText += lang("；走时速率偏差 %1 秒/天", "; drift %1 s/day").arg(drift, 0, 'f', 1);
-        fitText += fr.rateSignificant
-            ? lang("（显著，将应用修正）", " (significant, will apply)")
-            : lang("（不显著，按固定偏移）", " (not significant, fixed offset)");
+    m_cancelBtn->setVisible(busy);
+    if (busy) {
+        m_goBtn->setText(stageText);
+    } else {
+        m_goBtn->setText(m_goStage == GoStage::Done
+            ? lang("✓ 完成（可重新校时）", "✓ Done (re-run)")
+            : lang("🔍 自动校时", "🔍 Auto calibrate"));
     }
-    m_fitLabel->setText(fitText);
-
-    QString warn;
-    bool adoptable = fr.ok;
-    if (fr.warning == TimeCalibration::FitWarning::RateInsane) {
-        warn = lang("⚠ 识别速率异常（疑似 OCR 误读），不予采用；请检查测点或改手动校时",
-                    "⚠ Insane fitted rate (likely OCR misread); inspect samples or use manual");
-        adoptable = false;
-    } else if (fr.warning == TimeCalibration::FitWarning::OutlierSuspected) {
-        warn = lang("⚠ 有测点残差异常：可取消勾选该测点，将自动重新拟合",
-                    "⚠ Outlier suspected: uncheck the row to refit automatically");
-    }
-    m_fitWarningLabel->setText(warn);
-    m_adoptFitBtn->setEnabled(adoptable);
+    m_progressLabel->setText(busy ? stageText : QString());
 }
 
+// ---------------------------------------------------------------------------
+// 高级区：北京时间对齐 / 手动 / 录像机自带
+// ---------------------------------------------------------------------------
 void TimeSettingsDialog::onTruthInputChanged()
 {
-    const bool canCheck = m_working.isValid() && m_working.dateKnown;
-    const qint64 monitorWall = canCheck ? m_working.wallMsOf(m_currentPosMs) : 0;
-    const qint64 beijing = m_beijingEdit->dateTime().toMSecsSinceEpoch();
-    const qint64 offset = canCheck ? beijing - monitorWall : 0;
-    if (canCheck) {
-        m_truthPreviewLabel->setText(
-            lang("整体偏移 = 北京时间 − 监控时间 = %1（将全局应用于此视频）",
-                 "Offset = Beijing − monitor = %1 (applies to whole video)")
-                .arg(fmtOffset(offset)));
-        m_adoptTruthBtn->setEnabled(true);
-    } else {
-        m_truthPreviewLabel->setText(lang("请先完成校时，再校验北京时间",
-                                          "Calibrate first, then check Beijing time"));
-        m_adoptTruthBtn->setEnabled(false);
+    if (!m_working.isValid() || !m_working.dateKnown) {
+        m_truthPreviewLabel->clear();
+        return;
     }
-    m_clearTruthBtn->setEnabled(m_working.truthSet);
+    const qint64 monitorWall = m_working.wallMsOf(m_currentPosMs);
+    const qint64 offset = m_beijingEdit->dateTime().toMSecsSinceEpoch()
+                          - monitorWall;
+    m_truthPreviewLabel->setText(lang(
+        "偏移：%1（画面时间 %2）", "Offset: %1 (on-screen %2)")
+        .arg(fmtOffset(offset)).arg(fmtWall(monitorWall)));
 }
 
 void TimeSettingsDialog::onAdoptTruth()
@@ -705,29 +732,6 @@ void TimeSettingsDialog::onClearTruth()
     m_applied = true;
     refreshWorkingSummary();
     emit calibrationApplied(m_working);
-}
-
-void TimeSettingsDialog::setBusy(bool busy, const QString &text)
-{
-    m_runBtn->setEnabled(!busy);
-    m_reconBtn->setEnabled(!busy);
-    m_progressLabel->setText(busy ? text : QString());
-}
-
-// ---------------------------------------------------------------------------
-// 采用（Q-3：仅此时才生效）
-// ---------------------------------------------------------------------------
-void TimeSettingsDialog::onAdoptFit()
-{
-    // 尊重「不应用漂移修正」勾选
-    if (m_noDriftCheck->isChecked())
-        m_fitResult.rateApplied = false;
-    m_working = m_fitResult;
-    m_working.calibratedAtMs = QDateTime::currentMSecsSinceEpoch();
-    m_applied = true;
-    refreshWorkingSummary();
-    emit calibrationApplied(m_working);
-    m_adoptFitBtn->setEnabled(false);
 }
 
 void TimeSettingsDialog::onAdoptAbsStart()
