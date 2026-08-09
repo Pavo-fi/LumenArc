@@ -82,6 +82,8 @@ private:
     void refreshWorkingSummary();
     void refitFromTable();
     void refitSummaryRefresh();
+    void applyWorking(const TimeCalibration &cal);   ///< 应用候选并通知主窗口
+    void maybeAutoApply();                           ///< GO 完成且无异常 → 自动应用
     void setGoBusy(bool busy, const QString &stageText);
     void fillSampleTable(const TimeCalibration &proposed);
     void fillSegmentTable(const TimeCalibration &proposed);
@@ -99,6 +101,7 @@ private:
     bool m_applied = false;
     bool m_updatingTable = false;
     bool m_detailsVisible = false;      // 结果细节折叠
+    bool m_autoApplied = false;         // GO 完成已自动应用（防重启用按钮）
     GoStage m_goStage = GoStage::Idle;
     qint64 m_absStartMs = 0;
 

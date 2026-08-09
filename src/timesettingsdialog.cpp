@@ -363,7 +363,9 @@ void TimeSettingsDialog::onRunGo()
         || m_goStage == GoStage::Recon)
         return;
     m_goStage = GoStage::Quick;
+    m_autoApplied = false;
     m_useBtn->setEnabled(false);
+    m_useBtn->setText(lang("✅ 使用此结果", "✅ Use this result"));
     m_detailsBtn->setEnabled(false);
     m_detailsBox->hide();
     m_detailsVisible = false;
@@ -425,6 +427,8 @@ void TimeSettingsDialog::onThreePointReady(const QString &videoPath,
     m_fitResult = proposed;
     fillSampleTable(proposed);
     refitSummaryRefresh();
+    // 无异常 → 自动应用（结果区与状态栏即时反馈）
+    maybeAutoApply();
 }
 
 void TimeSettingsDialog::onReconstructionReady(const QString &videoPath,
@@ -471,6 +475,8 @@ void TimeSettingsDialog::onReconstructionReady(const QString &videoPath,
     m_reconSummaryLabel->setText(summary);
     m_useBtn->setEnabled(true);
     m_detailsBtn->setEnabled(true);
+    // 无异常 → 自动应用（结果区与状态栏即时反馈）
+    maybeAutoApply();
 }
 
 void TimeSettingsDialog::onUseResult()
@@ -479,16 +485,51 @@ void TimeSettingsDialog::onUseResult()
         && !m_fitResult.piecewiseMode()) {
         if (m_noDriftCheck->isChecked())
             m_fitResult.rateApplied = false;
-        m_working = m_fitResult;
+        applyWorking(m_fitResult);
     } else if (m_reconResult.piecewiseMode()) {
-        m_working = m_reconResult;
-    } else {
-        return;
+        applyWorking(m_reconResult);
     }
+}
+
+void TimeSettingsDialog::applyWorking(const TimeCalibration &cal)
+{
+    m_working = cal;
     m_working.calibratedAtMs = QDateTime::currentMSecsSinceEpoch();
     m_applied = true;
+    m_autoApplied = true;
     refreshWorkingSummary();
     emit calibrationApplied(m_working);
+}
+
+void TimeSettingsDialog::maybeAutoApply()
+{
+    // 三点结果：拟合有效且无"速率异常"警告 → 自动应用
+    if (m_fitResult.isValid() && m_fitResult.source == TimeCalibration::Source::Ocr
+        && !m_fitResult.piecewiseMode()) {
+        const TimeCalibration::FitResult fr = TimeCalibration::fit(m_fitResult.samples);
+        if (fr.ok
+            && fr.warning != TimeCalibration::FitWarning::RateInsane) {
+            if (m_noDriftCheck->isChecked())
+                m_fitResult.rateApplied = false;
+            applyWorking(m_fitResult);
+            m_useBtn->setEnabled(false);
+            m_useBtn->setText(lang("✅ 已应用", "✅ Applied"));
+            m_resultLabel->setText(lang("✅ 已应用：%1", "✅ Applied: %1")
+                                       .arg(m_resultLabel->text()));
+            return;
+        }
+        // 速率异常：不自动应用，等用户确认
+        m_useBtn->setText(lang("确认使用此结果", "Use anyway"));
+        return;
+    }
+    // 重建结果：分段有效 → 自动应用
+    if (m_reconResult.piecewiseMode()) {
+        applyWorking(m_reconResult);
+        m_useBtn->setEnabled(false);
+        m_useBtn->setText(lang("✅ 已应用", "✅ Applied"));
+        m_resultLabel->setText(lang("✅ 已应用：%1", "✅ Applied: %1")
+                                   .arg(m_resultLabel->text()));
+    }
 }
 
 void TimeSettingsDialog::onRunReconForce()
@@ -600,7 +641,8 @@ void TimeSettingsDialog::refitSummaryRefresh()
                     "⚠ Outlier suspected: uncheck the row to recompute");
     }
     m_fitWarningLabel->setText(warn);
-    m_useBtn->setEnabled(adoptable);
+    if (!m_autoApplied)
+        m_useBtn->setEnabled(adoptable);
     m_detailsBtn->setEnabled(true);
 }
 
