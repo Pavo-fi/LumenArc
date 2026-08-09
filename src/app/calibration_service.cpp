@@ -433,6 +433,9 @@ void CalibrationService::onAtPositionsFailed(const QString &error)
 {
     const QString video = m_pendingVideo;
     m_pendingVideo.clear();
+    if (m_quickPending) {
+        m_quickPending = false;
+    }
     if (m_reconStage != ReconStage::None) {
         m_reconStage = ReconStage::None;
         m_reconSamples.clear();

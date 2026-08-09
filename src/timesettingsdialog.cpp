@@ -58,6 +58,8 @@ TimeSettingsDialog::TimeSettingsDialog(const QString &videoPath,
     setWindowTitle(lang("视频校时", "Time Calibration"));
     setMinimumWidth(780);
     setWindowFlag(Qt::Window, true);   // 非模态：可最小化/关闭，主窗口照常操作
+    setWindowFlags(windowFlags() | Qt::WindowMinimizeButtonHint
+                   | Qt::WindowMaximizeButtonHint);
     buildUi();
     refreshWorkingSummary();
 
@@ -608,13 +610,40 @@ void TimeSettingsDialog::onServiceFailed(const QString &videoPath,
 {
     if (videoPath != m_videoPath)
         return;
-    if (m_goStage == GoStage::Quick || m_goStage == GoStage::Ocr
-        || m_goStage == GoStage::Recon) {
+    // 快速检查失败：OCR 类错误（首尾帧可能恰好黑屏/片头）→ 降级直接三点识别；
+    // 系统性错误（python/脚本缺失等）→ 直接报错。
+    if (m_goStage == GoStage::Quick) {
+        if (error.contains(QStringLiteral("ocr"))) {
+            m_goStage = GoStage::Ocr;
+            m_resultLabel->setText(lang(
+                "快速检查未读取到画面时间，正在尝试三点识别…",
+                "Quick check found no time; trying 3-point OCR…"));
+            setGoBusy(true, lang("识别中…", "Recognizing…"));
+            m_service->runThreePoint(m_videoPath, m_currentPosMs, m_durationMs);
+        } else {
+            m_goStage = GoStage::Failed;
+            setGoBusy(false, QString());
+            m_resultLabel->setText(lang(
+                "自动校时无法启动：%1。\n可检查软件目录完整性后重试，"
+                "或使用第 3 步高级 → 手动输入。",
+                "Auto calibration cannot start: %1. "
+                "Check install integrity, or use Step 3 → manual.").arg(error));
+        }
+        return;
+    }
+    if (m_goStage == GoStage::Ocr || m_goStage == GoStage::Recon) {
         m_goStage = GoStage::Failed;
         setGoBusy(false, QString());
         m_resultLabel->setText(lang(
-            "失败：%1。可在「高级」中手动输入画面时间。",
-            "Failed: %1. Use Advanced → manual input.").arg(error));
+            "未能识别画面中的时间（%1）。\n"
+            "可能原因：\n"
+            "· 画面中没有时间显示，或时间不含日期（需 年月日 时分秒）\n"
+            "· 时间字体/位置特殊\n"
+            "可尝试：第 3 步高级 → 手动输入画面时间 / 强制变速重建。",
+            "Could not read on-screen time (%1).\n"
+            "Possible: no timestamp, date-less format (needs yyyy-mm-dd hh:mm:ss), "
+            "or unusual font. Try Step 3 → manual / force reconstruction.")
+                .arg(error));
         return;
     }
     // 高级区强制重建失败
