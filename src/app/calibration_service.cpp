@@ -42,7 +42,8 @@ constexpr qint64 kCoarseSampleMinMs  = 30000;  ///< 粗采样最小间隔
 constexpr qint64 kCoarseSampleMaxMs  = 120000; ///< 粗采样最大间隔
 constexpr qint64 kBoundaryStepMs     = 2000;   ///< 边界加密步长
 constexpr qint64 kBoundaryPadMs      = 5000;   ///< 边界区间外扩（加密范围）
-constexpr int    kMaxRefinePoints    = 160;    ///< 加密点总量上限（防超时；按跳变幅度取 top）
+constexpr int    kMaxRefinePoints    = 200;    ///< 加密点总量上限（防超时）
+constexpr int    kMinRefinePerBoundary = 8;    ///< 每边界保底加密点数（弱边界定位）
 constexpr double kAudioConsistencyDev = 0.02;  ///< OSD跨度 vs 音频时长容差
 } // namespace
 
@@ -285,12 +286,24 @@ void CalibrationService::analyzeCoarse()
     }
     std::sort(jobs.begin(), jobs.end(),
               [](const Job &a, const Job &b) { return a.jump > b.jump; });
+    // 加密点分配（v1.2.1 改进）：总量上限内保证每个边界都有保底加密
+    // （跳变区间全宽，步长按配额自适应 ≥ 4s），强边界（jump 大）优先
+    // 拿 2s 细步长——弱边界不再只有 ±1 粗间隔的定位精度。
     QVector<qint64> extra;
-    for (const Job &j : jobs) {
-        if (extra.size() >= kMaxRefinePoints)
-            break;
+    int remaining = kMaxRefinePoints;
+    const int totalJobs = jobs.size();
+    for (int idx = 0; idx < totalJobs && remaining > 0; ++idx) {
+        const Job &j = jobs[idx];
+        const int jobsLeft = totalJobs - idx;
+        const qint64 span = j.hi - j.lo + 2 * kBoundaryPadMs;
+        // 理想细步长点数 vs 剩余均分配额
+        const int ideal = static_cast<int>(span / kBoundaryStepMs) + 1;
+        const int quota = qMax(kMinRefinePerBoundary,
+                               qMin(ideal, remaining / jobsLeft));
+        const qint64 step = qMax<qint64>(
+            kBoundaryStepMs, span / qMax(1, quota));
         for (qint64 pos = j.lo - kBoundaryPadMs;
-             pos <= j.hi + kBoundaryPadMs; pos += kBoundaryStepMs) {
+             pos <= j.hi + kBoundaryPadMs; pos += step) {
             if (extra.size() >= kMaxRefinePoints)
                 break;
             if (pos < 0 || pos >= m_pendingDurationMs)
@@ -304,6 +317,7 @@ void CalibrationService::analyzeCoarse()
             if (!dup)
                 extra.append(pos);
         }
+        remaining = kMaxRefinePoints - extra.size();
     }
     std::sort(extra.begin(), extra.end());
     QVector<qint64> dedup;
@@ -355,6 +369,10 @@ void CalibrationService::finalizeReconstruction()
     TimeCalibration cal;
     cal.source = TimeCalibration::Source::Ocr;
     cal.samples = allSamples;
+    // v1.2.1：OCR 异常测点显式标记（留档/UI 展示，不参与拟合）
+    for (int idx : rep.outlierIdx)
+        if (idx >= 0 && idx < cal.samples.size())
+            cal.samples[idx].ocrSuspicious = true;
     cal.dateKnown = true;
     cal.calibratedAtMs = QDateTime::currentMSecsSinceEpoch();
     cal.piecewise = map;

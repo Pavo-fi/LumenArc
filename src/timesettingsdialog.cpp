@@ -114,11 +114,12 @@ void TimeSettingsDialog::buildUi()
     row1->addWidget(m_progressLabel, 1);
     ga->addLayout(row1);
 
-    m_sampleTable = new QTableWidget(0, 6, this);
+    m_sampleTable = new QTableWidget(0, 7, this);
     m_sampleTable->setHorizontalHeaderLabels(
         {lang("采用", "Use"), lang("流内位置", "Stream"),
          lang("识别时间", "OCR time"), lang("OCR 原文", "Raw text"),
-         lang("置信", "Conf"), lang("证据帧", "Frame")});
+         lang("置信", "Conf"), lang("证据帧", "Frame"),
+         lang("异常", "Suspect")});
     m_sampleTable->horizontalHeader()->setStretchLastSection(true);
     m_sampleTable->verticalHeader()->setVisible(false);
     m_sampleTable->setMinimumHeight(120);
@@ -379,6 +380,19 @@ void TimeSettingsDialog::onReconstructionReady(const QString &videoPath,
         "%1 rate boundaries (%2 segments) found: variable-rate file; "
         "time map rebuilt from OSD.")
         .arg(proposed.boundaryCount).arg(segs.size());
+    // v1.2.1：OCR 异常测点提示（错读点时间不可信，报告中须标注）
+    int suspicious = 0;
+    for (const auto &s : proposed.samples)
+        if (s.ocrSuspicious)
+            ++suspicious;
+    if (suspicious > 0) {
+        summary += lang(
+            " 检测到 %1 个 OCR 异常测点（⚠，已自动排除）："
+            "其 OSD 读数疑似错读，引用时须以证据帧为准。",
+            " %1 OCR-suspect samples (⚠, auto-excluded): readings may be "
+            "wrong; verify against evidence frames.")
+            .arg(suspicious);
+    }
     if (proposed.audioKnown) {
         summary += lang(
             " 音频时长校验：%1（%2 分 vs OSD 跨度 %3 分）。",
@@ -453,6 +467,14 @@ void TimeSettingsDialog::onThreePointReady(const QString &videoPath,
         }
         img->setToolTip(s.frameImgPath);
         m_sampleTable->setItem(i, 5, img);
+        // v1.2.1：OCR 异常标注（错读点已自动排除，时间不可信）
+        auto *sus = new QTableWidgetItem(
+            s.ocrSuspicious ? QStringLiteral("⚠") : QString());
+        sus->setFlags(sus->flags() & ~Qt::ItemIsEditable);
+        if (s.ocrSuspicious)
+            sus->setToolTip(lang("OCR 疑似错读，已自动排除",
+                                 "OCR suspect (auto-excluded)"));
+        m_sampleTable->setItem(i, 6, sus);
     }
     m_updatingTable = false;
 

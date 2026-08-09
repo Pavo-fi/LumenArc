@@ -57,6 +57,7 @@ struct PiecewiseDetectReport
     bool    audioConsistent = true; ///< 音频时长校验结论（未知时保持 true）
     bool    audioKnown = false;     ///< 是否取得音频时长做过校验
     int     outlierCount = 0;       ///< 剔除的 OCR 异常测点数（尖峰野点）
+    QVector<int> outlierIdx;        ///< 异常测点在输入 samples 中的索引（留档/UI）
 };
 
 /// 粗采样分析结果（供两级采样编排：边界区间 → 加密取样位置）

@@ -32,8 +32,9 @@ struct Point {
 
 /// 段拟合野点残差阈值（OCR 数字错读通常 > 10s；鲁棒拟合迭代剔除）
 static constexpr double kRobustResidualMs = 10000.0;
-/// 相邻段合并的 rate 差阈值（吸收假边界：错读点产生的同率两段）
-static constexpr double kSegmentMergeRate = 0.05;
+/// 相邻段合并的 rate 差阈值（吸收错读/噪声产生的同档碎段；
+/// 真档位边界差 ≥ 0.25 不受影响）
+static constexpr double kSegmentMergeRate = 0.12;
 /// 段完整性：点数不足时的最小段宽（宽段仅 1 点也保留）
 static constexpr qint64 kMinSegmentWidthMs = 30000;
 /// 段 rate sanity：|rate−1| 超此值并入邻居（错读碎片段）
@@ -670,9 +671,14 @@ PiecewiseTimeMap PiecewiseTimeMap::detect(const QVector<PiecewiseSample> &in,
     rep.speedVariant = rep.boundaryCount > 0
         || std::fabs(rep.overallRate - 1.0) > kNormalRateDev;
     rep.outlierCount = 0;
-    for (const Point &p : pts)
-        if (p.outlier)
-            ++rep.outlierCount;
+    rep.outlierIdx.clear();
+    for (const Point &p : pts) {
+        if (!p.outlier)
+            continue;
+        ++rep.outlierCount;
+        if (p.origIdx >= 0)
+            rep.outlierIdx.append(p.origIdx);   // 输入 samples 索引（留档/UI）
+    }
 
     if (report)
         *report = rep;

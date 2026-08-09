@@ -157,6 +157,7 @@ QJsonObject TimeCalibration::toJson() const
         so[QStringLiteral("frameImg")] = s.frameImgPath;
         so[QStringLiteral("conf")] = s.conf;
         so[QStringLiteral("used")] = s.used;
+        so[QStringLiteral("ocrSuspicious")] = s.ocrSuspicious;
         arr.append(so);
     }
     if (!arr.isEmpty())
@@ -199,6 +200,7 @@ TimeCalibration TimeCalibration::fromJson(const QJsonObject &o)
         s.frameImgPath = so[QStringLiteral("frameImg")].toString();
         s.conf = so[QStringLiteral("conf")].toDouble();
         s.used = so[QStringLiteral("used")].toBool(true);
+        s.ocrSuspicious = so[QStringLiteral("ocrSuspicious")].toBool();
         c.samples.append(s);
     }
     // v1.2.1：分段重建字段（老文件无此字段 → piecewise 无效，行为不变）

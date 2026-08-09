@@ -47,6 +47,7 @@ struct TimeCalibration
         QString frameImgPath;      ///< 证据截图（相对路径）
         double  conf = 0.0;        ///< 该点 OCR 置信度
         bool    used = true;       ///< 用户可在对话框剔除野点重新拟合
+        bool    ocrSuspicious = false; ///< v1.2.1：检测为 OCR 异常（错读），已自动排除
     };
     QVector<Sample> samples;
     double  sigmaRate = 0.0;       ///< 拟合速率标准误（报告用）

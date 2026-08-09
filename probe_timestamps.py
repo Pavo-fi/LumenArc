@@ -530,6 +530,22 @@ def _worker(video_path):
     return res
 
 
+def _worker_at(video_path, positions):
+    """At-mode worker (v1.2.1 parallel): sample a file's requested positions.
+    Process-local ctx; evidence dir is per-file (tag + '_at'), safe to share."""
+    ctx = _work_ctx
+    tag = hashlib.sha1(video_path.encode("utf-8")).hexdigest()[:12]
+    frame_dir = os.path.join(ctx["frame_root"], tag + "_at")
+    try:
+        return process_file_at(video_path, ctx["ffmpeg"], frame_dir,
+                               ctx["durations"].get(video_path, 0), positions)
+    except Exception as e:
+        import traceback
+        return {"file": video_path, "ok": False, "samples": [],
+                "error": f"worker_exception:{e}",
+                "trace": traceback.format_exc()[-800:]}
+
+
 def process_file_frames_only(video_path, ffmpeg_path, frame_dir, duration_ms):
     """Evidence frames without OCR (in-stream absolute time already trusted):
     one head frame + one tail frame, no inference at all."""
@@ -625,7 +641,8 @@ def main():
     ap.add_argument("files", nargs="+")
     ap.add_argument("--ffmpeg-path", required=True)
     ap.add_argument("--work-dir", required=True)
-    ap.add_argument("--workers", type=int, default=4)
+    ap.add_argument("--workers", type=int,
+                    default=max(2, min(8, os.cpu_count() or 4)))
     ap.add_argument("--duration-json", default="",
                     help="JSON object {file: trustedDurationMs} from C++ side")
     ap.add_argument("--with-sha256", action="store_true")
@@ -685,23 +702,53 @@ def main():
             print(f"WARNING:at-json parse failed: {e}", file=sys.stderr)
 
     if at_positions:
-        ordered = []
-        total = sum(max(1, len(at_positions.get(f, []))) for f in files)
+        # v1.2.1：按位置分片并行（单文件多位置也并行；证据帧文件名含
+        # 位置，不同片不冲突）。200 点 4 worker ≈ 3min（串行 ~10min）。
+        tasks = []
+        for f in files:
+            poss = at_positions.get(f, [])
+            if not poss:
+                continue
+            n_chunks = max(1, min(args.workers, (len(poss) + 7) // 8))
+            chunk = max(1, (len(poss) + n_chunks - 1) // n_chunks)
+            for c in range(0, len(poss), chunk):
+                tasks.append((f, poss[c:c + chunk]))
+        total = sum(max(1, len(sub)) for _, sub in tasks)
         done = 0
         try:
-            for f in files:
-                positions = at_positions.get(f, [])
-                tag = hashlib.sha1(f.encode("utf-8")).hexdigest()[:12]
-                frame_dir = os.path.join(frame_root, tag + "_at")
-                res = process_file_at(f, args.ffmpeg_path, frame_dir,
-                                      durations.get(f, 0), positions)
-                ordered.append(res)
-                done += max(1, len(positions))
-                if not res.get("ok"):
-                    print(f"ERROR:{f}:{res.get('error', 'unknown')}",
+            with futures.ProcessPoolExecutor(
+                    max_workers=max(1, min(args.workers, len(tasks))),
+                    initializer=_worker_init,
+                    initargs=(args.ffmpeg_path, frame_root, durations,
+                              False, frozenset())) as pool:
+                futs = {pool.submit(_worker_at, f, sub): i
+                        for i, (f, sub) in enumerate(tasks)}
+                results = {}
+                for fut in futures.as_completed(futs):
+                    i = futs[fut]
+                    f, sub = tasks[i]
+                    try:
+                        res = fut.result()
+                    except Exception as e:
+                        res = {"file": f, "ok": False, "samples": [],
+                               "error": f"executor:{e}"}
+                    if f not in results:
+                        results[f] = {"file": f, "ok": False, "samples": [],
+                                      "durationMs": res.get("durationMs", 0)}
+                    results[f]["samples"] += res.get("samples", [])
+                    results[f]["ok"] = results[f]["ok"] or res.get("ok", False)
+                    if res.get("error") and not results[f].get("error"):
+                        results[f]["error"] = res["error"]
+                    done += max(1, len(sub))
+                    if res.get("error") and not res.get("ok"):
+                        print(f"WARNING:{f}:{res.get('error')}",
+                              file=sys.stderr, flush=True)
+                    print(f"PROGRESS:{done}|{total}|{done * 100.0 / total:.1f}",
                           file=sys.stderr, flush=True)
-                print(f"PROGRESS:{done}|{total}|{done * 100.0 / total:.1f}",
-                      file=sys.stderr, flush=True)
+                ordered = [results.get(f, {"file": f, "ok": False,
+                                           "samples": [],
+                                           "error": "no_result"})
+                           for f in files]
         finally:
             if not args.evidence_dir:
                 _cleanup_dir(tmp_root)
