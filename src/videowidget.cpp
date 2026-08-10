@@ -38,6 +38,86 @@ OverlayWidget::OverlayWidget(QWidget *parent)
     setAttribute(Qt::WA_TransparentForMouseEvents, false);
     setAttribute(Qt::WA_NoSystemBackground, true);
     setAttribute(Qt::WA_OpaquePaintEvent, false);
+    // 时间戳框选按钮（v1.2.1）：确认 / 跳过
+    m_roiConfirmBtn = new QPushButton(QStringLiteral("✓ 确认"), this);
+    m_roiConfirmBtn->setStyleSheet(QStringLiteral(
+        "QPushButton { background:#2d8f47; color:white; font-weight:bold;"
+        " border:none; border-radius:4px; padding:6px 16px; }"
+        "QPushButton:hover { background:#37a855; }"));
+    m_roiSkipBtn = new QPushButton(QStringLiteral("跳过（自动扫描）"), this);
+    m_roiSkipBtn->setStyleSheet(QStringLiteral(
+        "QPushButton { background:#555a; color:white; border:none;"
+        " border-radius:4px; padding:6px 12px; }"
+        "QPushButton:hover { background:#666a; }"));
+    m_roiConfirmBtn->hide();
+    m_roiSkipBtn->hide();
+    connect(m_roiConfirmBtn, &QPushButton::clicked, this, [this]() {
+        endTimestampRoiSelection();
+        emit timestampRoiConfirmed(m_timestampRoiRect.isValid()
+            ? normalizedRoi(m_timestampRoiRect) : QRectF());
+    });
+    connect(m_roiSkipBtn, &QPushButton::clicked, this, [this]() {
+        endTimestampRoiSelection();
+        emit timestampRoiCancelled();
+    });
+}
+
+void OverlayWidget::beginTimestampRoiSelection(const QRectF &defaultRoi)
+{
+    m_timestampRoiMode = true;
+    // 默认区域：右上角（监控时间戳常见位置）；无效时给 25%x8% 框
+    if (defaultRoi.isValid() && m_videoWidth > 0 && m_videoHeight > 0) {
+        // 归一化 → 视频像素 → widget 坐标（线性映射，避免 QPointF 重载依赖）
+        const QRect dr = m_videoDisplayRect;
+        const QPoint p0 = QPoint(
+            dr.left() + int(defaultRoi.x() * dr.width()),
+            dr.top() + int(defaultRoi.y() * dr.height()));
+        const QPoint p1 = QPoint(
+            dr.left() + int((defaultRoi.x() + defaultRoi.width()) * dr.width()),
+            dr.top() + int((defaultRoi.y() + defaultRoi.height()) * dr.height()));
+        m_timestampRoiRect = QRect(p0, p1).normalized();
+    } else {
+        const QRect dr = m_videoDisplayRect;
+        m_timestampRoiRect = QRect(dr.right() - dr.width() / 4,
+                                   dr.top(), dr.width() / 4,
+                                   dr.height() / 12);
+    }
+    m_roiConfirmBtn->show();
+    m_roiSkipBtn->show();
+    placeRoiButtons();
+    setCursor(Qt::CrossCursor);
+    update();
+}
+
+void OverlayWidget::endTimestampRoiSelection()
+{
+    m_timestampRoiMode = false;
+    m_roiConfirmBtn->hide();
+    m_roiSkipBtn->hide();
+    unsetCursor();
+    update();
+}
+
+QRectF OverlayWidget::normalizedRoi(const QRect &widgetRect) const
+{
+    if (m_videoWidth <= 0 || m_videoHeight <= 0)
+        return QRectF();
+    const QRect vr = mapToVideo(widgetRect);
+    return QRectF(double(vr.x()) / m_videoWidth,
+                  double(vr.y()) / m_videoHeight,
+                  double(vr.width()) / m_videoWidth,
+                  double(vr.height()) / m_videoHeight);
+}
+
+void OverlayWidget::placeRoiButtons()
+{
+    const int w = m_roiConfirmBtn->sizeHint().width()
+                  + m_roiSkipBtn->sizeHint().width() + 12;
+    const int h = m_roiConfirmBtn->sizeHint().height();
+    const int x = qMax(8, width() - w - 8);
+    const int y = qMax(8, height() - h - 8);
+    m_roiConfirmBtn->move(x, y);
+    m_roiSkipBtn->move(x + m_roiConfirmBtn->sizeHint().width() + 8, y);
 }
 
 void OverlayWidget::setRegionModel(RegionModel *model)
@@ -432,6 +512,15 @@ QRect OverlayWidget::mapFromVideo(const QRect &videoRect) const
 /// @brief 鼠标按下：区域创建/选中/调整大小/pin选择/中键平移放大镜
 void OverlayWidget::mousePressEvent(QMouseEvent *event)
 {
+    // 时间戳框选模式：按下-拖动-松开画框
+    if (m_timestampRoiMode && event->button() == Qt::LeftButton) {
+        m_dragMode = DragMode::CreateNew;
+        m_dragStart = event->pos();
+        m_timestampRoiRect = QRect(event->pos(), event->pos());
+        update();
+        event->accept();
+        return;
+    }
     if (event->button() == Qt::MiddleButton) {
         m_dragMode = DragMode::MagnifierPan;
         m_dragStart = event->pos();
@@ -713,6 +802,13 @@ void OverlayWidget::mouseMoveEvent(QMouseEvent *event)
     QPoint videoPos = mapToVideo(pos);
     m_currentMousePos = pos;  // 用于绘制预览
 
+    // 时间戳框选拖动中
+    if (m_timestampRoiMode && m_dragMode == DragMode::CreateNew) {
+        m_timestampRoiRect = QRect(m_dragStart, pos).normalized();
+        update();
+        return;
+    }
+
     // 辅助线绘制中
     if (m_drawingGuideLine) {
         m_currentMousePos = pos;
@@ -925,6 +1021,18 @@ void OverlayWidget::mouseReleaseEvent(QMouseEvent *event)
     }
 
     if (event->button() == Qt::LeftButton) {
+        // 时间戳框选完成（过小则忽略，保持原框）
+        if (m_timestampRoiMode && m_dragMode == DragMode::CreateNew) {
+            m_dragMode = DragMode::None;
+            if (m_timestampRoiRect.width() > 8 && m_timestampRoiRect.height() > 4) {
+                m_timestampRoiRect = m_timestampRoiRect.intersected(m_videoDisplayRect);
+            } else if (m_timestampRoiRect.isEmpty()) {
+                m_timestampRoiRect = QRect();   // 无效
+            }
+            update();
+            event->accept();
+            return;
+        }
         // 辅助线完成
         if (m_drawingGuideLine && m_guideLineModel) {
             QPoint videoPos = mapToVideo(event->pos());
@@ -1147,6 +1255,11 @@ VideoWidget::VideoWidget(QWidget *parent)
     m_overlay->setGeometry(rect());
     m_overlay->raise();
     m_overlay->show();
+    // 时间戳框选信号转发（v1.2.1）
+    connect(m_overlay, &OverlayWidget::timestampRoiConfirmed,
+            this, &VideoWidget::timestampRoiConfirmed);
+    connect(m_overlay, &OverlayWidget::timestampRoiCancelled,
+            this, &VideoWidget::timestampRoiCancelled);
 }
 
 VideoWidget::~VideoWidget() = default;
@@ -1291,6 +1404,18 @@ void VideoWidget::updateOverlayGeometry()
         return;
     m_overlay->setGeometry(rect());
     m_overlay->setVideoDisplayRect(videoDisplayRect());
+}
+
+void VideoWidget::beginTimestampRoiSelection(const QRectF &defaultRoi)
+{
+    if (m_overlay)
+        m_overlay->beginTimestampRoiSelection(defaultRoi);
+}
+
+void VideoWidget::endTimestampRoiSelection()
+{
+    if (m_overlay)
+        m_overlay->endTimestampRoiSelection();
 }
 
 /// @brief 绘制视频帧+截图叠加（含亮度对比度缓存）

@@ -17,6 +17,7 @@
 
 #include <QDialog>
 #include <QString>
+#include <QRectF>
 #include "domain/time_calibration.h"
 
 class CalibrationService;
@@ -53,9 +54,14 @@ public:
 signals:
     /// 校时已应用（非模态：主窗口收到后更新图表与状态栏）
     void calibrationApplied(const TimeCalibration &cal);
+    /// 请求在主窗口视频上框选时间戳区域（GO 首次使用且无已存区域时）
+    void requestTimestampRoi();
+    /// 取消框选（主窗口退出框选模式）
+    void cancelTimestampRoiRequest();
 
 private slots:
     void onRunGo();          ///< GO 主按钮：快速检查 → 自动路由
+    void onRoiButton();      ///< 手动重新框选时间戳区域
     void onCancelGo();
     void onServiceProgress(const QString &stage);
     void onQuickCheckReady(const QString &videoPath, double overallRate,
@@ -77,9 +83,14 @@ private slots:
     void onClearTruth();
     void onNoDriftCorrectionToggled(bool on);
 
+public slots:
+    /// 主窗口框选完成回调：rect 归一化 0~1（无效 = 用户跳过）
+    void setTimestampRoi(const QRectF &rect);
+
 private:
     void buildUi();
     QWidget *buildUsageBanner();   ///< 顶部用法说明（参考拼接窗口格式横幅）
+    void startGo();                ///< 实际启动 GO（ROI 就绪后）
     void refreshWorkingSummary();
     void refitFromTable();
     void refitSummaryRefresh();
@@ -94,6 +105,8 @@ private:
     QString m_videoPath;
     qint64 m_currentPosMs = 0;
     qint64 m_durationMs = 0;
+    QRectF m_roi;                    ///< 时间戳区域（归一化 0~1，无效=未框选）
+    bool m_waitingRoi = false;       ///< 等待主窗口框选结果
     TimeCalibration m_working;          // 工作副本（采用候选时更新）
     TimeCalibration m_fitResult;        // 最近一次三点拟合候选
     TimeCalibration m_reconResult;      // 最近一次重建候选
@@ -110,6 +123,7 @@ private:
     QLabel *m_videoLabel = nullptr;
     QLabel *m_workingSummary = nullptr;
     QPushButton *m_goBtn = nullptr;         // GO 主按钮
+    QPushButton *m_roiBtn = nullptr;        // 框选时间戳区域
     QPushButton *m_cancelBtn = nullptr;
     QLabel *m_progressLabel = nullptr;
     QLabel *m_resultLabel = nullptr;        // 一句话结果

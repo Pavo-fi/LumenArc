@@ -57,6 +57,7 @@
 #include <QFileInfo>
 #include <QTextStream>
 #include <QSettings>
+#include <QCryptographicHash>
 #include <QTimer>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -1804,6 +1805,29 @@ void MainWindow::onLoadOverlayImage()
     m_snapshotFusion.imageData = img;
 }
 
+// ---------------------------------------------------------------------------
+// 时间戳区域持久化（v1.2.1：按视频路径 hash，同一摄像头复用）
+// ---------------------------------------------------------------------------
+QRectF MainWindow::savedTimestampRoi(const QString &videoPath) const
+{
+    if (videoPath.isEmpty())
+        return QRectF();
+    QSettings s("LumenArc", "LumenArc");
+    const QByteArray key = "calibration/roi_"
+        + QCryptographicHash::hash(videoPath.toUtf8(), QCryptographicHash::Md5).toHex();
+    return s.value(QString::fromLatin1(key)).toRectF();
+}
+
+void MainWindow::saveTimestampRoi(const QString &videoPath, const QRectF &norm)
+{
+    if (videoPath.isEmpty() || !norm.isValid())
+        return;
+    QSettings s("LumenArc", "LumenArc");
+    const QByteArray key = "calibration/roi_"
+        + QCryptographicHash::hash(videoPath.toUtf8(), QCryptographicHash::Md5).toHex();
+    s.setValue(QString::fromLatin1(key), norm);
+}
+
 void MainWindow::onSetStartTime()
 {
     // v1.2.1 非模态校时窗口：重建/识别在后台进行，主窗口可继续操作；
@@ -1823,7 +1847,47 @@ void MainWindow::onSetStartTime()
         m_calibration, sidecarWarning, m_calibrationService, this);
     dlg->setAttribute(Qt::WA_DeleteOnClose);
     m_calibrationDialog = dlg;
+    // 恢复已保存的时间戳区域（同一摄像头自动复用）
+    const QRectF savedRoi = savedTimestampRoi(m_currentVideoPath);
+    if (savedRoi.isValid())
+        dlg->setTimestampRoi(savedRoi);
     // 应用校时（与旧模态路径等价：应用后更新图表与状态栏）
+    // v1.2.1 时间戳框选：dialog 请求 → 主窗口视频框选 → 回传 + 持久化
+    connect(dlg, &TimeSettingsDialog::requestTimestampRoi,
+            this, [this, dlg]() {
+                // 优先用已保存的区域（同一摄像头复用）；无则给右上角默认框
+                QRectF saved = savedTimestampRoi(m_currentVideoPath);
+                m_videoWidget->beginTimestampRoiSelection(saved);
+                m_roiDialog = dlg;
+            });
+    connect(m_videoWidget, &VideoWidget::timestampRoiConfirmed,
+            this, [this](const QRectF &norm) {
+                if (m_roiDialog) {
+                    saveTimestampRoi(m_currentVideoPath, norm);
+                    m_roiDialog->setTimestampRoi(norm);
+                }
+                m_videoWidget->endTimestampRoiSelection();
+                m_roiDialog = nullptr;
+            });
+    connect(dlg, &TimeSettingsDialog::cancelTimestampRoiRequest,
+            this, [this]() {
+                m_videoWidget->endTimestampRoiSelection();
+                m_roiDialog = nullptr;
+            });
+    connect(m_videoWidget, &VideoWidget::timestampRoiCancelled,
+            this, [this]() {
+                if (m_roiDialog)
+                    m_roiDialog->setTimestampRoi(QRectF());
+                m_videoWidget->endTimestampRoiSelection();
+                m_roiDialog = nullptr;
+            });
+    // 窗口关闭时退出框选模式
+    connect(dlg, &QDialog::destroyed, this, [this]() {
+        if (m_roiDialog)
+            m_roiDialog = nullptr;
+        m_videoWidget->endTimestampRoiSelection();
+        m_calibrationDialog = nullptr;
+    });
     connect(dlg, &TimeSettingsDialog::calibrationApplied,
             this, [this](const TimeCalibration &cal) {
                 m_calibration = cal;

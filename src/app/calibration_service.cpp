@@ -72,7 +72,8 @@ void CalibrationService::setPythonExecutable(const QString &path)
 }
 
 void CalibrationService::runThreePoint(const QString &videoPath,
-                                       qint64 currentPosMs, qint64 durationMs)
+                                       qint64 currentPosMs, qint64 durationMs,
+                                       const QRectF &roi)
 {
     if (videoPath.isEmpty() || isRunning())
         return;
@@ -111,11 +112,12 @@ void CalibrationService::runThreePoint(const QString &videoPath,
     QDir().mkpath(evidenceDirFor(videoPath));
     emit progress(QStringLiteral("sampling"));
     m_ocrEngine->runAtPositions(videoPath, dedup, dur,
-                                evidenceDirFor(videoPath));
+                                evidenceDirFor(videoPath), roi);
 }
 
 void CalibrationService::runReconstruction(const QString &videoPath,
-                                           qint64 durationMs)
+                                           qint64 durationMs,
+                                           const QRectF &roi)
 {
     if (videoPath.isEmpty() || isRunning())
         return;
@@ -130,6 +132,7 @@ void CalibrationService::runReconstruction(const QString &videoPath,
 
     m_pendingVideo = videoPath;
     m_pendingDurationMs = dur;
+    m_roi = roi;
     m_reconSamples.clear();
 
     // 阶段 1 粗采样：间隔 = clamp(dur/60, 30s, 120s)，含首 1s 与尾-3s
@@ -151,11 +154,12 @@ void CalibrationService::runReconstruction(const QString &videoPath,
     QDir().mkpath(evidenceDirFor(videoPath));
     emit progress(QStringLiteral("coarse %1 pts").arg(dedup.size()));
     m_ocrEngine->runAtPositions(videoPath, dedup, dur,
-                                evidenceDirFor(videoPath));
+                                evidenceDirFor(videoPath), roi);
 }
 
 void CalibrationService::runQuickCheck(const QString &videoPath,
-                                       qint64 durationMs)
+                                       qint64 durationMs,
+                                       const QRectF &roi)
 {
     if (videoPath.isEmpty() || isRunning())
         return;
@@ -175,7 +179,7 @@ void CalibrationService::runQuickCheck(const QString &videoPath,
     m_quickPending = true;
     emit progress(QStringLiteral("quick check"));
     m_ocrEngine->runAtPositions(videoPath, positions, dur,
-                                evidenceDirFor(videoPath));
+                                evidenceDirFor(videoPath), roi);
 }
 
 void CalibrationService::probeAbsStart(const QString &videoPath)
@@ -368,7 +372,7 @@ void CalibrationService::analyzeCoarse()
     m_reconStage = ReconStage::Boundary;
     emit progress(QStringLiteral("boundary %1 pts").arg(dedup.size()));
     m_ocrEngine->runAtPositions(m_pendingVideo, dedup, m_pendingDurationMs,
-                                evidenceDirFor(m_pendingVideo));
+                                evidenceDirFor(m_pendingVideo), m_roi);
 }
 
 void CalibrationService::finalizeReconstruction()

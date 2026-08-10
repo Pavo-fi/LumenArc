@@ -145,6 +145,10 @@ protected:
     CalibrationService *m_calibrationService = nullptr;
     TimeCalibration m_calibration;   // 当前视频校时 SSOT（.vla v8 持久化）
     QPointer<TimeSettingsDialog> m_calibrationDialog;  // 非模态校时窗口（v1.2.1）
+    QPointer<TimeSettingsDialog> m_roiDialog;          // 框选中的校时窗口
+    /// 时间戳区域持久化（按视频路径 hash，同一摄像头复用）
+    QRectF savedTimestampRoi(const QString &videoPath) const;
+    void saveTimestampRoi(const QString &videoPath, const QRectF &norm);
     RegionModel *m_regionModel = nullptr;
     PolygonModel *m_polygonModel = nullptr;
     GuideLineModel *m_guideLineModel = nullptr;

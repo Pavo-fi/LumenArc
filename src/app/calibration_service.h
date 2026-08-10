@@ -15,6 +15,7 @@
 
 #include <QObject>
 #include <QString>
+#include <QRectF>
 #include <QVector>
 #include "domain/time_calibration.h"
 #include "domain/sort_model.h"
@@ -41,14 +42,16 @@ public:
     /// 一键三点自动校时：首（1s）/当前位置/尾（时长-3s）三处取样 OCR，
     /// 最小二乘拟合仿射模型 → threePointReady（候选，不生效）。
     void runThreePoint(const QString &videoPath, qint64 currentPosMs,
-                       qint64 durationMs);
+                       qint64 durationMs, const QRectF &roi = QRectF());
     /// 时间重建（v1.2.1）：两级采样（粗采样分段 + 边界加密）→ 分段表。
     /// 正常录像（无边界且 |rate−1|≤1%）退化为单段仿射，行为与三点一致。
     /// 结果经 reconstructionReady 发出（候选，不生效）。
-    void runReconstruction(const QString &videoPath, qint64 durationMs);
+    void runReconstruction(const QString &videoPath, qint64 durationMs,
+                           const QRectF &roi = QRectF());
     /// 秒级预检（v1.2.1）：首/尾两点 OCR 判"疑似变速文件"，
     /// 供校时窗口智能推荐（正常→① 自动校时；变速→⑤ 时间重建）。
-    void runQuickCheck(const QString &videoPath, qint64 durationMs);
+    void runQuickCheck(const QString &videoPath, qint64 durationMs,
+                       const QRectF &roi = QRectF());
     /// absStart（流内绝对起始，DHAV 等）快速候选探测。
     void probeAbsStart(const QString &videoPath);
     void cancel();
@@ -102,6 +105,7 @@ private:
     MediaProbeEngine *m_probeEngine = nullptr;     // 自持有
     QString m_pendingVideo;
     qint64 m_pendingDurationMs = 0;
+    QRectF m_roi;                  ///< 用户框选时间戳区域（归一化 0~1）
     bool m_absPending = false;
 
     // 时间重建状态（两级采样）

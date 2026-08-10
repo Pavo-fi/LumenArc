@@ -327,15 +327,38 @@ def _search_crops(crops, filename, use_binary):
     return best
 
 
-def ocr_frame(frame_path, filename):
+def ocr_frame(frame_path, filename, roi=None):
     """OCR one candidate frame. Cost-bounded adaptive chain:
       narrow crops + enhanced -> narrow + binary -> wide corner crops.
     Frames are downscaled to OCR_MAX_WIDTH first (det cost scales with
-    pixels; 20px+ OSD text stays legible). Returns dict(best) or None."""
+    pixels; 20px+ OSD text stays legible). Returns dict(best) or None.
+
+    roi: (x0, y0, x1, y1) 归一化坐标（0~1，按帧尺寸换算；用户框选的时间戳
+    区域）。指定时只识别该区域（放大 3 倍 + 增强），排除画面干扰。"""
     img = cv2.imread(frame_path)
     if img is None:
         return None
     h, w = img.shape[:2]
+    if roi is not None:
+        x0 = max(0, min(int(roi[0] * w), w - 1))
+        y0 = max(0, min(int(roi[1] * h), h - 1))
+        x1 = max(x0 + 1, min(int(roi[2] * w), w))
+        y1 = max(y0 + 1, min(int(roi[3] * h), h))
+        crop = img[y0:y1, x0:x1]
+        if crop.size == 0:
+            return None
+        # 放大 3 倍（时间戳字号小，放大后 OCR 更稳）
+        crop = cv2.resize(crop, None, fx=3.0, fy=3.0,
+                          interpolation=cv2.INTER_CUBIC)
+        ch, cw = crop.shape[:2]
+        if cw > OCR_MAX_WIDTH:
+            crop = cv2.resize(crop,
+                              (OCR_MAX_WIDTH, int(ch * OCR_MAX_WIDTH / cw)),
+                              interpolation=cv2.INTER_AREA)
+        best = _search_crops([crop], filename, use_binary=False)
+        if best is None:
+            best = _search_crops([crop], filename, use_binary=True)
+        return best
     if w > OCR_MAX_WIDTH:
         img = cv2.resize(img, (OCR_MAX_WIDTH, int(h * OCR_MAX_WIDTH / w)),
                          interpolation=cv2.INTER_AREA)
@@ -395,13 +418,13 @@ def vote(candidates):
     return chosen["implied"], conf, chosen
 
 
-def ocr_side(cands, filename):
+def ocr_side(cands, filename, roi=None):
     """OCR one side (head/tail) with incremental voting: stop as soon as two
     frames agree (halves the common-case inference count)."""
     points = []
     used = []
     for rel_ms, path in cands:
-        o = ocr_frame(path, filename)
+        o = ocr_frame(path, filename, roi)
         used.append((rel_ms, path))
         if o is not None:
             points.append((rel_ms, o))
@@ -530,7 +553,7 @@ def _worker(video_path):
     return res
 
 
-def _worker_at(video_path, positions):
+def _worker_at(video_path, positions, roi=None):
     """At-mode worker (v1.2.1 parallel): sample a file's requested positions.
     Process-local ctx; evidence dir is per-file (tag + '_at'), safe to share."""
     ctx = _work_ctx
@@ -538,7 +561,8 @@ def _worker_at(video_path, positions):
     frame_dir = os.path.join(ctx["frame_root"], tag + "_at")
     try:
         return process_file_at(video_path, ctx["ffmpeg"], frame_dir,
-                               ctx["durations"].get(video_path, 0), positions)
+                               ctx["durations"].get(video_path, 0), positions,
+                               roi)
     except Exception as e:
         import traceback
         return {"file": video_path, "ok": False, "samples": [],
@@ -567,7 +591,8 @@ def process_file_frames_only(video_path, ffmpeg_path, frame_dir, duration_ms):
     return out
 
 
-def process_file_at(video_path, ffmpeg_path, frame_dir, duration_ms, positions):
+def process_file_at(video_path, ffmpeg_path, frame_dir, duration_ms, positions,
+                    roi=None):
     """Calibration sampling mode (V1 plan §3.2, --at-json): for each requested
     stream position, extract ±0.25s candidate frames, OCR with incremental
     voting, and return ONE wall-clock sample per position.
@@ -594,7 +619,8 @@ def process_file_at(video_path, ffmpeg_path, frame_dir, duration_ms, positions):
             if el >= 0:
                 cands.append((actual if actual is not None and actual >= 0
                               else ss, p))
-        w, conf, chosen, used = ocr_side(cands, os.path.basename(video_path))
+        w, conf, chosen, used = ocr_side(cands, os.path.basename(video_path),
+                                        roi)
         if w > 0 and chosen is not None:
             img = ""
             for rel, path in used:
@@ -654,6 +680,9 @@ def main():
     ap.add_argument("--at-json", default="",
                     help="calibration sampling mode: JSON {file: [posMs,...]}; "
                          "one wall-clock sample per position (V1 plan §3.2)")
+    ap.add_argument("--roi-json", default="",
+                    help="optional user-selected timestamp ROI: "
+                         "JSON {file: [x0,y0,x1,y1]} in video pixels")
     args = ap.parse_args()
 
     if not os.path.isfile(args.ffmpeg_path):
@@ -701,6 +730,15 @@ def main():
         except (json.JSONDecodeError, ValueError, AttributeError) as e:
             print(f"WARNING:at-json parse failed: {e}", file=sys.stderr)
 
+    rois = {}
+    if args.roi_json and os.path.isfile(args.roi_json):
+        try:
+            with open(args.roi_json, "r", encoding="utf-8") as f:
+                rois = {os.path.normpath(k): [float(x) for x in v]
+                        for k, v in json.load(f).items()}
+        except (json.JSONDecodeError, ValueError, AttributeError) as e:
+            print(f"WARNING:roi-json parse failed: {e}", file=sys.stderr)
+
     if at_positions:
         # v1.2.1：按位置分片并行（单文件多位置也并行；证据帧文件名含
         # 位置，不同片不冲突）。200 点 4 worker ≈ 3min（串行 ~10min）。
@@ -721,7 +759,7 @@ def main():
                     initializer=_worker_init,
                     initargs=(args.ffmpeg_path, frame_root, durations,
                               False, frozenset())) as pool:
-                futs = {pool.submit(_worker_at, f, sub): i
+                futs = {pool.submit(_worker_at, f, sub, rois.get(f)): i
                         for i, (f, sub) in enumerate(tasks)}
                 results = {}
                 for fut in futures.as_completed(futs):

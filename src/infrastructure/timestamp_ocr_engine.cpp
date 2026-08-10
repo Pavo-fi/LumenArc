@@ -217,7 +217,8 @@ void TimestampOcrEngine::run(const QStringList &paths, const QString &workDir,
 void TimestampOcrEngine::runAtPositions(const QString &path,
                                         const QVector<qint64> &positionsMs,
                                         qint64 trustedDurationMs,
-                                        const QString &evidenceDir)
+                                        const QString &evidenceDir,
+                                        const QRectF &roi)
 {
     if (isRunning() || path.isEmpty() || positionsMs.isEmpty())
         return;
@@ -263,6 +264,21 @@ void TimestampOcrEngine::runAtPositions(const QString &path,
         f.write(QJsonDocument(atObj).toJson(QJsonDocument::Compact));
     }
 
+    // 用户框选的时间戳区域（归一化 0~1）→ roi.json
+    QString roiPath;
+    if (roi.isValid()) {
+        QJsonObject roiObj;
+        QJsonArray arr{roi.x(), roi.y(), roi.x() + roi.width(),
+                       roi.y() + roi.height()};
+        roiObj.insert(QDir::toNativeSeparators(path), arr);
+        roiPath = workDir + QStringLiteral("/roi.json");
+        QFile f(roiPath);
+        if (f.open(QIODevice::WriteOnly | QIODevice::Text))
+            f.write(QJsonDocument(roiObj).toJson(QJsonDocument::Compact));
+        else
+            roiPath.clear();
+    }
+
     const QString script = QCoreApplication::applicationDirPath()
         + QStringLiteral("/probe_timestamps.py");
     QStringList args{QStringLiteral("-X"), QStringLiteral("utf8"),
@@ -271,6 +287,8 @@ void TimestampOcrEngine::runAtPositions(const QString &path,
                      QStringLiteral("--work-dir"), workDir,
                      QStringLiteral("--duration-json"), durPath,
                      QStringLiteral("--at-json"), atPath};
+    if (!roiPath.isEmpty())
+        args << QStringLiteral("--roi-json") << roiPath;
     if (!evidenceDir.isEmpty())
         args << QStringLiteral("--evidence-dir") << evidenceDir;
     args << path;

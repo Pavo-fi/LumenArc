@@ -11,6 +11,7 @@
 #pragma once
 
 #include <QWidget>
+#include <QPushButton>
 #include <QRect>
 #include <QPolygon>
 #include <QVector>
@@ -47,7 +48,14 @@ public:
     void setGuideLineMode(bool enabled);
     bool isGuideLineMode() const { return m_guideLineMode; }
 
+    // 时间戳区域框选（v1.2.1：GO 校时用）
+    void beginTimestampRoiSelection(const QRectF &defaultRoi);
+    void endTimestampRoiSelection();
+    bool isTimestampRoiMode() const { return m_timestampRoiMode; }
+
 signals:
+    void timestampRoiConfirmed(const QRectF &normalized);
+    void timestampRoiCancelled();
     void regionInteracted();
     void magnifierWheelZoom(int delta, QPoint videoPos);
     void magnifierCursorMoved(QPoint videoPos);
@@ -108,6 +116,10 @@ private:
     int hitTestGuideEndpoint(const QPoint &pos, int *lineIndex = nullptr) const;
     int hitTestGuideLine(const QPoint &pos) const;
 
+    // 时间戳框选辅助
+    QRectF normalizedRoi(const QRect &widgetRect) const;
+    void placeRoiButtons();
+
     // 坐标映射
     QPoint mapToVideo(const QPoint &widgetPos) const;
     QPoint mapFromVideo(const QPoint &videoPos) const;
@@ -136,6 +148,12 @@ private:
     int m_selectedPolygon = -1;
     QPolygon m_dragOriginalPolygon;    // 拖拽前的多边形副本
     int m_dragPolygonVertexIndex = -1; // 正在拖拽的顶点索引
+
+    // 时间戳框选模式（v1.2.1）
+    bool m_timestampRoiMode = false;
+    QRect m_timestampRoiRect;      // widget 坐标（画框中）
+    QPushButton *m_roiConfirmBtn = nullptr;
+    QPushButton *m_roiSkipBtn = nullptr;
 
     // 辅助线模式
     bool m_guideLineMode = false;
@@ -173,6 +191,9 @@ public:
 
     void setSnapshot(const QImage &snapshot, int brightness = 0, int contrast = 0, int opacity = 0);
     void clearSnapshot();
+    /// 时间戳区域框选（转发 OverlayWidget）
+    void beginTimestampRoiSelection(const QRectF &defaultRoi);
+    void endTimestampRoiSelection();
     /// @brief Clear the displayed video frame (back to "no video" placeholder).
     void clearFrame();
     /// @brief 大视频加载期间的“导入中…”提示（首帧到达后由调用方关闭）
@@ -182,6 +203,8 @@ public:
 
 signals:
     void frameSnapshotReady(const QImage &image);
+    void timestampRoiConfirmed(const QRectF &normalized);
+    void timestampRoiCancelled();
 
 public slots:
     void onFrameReady(const QImage &image);

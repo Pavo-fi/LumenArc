@@ -122,8 +122,13 @@ void TimeSettingsDialog::buildUi()
         "QPushButton { font-size:15px; font-weight:bold; }"));
     m_cancelBtn = new QPushButton(lang("取消", "Cancel"), this);
     m_cancelBtn->setVisible(false);
+    m_roiBtn = new QPushButton(lang("框选时间戳区域", "Select timestamp area"), this);
+    m_roiBtn->setToolTip(lang(
+        "在画面上框住时间戳（识别更准）。同一摄像头只需框一次，之后自动复用。",
+        "Box the timestamp on screen for better OCR. Set once per camera."));
     goRow->addWidget(m_goBtn, 3);
     goRow->addWidget(m_cancelBtn, 1);
+    goRow->addWidget(m_roiBtn, 1);
     gg->addLayout(goRow);
     m_progressLabel = new QLabel(this);
     m_progressLabel->setStyleSheet(QStringLiteral("color:#666;"));
@@ -297,6 +302,7 @@ void TimeSettingsDialog::buildUi()
     lay->addWidget(bbox);
 
     connect(m_goBtn, &QPushButton::clicked, this, &TimeSettingsDialog::onRunGo);
+    connect(m_roiBtn, &QPushButton::clicked, this, &TimeSettingsDialog::onRoiButton);
     connect(m_cancelBtn, &QPushButton::clicked, this, &TimeSettingsDialog::onCancelGo);
     connect(m_detailsBtn, &QPushButton::clicked, this, &TimeSettingsDialog::onToggleDetails);
     connect(m_useBtn, &QPushButton::clicked, this, &TimeSettingsDialog::onUseResult);
@@ -415,6 +421,37 @@ void TimeSettingsDialog::onRunGo()
     if (m_goStage == GoStage::Quick || m_goStage == GoStage::Ocr
         || m_goStage == GoStage::Recon)
         return;
+    // 无已存时间戳区域 → 先请用户在画面上框选（识别率更高）
+    if (!m_roi.isValid()) {
+        m_waitingRoi = true;
+        m_resultLabel->setText(lang(
+            "请在主窗口画面上框住时间戳区域（如右上角时间），"
+            "然后点「确认」；不确定可点「跳过（自动扫描）」。",
+            "Draw a box around the on-screen timestamp in the main window, "
+            "then confirm; or skip for auto-scan."));
+        setGoBusy(true, lang("框选时间戳…", "Select timestamp area…"));
+        emit requestTimestampRoi();
+        return;
+    }
+    startGo();
+}
+
+void TimeSettingsDialog::onCancelGo()
+{
+    if (m_service)
+        m_service->cancel();
+    if (m_waitingRoi) {
+        m_waitingRoi = false;
+        emit cancelTimestampRoiRequest();
+    }
+    m_goStage = GoStage::Idle;
+    setGoBusy(false, QString());
+    m_resultLabel->setText(lang("已取消。可重新点击「自动校时」。",
+                                "Cancelled. Click \"Auto calibrate\" to retry."));
+}
+
+void TimeSettingsDialog::startGo()
+{
     m_goStage = GoStage::Quick;
     m_autoApplied = false;
     m_useBtn->setEnabled(false);
@@ -427,17 +464,36 @@ void TimeSettingsDialog::onRunGo()
         "快速检查中…（读取首尾画面时间，约 10 秒）",
         "Quick-checking… (reading first/last on-screen time, ~10s)"));
     setGoBusy(true, lang("快速检查中…", "Quick-checking…"));
-    m_service->runQuickCheck(m_videoPath, m_durationMs);
+    m_service->runQuickCheck(m_videoPath, m_durationMs, m_roi);
 }
 
-void TimeSettingsDialog::onCancelGo()
+void TimeSettingsDialog::onRoiButton()
 {
-    if (m_service)
-        m_service->cancel();
-    m_goStage = GoStage::Idle;
-    setGoBusy(false, QString());
-    m_resultLabel->setText(lang("已取消。可重新点击「自动校时」。",
-                                "Cancelled. Click \"Auto calibrate\" to retry."));
+    m_waitingRoi = true;
+    m_resultLabel->setText(lang(
+        "请在主窗口画面上框住时间戳区域，然后点「确认」；"
+        "不确定可点「跳过（自动扫描）」。",
+        "Draw a box around the timestamp in the main window, then confirm; "
+        "or skip for auto-scan."));
+    emit requestTimestampRoi();
+}
+
+void TimeSettingsDialog::setTimestampRoi(const QRectF &rect)
+{
+    m_roi = rect;
+    m_waitingRoi = false;
+    if (m_roi.isValid()) {
+        m_roiBtn->setText(lang("重新框选时间戳", "Re-select timestamp"));
+        if (m_goStage == GoStage::Idle || m_goStage == GoStage::Failed
+            || m_goStage == GoStage::Done)
+            m_resultLabel->setText(lang(
+                "时间戳区域已选定。点击 GO 开始自动校时。",
+                "Timestamp area set. Click GO to calibrate."));
+    }
+    // 若正处于 GO 流程（框选后自动继续）
+    if (m_goStage == GoStage::Quick) {
+        startGo();
+    }
 }
 
 void TimeSettingsDialog::onQuickCheckReady(const QString &videoPath,
@@ -458,7 +514,7 @@ void TimeSettingsDialog::onQuickCheckReady(const QString &videoPath,
         m_reconSummaryLabel->setText(lang("重建中…", "Reconstructing…"));
         m_segmentTable->setRowCount(0);
         setGoBusy(true, lang("重建中…", "Reconstructing…"));
-        m_service->runReconstruction(m_videoPath, m_durationMs);
+        m_service->runReconstruction(m_videoPath, m_durationMs, m_roi);
     } else {
         // 正常文件：自动进入三点识别
         m_goStage = GoStage::Ocr;
@@ -466,7 +522,8 @@ void TimeSettingsDialog::onQuickCheckReady(const QString &videoPath,
             "文件时间正常。正在三点识别…（几十秒）",
             "Normal recording. Running 3-point OCR… (tens of seconds)"));
         setGoBusy(true, lang("识别中…", "Recognizing…"));
-        m_service->runThreePoint(m_videoPath, m_currentPosMs, m_durationMs);
+        m_service->runThreePoint(m_videoPath, m_currentPosMs, m_durationMs,
+                                 m_roi);
     }
 }
 
@@ -597,7 +654,7 @@ void TimeSettingsDialog::onRunReconForce()
     m_reconSummaryLabel->setText(lang("重建中…", "Reconstructing…"));
     m_segmentTable->setRowCount(0);
     setGoBusy(true, lang("重建中…", "Reconstructing…"));
-    m_service->runReconstruction(m_videoPath, m_durationMs);
+    m_service->runReconstruction(m_videoPath, m_durationMs, m_roi);
 }
 
 void TimeSettingsDialog::onServiceProgress(const QString &stage)
@@ -619,7 +676,8 @@ void TimeSettingsDialog::onServiceFailed(const QString &videoPath,
                 "快速检查未读取到画面时间，正在尝试三点识别…",
                 "Quick check found no time; trying 3-point OCR…"));
             setGoBusy(true, lang("识别中…", "Recognizing…"));
-            m_service->runThreePoint(m_videoPath, m_currentPosMs, m_durationMs);
+            m_service->runThreePoint(m_videoPath, m_currentPosMs, m_durationMs,
+                                     m_roi);
         } else {
             m_goStage = GoStage::Failed;
             setGoBusy(false, QString());

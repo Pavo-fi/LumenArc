@@ -20,6 +20,7 @@
 #include <QStringList>
 #include <QMap>
 #include <QVector>
+#include <QRectF>
 #include <QByteArray>
 #include "domain/ocr_result.h"
 #include "domain/preprocess_task.h"
@@ -58,7 +59,8 @@ public:
     /// evidenceDir：证据帧持久目录（空 = 临时目录，任务结束清理）。
     /// 与 run() 互斥（isRunning 守卫）。
     void runAtPositions(const QString &path, const QVector<qint64> &positionsMs,
-                        qint64 trustedDurationMs, const QString &evidenceDir);
+                        qint64 trustedDurationMs, const QString &evidenceDir,
+                        const QRectF &roi = QRectF());
     void cancel();
     bool isRunning() const;
 
