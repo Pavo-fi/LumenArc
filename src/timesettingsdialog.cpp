@@ -423,6 +423,7 @@ void TimeSettingsDialog::onRunGo()
         return;
     // 无已存时间戳区域 → 先请用户在画面上框选（识别率更高）
     if (!m_roi.isValid()) {
+        m_goStage = GoStage::Quick;   // 框选确认后由 setTimestampRoi 自动继续
         m_waitingRoi = true;
         m_resultLabel->setText(lang(
             "请在主窗口画面上框住时间戳区域（如右上角时间），"
@@ -487,8 +488,12 @@ void TimeSettingsDialog::setTimestampRoi(const QRectF &rect)
         if (m_goStage == GoStage::Idle || m_goStage == GoStage::Failed
             || m_goStage == GoStage::Done)
             m_resultLabel->setText(lang(
-                "时间戳区域已选定。点击 GO 开始自动校时。",
-                "Timestamp area set. Click GO to calibrate."));
+                "时间戳区域已选定（画面坐标 %1~%2, %3~%4）。"
+                "点击 GO 开始自动校时；如需调整可点「重新框选时间戳」。",
+                "Timestamp area set (frame coords %1~%2, %3~%4). "
+                "Click GO to calibrate; re-select to adjust.")
+                    .arg(m_roi.left(), 0, 'f', 2).arg(m_roi.right(), 0, 'f', 2)
+                    .arg(m_roi.top(), 0, 'f', 2).arg(m_roi.bottom(), 0, 'f', 2));
     }
     // 若正处于 GO 流程（框选后自动继续）
     if (m_goStage == GoStage::Quick) {

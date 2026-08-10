@@ -87,6 +87,37 @@ int main(int argc, char **argv)
         CHECK(std::fabs(fr.rate - 1.0) < 1e-3, "synthetic rate ~1.0");
     }
 
+    // ---- ROI 模式（v1.2.1）：框选左上角时间戳区域，应同样识别成功 ----
+    {
+        QVector<TimeCalibration::Sample> roiSamples;
+        QString roiError;
+        QObject::connect(&engine, &TimestampOcrEngine::atPositionsFinished,
+                         [&](const QVector<TimeCalibration::Sample> &s) {
+                             roiSamples = s;
+                             app.quit();
+                         });
+        QObject::connect(&engine, &TimestampOcrEngine::atPositionsFailed,
+                         [&](const QString &e) {
+                             roiError = e;
+                             app.quit();
+                         });
+        // synth drawtext 在 x=40,y=40（1280x720）→ 归一化左上角区域
+        engine.runAtPositions(video, positions, 30000, evDir,
+                              QRectF(0.0, 0.0, 0.55, 0.18));
+        app.exec();
+        CHECK(roiError.isEmpty(),
+              qPrintable(QStringLiteral("roi engine failed: ") + roiError));
+        CHECK(roiSamples.size() == positions.size(),
+              "roi: one sample per requested position");
+        for (int i = 0; i < roiSamples.size() && i < positions.size(); ++i) {
+            const qint64 truth = baseEpochMs + roiSamples[i].streamMs;
+            const qint64 errMs = qAbs(roiSamples[i].wallMs - truth);
+            CHECK(errMs <= 2000,
+                  qPrintable(QStringLiteral("roi wall truth err %1ms at pos %2")
+                                 .arg(errMs).arg(i)));
+        }
+    }
+
     fprintf(stderr, "ocr_atpositions_test: %d checks, %d failures\n",
             g_checks, g_failures);
     return g_failures ? 1 : 0;
