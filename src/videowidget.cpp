@@ -201,6 +201,33 @@ void OverlayWidget::paintEvent(QPaintEvent *event)
     drawRegions(painter);
     drawPolygons(painter);
     drawGuideLines(painter);
+
+    // 时间戳框选模式（v1.2.1）：暗色遮罩 + 框内高亮 + 鼠标跟随提示
+    if (m_timestampRoiMode) {
+        if (m_videoDisplayRect.isValid() && !m_videoDisplayRect.isEmpty()) {
+            QColor dim(0, 0, 0, 110);
+            if (m_timestampRoiRect.isValid()) {
+                QRegion region(m_videoDisplayRect);
+                region -= m_timestampRoiRect;
+                painter.setClipRegion(region);
+                painter.fillRect(m_videoDisplayRect, dim);
+                painter.setClipping(false);
+                painter.setPen(QPen(QColor(46, 134, 222), 2, Qt::DashLine));
+                painter.drawRect(m_timestampRoiRect);
+            } else {
+                painter.fillRect(m_videoDisplayRect, dim);
+            }
+        }
+        // 鼠标跟随提示
+        QFont f = painter.font();
+        f.setPointSize(10);
+        f.setBold(true);
+        painter.setFont(f);
+        painter.setPen(Qt::white);
+        const QPoint tip = m_currentMousePos + QPoint(14, -26);
+        painter.drawText(tip, QStringLiteral("拖拽框选时间戳区域"));
+        placeRoiButtons();
+    }
 }
 
 void OverlayWidget::drawRegions(QPainter &painter)

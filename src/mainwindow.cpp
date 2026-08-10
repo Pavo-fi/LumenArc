@@ -1500,6 +1500,9 @@ void MainWindow::openVideoFile(const QString &filePath)
     m_currentDurationMs = 0;  // 等待 durationChanged 校准
 
     if (m_videoEngine->load(filePath)) {
+        // 同步源视频原生分辨率（时间戳框选归一化基准，v1.2.1）
+        m_videoWidget->overlay()->setVideoSize(
+            m_videoEngine->videoWidth(), m_videoEngine->videoHeight());
         // 大视频加载需要数秒：主窗口显示“导入中…”（首帧到达自动清除），
         // 避免用户误以为程序无响应
         m_videoWidget->setLoading(true);
