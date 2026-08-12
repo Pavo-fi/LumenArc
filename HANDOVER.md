@@ -1,6 +1,6 @@
 # LumenArc v1.3 工作交接文档
 
-> 编制日期：2026-07-28（2026-08-13 v1.3.0 M1 完成后更新）
+> 编制日期：2026-07-28（2026-08-13 v1.3.0 M2 完成后更新）
 > 最新标签：`v1.2.2`（2026-08-12 收尾封版：GO 预检第三点确认 + toast 通知 + ui_chain 入 CMake + 版本对齐）
 > 提交历史：`77c8e44`→`abd7b11`→`ff4c9a4`→`adb429b`→`5bbb59b`→`6b61a8d`→`25efc66`→`d978496`→`f496680`→`4447ca7`→`66b2b8f`→`0306427`→`e812e0c`→`f073804`→`16a64de`→`d9cc07a`→`977cb96`→`f9141f8`→`9d1230a`
 > 前处理批次：`9c97072`→`2ba4776`→`772c97f`→`7f5f20b`→`e34bdd9`→`40abd96`→`4b87a5a`（见第十三章）
@@ -12,7 +12,8 @@
 > 校时管线救复批次（2026-08-12）：`b7040eb`→`b87b68f`→`683c0d2`→`4a7a23f`
 >   （见第二十一章 21.6~21.9：重建死锁/中文路径/框选链路/星期 OSD 解析）
 > v1.2.2 收尾批次（2026-08-12）：见第二十二章（预检第三点确认/toast/ui_chain CMake/版本对齐）
-> v1.3.0 案件模块批次（2026-08-13 开工，M1 已完成）：施工方案 `ed71a6a` → M1 `7a5e355`/`0e6eb90`（见第二十三章）
+> v1.3.0 案件模块批次（2026-08-13 开工，M1/M2 已完成）：施工方案 `ed71a6a` → M1 `7a5e355`/`0e6eb90`
+>   → M2 `4928626`→`b1f276a`→`3100fe6`→`713291e`→`c3b72b4`（见第二十三章）
 
 ## 〇、2026-08-12 校时管线救复速览（最先读）
 
@@ -1401,7 +1402,7 @@ Info.plist 两项（原滞留 1.1.1）→ 1.2.2。
 
 ---
 
-## 二十三、v1.3.0 案件模块实施记录（2026-08-13 开工，进行中）
+## 二十三、v1.3.0 案件模块实施记录（2026-08-13 开工，M1/M2 完成）
 
 ### 23.0 施工依据
 
@@ -1451,10 +1452,54 @@ Info.plist 两项（原滞留 1.1.1）→ 1.2.2。
 | **lumenarc_case_test（新增）** | 96/96：往返/版本/magic/未知字段/原子写/编号生成/高水位/锁冲突+force/双模式分流/框选记忆/徽标/重开持久化/deleteData/哈希队列(进度+排空)/校验(一致/篡改标变更/删除标缺失/sha 重登记)/manifest(含 case.json 排除锁) |
 | 既有回归 | calibration 73 / piecewise 96 / preprocess 168 / ui_chain 23 / ocr_atpositions 21 零修改全绿 |
 
-### 23.4 下一步 M2（任务 6-11，顺序 6→9→7→8→10→11）
+### 23.4 M2 完成内容（任务 6-11，commits `4928626`→`b1f276a`→`3100fe6`→`713291e`→`c3b72b4`）
 
-6 .vla 路径分流挂接（mainwindow.cpp:2467/1651/1733-1798 三处走 vlaPathFor，
-入案视频缓存探测不弹询问）→ 9 框选记忆迁移（注册表旧值只读复制一次）→
-7 Ctrl+O 自动入案/「临时打开(不入案)」/源旁 .vla 询问导入 → 8 校时证据目录
-override + 前处理横幅【导入案件/独立输出】+ finalize 自动登记 + sidecar 复制
-sidecars/ → 10 CaseDock 证据树 + 模式出口三处 → 11 新建/属性对话框 + 起始页。
+| 任务 | 交付 |
+|---|---|
+| 6 .vla 路径分流挂接 | mainwindow 三处走 `vlaPathFor`：自动保存（`onAnalysisFinished`）/缓存探测（`openVideoFile`）/手动存取（`onSaveAnalysis` 默认路径 + `onLoadAnalysis` 起始目录）；入案视频缓存探测**不弹询问**（案件 .vla 即权威缓存直接加载）；写案件 .vla 同步刷新校时徽标（`calibrationBadgeSummary`：来源+点数+rate+分段标注） |
+| 9 框选记忆迁移 | `savedTimestampRoi`/`saveTimestampRoi` 双模式分流：入案读写 case.json `timestampRoi`；注册表旧值**只读复制一次**入案（原值保留一版，拍板§8-12）；独立模式照旧 QSettings（`readTimestampRoiRegistry` 抽出） |
+| 7 打开/添加行为 | `admitVideoToCase`：Ctrl+O/拖入即入案（先于 openVideoFile，源旁 .vla 导入后缓存探测直接命中）；已在案直接打开不重复登记；重复路径非模态拒绝；同大小仅提示；**源旁 .vla 询问导入（默认是，复制）**；登记即落盘。菜单「临时打开视频（不入案）」（`openVideosInteractive(bool)` 公共化） |
+| 8 校时/前处理挂接 | `CalibrationService::setEvidenceDirResolver`（默认老路径，MainWindow 注入 `CaseManager::evidenceDirFor`）；PreprocessWindow 案件横幅「📁 案件模式：成果自动导入《编号-名称》」+【导入案件(默认)】/【独立输出(自选)】互斥；导入模式锁定输出目录 `<案件>/preprocess/<yyyyMMdd_HHmmss>`（`caseSessionDir` 惰性生成、mutable+const）；finalize 自动登记 `addPreprocessSession`（sessionDir/reportCsv 相对路径、输出引用制 P### 登记 size/mtime、**sidecar 复制归类 sidecars/** 原件保留输出旁供独立继承）；登记结果附注完成页。`PreprocessReport.outputPaths` 全量清单（协调器回填） |
+| 10 CaseDock + 模式出口 | `casedock.{h,cpp}`：证据树四组（视频/前处理/报告/快照）；徽标 ⏳✓⚠✗+校时⏰（同步快判）；右键 打开/重定位/移除(默认保留案内数据三钮)/算指纹/复制指纹/资源管理器显示(explorer /select)；标题栏✕=退出案件模式（closeEvent 忽略+发请求）。**模式出口三处**（✕/Ctrl+W/状态栏📁按钮）；窗口标题带《编号-名称》（`windowTitleWithCase`）；CaseDock 替代视频列表；开案恢复现场（lastVideoId→openVideoFile，案件 .vla 自动加载）；退出不中断播放；closeEvent 应用退出 dirty 检查。哈希队列排空静默落盘 |
+| 11 对话框 + 起始页 | `casedialogs.{h,cpp}`：NewCaseDialog（必填校验/编号预览随输入刷新/创建后固定提示）；CasePropertiesDialog（编号/案发时间/地点固定，改标题不改目录名）。`startpagewidget.{h,cpp}`：三钮+最近 10 条双击打开+空态引导文案+「不再显示」勾选。CaseManager：`caseRootDir` 静态设置项（默认 `<程序目录>/cases/`）、`updateCaseInfo`、M2 任务10 附带 `relocateVideo`（大小不一致默认拒绝、force「仍要采用」extraFields 留档、sha 作废重算）与 `queueHashFor`。案件菜单补全（新建/打开/最近子菜单动态/起始页/属性/根目录设置/关闭）；openCaseFlow 锁冲突提示 force |
+
+### 23.5 M2 实施中发现并固化的修正（含一项 Windows 环境实测结论）
+
+1. **Windows 同尺寸重写 mtime 可能不更新（实测复现）**：`verify_race_probe`
+   复现——Qt QFile 重写同尺寸文件后内容已是新值但 mtime 保持原值，M1
+   快扫依赖的 mtime 触发在该场景必漏报。结论固化：**快扫 size/mtime 为
+   尽力而为语义；篡改确证走全量重算**（M3 校验报告对话框须把「全部重算」
+   放显眼位）。case_test 校验用例已改为确定性双路径（同尺寸→全量/异尺寸
+   →快扫 size）。
+2. **AV/Defender 扫描锁**：刚落盘文件可能被瞬时锁读/锁删 → 测试统一加
+   轮询重试（写后读回校验、删除重试、manifest 轮询至可解析）。生产代码
+   不受影响（QSaveFile 原子写）。
+3. **QMessageBox::addButton 返回 QPushButton\*** 但 qmessagebox.h 只前置
+   声明：与 clickedButton()（QAbstractButton\*）比较需 `<QPushButton>` +
+   `<QAbstractButton>` 完整类型。
+4. **测试组污染真实注册表 case/recent**：createCase→pushRecent 无清理
+   （M1 组 8 同样遗漏）→ `RecentGuard` RAII 快照清空/析构恢复。
+5. **msbuild 无 ALL_BUILD 目标**：全量构建直接对整个 .sln 不带 /target
+   （build_tmp/build_target.bat ALL 已封装；cmake 在 `C:\cmake-temp\CMake\bin`，
+   不在 PATH）。
+6. **Qt6Test/Qt6Concurrent dll 未随 exe 部署**：ui_chain 等测试需
+   `PATH=<Qt>/bin` 前缀运行（DLL 未拷贝 Release/）。
+
+### 23.6 测试状态（M2 封版）
+
+| 测试 | 结果 |
+|---|---|
+| **lumenarc_case_test** | **155/155**（M1 96 + 迁移组 13 + 会话登记组 15 + 重定位组 16 + 属性组 11；校验组确定性重构；20 连跑全绿） |
+| 既有回归 | calibration 73 / piecewise 96 / preprocess 168 / ui_chain 23 / ocr_atpositions 21 / vla 3×PASS **零修改全绿** |
+| 离屏冒烟 | LumenArc.exe offscreen 启动 10s 无崩溃（起始页开/关两种模式） |
+
+### 23.7 下一步 M3（任务 12-15）
+
+12 导出移交包（完整包默认/轻量可选；导前自检；空间预检；后台可取消+半成品
+清理；sources/+包内 case.json+manifest+导后快校；README.txt）→ 13 批量重新
+定位（名+大小模糊→人工确认→**指纹强制比对**默认拒绝「仍要采用」留档；
+VideoStateManager 键迁移；M2 的 relocateVideo 基础版已就位可复用）→ 14 多机
+时间线对齐视图（只读；复用 ClipTimelineWidget；末位可砍）→ 15 文档与封版
+（MANUAL 新章/README/手工点检清单；全回归；版本号 1.3.0 五处；打标签）。
+**手工矩阵（§4.3）待实机跑**：新建→加 3 视频(含中文路径)→校时→框选记忆随案
+→关案重开现场全恢复→删源视频重开(重定位)→双模式逐点比对。
