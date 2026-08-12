@@ -233,6 +233,19 @@ def ocr_image(img):
             for item in result]
 
 
+def _imread_unicode(path):
+    """cv2.imread 在 Windows 用 ANSI fopen：路径含中文（如视频位于
+    “测试文件”目录 → 证据帧全在中文路径下）时静默返回 None，整片
+    OCR 全灭。np.fromfile + imdecode 走 Win32 Unicode API。"""
+    try:
+        data = np.fromfile(path, dtype=np.uint8)
+        if data.size == 0:
+            return None
+        return cv2.imdecode(data, cv2.IMREAD_COLOR)
+    except OSError:
+        return None
+
+
 def merge_ocr_lines(items):
     """Merge same-baseline detection boxes into full lines.
 
@@ -335,7 +348,7 @@ def ocr_frame(frame_path, filename, roi=None):
 
     roi: (x0, y0, x1, y1) 归一化坐标（0~1，按帧尺寸换算；用户框选的时间戳
     区域）。指定时只识别该区域（放大 3 倍 + 增强），排除画面干扰。"""
-    img = cv2.imread(frame_path)
+    img = _imread_unicode(frame_path)
     if img is None:
         return None
     h, w = img.shape[:2]
@@ -375,7 +388,7 @@ def ocr_frame(frame_path, filename, roi=None):
 
 def _ocr_frame_capped(frame_path, filename):
     """Cost-capped OCR for bonus frames: one narrow-enhanced pass only."""
-    img = cv2.imread(frame_path)
+    img = _imread_unicode(frame_path)
     if img is None:
         return None
     h, w = img.shape[:2]

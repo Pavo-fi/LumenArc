@@ -1230,3 +1230,29 @@ av*.dll 在应用根目录而非 ffmpeg/ 子目录，显式 `setWorkingDirectory
 且仿射回退 piecewiseMode=false，不得挂起；挂起即 P0 回归）。实测 synth.mp4：修复前
 boundary 0 pts 挂死；修复后 5 checks 0 failures。全套：calibration 73 / piecewise
 96 / ocr_atpositions 21 全过。
+
+### 21.7 电梯用例全链路验证 + 中文路径 OCR 修复（2026-08-12）
+
+> B3 黄金用例（用户移至 `C:\code\LumenArc\测试文件\B3一单元客梯.mp4`）首次在最终
+> 代码上跑通全链路，并暴露一个真机阻断级缺陷。
+
+**P0-3 cv2.imread 中文路径静默失败**：OpenCV（5.0.0）在 Windows 用 ANSI fopen，
+路径含任何非 ASCII 字符即返回 None——视频在中文目录（如“测试文件”）时证据帧全
+在中文路径下，每帧 OCR 静默失败 → 全片 ocr_all_failed。旧 B3 测试从未暴露：当时
+证据帧目录 `C:/code/LumenArc/LumenArc_Calibration/` 全 ASCII，中文只在文件名（不
+进证据路径）。修复：`np.fromfile + cv2.imdecode`（Win32 Unicode API），两处读取点
+（ocr_frame / _ocr_frame_capped）统一封装 `_imread_unicode`。
+
+**验证矩阵（全部实测通过）**：
+
+| 用例 | 结果 |
+|---|---|
+| B3 黄金用例（ASCII 副本） | 18/18：8 段（1.0/2.0/1.0/2.0/1.389/1.0/2.0/1.0），92.3% 测点≤2s，OSD 6196s vs 音频 6121s 吻合 |
+| B3 中文真实路径（测试文件\\B3一单元客梯.mp4） | 18/18，分段与 ASCII 完全一致（确定性）；证据帧正常落中文目录 |
+| GO 路由（quickCheck harness） | B3：rate=1.398 suspicious=1 → 正确路由重建（真值 6196/4435=1.397） |
+| synth 正常文件 --expect-normal | 5/5：完成 + 仿射回退（P0-1 不复发） |
+| synth OCR 半链路 | 21/21（imdecode 对 ASCII 无回归） |
+| calibration / piecewise / preprocess | 73 / 96 / 168 全过 |
+
+遗留：B3 段 5（2.2s 窄段，rate 1.0）属文档已知“错读密集区碎段”现象，在测试容差内；
+真人测试重点：GO 全流程（框选 → 预检 → 自动路由 → 自动应用 → 图表时间轴）。
