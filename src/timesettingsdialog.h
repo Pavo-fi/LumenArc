@@ -31,7 +31,10 @@ class QCheckBox;
 class QWidget;
 
 /// GO 一键校时状态机
-enum class GoStage { Idle, Quick, Ocr, Recon, Done, Failed };
+enum class GoStage { Idle, Staged, Quick, Ocr, Recon, Done, Failed };
+// Staged（v1.2.x UX）：框选就绪、待「确认并开始校时」——拖拽结束后校时窗
+// 自动恢复并给出醒目确认按钮，用户显式确认才进入 Quick。
+
 
 class TimeSettingsDialog : public QDialog
 {
@@ -86,6 +89,9 @@ private slots:
 public slots:
     /// 主窗口框选完成回调：rect 归一化 0~1（无效 = 用户跳过）
     void setTimestampRoi(const QRectF &rect);
+    /// 框选就绪（拖拽松开/叠加层确认）：恢复窗口并给出「确认并开始校时」；
+    /// rect 无效 = 用户跳过框选 → GO 流程直接自动扫描开始
+    void stageTimestampRoi(const QRectF &rect);
 
 private:
     void buildUi();

@@ -53,13 +53,21 @@ FFMPEG_TAIL_TIMEOUT_S = 90   # indexless pseudo-MP4 tail seek can be slow
 
 # Regex priority list (design §5.2.4). Hit = stop.
 # 秒组前允许空格（OCR 常把冒号读成空格："15:03 :25" 仍解析为 15:03:25）
+# 日期与时间之间允许星期等无数字间隔（"2026-07-22 星期三 03:18:01"：
+# 此前 \s*[T\s]? 桥接不了「星期三」，整行失配 → 窄裁剪碎片被
+# RE_NO_YEAR 错配（"11.1" 被当 11月1日）→ 墙钟错数月 + 速率异常被拒）
 RE_FULL = re.compile(
-    r"(\d{4})[-/年.](\d{1,2})[-/月.](\d{1,2})[日号]?\s*[T\s]?"
+    r"(\d{4})[-/年.](\d{1,2})[-/月.](\d{1,2})[日号]?\s*"
+    r"(?:星期[一二三四五六日天]\s*)?"
+    r"(?:\([A-Za-z]{3}\)\s*|[A-Za-z]{3}\.\s*)?"
+    r"[T\s]?"
     r"(\d{1,2}):(\d{2})(?:\s*:(\d{2}))?(?:[:.](\d{1,3}))?")
 RE_NO_YEAR = re.compile(
     r"(?<!\d)(\d{1,2})[-/月.](\d{1,2})[日号]?\s+(\d{1,2}):(\d{2})\s*:(\d{2})(?!\d)")
 RE_TIME_ONLY = re.compile(r"(?<!\d)(\d{1,2}):(\d{2})\s*:(\d{2})(?!\d)")
 RE_FILENAME_YEAR = re.compile(r"(20\d{2})")
+# 文件名完整日期（监控导出常见命名 20260722_031301_me00060：日期_时间_通道）
+RE_FILE_FULLDATE = re.compile(r"(?<!\d)(20\d{2})(\d{2})(\d{2})(?!\d)")
 
 # OCR digit-confusion normalization (applied to a DERIVED copy only; the raw
 # text is never altered, design §9.2 forensic rule).
@@ -289,9 +297,25 @@ def _valid(y, mo, d, h, mi, s):
             and 1 <= d <= 31 and 0 <= h <= 23 and 0 <= mi <= 59 and 0 <= s <= 59)
 
 
+def _file_full_date(filename):
+    """文件名完整日期 (y, mo, d) 或 None（值域校验）。"""
+    m = RE_FILE_FULLDATE.search(filename)
+    if not m:
+        return None
+    y, mo, d = int(m.group(1)), int(m.group(2)), int(m.group(3))
+    if 2000 <= y <= datetime.datetime.now().year + 1 and 1 <= mo <= 12 and 1 <= d <= 31:
+        return (y, mo, d)
+    return None
+
+
 def parse_timestamp(text, filename=""):
-    """Parse wall-clock from (normalized) OCR text. Returns (datetime, ms_frac)
-    or None. Value-range validated (design §5.2.4)."""
+    """Parse wall-clock from (normalized) OCR text.
+    Returns (datetime, ms_frac, kind) or None. Value-range validated.
+    kind:
+      'full'     OSD 含完整日期（最可信）
+      'noyear'   OSD 月-日 + 文件名年
+      'timeonly' OSD 仅时分秒 + 文件名完整日期（纯时间 OSD 摄像头兜底）
+    优先级即可信度；调用方在多点/多裁剪间应优先 full（防碎片错配月日）。"""
     t = normalize_for_parse(text)
     m = RE_FULL.search(t)
     if m:
@@ -302,7 +326,7 @@ def parse_timestamp(text, filename=""):
         ms = int(frac.ljust(3, "0")[:3]) if frac else 0
         if _valid(y, mo, d, h, mi, s):
             try:
-                return datetime.datetime(y, mo, d, h, mi, s), ms
+                return datetime.datetime(y, mo, d, h, mi, s), ms, "full"
             except ValueError:
                 pass
     m = RE_NO_YEAR.search(t)
@@ -314,15 +338,31 @@ def parse_timestamp(text, filename=""):
             h, mi, s = int(m.group(3)), int(m.group(4)), int(m.group(5))
             if _valid(y, mo, d, h, mi, s):
                 try:
-                    return datetime.datetime(y, mo, d, h, mi, s), 0
+                    return datetime.datetime(y, mo, d, h, mi, s), 0, "noyear"
                 except ValueError:
                     pass
-    return None  # RE_TIME_ONLY: reference-only, never a primary result
+    # RE_TIME_ONLY：OSD 无日期时，用文件名完整日期补齐（原设计为
+    # reference-only；监控文件名 20260722_031301_me00060 自带可信日期）
+    m = RE_TIME_ONLY.search(t)
+    if m:
+        fd = _file_full_date(filename)
+        if fd:
+            y, mo, d = fd
+            h, mi, s = int(m.group(1)), int(m.group(2)), int(m.group(3))
+            if _valid(y, mo, d, h, mi, s):
+                try:
+                    return datetime.datetime(y, mo, d, h, mi, s), 0, "timeonly"
+                except ValueError:
+                    pass
+    return None
 
 
 def _search_crops(crops, filename, use_binary):
-    """First-parse-hit-wins scan over crops. Returns best dict or None."""
-    best = None
+    """Scan crops; 命中分级：full（完整日期）恒优先于 noyear/timeonly
+    （窄裁剪碎片如 "11.1 03:18:01" 常被错配月日，full 行才是可信证据）。
+    full 命中即提前结束（控制成本）。"""
+    best_full = None
+    best_part = None
     for crop in crops:
         enhanced, binary = preprocess(crop)
         variant = binary if use_binary else enhanced
@@ -332,12 +372,17 @@ def _search_crops(crops, filename, use_binary):
             parsed = parse_timestamp(text, filename)
             if parsed is None:
                 continue
-            dt, ms = parsed
-            if best is None or score > best["conf"]:
-                best = {"conf": score, "dt": dt, "ms": ms, "rawText": text}
-        if best is not None:
-            break  # first hit wins; cross-frame voting guards correctness
-    return best
+            dt, ms, kind = parsed
+            cand = {"conf": score, "dt": dt, "ms": ms, "rawText": text,
+                    "kind": kind}
+            if kind == "full":
+                if best_full is None or score > best_full["conf"]:
+                    best_full = cand
+            elif best_part is None or score > best_part["conf"]:
+                best_part = cand
+        if best_full is not None:
+            break  # full 命中即停（跨帧投票守护正确性）
+    return best_full if best_full is not None else best_part
 
 
 def ocr_frame(frame_path, filename, roi=None):
@@ -375,19 +420,27 @@ def ocr_frame(frame_path, filename, roi=None):
     if w > OCR_MAX_WIDTH:
         img = cv2.resize(img, (OCR_MAX_WIDTH, int(h * OCR_MAX_WIDTH / w)),
                          interpolation=cv2.INTER_AREA)
-    crops = crop_blocks(img)
-    best = _search_crops(crops, filename, use_binary=False)
-    if best is None:
-        best = _search_crops(crops, filename, use_binary=True)
-    if best is None:
-        # 宽裁剪兜底仅查两个上角（日期行长被窄裁剪切断的场景；控制成本）
-        best = _search_crops(crop_blocks(img, wide=True)[:2], filename,
-                             use_binary=False)
-    return best
+    # 全帧优先：OSD 长行（含星期/通道前缀，如 2560 宽机身）常被 30% 窄裁剪
+    # 切断；全帧 merge_ocr_lines 重组完整行，full-date 命中最可信。
+    # 链：全帧 enhanced → 窄裁剪 enhanced → 窄裁剪 binary → 宽裁剪上角。
+    # 任何 pass 出 full 即返回；都没有则取最优 partial（noyear/timeonly）。
+    partial = None
+    for crops, use_bin in (([img], False),
+                           (crop_blocks(img), False),
+                           (crop_blocks(img), True),
+                           (crop_blocks(img, wide=True)[:2], False)):
+        best = _search_crops(crops, filename, use_bin)
+        if best is None:
+            continue
+        if best.get("kind") == "full":
+            return best
+        if partial is None or best["conf"] > partial["conf"]:
+            partial = best
+    return partial
 
 
 def _ocr_frame_capped(frame_path, filename):
-    """Cost-capped OCR for bonus frames: one narrow-enhanced pass only."""
+    """Cost-capped OCR for bonus frames: one full-frame enhanced pass only."""
     img = _imread_unicode(frame_path)
     if img is None:
         return None
@@ -395,7 +448,7 @@ def _ocr_frame_capped(frame_path, filename):
     if w > OCR_MAX_WIDTH:
         img = cv2.resize(img, (OCR_MAX_WIDTH, int(h * OCR_MAX_WIDTH / w)),
                          interpolation=cv2.INTER_AREA)
-    return _search_crops(crop_blocks(img), filename, use_binary=False)
+    return _search_crops([img], filename, use_binary=False)
 
 
 def vote(candidates):

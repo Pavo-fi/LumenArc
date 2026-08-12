@@ -52,9 +52,11 @@ OverlayWidget::OverlayWidget(QWidget *parent)
     m_roiConfirmBtn->hide();
     m_roiSkipBtn->hide();
     connect(m_roiConfirmBtn, &QPushButton::clicked, this, [this]() {
+        const QRectF norm = m_timestampRoiRect.isValid()
+            ? normalizedRoi(m_timestampRoiRect) : QRectF();
         endTimestampRoiSelection();
-        emit timestampRoiConfirmed(m_timestampRoiRect.isValid()
-            ? normalizedRoi(m_timestampRoiRect) : QRectF());
+        emit timestampRoiConfirmed(norm);
+        emit timestampRoiReady(norm);
     });
     connect(m_roiSkipBtn, &QPushButton::clicked, this, [this]() {
         endTimestampRoiSelection();
@@ -1053,6 +1055,11 @@ void OverlayWidget::mouseReleaseEvent(QMouseEvent *event)
             m_dragMode = DragMode::None;
             if (m_timestampRoiRect.width() > 8 && m_timestampRoiRect.height() > 4) {
                 m_timestampRoiRect = m_timestampRoiRect.intersected(m_videoDisplayRect);
+                // UX（现场反馈）：拖拽结束即完成框选——交回校时窗口，由窗口
+                // 提供「确认并开始校时」（确认键在叠加层角落太不显眼）
+                const QRectF norm = normalizedRoi(m_timestampRoiRect);
+                endTimestampRoiSelection();
+                emit timestampRoiReady(norm);
             } else if (m_timestampRoiRect.isEmpty()) {
                 m_timestampRoiRect = QRect();   // 无效
             }
@@ -1287,6 +1294,8 @@ VideoWidget::VideoWidget(QWidget *parent)
             this, &VideoWidget::timestampRoiConfirmed);
     connect(m_overlay, &OverlayWidget::timestampRoiCancelled,
             this, &VideoWidget::timestampRoiCancelled);
+    connect(m_overlay, &OverlayWidget::timestampRoiReady,
+            this, &VideoWidget::timestampRoiReady);
 }
 
 VideoWidget::~VideoWidget() = default;

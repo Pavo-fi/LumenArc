@@ -56,6 +56,9 @@ public:
 signals:
     void timestampRoiConfirmed(const QRectF &normalized);
     void timestampRoiCancelled();
+    /// 拖拽松开/点「确认」：框选就绪（归一化 ROI；无效=未框出）
+    /// v1.2.x UX：拖拽结束即交回校时窗口，由窗口提供「确认并开始校时」
+    void timestampRoiReady(const QRectF &normalized);
     void regionInteracted();
     void magnifierWheelZoom(int delta, QPoint videoPos);
     void magnifierCursorMoved(QPoint videoPos);
@@ -205,6 +208,7 @@ signals:
     void frameSnapshotReady(const QImage &image);
     void timestampRoiConfirmed(const QRectF &normalized);
     void timestampRoiCancelled();
+    void timestampRoiReady(const QRectF &normalized);
 
 public slots:
     void onFrameReady(const QImage &image);

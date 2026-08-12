@@ -421,16 +421,28 @@ void TimeSettingsDialog::onRunGo()
     if (m_goStage == GoStage::Quick || m_goStage == GoStage::Ocr
         || m_goStage == GoStage::Recon)
         return;
+    // 框选就绪待确认：ROI 有效 → 开始校时（「确认并开始校时」按钮语义）
+    if (m_goStage == GoStage::Staged) {
+        if (m_roi.isValid())
+            startGo();
+        else {
+            m_goStage = GoStage::Idle;
+            onRunGo();   // 无效 ROI（不应发生）：回退正常流程
+        }
+        return;
+    }
     // 无已存时间戳区域 → 先请用户在画面上框选（识别率更高）
     if (!m_roi.isValid()) {
-        m_goStage = GoStage::Quick;   // 框选确认后由 setTimestampRoi 自动继续
+        m_goStage = GoStage::Staged;   // 框选就绪后由 stageTimestampRoi 接回
         m_waitingRoi = true;
         m_resultLabel->setText(lang(
-            "请在主窗口画面上框住时间戳区域（如右上角时间），"
-            "然后点「确认」；不确定可点「跳过（自动扫描）」。",
-            "Draw a box around the on-screen timestamp in the main window, "
-            "then confirm; or skip for auto-scan."));
-        setGoBusy(true, lang("框选时间戳…", "Select timestamp area…"));
+            "本窗口已最小化：请在主窗口画面上框住时间戳区域。\n"
+            "松开鼠标后本窗口自动恢复，点「确认并开始校时」。\n"
+            "不确定区域可点画面右下角「跳过（自动扫描）」。",
+            "Window minimized: draw a box around the on-screen timestamp. "
+            "On release this window returns with a confirm button; "
+            "or use \"skip\" on screen for auto-scan."));
+        showMinimized();   // 框选不挡画面（现场反馈 UX）
         emit requestTimestampRoi();
         return;
     }
@@ -446,6 +458,8 @@ void TimeSettingsDialog::onCancelGo()
         emit cancelTimestampRoiRequest();
     }
     m_goStage = GoStage::Idle;
+    if (isMinimized())
+        showNormal();   // 框选取消时恢复窗口
     setGoBusy(false, QString());
     m_resultLabel->setText(lang("已取消。可重新点击「自动校时」。",
                                 "Cancelled. Click \"Auto calibrate\" to retry."));
@@ -473,18 +487,17 @@ void TimeSettingsDialog::startGo()
 void TimeSettingsDialog::onRoiButton()
 {
     m_waitingRoi = true;
-    // 「框选时间戳区域」按钮 = 先框后测入口：框选确认后自动开始 GO。
-    // 用户框完的直觉预期是继续校时，而不是再回来点一次 GO（现场反馈：
-    // 框选完了不抵达下一步——根因是本函数此前不置 m_goStage，确认后
-    // setTimestampRoi 不会触发 startGo）。
+    // 「框选时间戳区域」= 先框后测入口：框选就绪后窗口恢复并给出
+    // 「确认并开始校时」（现场反馈 UX：确认键要显眼、流程要自动接回）
     if (m_goStage == GoStage::Idle || m_goStage == GoStage::Failed
         || m_goStage == GoStage::Done)
-        m_goStage = GoStage::Quick;
+        m_goStage = GoStage::Staged;
     m_resultLabel->setText(lang(
-        "请在主窗口画面上框住时间戳区域，然后点「确认」；"
-        "不确定可点「跳过（自动扫描）」。",
-        "Draw a box around the timestamp in the main window, then confirm; "
-        "or skip for auto-scan."));
+        "本窗口已最小化：请在主窗口画面上框住时间戳区域。\n"
+        "松开鼠标后本窗口自动恢复，点「确认并开始校时」。",
+        "Window minimized: draw a box around the timestamp. "
+        "On release this window returns with a confirm button."));
+    showMinimized();
     emit requestTimestampRoi();
 }
 
@@ -504,9 +517,35 @@ void TimeSettingsDialog::setTimestampRoi(const QRectF &rect)
                     .arg(m_roi.left(), 0, 'f', 2).arg(m_roi.right(), 0, 'f', 2)
                     .arg(m_roi.top(), 0, 'f', 2).arg(m_roi.bottom(), 0, 'f', 2));
     }
-    // 若正处于 GO 流程（框选后自动继续）
-    if (m_goStage == GoStage::Quick) {
-        startGo();
+}
+
+void TimeSettingsDialog::stageTimestampRoi(const QRectF &rect)
+{
+    m_roi = rect;
+    m_waitingRoi = false;
+    // 框选（或跳过）后窗口自动恢复（现场反馈 UX）
+    if (isMinimized())
+        showNormal();
+    raise();
+    activateWindow();
+    if (!m_roi.isValid()) {
+        // 用户跳过框选：GO 流程直接自动扫描开始（无可确认内容）
+        if (m_goStage == GoStage::Staged)
+            startGo();
+        return;
+    }
+    m_roiBtn->setText(lang("重新框选时间戳", "Re-select timestamp"));
+    m_resultLabel->setText(lang(
+        "已框选时间戳区域（画面坐标 %1~%2, %3~%4）。\n"
+        "点击下方「确认并开始校时」。",
+        "Timestamp area boxed (frame coords %1~%2, %3~%4). "
+        "Click \"Confirm & start\" below.")
+            .arg(m_roi.left(), 0, 'f', 2).arg(m_roi.right(), 0, 'f', 2)
+            .arg(m_roi.top(), 0, 'f', 2).arg(m_roi.bottom(), 0, 'f', 2));
+    if (m_goStage == GoStage::Staged) {
+        // 醒目的主按钮：确认并开始校时（替代叠加层角落的小确认键）
+        m_goBtn->setText(lang("✅ 确认并开始校时", "✅ Confirm & start"));
+        m_progressLabel->clear();
     }
 }
 

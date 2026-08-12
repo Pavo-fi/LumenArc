@@ -510,11 +510,13 @@ MainWindow::MainWindow(QWidget *parent)
     // 每开一次校时窗重复 connect 一份（lambda 永久累积在 VideoWidget 上）。
     // lambda 只读成员（m_roiDialog/m_currentVideoPath/m_videoWidget），
     // 与单次连接语义自洽。
-    connect(m_videoWidget, &VideoWidget::timestampRoiConfirmed,
+    // v1.2.x UX：拖拽松开/叠加层「确认」→ timestampRoiReady → 校时窗恢复并
+    // 提供「确认并开始校时」（ready 与 confirmed 由按钮同时发，接 ready 即可）
+    connect(m_videoWidget, &VideoWidget::timestampRoiReady,
             this, [this](const QRectF &norm) {
                 if (m_roiDialog) {
                     saveTimestampRoi(m_currentVideoPath, norm);
-                    m_roiDialog->setTimestampRoi(norm);
+                    m_roiDialog->stageTimestampRoi(norm);
                 }
                 m_videoWidget->endTimestampRoiSelection();
                 m_roiDialog = nullptr;
@@ -522,7 +524,7 @@ MainWindow::MainWindow(QWidget *parent)
     connect(m_videoWidget, &VideoWidget::timestampRoiCancelled,
             this, [this]() {
                 if (m_roiDialog)
-                    m_roiDialog->setTimestampRoi(QRectF());
+                    m_roiDialog->stageTimestampRoi(QRectF());
                 m_videoWidget->endTimestampRoiSelection();
                 m_roiDialog = nullptr;
             });

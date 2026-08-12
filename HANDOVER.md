@@ -1279,3 +1279,33 @@ boundary 0 pts 挂死；修复后 5 checks 0 failures。全套：calibration 73 
 **回归**：`tests/ui_chain_test_main.cpp`（离屏，需 Qt6Test + qoffscreen；双场景
 11/11——GO 入口与框选按钮入口均自动续跑至自动应用）；calibration 73 / piecewise
 96 / ocr_atpositions 21 全过。
+
+### 21.9 星期间隔 OSD + 框选 UX 重构（2026-08-12 现场反馈②）
+
+**OCR 解析三连修**（用例 `20260722_031301_me00060.mp4`，OSD = `2026-07-22 星期三
+03:18:01` 顶部偏左长行）：
+
+1. **RE_FULL 允许星期/英文周几间隔**：此前 `\s*[T\s]?` 桥接不了「星期三」→
+   整行失配（全帧 OCR 1.00 置信读对整行，解析 None）；
+2. **全帧优先 + 命中分级**：OSD 长行（2560 宽机身左上延至中上）被 30% 窄裁剪
+   切断，碎片 `"11.1 03:18:01"` 被 RE_NO_YEAR 错配为 11月1日 + 文件名年 → 墙钟
+   **静默错 3 个月**（取证最忌）+ 跨帧误读不一致 → RateInsane 拒用（用户视角
+   "提取时间失败"）。链改为：全帧 enhanced → 窄裁剪 → 窄 binary → 宽上角；
+   `_search_crops` 分级 full 恒优先于 noyear/timeonly，full 命中即返；
+3. **timeonly 兜底**：OSD 仅 HH:MM:SS 时用文件名完整日期（YYYYMMDD_ 前缀，值域
+   校验）补齐（原 design 为 reference-only；监控命名 20260722_031301_me00060
+   自带可信日期）。
+
+修复后该文件三点：761ms→03:13:02 / 299760ms→03:18:01 / 654760ms→03:23:56，
+全 full-date（07-22 与文件名一致），rate 严格 1.000。B3 抽点无回归（通道前缀
+`B3二单元客梯 2024-09-30 …` 照常 full 命中）。
+
+**框选 UX 重构**（现场反馈：确认键不明显）。新流程：点 GO/「框选时间戳」→
+校时窗**自动最小化** → 拖拽框选**松开即完成**（overlay 新增 timestampRoiReady，
+mouseRelease 直发）→ 校时窗**自动恢复** + 主按钮变「✅ 确认并开始校时」→ 点击
+进入后续步骤（GoStage 新增 Staged 待确认态）。叠加层角落小确认键保留为备选。
+跳过框选 = 直接自动扫描开始（无可确认内容不挡一步）。
+
+**回归**：ui_chain v3（双入口 16/16：最小化/恢复/未启动/醒目按钮/启动/应用全
+断言）+ me60 真实文件 GO 全流程 8/8（quickCheck→三点→自动应用）；calibration
+73 / piecewise 96 / ocr_atpositions 21 / expect-normal 5 全过。
