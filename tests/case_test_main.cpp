@@ -558,22 +558,31 @@ int main(int argc, char **argv)
         CHECK(report[0].status == 0 && report[1].status == 0,
               "verify: all ok");
 
-        // 篡改内容但保持大小（快扫抓不到，全量重算抓得到）
+        // 篡改内容但保持大小（快扫抓不到内容变化，全量重算必抓）
+        // 确定性设计：Windows 下 Qt 重写同尺寸文件存在 mtime 不更新的
+        // 实测场景（verify_race_probe 复现：内容已是新值但 mtime 不变）——
+        // mtime 触发的快扫重算是尽力而为，不可作为确定性断言依据。
+        // 因此：① 同尺寸篡改 → 全量重算（内容比对，确定性）
+        //       ② 异尺寸篡改 → 快扫（size 触发，确定性）
         report.clear();
-        const qint64 mtimeBefore = QFileInfo(va).lastModified().toMSecsSinceEpoch();
-        {
-            QFile f(va);
-            f.open(QIODevice::WriteOnly);
-            f.write(QByteArray(5000, 'z'));   // 同尺寸不同内容
-            f.close();
-        }
-        // Windows 惰性 mtime 防御：轮询确认 mtime 变化（与生产代码同源
-        // QFileInfo），确保快扫触发条件确定性成立（Defender/负载下曾抖动）
+        QByteArray tamperProof;
         t.restart();
-        while (QFileInfo(va).lastModified().toMSecsSinceEpoch() == mtimeBefore
-               && t.elapsed() < 5000)
+        while (t.elapsed() < 5000) {
+            {
+                QFile f(va);
+                if (f.open(QIODevice::WriteOnly))
+                    f.write(QByteArray(5000, 'z'));   // 同尺寸不同内容
+                f.close();
+            }
+            QFile rf(va);
+            if (rf.open(QIODevice::ReadOnly) && rf.read(1) == "z") {
+                tamperProof = "z";
+                break;
+            }
             QThread::msleep(20);
-        cm.verifyIntegrity(false);   // 快扫：size/mtime 变了 → 会重算比对
+        }
+        CHECK(tamperProof == "z", "tamper write took effect");
+        cm.verifyIntegrity(true);   // 全量重算：内容比对必报
         t.restart();
         while (report.isEmpty() && t.elapsed() < 10000)
             QCoreApplication::processEvents(QEventLoop::AllEvents, 50);
@@ -587,9 +596,46 @@ int main(int argc, char **argv)
         CHECK(cm.videoById(idA)->sha256 != shaA,
               "verify: sha re-registered after change");
 
-        // 删除文件 → 缺失
+        // 异尺寸篡改 → 快扫（size 触发，确定性）
         report.clear();
-        QFile::remove(vb);
+        tamperProof.clear();
+        t.restart();
+        while (t.elapsed() < 5000) {
+            {
+                QFile f(vb);
+                if (f.open(QIODevice::WriteOnly))
+                    f.write(QByteArray(7001, 'y'));   // 多 1 字节
+                f.close();
+            }
+            QFile rf(vb);
+            if (rf.open(QIODevice::ReadOnly) && rf.size() == 7001) {
+                tamperProof = "y";
+                break;
+            }
+            QThread::msleep(20);
+        }
+        CHECK(tamperProof == "y", "size-tamper write took effect");
+        cm.verifyIntegrity(false);   // 快扫：size 触发重算比对
+        t.restart();
+        while (report.isEmpty() && t.elapsed() < 10000)
+            QCoreApplication::processEvents(QEventLoop::AllEvents, 50);
+        bool foundSizeChanged = false;
+        for (const auto &it : report)
+            if (it.label == idB && it.status == 1)
+                foundSizeChanged = true;
+        CHECK(foundSizeChanged,
+              "verify: size-tampered file flagged changed (fast scan)");
+
+        // 删除文件 → 缺失（AV 锁防御：轮询重试至确实删除）
+        report.clear();
+        t.restart();
+        while (QFile::exists(vb) && t.elapsed() < 5000) {
+            QFile::remove(vb);
+            if (!QFile::exists(vb))
+                break;
+            QThread::msleep(20);
+        }
+        CHECK(!QFile::exists(vb), "delete took effect");
         cm.verifyIntegrity(false);
         t.restart();
         while (report.isEmpty() && t.elapsed() < 10000)
