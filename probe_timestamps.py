@@ -48,6 +48,10 @@ SINGLE_HIT_MIN_SCORE = 0.85  # single-frame vote acceptance (RapidOCR calibratio
 VOTE_TOLERANCE_MS = 1500     # implied-start cluster tolerance
 HEAD_OFFSETS_S = (0, 1, 2)   # first-frame candidates (boot black / OSD delay)
 TAIL_OFFSETS_S = (3, 1)      # last-frame candidates relative to trusted end
+# ---- 证据帧体积优化（v1.3.0 拍板 A+B+C+D）----
+EVIDENCE_JPEG_QUALITY = 90   # D：PNG→JPEG q90（-3x）
+EVIDENCE_FULL_MAX_WIDTH = 1280  # 无框选模式命中全帧降宽
+EVIDENCE_ROI_MARGIN = 0.25   # A：ROI 裁剪外扩比例（上下文）
 FFMPEG_HEAD_TIMEOUT_S = 30
 FFMPEG_TAIL_TIMEOUT_S = 90   # indexless pseudo-MP4 tail seek can be slow
 
@@ -252,6 +256,40 @@ def _imread_unicode(path):
         return cv2.imdecode(data, cv2.IMREAD_COLOR)
     except OSError:
         return None
+
+
+def _save_evidence_jpg(img_path, out_path, roi=None, max_width=None):
+    """证据帧 PNG → JPEG（v1.3.0 体积优化）：可选 ROI 裁剪(外扩
+    EVIDENCE_ROI_MARGIN 作上下文)/降宽；imencode+tofile 走 Unicode 路径。
+    成功返回 out_path，失败返回空串。"""
+    img = _imread_unicode(img_path)
+    if img is None:
+        return ""
+    if roi is not None:
+        h, w = img.shape[:2]
+        x0, y0, x1, y1 = roi
+        mw = (x1 - x0) * EVIDENCE_ROI_MARGIN
+        mh = (y1 - y0) * EVIDENCE_ROI_MARGIN
+        px0 = max(0, int((x0 - mw) * w))
+        py0 = max(0, int((y0 - mh) * h))
+        px1 = min(w, max(px0 + 1, int((x1 + mw) * w)))
+        py1 = min(h, max(py0 + 1, int((y1 + mh) * h)))
+        img = img[py0:py1, px0:px1]
+        if img.size == 0:
+            return ""
+    if max_width and img.shape[1] > max_width:
+        scale = max_width / img.shape[1]
+        img = cv2.resize(img, (max_width, int(img.shape[0] * scale)),
+                         interpolation=cv2.INTER_AREA)
+    ok, buf = cv2.imencode(".jpg", img,
+                           [cv2.IMWRITE_JPEG_QUALITY, EVIDENCE_JPEG_QUALITY])
+    if not ok:
+        return ""
+    try:
+        buf.tofile(out_path)
+    except OSError:
+        return ""
+    return out_path
 
 
 def merge_ocr_lines(items):
@@ -670,6 +708,7 @@ def process_file_at(video_path, ffmpeg_path, frame_dir, duration_ms, positions,
     os.makedirs(frame_dir, exist_ok=True)
     out = {"file": video_path, "ok": False, "samples": [],
            "durationMs": duration_ms}
+    all_extracted = []   # (relMs, png_path)：收尾统一清理/转 JPEG
     for pos in positions:
         pos = max(0, int(pos))
         cands = []
@@ -685,6 +724,7 @@ def process_file_at(video_path, ffmpeg_path, frame_dir, duration_ms, positions,
             if el >= 0:
                 cands.append((actual if actual is not None and actual >= 0
                               else ss, p))
+        all_extracted.extend(cands)
         w, conf, chosen, used = ocr_side(cands, os.path.basename(video_path),
                                         roi)
         if w > 0 and chosen is not None:
@@ -706,6 +746,43 @@ def process_file_at(video_path, ffmpeg_path, frame_dir, duration_ms, positions,
     out["ok"] = any(s.get("wallMs", 0) > 0 for s in out["samples"])
     if not out["ok"]:
         out["error"] = "ocr_all_failed"
+
+    # ---- 证据帧体积优化（v1.3.0 A+B+C+D）----
+    # C：首尾各留 1 张全帧 JPEG 作场景上下文
+    context_map = {}   # png_path -> jpg_path
+    if all_extracted:
+        first = min(all_extracted)[1]
+        last = max(all_extracted)[1]
+        saved = _save_evidence_jpg(
+            first, os.path.join(frame_dir, "context_head.jpg"))
+        if saved:
+            context_map[first] = saved
+            out["contextHeadImg"] = saved
+        if last != first:
+            saved = _save_evidence_jpg(
+                last, os.path.join(frame_dir, "context_tail.jpg"))
+            if saved:
+                context_map[last] = saved
+                out["contextTailImg"] = saved
+    # A+B+D：命中帧 → ROI 裁剪 JPEG（无框选 → 全帧降宽 JPEG）；未命中全删
+    for s in out["samples"]:
+        img = s.get("frameImg")
+        if not img:
+            continue
+        if img in context_map:
+            s["frameImg"] = context_map[img]   # 命中帧即上下文全帧
+            continue
+        saved = _save_evidence_jpg(
+            img, os.path.join(frame_dir, f"at_{s['relMs']}.jpg"),
+            roi=roi if roi else None,
+            max_width=None if roi else EVIDENCE_FULL_MAX_WIDTH)
+        if saved:
+            s["frameImg"] = saved
+    for _, p in all_extracted:
+        try:
+            os.remove(p)
+        except OSError:
+            pass
     return out
 
 
