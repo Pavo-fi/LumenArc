@@ -506,6 +506,27 @@ MainWindow::MainWindow(QWidget *parent)
     m_snapshotOverlay = new SnapshotOverlay(m_videoWidget);
     m_snapshotOverlay->hide();
 
+    // 时间戳框选信号（v1.2.1）：永久连接一次——此前挂在 onSetStartTime 里，
+    // 每开一次校时窗重复 connect 一份（lambda 永久累积在 VideoWidget 上）。
+    // lambda 只读成员（m_roiDialog/m_currentVideoPath/m_videoWidget），
+    // 与单次连接语义自洽。
+    connect(m_videoWidget, &VideoWidget::timestampRoiConfirmed,
+            this, [this](const QRectF &norm) {
+                if (m_roiDialog) {
+                    saveTimestampRoi(m_currentVideoPath, norm);
+                    m_roiDialog->setTimestampRoi(norm);
+                }
+                m_videoWidget->endTimestampRoiSelection();
+                m_roiDialog = nullptr;
+            });
+    connect(m_videoWidget, &VideoWidget::timestampRoiCancelled,
+            this, [this]() {
+                if (m_roiDialog)
+                    m_roiDialog->setTimestampRoi(QRectF());
+                m_videoWidget->endTimestampRoiSelection();
+                m_roiDialog = nullptr;
+            });
+
     createMenus();
     createToolBar();
     setupConnections();
@@ -1837,8 +1858,13 @@ void MainWindow::onSetStartTime()
     // 关闭窗口不取消任务，重开可见进度与结果（Q-3 候选语义不变）。
     if (m_currentVideoPath.isEmpty())
         return;
-    if (m_calibrationDialog)
+    // 已开窗口：置顶返回（此前无 return 照样新建 → 双窗共存，框选确认只
+    // 推进最后打开的窗口，先开的永远卡在「框选完了不抵达下一步」）
+    if (m_calibrationDialog) {
         m_calibrationDialog->raise();
+        m_calibrationDialog->activateWindow();
+        return;
+    }
     const qint64 curPos = m_videoEngine ? m_videoEngine->position() : 0;
     QString sidecarWarning;
     if (m_calibration.source == TimeCalibration::Source::Inherited)
@@ -1863,27 +1889,11 @@ void MainWindow::onSetStartTime()
                 m_videoWidget->beginTimestampRoiSelection(saved);
                 m_roiDialog = dlg;
             });
-    connect(m_videoWidget, &VideoWidget::timestampRoiConfirmed,
-            this, [this](const QRectF &norm) {
-                if (m_roiDialog) {
-                    saveTimestampRoi(m_currentVideoPath, norm);
-                    m_roiDialog->setTimestampRoi(norm);
-                }
-                m_videoWidget->endTimestampRoiSelection();
-                m_roiDialog = nullptr;
-            });
     connect(dlg, &TimeSettingsDialog::cancelTimestampRoiRequest,
             this, [this]() {
                 m_videoWidget->endTimestampRoiSelection();
                 m_roiDialog = nullptr;
-            });
-    connect(m_videoWidget, &VideoWidget::timestampRoiCancelled,
-            this, [this]() {
-                if (m_roiDialog)
-                    m_roiDialog->setTimestampRoi(QRectF());
-                m_videoWidget->endTimestampRoiSelection();
-                m_roiDialog = nullptr;
-            });
+    });
     // 窗口关闭时退出框选模式
     connect(dlg, &QDialog::destroyed, this, [this]() {
         if (m_roiDialog)
@@ -1918,9 +1928,6 @@ void MainWindow::onSetStartTime()
                 }
                 showOperationStatus(msg);
             });
-    connect(dlg, &QDialog::destroyed, this, [this]() {
-        m_calibrationDialog = nullptr;
-    });
     dlg->show();
     dlg->raise();
     dlg->activateWindow();

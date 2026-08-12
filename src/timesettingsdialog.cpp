@@ -462,8 +462,10 @@ void TimeSettingsDialog::startGo()
     m_detailsVisible = false;
     m_detailsBtn->setText(lang("查看细节 ▸", "Details ▸"));
     m_resultLabel->setText(lang(
-        "快速检查中…（读取首尾画面时间，约 10 秒）",
-        "Quick-checking… (reading first/last on-screen time, ~10s)"));
+        "快速检查中…（读取首尾画面时间；大文件尾部定位较慢，\n"
+        "可能需 1~2 分钟，请稍候）",
+        "Quick-checking… (reading first/last on-screen time; tail seek on "
+        "large files can take 1-2 min)"));
     setGoBusy(true, lang("快速检查中…", "Quick-checking…"));
     m_service->runQuickCheck(m_videoPath, m_durationMs, m_roi);
 }
@@ -471,6 +473,13 @@ void TimeSettingsDialog::startGo()
 void TimeSettingsDialog::onRoiButton()
 {
     m_waitingRoi = true;
+    // 「框选时间戳区域」按钮 = 先框后测入口：框选确认后自动开始 GO。
+    // 用户框完的直觉预期是继续校时，而不是再回来点一次 GO（现场反馈：
+    // 框选完了不抵达下一步——根因是本函数此前不置 m_goStage，确认后
+    // setTimestampRoi 不会触发 startGo）。
+    if (m_goStage == GoStage::Idle || m_goStage == GoStage::Failed
+        || m_goStage == GoStage::Done)
+        m_goStage = GoStage::Quick;
     m_resultLabel->setText(lang(
         "请在主窗口画面上框住时间戳区域，然后点「确认」；"
         "不确定可点「跳过（自动扫描）」。",

@@ -1256,3 +1256,26 @@ boundary 0 pts 挂死；修复后 5 checks 0 failures。全套：calibration 73 
 
 遗留：B3 段 5（2.2s 窄段，rate 1.0）属文档已知“错读密集区碎段”现象，在测试容差内；
 真人测试重点：GO 全流程（框选 → 预检 → 自动路由 → 自动应用 → 图表时间轴）。
+
+### 21.8 UI 操作链路修复：框选后不抵达下一步（2026-08-12）
+
+> **现场反馈**：框选完了以后不会抵达下一步。先以离屏 harness 复刻整条链路
+> （OverlayWidget 鼠标链 + VideoWidget 转发 + MainWindow 接线块逐字 + 对话框状态机
+> + 真实 OCR），证明代码链路本身畅通（11/11）——问题在四处 UX/接线缺陷：
+
+1. **「框选时间戳区域」按钮不置 m_goStage**（主断点）：用户直接点框选按钮（不点 GO）
+   时，确认后 setTimestampRoi 不满足 `m_goStage == Quick` → 不触发 startGo，对话框
+   只显示“已选定…点击 GO”——用户直觉“框完该继续”落空。修复：onRoiButton 在
+   Idle/Failed/Done 状态下一并置 Quick（先框后测入口，确认后自动开始）。
+2. **onSetStartTime 双窗 bug**：`if (m_calibrationDialog) raise();` 后无 return 照样
+   new → 两窗共存，框选确认只推进最后打开的窗口，先开的永远卡住。修复：已开窗口
+   raise + activateWindow + return。
+3. **VideoWidget 信号 connect 累积**：timestampRoiConfirmed/Cancelled 的 connect 挂在
+   onSetStartTime（每开一窗加一份，lambda 永久残留）。修复：移至 MainWindow 构造
+   函数一次性连接（lambda 只读成员，语义自洽）；删除重复 destroyed lambda。
+4. **quickCheck 文案不实**：“约 10 秒”对 B3 类无索引大文件（尾部 seek 单次可达
+   90s）严重低估，用户等 30s 误判死机。文案改为“可能需 1~2 分钟”。
+
+**回归**：`tests/ui_chain_test_main.cpp`（离屏，需 Qt6Test + qoffscreen；双场景
+11/11——GO 入口与框选按钮入口均自动续跑至自动应用）；calibration 73 / piecewise
+96 / ocr_atpositions 21 全过。
