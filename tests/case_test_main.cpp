@@ -9,6 +9,7 @@
 #include <QJsonArray>
 #include <QTemporaryDir>
 #include <QSettings>
+#include <QCryptographicHash>
 #include <cstdio>
 #include "domain/case_model.h"
 #include "app/case_manager.h"
@@ -362,6 +363,125 @@ int main(int argc, char **argv)
         }
     }
 
+    // ---- 7.5 框选记忆迁移（v1.3.0 M2 任务9：MainWindow 接线语义逐字复刻）----
+    // savedTimestampRoi/saveTimestampRoi 双模式分流：入案→case.json 优先，
+    // 注册表旧值只读复制一次入案（原值保留一版）；未入案→注册表照旧。
+    {
+        QTemporaryDir root;
+        auto mkVideo = [&](const QString &name) {
+            QFile f(root.filePath(name));
+            f.open(QIODevice::WriteOnly);
+            f.write("x", 1);
+            f.close();
+            return f.fileName();
+        };
+        const QString vidCase = mkVideo(QStringLiteral("迁移案内.mp4"));
+        const QString vidInd  = mkVideo(QStringLiteral("迁移独立.mp4"));
+
+        // MainWindow::readTimestampRoiRegistry 逐字复刻
+        auto regRead = [](const QString &videoPath) {
+            QSettings s("LumenArc", "LumenArc");
+            const QByteArray key = "calibration/roi_"
+                + QCryptographicHash::hash(videoPath.toUtf8(), QCryptographicHash::Md5).toHex();
+            return s.value(QString::fromLatin1(key)).toRectF();
+        };
+        auto regWrite = [](const QString &videoPath, const QRectF &norm) {
+            QSettings s("LumenArc", "LumenArc");
+            const QByteArray key = "calibration/roi_"
+                + QCryptographicHash::hash(videoPath.toUtf8(), QCryptographicHash::Md5).toHex();
+            s.setValue(QString::fromLatin1(key), norm);
+        };
+        auto regClear = [](const QString &videoPath) {
+            QSettings s("LumenArc", "LumenArc");
+            const QByteArray key = "calibration/roi_"
+                + QCryptographicHash::hash(videoPath.toUtf8(), QCryptographicHash::Md5).toHex();
+            s.remove(QString::fromLatin1(key));
+        };
+        // MainWindow::savedTimestampRoi/saveTimestampRoi 逐字复刻
+        CaseManager cm;
+        auto savedRoi = [&](const QString &videoPath) -> QRectF {
+            if (videoPath.isEmpty())
+                return QRectF();
+            if (cm.isCaseVideo(videoPath)) {
+                QRectF roi = cm.timestampRoiFor(videoPath);
+                if (roi.isValid())
+                    return roi;
+                roi = regRead(videoPath);
+                if (roi.isValid())
+                    cm.setTimestampRoi(videoPath, roi);
+                return roi;
+            }
+            return regRead(videoPath);
+        };
+        auto saveRoi = [&](const QString &videoPath, const QRectF &norm) {
+            if (videoPath.isEmpty() || !norm.isValid())
+                return;
+            if (cm.isCaseVideo(videoPath)) {
+                cm.setTimestampRoi(videoPath, norm);
+                return;
+            }
+            regWrite(videoPath, norm);
+        };
+
+        // 预清 + 建案 + 入案
+        regClear(vidCase);
+        regClear(vidInd);
+        QString err;
+        CaseMeta meta;
+        meta.caseNo = QStringLiteral("20260813-迁移-a");
+        meta.title = QStringLiteral("迁移");
+        CHECK(cm.createCase(root.path(), meta, &err), "migrate: createCase");
+        const QString idC = cm.addVideo(vidCase, &err);
+        CHECK(!idC.isEmpty(), "migrate: addVideo");
+
+        // ① 注册表旧值只读复制一次：案内空 → 返回注册表值 + 写入案 + 注册表保留
+        const QRectF regRoi(0.11, 0.22, 0.33, 0.08);
+        regWrite(vidCase, regRoi);
+        const QRectF got1 = savedRoi(vidCase);
+        CHECK(got1.isValid() && qAbs(got1.x() - 0.11) < 1e-9,
+              "migrate: registry value returned");
+        CHECK(cm.timestampRoiFor(vidCase).isValid()
+              && qAbs(cm.timestampRoiFor(vidCase).x() - 0.11) < 1e-9,
+              "migrate: copied into case.json");
+        CHECK(regRead(vidCase).isValid()
+              && qAbs(regRead(vidCase).x() - 0.11) < 1e-9,
+              "migrate: registry original kept");
+
+        // ② 案件内读写优先：案内值覆盖后不再读注册表
+        const QRectF caseRoi(0.44, 0.55, 0.20, 0.06);
+        saveRoi(vidCase, caseRoi);
+        const QRectF got2 = savedRoi(vidCase);
+        CHECK(qAbs(got2.x() - 0.44) < 1e-9, "migrate: case value wins");
+        CHECK(qAbs(regRead(vidCase).x() - 0.11) < 1e-9,
+              "migrate: save to case leaves registry untouched");
+
+        // ③ 独立模式照旧：未入案视频只走注册表，案件不受影响
+        const QRectF indRoi(0.66, 0.77, 0.10, 0.05);
+        saveRoi(vidInd, indRoi);
+        CHECK(regRead(vidInd).isValid() && qAbs(regRead(vidInd).x() - 0.66) < 1e-9,
+              "migrate: independent writes registry");
+        CHECK(savedRoi(vidInd).isValid() && qAbs(savedRoi(vidInd).x() - 0.66) < 1e-9,
+              "migrate: independent reads registry");
+        CHECK(!cm.isCaseVideo(vidInd) && !cm.timestampRoiFor(vidInd).isValid(),
+              "migrate: independent leaves case untouched");
+
+        // ④ 迁移后持久化：保存重开案内值仍在
+        CHECK(cm.saveCase(&err), "migrate: saveCase");
+        cm.closeCase();
+        {
+            CaseManager cm2;
+            CHECK(cm2.openCase(QDir(root.path()).filePath("20260813-迁移-a-迁移"),
+                               &err), "migrate: reopen");
+            CHECK(cm2.timestampRoiFor(vidCase).isValid()
+                  && qAbs(cm2.timestampRoiFor(vidCase).x() - 0.44) < 1e-9,
+                  "migrate: persisted across reopen");
+            cm2.closeCase();
+        }
+        // 清理注册表测试键
+        regClear(vidCase);
+        regClear(vidInd);
+    }
+
     // ---- 8. 哈希队列 + 完整性校验 + manifest ----
     {
         QTemporaryDir root;
@@ -480,6 +600,90 @@ int main(int argc, char **argv)
             CHECK(!hasLock, "manifest excludes lock file");
         }
         cm.closeCase();
+    }
+
+    // ---- 9. 前处理会话登记（v1.3.0 M2 任务8：addPreprocessSession）----
+    {
+        QTemporaryDir root;
+        CaseManager cm;
+        QString err;
+        CaseMeta meta;
+        meta.caseNo = QStringLiteral("20260813-前处理-a");
+        meta.title = QStringLiteral("前处理");
+        CHECK(cm.createCase(root.path(), meta, &err), "pps: createCase");
+
+        // 会话目录结构：<案件>/preprocess/<ts>/{report.csv, merged.mp4,
+        //   merged.mp4.lumencal.json, t01.mp4}
+        const QString session = cm.caseDir()
+            + QStringLiteral("/preprocess/20260813_143022");
+        QDir().mkpath(session);
+        auto mkFile = [](const QString &path, const QByteArray &content) {
+            QFile f(path);
+            f.open(QIODevice::WriteOnly);
+            f.write(content);
+            f.close();
+        };
+        mkFile(session + QStringLiteral("/report.csv"), "a,b\n1,2\n");
+        mkFile(session + QStringLiteral("/merged.mp4"), QByteArray(4096, 'm'));
+        mkFile(session + QStringLiteral("/t01.mp4"), QByteArray(2048, 't'));
+        mkFile(session + QStringLiteral("/merged.mp4.lumencal.json"),
+               "{\"segs\":[]}");
+
+        // 登记：reportCsv 在证据子目录的场景（finalize 迁入 LumenArc_Evidence_）
+        const QString evCsv = session
+            + QStringLiteral("/LumenArc_Evidence_x/report.csv");
+        QDir().mkpath(session + QStringLiteral("/LumenArc_Evidence_x"));
+        mkFile(evCsv, "a,b\n3,4\n");
+        CHECK(cm.addPreprocessSession(
+                  session, evCsv,
+                  {session + QStringLiteral("/merged.mp4"),
+                   session + QStringLiteral("/t01.mp4"),
+                   session + QStringLiteral("/missing.mp4")},   // 缺失产物跳过
+                  {session + QStringLiteral("/merged.mp4.lumencal.json")},
+                  &err), "pps: addPreprocessSession");
+        CHECK(cm.meta().preprocessSessions.size() == 1, "pps: 1 session");
+        const auto &p = cm.meta().preprocessSessions.first();
+        CHECK(p.sessionDirRelPath == QStringLiteral("preprocess/20260813_143022"),
+              "pps: sessionDirRelPath");
+        CHECK(p.reportCsvRelPath.contains("LumenArc_Evidence_x/report.csv"),
+              "pps: reportCsvRelPath (nested evidence dir)");
+        CHECK(p.outputRefs.size() == 2, "pps: 2 outputs (missing skipped)");
+        if (p.outputRefs.size() == 2) {
+            CHECK(p.outputRefs[0].id == QStringLiteral("P001")
+                  && p.outputRefs[1].id == QStringLiteral("P002"),
+                  "pps: P### ids");
+            CHECK(p.outputRefs[0].sizeBytes == 4096
+                  && p.outputRefs[0].mtimeMs > 0
+                  && p.outputRefs[0].sha256.isEmpty(),
+                  "pps: output size/mtime registered, sha pending");
+        }
+        CHECK(p.sidecarRelPaths.size() == 1
+              && p.sidecarRelPaths.first().contains(
+                  "preprocess/20260813_143022/sidecars/merged.mp4.lumencal.json"),
+              "pps: sidecar copied into sidecars/");
+        CHECK(QFile::exists(session
+                  + QStringLiteral("/sidecars/merged.mp4.lumencal.json")),
+              "pps: sidecar copy exists");
+        CHECK(QFile::exists(session
+                  + QStringLiteral("/merged.mp4.lumencal.json")),
+              "pps: original sidecar kept beside output");
+
+        // 案件外会话目录拒绝
+        CHECK(!cm.addPreprocessSession(root.path(), QString(), {}, {}, &err),
+              "pps: outside-case session rejected");
+
+        // 持久化
+        CHECK(cm.saveCase(&err), "pps: saveCase");
+        cm.closeCase();
+        {
+            CaseManager cm2;
+            CHECK(cm2.openCase(QDir(root.path()).filePath(
+                      "20260813-前处理-a-前处理"), &err), "pps: reopen");
+            CHECK(cm2.meta().preprocessSessions.size() == 1
+                  && cm2.meta().preprocessSessions.first().outputRefs.size() == 2,
+                  "pps: session persisted across reopen");
+            cm2.closeCase();
+        }
     }
 
     fprintf(stderr, "case_test: %d checks, %d failures\n", g_checks, g_failures);

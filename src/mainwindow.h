@@ -29,6 +29,7 @@ class PinnedWidget;
 class IVideoEngine;
 class IAnalysisEngine;
 class CalibrationService;
+class CaseManager;
 class RegionModel;
 class PolygonModel;
 class GuideLineModel;
@@ -55,6 +56,8 @@ public:
 private slots:
     /// @brief 打开文件对话框并加载视频
     void onOpenFile();
+    /// @brief 临时打开视频（不入案，v1.3.0 M2 任务7）
+    void onOpenFileTemporary();
     void onSetStartTime();
     /// @brief 播放视频
     void onPlay();
@@ -104,6 +107,11 @@ private:
     void updateTimeDisplay();
     QString formatTime(qint64 ms) const;
     void openVideoFile(const QString &path);
+    /// @brief 打开视频对话框公共流程（admitToCase=false 为临时打开不入案）
+    void openVideosInteractive(bool admitToCase);
+    /// @brief 视频入案登记（v1.3.0 M2 任务7）：重复跳过/源旁 .vla 询问导入
+    ///        （默认是，复制）/同大小仅提示；无打开案件时直接返回
+    void admitVideoToCase(const QString &path, bool interactive);
     /// @brief 自动检测系统中的 Python 解释器路径
     QString detectPythonPath() const;
     /// @brief 用 Python 分析引擎的真实帧数/FPS 计算可信时长
@@ -144,6 +152,9 @@ protected:
     IVideoEngine *m_videoEngine = nullptr;
     IAnalysisEngine *m_analysisEngine = nullptr;
     CalibrationService *m_calibrationService = nullptr;
+    /// 案件管理器（v1.3.0 M2）：.vla 路径分流/框选记忆随案 SSOT；
+    /// 无打开案件或未入案视频时全部回落独立模式老路径（v1.2.2 逐点一致）
+    CaseManager *m_caseManager = nullptr;
     TimeCalibration m_calibration;   // 当前视频校时 SSOT（.vla v8 持久化）
     QPointer<TimeSettingsDialog> m_calibrationDialog;  // 非模态校时窗口（v1.2.1）
     QPointer<TimeSettingsDialog> m_roiDialog;          // 框选中的校时窗口
@@ -153,6 +164,10 @@ protected:
     /// 时间戳区域持久化（按视频路径 hash，同一摄像头复用）
     QRectF savedTimestampRoi(const QString &videoPath) const;
     void saveTimestampRoi(const QString &videoPath, const QRectF &norm);
+    /// QSettings 注册表读取（独立模式路径；案件模式迁移时只读复制源）
+    QRectF readTimestampRoiRegistry(const QString &videoPath) const;
+    /// 校时徽标文案（写案件内 .vla 时同步刷新 CaseVideoRef 缓存）
+    QString calibrationBadgeSummary() const;
     RegionModel *m_regionModel = nullptr;
     PolygonModel *m_polygonModel = nullptr;
     GuideLineModel *m_guideLineModel = nullptr;

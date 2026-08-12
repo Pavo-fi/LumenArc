@@ -20,6 +20,7 @@
 #include "infrastructure/ffmpeg_video_engine.h"
 #include "infrastructure/python_analysis_engine.h"
 #include "app/calibration_service.h"
+#include "app/case_manager.h"
 #include "timesettingsdialog.h"
 #include "magnifierwidget.h"
 #include "snapshotoverlay.h"
@@ -496,6 +497,16 @@ MainWindow::MainWindow(QWidget *parent)
     // 「采用」由 TimeSettingsDialog 决定）
     m_calibrationService = new CalibrationService(m_analysisEngine, this);
     m_calibrationService->setPythonExecutable(detectPythonPath());
+
+    // 案件管理器（v1.3.0 M2）：唯一持有打开的案件；无案件时所有分流
+    // 接口（vlaPathFor/timestampRoiFor…）自动回落独立模式老行为
+    m_caseManager = new CaseManager(this);
+    // 校时证据帧目录分流（M2 任务8）：入案→案件 evidence/calibration/V###；
+    // 未入案/无案件→CaseManager 内部回落老路径 LumenArc_Calibration
+    m_calibrationService->setEvidenceDirResolver(
+        [this](const QString &videoPath) {
+            return m_caseManager->evidenceDirFor(videoPath);
+        });
     // v1.2.1 非模态：后台校时任务进度常驻状态栏（对话框关闭后仍可见）
     connect(m_calibrationService, &CalibrationService::progress,
             this, [this](const QString &stage) {
@@ -545,6 +556,8 @@ MainWindow::~MainWindow()
 void MainWindow::openPreprocessWindow()
 {
     auto *w = new PreprocessWindow(m_analysisEngine, this);
+    // v1.3.0 M2 任务8：案件模式注入（有打开案件时成果默认导入案件）
+    w->setCaseManager(m_caseManager);
     connect(w, &PreprocessWindow::openOutputRequested,
             this, &MainWindow::openVideoFile);
     w->show();
@@ -557,6 +570,8 @@ void MainWindow::createMenus()
 {
     QMenu *fileMenu = menuBar()->addMenu(lang("文件(&F)", "&File"));
     fileMenu->addAction(lang("打开视频(&O)...", "&Open Video..."), this, &MainWindow::onOpenFile, QKeySequence::Open);
+    // v1.3.0 M2 任务7：临时打开（不入案）——有打开案件时与 Ctrl+O 的唯一区别
+    fileMenu->addAction(lang("临时打开视频（不入案）(&T)...", "Open Video &Temporarily (no case)..."), this, &MainWindow::onOpenFileTemporary);
     fileMenu->addAction(lang("素材转码拼接(&M)...", "&Transcode & Merge..."), this, &MainWindow::openPreprocessWindow, QKeySequence(QStringLiteral("Ctrl+M")));
     fileMenu->addAction(lang("加载图片为叠加(&I)...", "Load Image as &Overlay..."), this, &MainWindow::onLoadOverlayImage);
     fileMenu->addSeparator();
@@ -1406,6 +1421,18 @@ qint64 MainWindow::trustedDurationFor(const QString &path) const
 
 void MainWindow::onOpenFile()
 {
+    // Ctrl+O：案件打开时自动入案（拍板§8-5）
+    openVideosInteractive(true);
+}
+
+void MainWindow::onOpenFileTemporary()
+{
+    // 「临时打开(不入案)」：跳过入案登记，其余流程一致
+    openVideosInteractive(false);
+}
+
+void MainWindow::openVideosInteractive(bool admitToCase)
+{
     QStringList filePaths = QFileDialog::getOpenFileNames(this,
         lang("打开视频", "Open Video Files"),
         QString(),
@@ -1427,6 +1454,11 @@ void MainWindow::onOpenFile()
         if (fps <= 0) fps = 30.0f;
         m_videoListPanel->addVideo(path, durationMs, fps);
 
+        // v1.3.0 M2 任务7：先于 openVideoFile 入案，使源旁 .vla 导入后
+        // 缓存探测直接命中案件 .vla（入案视频不弹询问）
+        if (admitToCase)
+            admitVideoToCase(path, true);
+
         if (i == 0) {
             openVideoFile(path);
             // 引擎回退：getVideoInfo 失败时改用引擎时长
@@ -1441,6 +1473,71 @@ void MainWindow::onOpenFile()
 }
 
 /// @brief 打开视频文件：加载/缓存检测/按钮启用
+/// @brief 视频入案登记（v1.3.0 M2 任务7）
+void MainWindow::admitVideoToCase(const QString &path, bool interactive)
+{
+    if (!m_caseManager || !m_caseManager->isOpen() || path.isEmpty())
+        return;
+    if (path.endsWith(".vla", Qt::CaseInsensitive))
+        return;   // .vla 分析文件不是视频，不入案
+    if (m_caseManager->isCaseVideo(path))
+        return;   // 已在案：照常打开即可，不重复登记
+
+    QString err;
+    const QString id = m_caseManager->addVideo(path, &err);
+    if (id.isEmpty()) {
+        // 重复路径拒绝（拍板§8-5）：非模态提示，不打断打开流程
+        if (!err.isEmpty())
+            showOperationStatus(err);
+        return;
+    }
+    showOperationStatus(lang("已入案登记：%1", "Registered into case: %1").arg(id));
+
+    // 同内容仅提示（拍板§8-5）：与案内他路大小完全一致 → 可能同一来源
+    if (const auto *self = m_caseManager->videoById(id)) {
+        for (const auto &v : m_caseManager->meta().videos) {
+            if (v.id != id && v.sizeBytes > 0 && v.sizeBytes == self->sizeBytes) {
+                showOperationStatus(
+                    lang("提示：%1 与 %2 文件大小相同，请确认是否同一来源",
+                         "Note: %1 and %2 have identical size; same source?")
+                        .arg(id, v.id));
+                break;
+            }
+        }
+    }
+
+    // 源旁已有 .vla 询问导入（默认是，复制；拍板§8-5）
+    const QString sideVla = path + QStringLiteral(".vla");
+    const QString caseVla = m_caseManager->vlaPathFor(path);
+    if (QFile::exists(sideVla) && !QFile::exists(caseVla)) {
+        bool importIt = true;
+        if (interactive) {
+            const auto reply = QMessageBox::question(this,
+                lang("导入已有分析结果", "Import Existing Analysis"),
+                lang("源视频旁存在已保存的分析结果：\n%1\n\n是否复制导入案件（%2）？",
+                     "A saved analysis exists beside the source:\n%1\n\n"
+                     "Copy it into the case (%2)?").arg(sideVla, id),
+                QMessageBox::Yes | QMessageBox::No, QMessageBox::Yes);
+            importIt = (reply == QMessageBox::Yes);
+        }
+        if (importIt) {
+            QDir().mkpath(QFileInfo(caseVla).absolutePath());
+            if (QFile::copy(sideVla, caseVla))
+                showOperationStatus(
+                    lang("已导入分析结果到 %1", "Imported analysis into %1").arg(id));
+            else
+                showOperationStatus(
+                    lang("分析结果复制失败", "Failed to copy the analysis file"));
+        }
+    }
+
+    // 登记即落盘（取证：崩溃不丢登记；case.json 体量小，保存开销可忽略）
+    QString saveErr;
+    if (!m_caseManager->saveCase(&saveErr))
+        showOperationStatus(
+            lang("案件保存失败：%1", "Failed to save case: %1").arg(saveErr));
+}
+
 void MainWindow::openVideoFile(const QString &filePath)
 {
     if (filePath.isEmpty())
@@ -1648,8 +1745,12 @@ void MainWindow::openVideoFile(const QString &filePath)
         m_captureBtn->setEnabled(true);
 
         // Check for cached .vla file alongside the video
-        QString vlaPath = filePath + ".vla";
+        // v1.3.0 路径分流：入案视频缓存 = 案件 videos/V###.vla；未入案照旧源旁
+        const QString vlaPath = m_caseManager->vlaPathFor(filePath);
         if (QFile::exists(vlaPath)) {
+            // 入案视频：案件内 .vla 即权威缓存，直接加载不弹询问（拍板§3-6）
+            bool loadCache = m_caseManager->isCaseVideo(filePath);
+            if (!loadCache) {
             auto reply = QMessageBox::question(this,
                 lang("找到缓存的分析结果", "Cached Analysis Found"),
                 lang("找到此视频已保存的分析结果。\n"
@@ -1657,7 +1758,9 @@ void MainWindow::openVideoFile(const QString &filePath)
                      "A saved analysis result was found for this video.\n"
                      "Would you like to load it instead of re-analyzing?\n\n") + vlaPath,
                 QMessageBox::Yes | QMessageBox::No, QMessageBox::Yes);
-            if (reply == QMessageBox::Yes) {
+            loadCache = (reply == QMessageBox::Yes);
+            }
+            if (loadCache) {
                 QVector<QRect> regions;
                 QVector<QPolygon> loadedPolygons;
                 QVector<GuideLine> loadedGuideLines;
@@ -1728,11 +1831,13 @@ void MainWindow::onSaveAnalysis()
         return;
     }
 
+    // v1.3.0 路径分流：入案视频默认存案件 videos/V###.vla（仍可另选路径）；
+    // 直接加载 .vla 的场景默认覆写原文件（v1.2.2 行为保持）
     QString defaultPath = m_currentVideoPath;
     if (defaultPath.isEmpty())
         defaultPath = "analysis_result.vla";
-    else if (!defaultPath.endsWith(".vla"))
-        defaultPath += ".vla";
+    else if (!defaultPath.endsWith(".vla", Qt::CaseInsensitive))
+        defaultPath = m_caseManager->vlaPathFor(defaultPath);
 
     QString filePath = QFileDialog::getSaveFileName(this,
         lang("保存分析结果", "Save Analysis Result"), defaultPath,
@@ -1752,6 +1857,14 @@ void MainWindow::onSaveAnalysis()
                                      m_regionModel->roiIds(),
                                      m_polygonModel->roiIds())) {
         // VLA2：频谱已内嵌于文件中，无需 .spec 伴随文件
+        // 存入案件管理路径时同步刷新校时徽标缓存（.vla 为 SSOT）
+        if (!m_currentVideoPath.isEmpty()
+            && QFileInfo(filePath).absoluteFilePath()
+                   == QFileInfo(m_caseManager->vlaPathFor(m_currentVideoPath)).absoluteFilePath()) {
+            m_caseManager->updateCalibrationBadge(
+                m_currentVideoPath, m_calibration.isValid(),
+                calibrationBadgeSummary());
+        }
         QMessageBox::information(this, lang("保存", "Save"),
             lang("分析结果保存成功。", "Analysis result saved successfully."));
         showOperationStatus(lang("保存成功", "Saved"));
@@ -1763,8 +1876,12 @@ void MainWindow::onSaveAnalysis()
 
 void MainWindow::onLoadAnalysis()
 {
+    // v1.3.0 路径分流：入案视频从案件 videos/ 目录起始浏览
+    const QString startDir = m_currentVideoPath.isEmpty()
+        ? QString()
+        : QFileInfo(m_caseManager->vlaPathFor(m_currentVideoPath)).absolutePath();
     QString filePath = QFileDialog::getOpenFileName(this,
-        "Load Analysis Result", QString(),
+        "Load Analysis Result", startDir,
         "VLA Files (*.vla);;All Files (*)");
     if (filePath.isEmpty())
         return;
@@ -1835,24 +1952,67 @@ void MainWindow::onLoadOverlayImage()
 // ---------------------------------------------------------------------------
 // 时间戳区域持久化（v1.2.1：按视频路径 hash，同一摄像头复用）
 // ---------------------------------------------------------------------------
-QRectF MainWindow::savedTimestampRoi(const QString &videoPath) const
+QRectF MainWindow::readTimestampRoiRegistry(const QString &videoPath) const
 {
-    if (videoPath.isEmpty())
-        return QRectF();
     QSettings s("LumenArc", "LumenArc");
     const QByteArray key = "calibration/roi_"
         + QCryptographicHash::hash(videoPath.toUtf8(), QCryptographicHash::Md5).toHex();
     return s.value(QString::fromLatin1(key)).toRectF();
 }
 
+QRectF MainWindow::savedTimestampRoi(const QString &videoPath) const
+{
+    if (videoPath.isEmpty())
+        return QRectF();
+    // v1.3.0 框选记忆随案（M2 任务9）：入案视频读写 case.json
+    if (m_caseManager && m_caseManager->isCaseVideo(videoPath)) {
+        QRectF roi = m_caseManager->timestampRoiFor(videoPath);
+        if (roi.isValid())
+            return roi;
+        // 迁移：注册表旧值只读复制一次入案（注册表原值保留一版，拍板§8-12）
+        roi = readTimestampRoiRegistry(videoPath);
+        if (roi.isValid())
+            m_caseManager->setTimestampRoi(videoPath, roi);
+        return roi;
+    }
+    // 独立模式照旧 QSettings
+    return readTimestampRoiRegistry(videoPath);
+}
+
 void MainWindow::saveTimestampRoi(const QString &videoPath, const QRectF &norm)
 {
     if (videoPath.isEmpty() || !norm.isValid())
         return;
+    // v1.3.0 入案视频框选记忆写 case.json（独立模式照旧 QSettings）
+    if (m_caseManager && m_caseManager->isCaseVideo(videoPath)) {
+        m_caseManager->setTimestampRoi(videoPath, norm);
+        return;
+    }
     QSettings s("LumenArc", "LumenArc");
     const QByteArray key = "calibration/roi_"
         + QCryptographicHash::hash(videoPath.toUtf8(), QCryptographicHash::Md5).toHex();
     s.setValue(QString::fromLatin1(key), norm);
+}
+
+QString MainWindow::calibrationBadgeSummary() const
+{
+    if (!m_calibration.isValid())
+        return QString();
+    QString src;
+    switch (m_calibration.source) {
+    case TimeCalibration::Source::Manual:    src = lang("手动", "manual"); break;
+    case TimeCalibration::Source::Ocr:       src = QStringLiteral("OCR"); break;
+    case TimeCalibration::Source::AbsStart:  src = QStringLiteral("absStart"); break;
+    case TimeCalibration::Source::Inherited: src = lang("继承", "inherited"); break;
+    default: break;
+    }
+    // 例："OCR 3点, rate=1.000"；分段重建模式标注 piecewise
+    QString s = lang("%1 %2点, rate=%3", "%1 %2pts, rate=%3")
+        .arg(src).arg(m_calibration.samples.size())
+        .arg(m_calibration.effectiveRate(), 0, 'f', 3);
+    if (m_calibration.piecewiseMode())
+        s += lang("（分段重建）", " (piecewise)");
+    return s;
 }
 
 void MainWindow::showTrayNotification(const QString &title,
@@ -2004,6 +2164,9 @@ void MainWindow::dropEvent(QDropEvent *event)
         if (fps <= 0) fps = 30.0f;
 
         m_videoListPanel->addVideo(filePath, durationMs, fps);
+
+        // v1.3.0 M2 任务7：拖入即入案（有打开案件时；拍板§8-5）
+        admitVideoToCase(filePath, true);
 
         if (first) {
             openVideoFile(filePath);
@@ -2464,7 +2627,10 @@ void MainWindow::onAnalysisFinished(const AnalysisSnapshot &snapshot)
     // MB，min/max 双遍历 + 量化 + 写盘在 UI 线程会“程序未响应”——现场反馈）
     if (!m_currentVideoPath.isEmpty() &&
         !m_currentVideoPath.endsWith(".vla", Qt::CaseInsensitive)) {
-        const QString vlaPath = m_currentVideoPath + ".vla";
+        // v1.3.0 路径分流：入案视频 .vla 落案件 videos/V###.vla
+        const QString vlaPath = m_caseManager->vlaPathFor(m_currentVideoPath);
+        // 案件 videos/ 建案时已创建；防御性确保（案件目录被移动/重开场景）
+        QDir().mkpath(QFileInfo(vlaPath).absolutePath());
         const QRect magRect = m_magnifier ? m_magnifier->currentSourceRect() : QRect();
         // 全部参数为值拷贝（各 model 的 getter 返回副本），后台线程安全
         const QVector<QRect> regions = m_regionModel->regions();
@@ -2485,6 +2651,10 @@ void MainWindow::onAnalysisFinished(const AnalysisSnapshot &snapshot)
                               regionRoiIds, polygonRoiIds);
         });
         // VLA2：频谱已内嵌于文件中，无需 .spec 伴随文件
+        // 同步刷新案件校时徽标缓存（.vla 为 SSOT；案件模式空指针安全）
+        m_caseManager->updateCalibrationBadge(
+            m_currentVideoPath, m_calibration.isValid(),
+            calibrationBadgeSummary());
     }
 
     QString msg;
