@@ -19,6 +19,7 @@
 #include "videostatemanager.h"
 
 class TimeSettingsDialog;
+class QSystemTrayIcon;
 
 class VideoWidget;
 class MagnifierWidget;
@@ -146,6 +147,9 @@ protected:
     TimeCalibration m_calibration;   // 当前视频校时 SSOT（.vla v8 持久化）
     QPointer<TimeSettingsDialog> m_calibrationDialog;  // 非模态校时窗口（v1.2.1）
     QPointer<TimeSettingsDialog> m_roiDialog;          // 框选中的校时窗口
+    /// 校时长任务完成的 Windows toast 通知（v1.2.2，用户最小化等待场景）
+    void showTrayNotification(const QString &title, const QString &message);
+    QSystemTrayIcon *m_trayIcon = nullptr;
     /// 时间戳区域持久化（按视频路径 hash，同一摄像头复用）
     QRectF savedTimestampRoi(const QString &videoPath) const;
     void saveTimestampRoi(const QString &videoPath, const QRectF &norm);

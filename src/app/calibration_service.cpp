@@ -173,6 +173,8 @@ void CalibrationService::runQuickCheck(const QString &videoPath,
         return;
     QVector<qint64> positions;
     positions.append(1000);
+    if (dur > 12000)
+        positions.append(dur / 2);   // v1.2.2 第三点（中点）共线校验
     if (dur > 6000)
         positions.append(dur - 3000);
     m_pendingVideo = videoPath;
@@ -180,6 +182,36 @@ void CalibrationService::runQuickCheck(const QString &videoPath,
     emit progress(QStringLiteral("quick check"));
     m_ocrEngine->runAtPositions(videoPath, positions, dur,
                                 evidenceDirFor(videoPath), roi);
+}
+
+bool CalibrationService::quickCheckSamplesInconsistent(
+    const QVector<TimeCalibration::Sample> &samples)
+{
+    if (samples.size() < 3)
+        return false;   // 两点无法校验（维持原首尾语义）
+    auto sorted = samples;
+    std::sort(sorted.begin(), sorted.end(),
+              [](const TimeCalibration::Sample &a,
+                 const TimeCalibration::Sample &b) {
+                  return a.streamMs < b.streamMs;
+              });
+    const qint64 ds = sorted.last().streamMs - sorted.first().streamMs;
+    const qint64 dw = sorted.last().wallMs - sorted.first().wallMs;
+    if (ds <= 0 || sorted.first().wallMs <= 0 || sorted.last().wallMs <= 0)
+        return false;
+    // OSD 分辨率 1s → 容差 max(5s, 2%跨度)；错一位分钟 = 60s+ 必超阈。
+    const double threshMs = qMax(5000.0, 0.02 * ds);
+    for (int i = 1; i + 1 < sorted.size(); ++i) {
+        const auto &m = sorted[i];
+        if (m.wallMs <= 0)
+            return true;
+        const double pred = sorted.first().wallMs
+            + static_cast<double>(dw)
+                  * (m.streamMs - sorted.first().streamMs) / ds;
+        if (std::fabs(m.wallMs - pred) > threshMs)
+            return true;
+    }
+    return false;
 }
 
 void CalibrationService::probeAbsStart(const QString &videoPath)
@@ -217,17 +249,29 @@ void CalibrationService::onAtPositionsFinished(
         return;
     if (m_quickPending) {
         m_quickPending = false;
+        // at 模式按位置分片并行，聚合顺序 = 完成顺序（随机）：先按 streamMs
+        // 排序，首尾语义才成立（与 onReconBatchFinished 同一防御）。
+        auto sorted = samples;
+        std::sort(sorted.begin(), sorted.end(),
+                  [](const TimeCalibration::Sample &a,
+                     const TimeCalibration::Sample &b) {
+                      return a.streamMs < b.streamMs;
+                  });
         // 首尾两点：整体速率 + 疑似变速判定（>15% 偏差）
         double rate = 1.0;
         bool suspicious = false;
-        if (samples.size() >= 2) {
-            const qint64 ds = samples.last().streamMs - samples.first().streamMs;
-            const qint64 dw = samples.last().wallMs - samples.first().wallMs;
-            if (ds > 0 && samples.first().wallMs > 0 && samples.last().wallMs > 0)
+        bool ocrSuspect = false;
+        if (sorted.size() >= 2) {
+            const qint64 ds = sorted.last().streamMs - sorted.first().streamMs;
+            const qint64 dw = sorted.last().wallMs - sorted.first().wallMs;
+            if (ds > 0 && sorted.first().wallMs > 0 && sorted.last().wallMs > 0)
                 rate = static_cast<double>(dw) / ds;
             suspicious = std::fabs(rate - 1.0) > 0.15;
+            // 第三点确认（v1.2.2）：中点墙钟必须落在首尾直线上，
+            // 否则首尾/中点任一点疑似错读 → 拒绝路由，防误判变速白跑重建。
+            ocrSuspect = quickCheckSamplesInconsistent(sorted);
         }
-        emit quickCheckReady(video, rate, suspicious);
+        emit quickCheckReady(video, rate, suspicious, ocrSuspect);
         return;
     }
     if (m_reconStage != ReconStage::None) {

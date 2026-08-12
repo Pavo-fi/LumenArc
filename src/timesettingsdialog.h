@@ -61,6 +61,9 @@ signals:
     void requestTimestampRoi();
     /// 取消框选（主窗口退出框选模式）
     void cancelTimestampRoiRequest();
+    /// GO 长任务（识别/重建，可达数分钟）完成或失败（v1.2.2）：
+    /// 供主窗口在用户最小化等待时发 Windows toast 通知
+    void goTaskFinished(const QString &title, const QString &message);
 
 private slots:
     void onRunGo();          ///< GO 主按钮：快速检查 → 自动路由
@@ -68,7 +71,7 @@ private slots:
     void onCancelGo();
     void onServiceProgress(const QString &stage);
     void onQuickCheckReady(const QString &videoPath, double overallRate,
-                           bool suspicious);
+                           bool suspicious, bool ocrSuspect);
     void onThreePointReady(const QString &videoPath,
                            const TimeCalibration &proposed);
     void onReconstructionReady(const QString &videoPath,

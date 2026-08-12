@@ -551,10 +551,24 @@ void TimeSettingsDialog::stageTimestampRoi(const QRectF &rect)
 
 void TimeSettingsDialog::onQuickCheckReady(const QString &videoPath,
                                            double overallRate,
-                                           bool suspicious)
+                                           bool suspicious,
+                                           bool ocrSuspect)
 {
     if (videoPath != m_videoPath)
         return;
+    if (ocrSuspect) {
+        // 第三点确认失败（v1.2.2）：首尾/中点任一点疑似被 OCR 错读。
+        // 拒绝自动路由——继续走会把错读当变速，白跑数分钟重建且结果不可信。
+        m_goStage = GoStage::Failed;
+        setGoBusy(false, QString());
+        m_resultLabel->setText(lang(
+            "⚠ 预检三个取样点的时间不成直线，OSD 疑似错读，时间不可信。\n"
+            "请点「框选时间戳区域」重新框选（对准时间戳、避开干扰文字）后再试。",
+            "⚠ Quick-check sample times are not collinear; OCR misread "
+            "suspected, time not trustworthy. Re-select the timestamp area "
+            "(aim at the digits, avoid other text) and try again."));
+        return;
+    }
     if (suspicious) {
         // 疑似变速：自动进入时间重建
         m_goStage = GoStage::Recon;
@@ -592,6 +606,10 @@ void TimeSettingsDialog::onThreePointReady(const QString &videoPath,
     refitSummaryRefresh();
     // 无异常 → 自动应用（结果区与状态栏即时反馈）
     maybeAutoApply();
+    emit goTaskFinished(lang("校时完成", "Calibration finished"),
+                        lang("%1：三点识别完成，结果在校时窗口中。",
+                             "%1: 3-point recognition done, see calibration "
+                             "window.").arg(QFileInfo(videoPath).fileName()));
 }
 
 void TimeSettingsDialog::onReconstructionReady(const QString &videoPath,
@@ -612,6 +630,10 @@ void TimeSettingsDialog::onReconstructionReady(const QString &videoPath,
             "Re-run \"Auto calibrate\" if needed."));
         m_useBtn->setEnabled(true);
         m_detailsBtn->setEnabled(true);
+        emit goTaskFinished(lang("校时完成", "Calibration finished"),
+                            lang("%1：重建完成，判定为正常录像。",
+                                 "%1: reconstruction done, normal recording.")
+                                .arg(QFileInfo(videoPath).fileName()));
         return;
     }
 
@@ -640,6 +662,10 @@ void TimeSettingsDialog::onReconstructionReady(const QString &videoPath,
     m_detailsBtn->setEnabled(true);
     // 无异常 → 自动应用（结果区与状态栏即时反馈）
     maybeAutoApply();
+    emit goTaskFinished(lang("校时完成", "Calibration finished"),
+                        lang("%1：时间重建完成，结果在校时窗口中。",
+                             "%1: time reconstruction done, see calibration "
+                             "window.").arg(QFileInfo(videoPath).fileName()));
 }
 
 void TimeSettingsDialog::onUseResult()
@@ -755,6 +781,9 @@ void TimeSettingsDialog::onServiceFailed(const QString &videoPath,
             "Possible: no timestamp, date-less format (needs yyyy-mm-dd hh:mm:ss), "
             "or unusual font. Try Step 3 → manual / force reconstruction.")
                 .arg(error));
+        emit goTaskFinished(lang("校时失败", "Calibration failed"),
+                            lang("%1：%2", "%1: %2")
+                                .arg(QFileInfo(videoPath).fileName(), error));
         return;
     }
     // 高级区强制重建失败

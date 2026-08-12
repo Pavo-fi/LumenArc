@@ -43,6 +43,7 @@
 #include <QFileDialog>
 #include <QMessageBox>
 #include <QApplication>
+#include <QSystemTrayIcon>
 #include <QStyle>
 #include <QDebug>
 #include <QDir>
@@ -1854,6 +1855,36 @@ void MainWindow::saveTimestampRoi(const QString &videoPath, const QRectF &norm)
     s.setValue(QString::fromLatin1(key), norm);
 }
 
+void MainWindow::showTrayNotification(const QString &title,
+                                      const QString &message)
+{
+    // v1.2.2：校时长任务（重建可达数分钟）用户最小化等待场景 ——
+    // Windows toast 通知。用户正在操作任一窗口时不打扰。
+    if (QApplication::activeWindow())
+        return;
+    if (!QSystemTrayIcon::isSystemTrayAvailable()
+        || !QSystemTrayIcon::supportsMessages())
+        return;
+    if (!m_trayIcon) {
+        m_trayIcon = new QSystemTrayIcon(windowIcon(), this);
+        connect(m_trayIcon, &QSystemTrayIcon::messageClicked, this, [this]() {
+            if (m_calibrationDialog) {
+                m_calibrationDialog->showNormal();
+                m_calibrationDialog->raise();
+                m_calibrationDialog->activateWindow();
+            }
+            showNormal();
+            raise();
+            activateWindow();
+        });
+    }
+    m_trayIcon->show();
+    m_trayIcon->showMessage(title, message,
+                            QSystemTrayIcon::Information, 10000);
+    // 托盘图标不常驻：消息弹出后自动隐藏（toast 已入系统通知中心）
+    QTimer::singleShot(15000, m_trayIcon, &QSystemTrayIcon::hide);
+}
+
 void MainWindow::onSetStartTime()
 {
     // v1.2.1 非模态校时窗口：重建/识别在后台进行，主窗口可继续操作；
@@ -1903,6 +1934,8 @@ void MainWindow::onSetStartTime()
         m_videoWidget->endTimestampRoiSelection();
         m_calibrationDialog = nullptr;
     });
+    connect(dlg, &TimeSettingsDialog::goTaskFinished,
+            this, &MainWindow::showTrayNotification);
     connect(dlg, &TimeSettingsDialog::calibrationApplied,
             this, [this](const TimeCalibration &cal) {
                 m_calibration = cal;

@@ -152,6 +152,49 @@ int main(int argc, char **argv)
     }
 
     CalibrationService service(nullptr);
+
+    // ---- 第三点确认（v1.2.2）静态校验用例：错读任一点必须可疑 ----
+    {
+        using S = TimeCalibration::Sample;
+        const qint64 base = 1750000000000LL;   // 任意 epoch 基点
+        auto mk = [](qint64 streamMs, qint64 wallMs) {
+            S s; s.streamMs = streamMs; s.wallMs = wallMs; s.conf = 1.0;
+            return s;
+        };
+        // 共线三点（rate=1.0）→ 不可疑
+        const QVector<S> ok{mk(1000, base), mk(15000, base + 14000),
+                            mk(27000, base + 26000)};
+        CHECK(!CalibrationService::quickCheckSamplesInconsistent(ok),
+              "quickCheck: collinear 3 points not suspect");
+        // 乱序输入同样不可疑（内部按 streamMs 排序）
+        const QVector<S> shuffled{ok[2], ok[0], ok[1]};
+        CHECK(!CalibrationService::quickCheckSamplesInconsistent(shuffled),
+              "quickCheck: shuffled collinear not suspect");
+        // 尾点错读 +60s → 可疑
+        CHECK(CalibrationService::quickCheckSamplesInconsistent(
+                  {mk(1000, base), mk(15000, base + 14000),
+                   mk(27000, base + 26000 + 60000)}),
+              "quickCheck: misread tail point suspect");
+        // 首点错读 +60s → 中点残差爆炸 → 可疑
+        CHECK(CalibrationService::quickCheckSamplesInconsistent(
+                  {mk(1000, base + 60000), mk(15000, base + 14000),
+                   mk(27000, base + 26000)}),
+              "quickCheck: misread head point suspect");
+        // 中点错读 -60s → 可疑
+        CHECK(CalibrationService::quickCheckSamplesInconsistent(
+                  {mk(1000, base), mk(15000, base + 14000 - 60000),
+                   mk(27000, base + 26000)}),
+              "quickCheck: misread mid point suspect");
+        // 仅两点 → 不可疑（保持旧行为：两点无法校验）
+        CHECK(!CalibrationService::quickCheckSamplesInconsistent(
+                  {mk(1000, base), mk(27000, base + 26000 + 60000)}),
+              "quickCheck: 2 points never suspect");
+        // 秒级小误差（±3s）在容差内 → 不可疑
+        CHECK(!CalibrationService::quickCheckSamplesInconsistent(
+                  {mk(1000, base), mk(15000, base + 14000 + 3000),
+                   mk(27000, base + 26000)}),
+              "quickCheck: small second-level jitter tolerated");
+    }
     FlowCtx c;
     c.service = &service;
     c.videoPath = synth;

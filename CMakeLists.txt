@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(LumenArc VERSION 1.2.0 LANGUAGES CXX)
+project(LumenArc VERSION 1.2.2 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -19,7 +19,7 @@ endif()
 
 # --- Qt6 ---
 set(CMAKE_PREFIX_PATH "${CMAKE_PREFIX_PATH};$ENV{QT6_DIR}")
-find_package(Qt6 REQUIRED COMPONENTS Widgets Charts Multimedia Concurrent)
+find_package(Qt6 REQUIRED COMPONENTS Widgets Charts Multimedia Concurrent Test)
 
 # --- FFmpeg (LGPL shared build: bin/ include/ lib/) ---
 set(FFMPEG_SDK_PATH "" CACHE PATH "Path to FFmpeg SDK root (contains include/ and lib/)")
@@ -301,6 +301,50 @@ target_link_libraries(lumenarc_vla_test PRIVATE
     Qt6::Charts
 )
 
+# --- UI chain test (offscreen): GO/框选全链路（v1.2.x UX，真实对话框+服务） ---
+add_executable(lumenarc_ui_chain_test
+    tests/ui_chain_test_main.cpp
+    src/timesettingsdialog.cpp
+    src/videowidget.cpp
+    src/app/calibration_service.cpp
+    src/infrastructure/ivideo_engine.h
+    src/infrastructure/ianalysis_engine.h
+    src/infrastructure/timestamp_ocr_engine.cpp
+    src/infrastructure/python_analysis_engine.cpp
+    src/infrastructure/media_probe_engine.cpp
+    src/i18n.cpp
+    src/domain/time_calibration.cpp
+    src/domain/time_piecewise.cpp
+    src/domain/region_model.cpp
+    src/domain/polygon_model.cpp
+    src/domain/guide_line_model.cpp
+)
+target_include_directories(lumenarc_ui_chain_test PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+    ${FFMPEG_INCLUDE_DIR}
+)
+target_link_libraries(lumenarc_ui_chain_test PRIVATE
+    Qt6::Core
+    Qt6::Gui
+    Qt6::Widgets
+    Qt6::Test       # QTest 鼠标事件注入
+    Qt6::Concurrent   # python_analysis_engine.cpp 后台解析
+    ${FFMPEG_LIBRARIES}
+)
+
+# 测试以 -platform offscreen 运行：exe 同目录 platforms/ 需有 qoffscreen.dll
+#（windeployqt 只部署 qwindows.dll，否则 Qt 弹“no Qt platform plugin”错误框）
+if(WIN32)
+    set(_qoffscreen_dll "${Qt6_DIR}/../../../plugins/platforms/qoffscreen.dll")
+    if(EXISTS "${_qoffscreen_dll}")
+        add_custom_command(TARGET lumenarc_ui_chain_test POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E make_directory
+                "$<TARGET_FILE_DIR:lumenarc_ui_chain_test>/platforms"
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different "${_qoffscreen_dll}"
+                "$<TARGET_FILE_DIR:lumenarc_ui_chain_test>/platforms/")
+    endif()
+endif()
+
 # --- Platform-specific executable ---
 if(WIN32)
     add_executable(${PROJECT_NAME} WIN32 ${SOURCES} ${HEADERS})
@@ -317,8 +361,8 @@ elseif(APPLE)
         MACOSX_BUNDLE TRUE
         MACOSX_BUNDLE_INFO_PLIST "${CMAKE_CURRENT_SOURCE_DIR}/src/Info.plist"
         MACOSX_BUNDLE_BUNDLE_NAME "LumenArc"
-        MACOSX_BUNDLE_BUNDLE_VERSION "1.2.0"
-        MACOSX_BUNDLE_SHORT_VERSION_STRING "1.2.0"
+        MACOSX_BUNDLE_BUNDLE_VERSION "1.2.2"
+        MACOSX_BUNDLE_SHORT_VERSION_STRING "1.2.2"
         MACOSX_BUNDLE_GUI_IDENTIFIER "com.firetech.lumenarc"
     )
 else()

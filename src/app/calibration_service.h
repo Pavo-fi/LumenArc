@@ -50,8 +50,15 @@ public:
                            const QRectF &roi = QRectF());
     /// 秒级预检（v1.2.1）：首/尾两点 OCR 判"疑似变速文件"，
     /// 供校时窗口智能推荐（正常→① 自动校时；变速→⑤ 时间重建）。
+    /// v1.2.2：时长足够时增采中点做三点共线校验（第三点确认）——
+    /// 首尾任一点被 OCR 错读会误判变速 → 白跑数分钟重建。
     void runQuickCheck(const QString &videoPath, qint64 durationMs,
                        const QRectF &roi = QRectF());
+    /// 第三点确认（v1.2.2）：预检三点共线校验。true = 任一点疑似错读
+    ///（时间不可信，应拒绝自动路由）。samples 任意顺序（内部排序）；
+    /// 少于 3 点无法校验返回 false（维持首尾两点旧语义）。
+    static bool quickCheckSamplesInconsistent(
+        const QVector<TimeCalibration::Sample> &samples);
     /// absStart（流内绝对起始，DHAV 等）快速候选探测。
     void probeAbsStart(const QString &videoPath);
     void cancel();
@@ -84,9 +91,11 @@ signals:
     /// 时间重建完成（候选，不生效；proposed 含 piecewise 分段表）
     void reconstructionReady(const QString &videoPath,
                              const TimeCalibration &proposed);
-    /// 秒级预检完成：overallRate 首尾速率；suspicious = 疑似变速
+    /// 秒级预检完成：overallRate 首尾速率；suspicious = 疑似变速；
+    /// ocrSuspect = 第三点确认失败（三点不成直线，首尾/中点任一点疑似错读，
+    /// 时间不可信，调用方应拒绝自动路由并提示重新框选）
     void quickCheckReady(const QString &videoPath, double overallRate,
-                         bool suspicious);
+                         bool suspicious, bool ocrSuspect);
     void absStartReady(const QString &videoPath, qint64 absStartEpochMs);
     void failed(const QString &videoPath, const QString &error);
 

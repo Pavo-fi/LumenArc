@@ -1,7 +1,7 @@
 # LumenArc v1.3 工作交接文档
 
-> 编制日期：2026-07-28（2026-08-12 校时管线救复后更新）
-> 最新标签：`v1.2.0`（2026-08-12 发布：校时深化 + 时间重建 + 管线救复正式版）
+> 编制日期：2026-07-28（2026-08-12 v1.2.2 收尾封版后更新）
+> 最新标签：`v1.2.2`（2026-08-12 收尾封版：GO 预检第三点确认 + toast 通知 + ui_chain 入 CMake + 版本对齐）
 > 提交历史：`77c8e44`→`abd7b11`→`ff4c9a4`→`adb429b`→`5bbb59b`→`6b61a8d`→`25efc66`→`d978496`→`f496680`→`4447ca7`→`66b2b8f`→`0306427`→`e812e0c`→`f073804`→`16a64de`→`d9cc07a`→`977cb96`→`f9141f8`→`9d1230a`
 > 前处理批次：`9c97072`→`2ba4776`→`772c97f`→`7f5f20b`→`e34bdd9`→`40abd96`→`4b87a5a`（见第十三章）
 > 现场反馈批次：`95f6dba`→`a8a2fe1`→`62a1c76`（见第十四章）
@@ -11,6 +11,7 @@
 > 拖拽批次：见第十八章（seek 回归三连修、34fps 拖拽、金色插入线、Del 删除、列表收录）
 > 校时管线救复批次（2026-08-12）：`b7040eb`→`b87b68f`→`683c0d2`→`4a7a23f`
 >   （见第二十一章 21.6~21.9：重建死锁/中文路径/框选链路/星期 OSD 解析）
+> v1.2.2 收尾批次（2026-08-12）：见第二十二章（预检第三点确认/toast/ui_chain CMake/版本对齐）
 
 ## 〇、2026-08-12 校时管线救复速览（最先读）
 
@@ -569,7 +570,7 @@ POST_BUILD 自动：windeployqt（Qt DLLs）→ FFmpeg DLLs → analyze_video.py
 ## 十、升级计划表
 
 > **版本号规则（2026-08 定）**：第一位 = 大架构重构；第二位 = 功能优化；第三位 = Bug 修复。
-> 当前基线 v1.1.1（标签功能优化 + X 轴刻度修复）。
+> 当前基线 v1.2.2（校时管线救复 + 收尾封版）。
 
 > **排期依据（重要性 × 紧迫性）**：案件/报告/校时属业务核心（直接影响证据交付与可信），
 > 优先于技术红利（更快/更省）；技术红利优先于架构维护。
@@ -1328,3 +1329,67 @@ mouseRelease 直发）→ 校时窗**自动恢复** + 主按钮变「✅ 确认�
 **回归**：ui_chain v3（双入口 16/16：最小化/恢复/未启动/醒目按钮/启动/应用全
 断言）+ me60 真实文件 GO 全流程 8/8（quickCheck→三点→自动应用）；calibration
 73 / piecewise 96 / ocr_atpositions 21 / expect-normal 5 全过。
+
+---
+
+## 二十二、v1.2.2 收尾批次（2026-08-12）
+
+校时管线稳定后的封版批次，四项：
+
+### 22.1 GO 预检"第三点确认"（防错读误判变速 → 白跑数分钟重建）
+
+**问题**：预检取首尾两点算 overallRate，任一点被 OCR 错读 → rate 偏离 →
+误判变速（>15%）→ 自动路由进时间重建（大文件数分钟级），结果还不可信。
+
+**修法**：
+- `runQuickCheck`：时长 >12s 时增采中点（positions = 首/中/尾三点）；
+- 新增 `CalibrationService::quickCheckSamplesInconsistent()`（public static，
+  可单测）：中点墙钟必须落在首尾直线上，容差 `max(5s, 2%跨度)`
+  （OSD 分辨率 1s；错一位分钟 = 60s+ 必超阈）；任一点 wallMs≤0 亦可疑；
+- `quickCheckReady` 信号增加第 4 参 `ocrSuspect`；
+- 校时窗口 `ocrSuspect=true` → GoStage::Failed + 提示重新框选，
+  **拒绝自动路由**（不进三点、更不进重建）；
+- 附带防御：预检分支补按 streamMs 排序（at 模式并行聚合顺序随机，
+  与重建分支同一防御，此前两点分支漏网）。
+
+**用例**（ui_chain_test_main.cpp，静态函数直测 7 条）：共线/乱序/尾点错读
+/首点错读/中点错读/仅两点不校验/±3s 秒级抖动容忍。
+
+### 22.2 GO 完成 Windows toast 通知
+
+重建数分钟、用户最小化等待场景：`TimeSettingsDialog::goTaskFinished(title,
+message)` 新信号（三点/重建完成 + 长任务失败三处发出）→ MainWindow
+`showTrayNotification`：`QSystemTrayIcon::showMessage`（仅当
+`QApplication::activeWindow()==nullptr` 不打扰；messageClicked 还原校时窗；
+托盘图标 15s 后自动隐藏不常驻）。
+
+### 22.3 ui_chain_test 补进 CMake
+
+`lumenarc_ui_chain_test` target（此前源码在库无 target）：
+- 源：timesettingsdialog/videowidget/calibration_service + OCR/python/probe
+  引擎 + 三个 domain 模型；**ivideo_engine.h / ianalysis_engine.h 必须列入
+  源表**（AUTOMOC 才生成接口 moc，否则 LNK2019 staticMetaObject）；
+- 链接 Qt6::Test（find_package 同步加 Test 组件，QTest 鼠标注入）；
+- POST_BUILD 拷贝 `qoffscreen.dll` 到 exe 旁 platforms/ —— exe 旁
+  platforms/ 只有 windeployqt 部署的 qwindows.dll，offscreen 运行时
+  Qt 会弹 "no Qt platform plugin" 错误框（本批实测踩到）。
+
+### 22.4 版本对齐 v1.2.2
+
+CMakeLists project(VERSION) / MACOSX 两项 / aboutdialog / app.rc 两项 /
+Info.plist 两项（原滞留 1.1.1）→ 1.2.2。
+
+### 22.5 验证矩阵
+
+| 测试 | 结果 |
+|---|---|
+| ui_chain（双入口 + 第三点 7 用例） | 23/23 绿（offscreen，synth.mp4 实战） |
+| calibration / piecewise / preprocess | 73 / 96 / 168 全绿 |
+| LumenArc 主程序 | 编译通过 |
+| reconstruction 集成 | 未跑（B3 黄金视频不在本机，需在有素材环境回归） |
+| vla_test | 跳过（测试 .vla 不在本机，既有条件非回归） |
+
+### 22.6 遗留（挂 v1.4.0）
+
+校时窗口 ⚠ 错读点随报告显式标注"OSD 疑似错读，时间不可信"——依赖报告
+模块的报告上下文，已记入 v1.4.0 范围（docs/DEVELOPMENT_PLAN_V1.3_CN.md §六）。
