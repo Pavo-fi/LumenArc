@@ -86,6 +86,8 @@ set(SOURCES
     src/domain/evidence_report.cpp
     src/domain/time_calibration.cpp
     src/domain/time_piecewise.cpp
+    src/domain/case_model.cpp
+    src/app/case_manager.cpp
     src/app/preprocessing_coordinator.cpp
     src/app/calibration_service.cpp
     src/timesettingsdialog.cpp
@@ -135,6 +137,8 @@ set(HEADERS
     src/domain/preprocess_text.h
     src/domain/time_calibration.h
     src/domain/time_piecewise.h
+    src/domain/case_model.h
+    src/app/case_manager.h
     src/app/preprocessing_coordinator.h
     src/app/calibration_service.h
     src/timesettingsdialog.h
@@ -299,6 +303,20 @@ target_link_libraries(lumenarc_vla_test PRIVATE
     Qt6::Gui
     Qt6::Widgets
     Qt6::Charts
+)
+
+# --- Case module domain test (v1.3.0) ---
+add_executable(lumenarc_case_test
+    tests/case_test_main.cpp
+    src/domain/case_model.cpp
+    src/app/case_manager.cpp
+)
+target_include_directories(lumenarc_case_test PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+)
+target_link_libraries(lumenarc_case_test PRIVATE
+    Qt6::Core
+    Qt6::Gui   # QRectF
 )
 
 # --- UI chain test (offscreen): GO/框选全链路（v1.2.x UX，真实对话框+服务） ---
