@@ -88,6 +88,7 @@ set(SOURCES
     src/domain/time_piecewise.cpp
     src/domain/case_model.cpp
     src/app/case_manager.cpp
+    src/casedock.cpp
     src/app/preprocessing_coordinator.cpp
     src/app/calibration_service.cpp
     src/timesettingsdialog.cpp
@@ -139,6 +140,7 @@ set(HEADERS
     src/domain/time_piecewise.h
     src/domain/case_model.h
     src/app/case_manager.h
+    src/casedock.h
     src/app/preprocessing_coordinator.h
     src/app/calibration_service.h
     src/timesettingsdialog.h

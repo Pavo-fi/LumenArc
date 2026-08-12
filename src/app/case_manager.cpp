@@ -302,6 +302,50 @@ bool CaseManager::removeVideo(const QString &id, bool deleteData,
     return false;
 }
 
+bool CaseManager::relocateVideo(const QString &id, const QString &newPath,
+                                QString *error, bool *sizeMismatch,
+                                bool force)
+{
+    if (sizeMismatch) *sizeMismatch = false;
+    auto *v = const_cast<CaseVideoRef *>(videoById(id));
+    if (!v) {
+        if (error) *error = QStringLiteral("案件中没有视频 %1").arg(id);
+        return false;
+    }
+    const QString norm = normPath(newPath);
+    const QFileInfo fi(norm);
+    if (!fi.exists() || !fi.isFile()) {
+        if (error) *error = QStringLiteral("文件不存在：%1").arg(norm);
+        return false;
+    }
+    // 同名同大小软匹配之外的大小不一致：默认拒绝（拍板§8-8 简化版）
+    if (!force && v->sizeBytes > 0 && fi.size() != v->sizeBytes) {
+        if (sizeMismatch) *sizeMismatch = true;
+        if (error)
+            *error = QStringLiteral(
+                "大小不一致（登记 %1 字节，新文件 %2 字节），默认拒绝")
+                .arg(v->sizeBytes).arg(fi.size());
+        return false;
+    }
+    // 「仍要采用」留档（拍板§8-8）：extraFields 记录覆写轨迹
+    if (v->sizeBytes > 0 && fi.size() != v->sizeBytes) {
+        m_meta.extraFields[QStringLiteral("relocateOverride/") + id] =
+            QStringLiteral("%1: %2 -> %3 (%4 -> %5 bytes)")
+                .arg(QDateTime::currentDateTime().toString(Qt::ISODate),
+                     v->originalPath, norm)
+                .arg(v->sizeBytes)
+                .arg(fi.size());
+    }
+    v->originalPath = norm;
+    v->sizeBytes = fi.size();
+    v->mtimeMs = fi.lastModified().toMSecsSinceEpoch();
+    v->sha256.clear();   // 引用已变：指纹作废，入队重算
+    setModified();
+    emit videoInfoChanged(id);
+    queueVideoHash(id);
+    return true;
+}
+
 const CaseVideoRef *CaseManager::videoById(const QString &id) const
 {
     return m_open ? CaseModel::findVideo(m_meta, id) : nullptr;

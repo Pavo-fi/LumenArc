@@ -73,6 +73,17 @@ public:
     /// 移除视频；deleteData=true 时连同案内 .vla 与校时证据帧一并删除。
     bool removeVideo(const QString &id, bool deleteData, QString *error);
 
+    /// 重定位（M2 基础版；取证红线：只改引用路径，绝不动 .vla 数据）。
+    /// 新文件必须存在；大小与登记不一致 → 返回 false 且 sizeMismatch=true
+    /// （调用方默认拒绝，显式「仍要采用」后以 force=true 重调，extraFields
+    /// 留档）。採用后重登记 size/mtime、清 sha256 并入队重算。
+    /// M3 任务13 批量版在此基础上加指纹强制比对。
+    bool relocateVideo(const QString &id, const QString &newPath,
+                       QString *error, bool *sizeMismatch = nullptr,
+                       bool force = false);
+    /// 手动算单路指纹（右键「算指纹」；幂等，已排队不重复）
+    void queueHashFor(const QString &id) { queueVideoHash(id); }
+
     const CaseVideoRef *videoById(const QString &id) const;
     const CaseVideoRef *videoByPath(const QString &path) const;
     bool isCaseVideo(const QString &path) const
@@ -128,6 +139,8 @@ signals:
     void caseSaved();
     void videoAdded(const QString &id);
     void videoRemoved(const QString &id);
+    /// 视频引用信息变更（重定位/重登记后，面板刷新用）
+    void videoInfoChanged(const QString &id);
     /// 哈希逐文件完成（Q-9 逐文件提示）：done/total 为队列进度
     void hashProgress(const QString &videoId, int done, int total);
     void hashQueueFinished();

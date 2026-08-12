@@ -10,6 +10,7 @@
 #include <QTemporaryDir>
 #include <QSettings>
 #include <QCryptographicHash>
+#include <QThread>
 #include <cstdio>
 #include "domain/case_model.h"
 #include "app/case_manager.h"
@@ -542,12 +543,19 @@ int main(int argc, char **argv)
 
         // 篡改内容但保持大小（快扫抓不到，全量重算抓得到）
         report.clear();
+        const qint64 mtimeBefore = QFileInfo(va).lastModified().toMSecsSinceEpoch();
         {
             QFile f(va);
             f.open(QIODevice::WriteOnly);
             f.write(QByteArray(5000, 'z'));   // 同尺寸不同内容
             f.close();
         }
+        // Windows 惰性 mtime 防御：轮询确认 mtime 变化（与生产代码同源
+        // QFileInfo），确保快扫触发条件确定性成立（Defender/负载下曾抖动）
+        t.restart();
+        while (QFileInfo(va).lastModified().toMSecsSinceEpoch() == mtimeBefore
+               && t.elapsed() < 5000)
+            QThread::msleep(20);
         cm.verifyIntegrity(false);   // 快扫：size/mtime 变了 → 会重算比对
         t.restart();
         while (report.isEmpty() && t.elapsed() < 10000)
@@ -583,13 +591,25 @@ int main(int argc, char **argv)
             QCoreApplication::processEvents(QEventLoop::AllEvents, 50);
         CHECK(QFile::exists(cm.caseDir() + "/manifest.json"),
               "manifest written");
-        {
+        // Windows Defender 扫描锁防御：刚原子落盘的文件可能被短暂锁读，
+        // 轮询至可打开且解析出 magic（不改变被验证内容）
+        QJsonObject manifestObj;
+        t.restart();
+        while (t.elapsed() < 10000) {
             QFile mf(cm.caseDir() + "/manifest.json");
-            mf.open(QIODevice::ReadOnly);
-            const auto doc = QJsonDocument::fromJson(mf.readAll());
-            CHECK(doc.object()["magic"].toString() == "LumenArcManifest",
+            if (mf.open(QIODevice::ReadOnly)) {
+                const auto doc = QJsonDocument::fromJson(mf.readAll());
+                if (doc.isObject() && !doc.object().isEmpty()) {
+                    manifestObj = doc.object();
+                    break;
+                }
+            }
+            QThread::msleep(20);
+        }
+        {
+            CHECK(manifestObj["magic"].toString() == "LumenArcManifest",
                   "manifest magic");
-            const auto files = doc.object()["files"].toArray();
+            const auto files = manifestObj["files"].toArray();
             bool hasCaseJson = false, hasLock = false;
             for (const auto &fv : files) {
                 const QString p = fv.toObject()["path"].toString();
@@ -684,6 +704,78 @@ int main(int argc, char **argv)
                   "pps: session persisted across reopen");
             cm2.closeCase();
         }
+    }
+
+    // ---- 10. 重定位（v1.3.0 M2 任务10：relocateVideo）----
+    {
+        QTemporaryDir root;
+        auto mkVideo = [&](const QString &name, const QByteArray &content) {
+            QFile f(root.filePath(name));
+            f.open(QIODevice::WriteOnly);
+            f.write(content);
+            f.close();
+            return f.fileName();
+        };
+        const QString va = mkVideo("a.mp4", QByteArray(5000, 'a'));
+        const QString vb = mkVideo("b.mp4", QByteArray(5000, 'b'));   // 同大小
+        const QString vc = mkVideo("c.mp4", QByteArray(9000, 'c'));   // 不同大小
+
+        CaseManager cm;
+        QString err;
+        CaseMeta meta;
+        meta.caseNo = QStringLiteral("20260813-重定位-a");
+        meta.title = QStringLiteral("重定位");
+        CHECK(cm.createCase(root.path(), meta, &err), "reloc: createCase");
+        int finishedCount = 0;
+        QObject::connect(&cm, &CaseManager::hashQueueFinished,
+                         [&]() { ++finishedCount; });
+        const QString idA = cm.addVideo(va, &err);
+        CHECK(!idA.isEmpty(), "reloc: addVideo");
+        QElapsedTimer t;
+        t.start();
+        while (finishedCount == 0 && t.elapsed() < 10000)
+            QCoreApplication::processEvents(QEventLoop::AllEvents, 50);
+        CHECK(finishedCount == 1, "reloc: initial hash done");
+        const QString shaA = cm.videoById(idA)->sha256;
+
+        // ① 同大小新路径：直接接受，引用改变 + sha 作废重算
+        bool mismatch = true;
+        CHECK(cm.relocateVideo(idA, vb, &err, &mismatch, false),
+              "reloc: same-size accepted");
+        CHECK(!mismatch, "reloc: no mismatch on same size");
+        CHECK(cm.videoById(idA)->originalPath.contains("b.mp4"),
+              "reloc: reference updated (only)");
+        CHECK(cm.videoById(idA)->sha256.isEmpty(), "reloc: sha invalidated");
+        t.restart();
+        while (finishedCount == 1 && t.elapsed() < 10000)
+            QCoreApplication::processEvents(QEventLoop::AllEvents, 50);
+        CHECK(finishedCount == 2, "reloc: rehash queued+done");
+        CHECK(cm.videoById(idA)->sha256.size() == 64
+              && cm.videoById(idA)->sha256 != shaA,
+              "reloc: sha recomputed for new content");
+
+        // ② 不同大小：默认拒绝（mismatch=true，引用不动）
+        const QString pathBefore = cm.videoById(idA)->originalPath;
+        CHECK(!cm.relocateVideo(idA, vc, &err, &mismatch, false),
+              "reloc: size-mismatch rejected by default");
+        CHECK(mismatch, "reloc: mismatch flag");
+        CHECK(cm.videoById(idA)->originalPath == pathBefore,
+              "reloc: reference untouched after reject");
+
+        // ③ 不同大小 force（仍要采用）：接受 + extraFields 留档
+        CHECK(cm.relocateVideo(idA, vc, &err, &mismatch, true),
+              "reloc: force override accepted");
+        CHECK(cm.videoById(idA)->originalPath.contains("c.mp4"),
+              "reloc: override reference updated");
+        CHECK(cm.meta().extraFields.contains(
+                  QStringLiteral("relocateOverride/") + idA),
+              "reloc: override archived in extraFields");
+
+        // ④ 不存在文件：拒绝
+        CHECK(!cm.relocateVideo(idA, root.filePath("nope.mp4"), &err,
+                                nullptr, false),
+              "reloc: missing file rejected");
+        cm.closeCase();
     }
 
     fprintf(stderr, "case_test: %d checks, %d failures\n", g_checks, g_failures);

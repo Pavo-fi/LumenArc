@@ -21,6 +21,7 @@
 #include "infrastructure/python_analysis_engine.h"
 #include "app/calibration_service.h"
 #include "app/case_manager.h"
+#include "casedock.h"
 #include "timesettingsdialog.h"
 #include "magnifierwidget.h"
 #include "snapshotoverlay.h"
@@ -507,6 +508,49 @@ MainWindow::MainWindow(QWidget *parent)
         [this](const QString &videoPath) {
             return m_caseManager->evidenceDirFor(videoPath);
         });
+
+    // ---- 案件模式接线（v1.3.0 M2 任务10）----
+    m_caseDock = new CaseDock(m_caseManager, this);
+    addDockWidget(Qt::LeftDockWidgetArea, m_caseDock);
+    resizeDocks({m_caseDock}, {250}, Qt::Horizontal);
+    m_caseDock->setVisible(false);   // 仅案件模式可见（替代视频列表）
+    connect(m_caseDock, &CaseDock::openVideoRequested,
+            this, &MainWindow::openVideoFile);
+    connect(m_caseDock, &CaseDock::closeCaseRequested,
+            this, &MainWindow::closeCaseWithPrompt);
+    connect(m_caseManager, &CaseManager::caseOpened,
+            this, &MainWindow::enterCaseMode);
+    connect(m_caseManager, &CaseManager::caseClosed,
+            this, &MainWindow::exitCaseMode);
+    // 证据树刷新触发点：登记/移除/重定位/逐路哈希/队列排空
+    auto refreshDock = [this]() {
+        if (m_caseManager->isOpen())
+            m_caseDock->refreshTree();
+    };
+    connect(m_caseManager, &CaseManager::videoAdded, this, refreshDock);
+    connect(m_caseManager, &CaseManager::videoRemoved, this, refreshDock);
+    connect(m_caseManager, &CaseManager::videoInfoChanged, this, refreshDock);
+    connect(m_caseManager, &CaseManager::hashProgress, this, refreshDock);
+    connect(m_caseManager, &CaseManager::hashQueueFinished, this,
+            [this, refreshDock]() {
+                refreshDock();
+                // 指纹回写 meta 后静默落盘（机器维护写，与 manifest 同理）
+                QString err;
+                m_caseManager->saveCase(&err);
+            });
+    // 状态栏📁标识（模式出口三：点击 = 关闭案件）
+    m_caseStatusBtn = new QPushButton(this);
+    m_caseStatusBtn->setFlat(true);
+    m_caseStatusBtn->setStyleSheet(
+        "QPushButton { color: " + Theme::Accent + "; border: none;"
+        " padding: 0 6px; font-weight: bold; }"
+        "QPushButton:hover { color: " + Theme::AccentHover + "; }");
+    m_caseStatusBtn->setToolTip(
+        lang("案件已打开（点击关闭案件）", "Case open (click to close)"));
+    m_caseStatusBtn->setVisible(false);
+    statusBar()->addWidget(m_caseStatusBtn);
+    connect(m_caseStatusBtn, &QPushButton::clicked,
+            this, &MainWindow::closeCaseWithPrompt);
     // v1.2.1 非模态：后台校时任务进度常驻状态栏（对话框关闭后仍可见）
     connect(m_calibrationService, &CalibrationService::progress,
             this, [this](const QString &stage) {
@@ -572,6 +616,15 @@ void MainWindow::createMenus()
     fileMenu->addAction(lang("打开视频(&O)...", "&Open Video..."), this, &MainWindow::onOpenFile, QKeySequence::Open);
     // v1.3.0 M2 任务7：临时打开（不入案）——有打开案件时与 Ctrl+O 的唯一区别
     fileMenu->addAction(lang("临时打开视频（不入案）(&T)...", "Open Video &Temporarily (no case)..."), this, &MainWindow::onOpenFileTemporary);
+
+    // v1.3.0 M2 任务10：案件菜单（关闭案件 Ctrl+W = 模式出口二；
+    // 新建/打开/最近/属性由任务11  prepend）
+    QMenu *caseMenu = menuBar()->addMenu(lang("案件(&C)", "&Case"));
+    m_closeCaseAction = caseMenu->addAction(
+        lang("关闭案件(&W)", "&Close Case"), this,
+        &MainWindow::closeCaseWithPrompt,
+        QKeySequence(QStringLiteral("Ctrl+W")));
+    m_closeCaseAction->setEnabled(false);
     fileMenu->addAction(lang("素材转码拼接(&M)...", "&Transcode & Merge..."), this, &MainWindow::openPreprocessWindow, QKeySequence(QStringLiteral("Ctrl+M")));
     fileMenu->addAction(lang("加载图片为叠加(&I)...", "Load Image as &Overlay..."), this, &MainWindow::onLoadOverlayImage);
     fileMenu->addSeparator();
@@ -1339,7 +1392,8 @@ void MainWindow::setupConnections()
                 m_setTimeBtn->setEnabled(false);
                 m_captureBtn->setEnabled(false);
 
-                setWindowTitle(lang("追光者 Lumen Arc v1.1.1", "Lumen Arc v1.1.1"));
+                setWindowTitle(windowTitleWithCase(
+                    lang("追光者 Lumen Arc v1.1.1", "Lumen Arc v1.1.1")));
                 updateTimeDisplay();
                 showOperationStatus(lang("已清空视频列表", "Video list cleared"));
             });
@@ -1538,6 +1592,112 @@ void MainWindow::admitVideoToCase(const QString &path, bool interactive)
             lang("案件保存失败：%1", "Failed to save case: %1").arg(saveErr));
 }
 
+// ---------------------------------------------------------------------------
+// 案件模式（v1.3.0 M2 任务10）
+// ---------------------------------------------------------------------------
+QString MainWindow::windowTitleWithCase(const QString &base) const
+{
+    if (m_caseManager && m_caseManager->isOpen())
+        return base + QStringLiteral(" - 《")
+            + m_caseManager->meta().caseNo + QStringLiteral("-")
+            + m_caseManager->meta().title + QStringLiteral("》");
+    return base;
+}
+
+void MainWindow::enterCaseMode()
+{
+    // CaseDock 替代视频列表（仅案件模式，拍板§8-6）
+    m_videoListPanel->setVisible(false);
+    m_videoListPlaceholder->setVisible(false);
+    m_caseDock->setVisible(true);
+    m_caseDock->refreshTree();
+    resizeDocks({m_caseDock}, {250}, Qt::Horizontal);
+    m_caseStatusBtn->setText(
+        QStringLiteral("📁 ") + m_caseManager->meta().caseNo);
+    m_caseStatusBtn->setVisible(true);
+    if (m_closeCaseAction)
+        m_closeCaseAction->setEnabled(true);
+    setWindowTitle(windowTitleWithCase(
+        lang("追光者 Lumen Arc v1.1.1", "Lumen Arc v1.1.1")));
+    showOperationStatus(lang("案件已打开：%1", "Case opened: %1")
+                            .arg(m_caseManager->meta().caseNo));
+    // 开案恢复现场（uiState.lastVideoId）：.vla 缓存探测自动加载分析数据
+    if (const auto *v = m_caseManager->videoById(m_caseManager->meta().lastVideoId)) {
+        if (QFile::exists(v->originalPath))
+            openVideoFile(v->originalPath);
+    }
+}
+
+void MainWindow::exitCaseMode()
+{
+    m_caseDock->setVisible(false);
+    m_videoListPanel->setVisible(true);
+    m_videoListContent->setVisible(true);
+    resizeDocks({m_videoListPanel}, {250}, Qt::Horizontal);
+    m_caseStatusBtn->setVisible(false);
+    if (m_closeCaseAction)
+        m_closeCaseAction->setEnabled(false);
+    setWindowTitle(lang("追光者 Lumen Arc v1.1.1", "Lumen Arc v1.1.1"));
+    showOperationStatus(lang("案件已关闭", "Case closed"));
+}
+
+void MainWindow::closeCaseWithPrompt()
+{
+    if (!m_caseManager || !m_caseManager->isOpen())
+        return;
+    // 记录现场后关案（不中断播放，拍板§8-6）
+    if (const auto *v = m_caseManager->videoByPath(m_currentVideoPath))
+        m_caseManager->setLastVideoId(v->id);
+    if (m_caseManager->isDirty()) {
+        const auto reply = QMessageBox::question(this,
+            lang("关闭案件", "Close Case"),
+            lang("案件有未保存的变更。关闭前是否保存？",
+                 "The case has unsaved changes. Save before closing?"),
+            QMessageBox::Save | QMessageBox::Discard | QMessageBox::Cancel,
+            QMessageBox::Save);
+        if (reply == QMessageBox::Cancel)
+            return;
+        if (reply == QMessageBox::Save) {
+            QString err;
+            if (!m_caseManager->saveCase(&err)) {
+                QMessageBox::critical(this, lang("错误", "Error"),
+                    lang("案件保存失败：%1", "Failed to save case: %1").arg(err));
+                return;
+            }
+        }
+    }
+    m_caseManager->closeCase();   // caseClosed → exitCaseMode
+}
+
+void MainWindow::closeEvent(QCloseEvent *event)
+{
+    // 退出前案件 dirty 检查（取证：未保存变更须明示；取消则中止退出）
+    if (m_caseManager && m_caseManager->isOpen() && m_caseManager->isDirty()) {
+        if (const auto *v = m_caseManager->videoByPath(m_currentVideoPath))
+            m_caseManager->setLastVideoId(v->id);
+        const auto reply = QMessageBox::question(this,
+            lang("退出", "Exit"),
+            lang("案件有未保存的变更。退出前是否保存？",
+                 "The case has unsaved changes. Save before exiting?"),
+            QMessageBox::Save | QMessageBox::Discard | QMessageBox::Cancel,
+            QMessageBox::Save);
+        if (reply == QMessageBox::Cancel) {
+            event->ignore();
+            return;
+        }
+        if (reply == QMessageBox::Save) {
+            QString err;
+            if (!m_caseManager->saveCase(&err)) {
+                QMessageBox::critical(this, lang("错误", "Error"),
+                    lang("案件保存失败：%1", "Failed to save case: %1").arg(err));
+                event->ignore();
+                return;
+            }
+        }
+    }
+    QMainWindow::closeEvent(event);
+}
+
 void MainWindow::openVideoFile(const QString &filePath)
 {
     if (filePath.isEmpty())
@@ -1582,8 +1742,8 @@ void MainWindow::openVideoFile(const QString &filePath)
 
         // Do NOT overwrite m_currentVideoPath with the .vla path: it is an
         // analysis file, not a playable video, and it keys VideoStateManager.
-        setWindowTitle("Lumen Arc v1.1.1 - [Loaded: " +
-                           QFileInfo(filePath).fileName() + "]");
+        setWindowTitle(windowTitleWithCase("Lumen Arc v1.1.1 - [Loaded: " +
+                           QFileInfo(filePath).fileName() + "]"));
         } else {
             QMessageBox::critical(this, lang("错误", "Error"),
                 lang("加载分析结果文件失败：\n",
@@ -1619,6 +1779,9 @@ void MainWindow::openVideoFile(const QString &filePath)
     m_currentVideoPath = filePath;
     m_trustedDurationMs = trustedDurationFor(filePath);
     m_currentDurationMs = 0;  // 等待 durationChanged 校准
+    // 案件现场跟踪（v1.3.0 M2：开案恢复 lastVideoId 的数据源）
+    if (const auto *cv = m_caseManager->videoByPath(filePath))
+        m_caseManager->setLastVideoId(cv->id);
 
     if (m_videoEngine->load(filePath)) {
         // 同步源视频原生分辨率（时间戳框选归一化基准，v1.2.1）
@@ -1913,8 +2076,8 @@ void MainWindow::onLoadAnalysis()
                 m_guideLineModel->addLine(line);
 
             // Do NOT overwrite m_currentVideoPath with the .vla path (see openVideoFile).
-        setWindowTitle("Lumen Arc v1.1.1 - [Loaded: " +
-                       QFileInfo(filePath).fileName() + "]");
+        setWindowTitle(windowTitleWithCase("Lumen Arc v1.1.1 - [Loaded: " +
+                       QFileInfo(filePath).fileName() + "]"));
         QMessageBox::information(this, lang("已加载", "Loaded"),
             lang("分析结果加载成功。", "Analysis result loaded successfully."));
         showOperationStatus(lang("加载成功", "Loaded"));

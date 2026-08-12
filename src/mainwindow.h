@@ -30,6 +30,7 @@ class IVideoEngine;
 class IAnalysisEngine;
 class CalibrationService;
 class CaseManager;
+class CaseDock;
 class RegionModel;
 class PolygonModel;
 class GuideLineModel;
@@ -112,6 +113,16 @@ private:
     /// @brief 视频入案登记（v1.3.0 M2 任务7）：重复跳过/源旁 .vla 询问导入
     ///        （默认是，复制）/同大小仅提示；无打开案件时直接返回
     void admitVideoToCase(const QString &path, bool interactive);
+    /// @brief 进入案件模式（v1.3.0 M2 任务10）：CaseDock 替代视频列表、
+    ///        状态栏📁、窗口标题带案件名、开案恢复现场（lastVideoId）
+    void enterCaseMode();
+    /// @brief 退出案件模式：恢复视频列表/状态栏/标题（不中断播放）
+    void exitCaseMode();
+    /// @brief 关闭案件流程（面板✕/Ctrl+W/状态栏📁 三出口共调）：
+    ///        dirty → 保存/放弃/取消；取消则中止
+    void closeCaseWithPrompt();
+    /// @brief 窗口标题拼接案件名（案件打开时）
+    QString windowTitleWithCase(const QString &base) const;
     /// @brief 自动检测系统中的 Python 解释器路径
     QString detectPythonPath() const;
     /// @brief 用 Python 分析引擎的真实帧数/FPS 计算可信时长
@@ -141,6 +152,7 @@ protected:
     void dragEnterEvent(QDragEnterEvent *event) override;
     void dropEvent(QDropEvent *event) override;
     void keyReleaseEvent(QKeyEvent *event) override;
+    void closeEvent(QCloseEvent *event) override;
     bool eventFilter(QObject *watched, QEvent *event) override;
 
     VideoWidget *m_videoWidget = nullptr;
@@ -155,6 +167,9 @@ protected:
     /// 案件管理器（v1.3.0 M2）：.vla 路径分流/框选记忆随案 SSOT；
     /// 无打开案件或未入案视频时全部回落独立模式老路径（v1.2.2 逐点一致）
     CaseManager *m_caseManager = nullptr;
+    CaseDock *m_caseDock = nullptr;          ///< 案件面板（任务10，仅案件模式可见）
+    QPushButton *m_caseStatusBtn = nullptr;  ///< 状态栏📁标识（点击=退出案件模式）
+    QAction *m_closeCaseAction = nullptr;    ///< 菜单「关闭案件」(Ctrl+W)
     TimeCalibration m_calibration;   // 当前视频校时 SSOT（.vla v8 持久化）
     QPointer<TimeSettingsDialog> m_calibrationDialog;  // 非模态校时窗口（v1.2.1）
     QPointer<TimeSettingsDialog> m_roiDialog;          // 框选中的校时窗口
