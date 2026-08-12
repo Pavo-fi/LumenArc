@@ -19,6 +19,21 @@ static int g_checks = 0, g_failures = 0;
 #define CHECK(cond, msg) do { ++g_checks; if (!(cond)) { ++g_failures; \
     fprintf(stderr, "FAIL: %s:%d: %s\n", __FILE__, __LINE__, msg); } } while (0)
 
+/// 最近案件注册表守卫：构造时快照并清空，析构时恢复（不污染开发机注册表）
+struct RecentGuard {
+    QStringList saved;
+    RecentGuard() {
+        CaseManager probe;
+        saved = probe.recentCases();
+        for (const auto &d : saved)
+            probe.removeRecent(d);
+    }
+    ~RecentGuard() {
+        QSettings s(QStringLiteral("LumenArc"), QStringLiteral("LumenArc"));
+        s.setValue(QStringLiteral("case/recent"), saved);
+    }
+};
+
 static CaseMeta makeSample()
 {
     CaseMeta m;
@@ -368,6 +383,7 @@ int main(int argc, char **argv)
     // savedTimestampRoi/saveTimestampRoi 双模式分流：入案→case.json 优先，
     // 注册表旧值只读复制一次入案（原值保留一版）；未入案→注册表照旧。
     {
+        RecentGuard recentGuard;
         QTemporaryDir root;
         auto mkVideo = [&](const QString &name) {
             QFile f(root.filePath(name));
@@ -485,6 +501,7 @@ int main(int argc, char **argv)
 
     // ---- 8. 哈希队列 + 完整性校验 + manifest ----
     {
+        RecentGuard recentGuard;
         QTemporaryDir root;
         auto mkVideo = [&](const QString &name, const QByteArray &content) {
             QFile f(root.filePath(name));
@@ -624,6 +641,7 @@ int main(int argc, char **argv)
 
     // ---- 9. 前处理会话登记（v1.3.0 M2 任务8：addPreprocessSession）----
     {
+        RecentGuard recentGuard;
         QTemporaryDir root;
         CaseManager cm;
         QString err;
@@ -708,6 +726,7 @@ int main(int argc, char **argv)
 
     // ---- 10. 重定位（v1.3.0 M2 任务10：relocateVideo）----
     {
+        RecentGuard recentGuard;
         QTemporaryDir root;
         auto mkVideo = [&](const QString &name, const QByteArray &content) {
             QFile f(root.filePath(name));
@@ -776,6 +795,69 @@ int main(int argc, char **argv)
                                 nullptr, false),
               "reloc: missing file rejected");
         cm.closeCase();
+    }
+
+    // ---- 11. 案件属性更新 + 根目录设置（v1.3.0 M2 任务11）----
+    {
+        RecentGuard recentGuard;
+        QTemporaryDir root;
+        CaseManager cm;
+        QString err;
+        CaseMeta meta;
+        meta.caseNo = QStringLiteral("20260813-属性-a");
+        meta.title = QStringLiteral("原标题");
+        meta.investigator = QStringLiteral("张三");
+        meta.unit = QStringLiteral("某单位");
+        CHECK(cm.createCase(root.path(), meta, &err), "props: createCase");
+
+        // 可改字段更新
+        CHECK(cm.updateCaseInfo(QStringLiteral("新标题"),
+                                QStringLiteral("李四"),
+                                QStringLiteral("新单位"),
+                                QStringLiteral("xx路 1 号"),
+                                QStringLiteral("备注文本"), &err),
+              "props: updateCaseInfo");
+        CHECK(cm.meta().title == QStringLiteral("新标题")
+              && cm.meta().investigator == QStringLiteral("李四")
+              && cm.meta().unit == QStringLiteral("新单位")
+              && cm.meta().locationDetail == QStringLiteral("xx路 1 号")
+              && cm.meta().description == QStringLiteral("备注文本"),
+              "props: editable fields updated");
+        CHECK(cm.meta().caseNo == QStringLiteral("20260813-属性-a"),
+              "props: caseNo fixed");
+        CHECK(cm.isDirty(), "props: dirty after update");
+
+        // 名称空白拒绝
+        CHECK(!cm.updateCaseInfo(QStringLiteral("  "), QString(), QString(),
+                                 QString(), QString(), &err),
+              "props: blank title rejected");
+
+        // 持久化
+        CHECK(cm.saveCase(&err), "props: saveCase");
+        cm.closeCase();
+        {
+            CaseManager cm2;
+            CHECK(cm2.openCase(QDir(root.path()).filePath(
+                      "20260813-属性-a-原标题"), &err),
+                  "props: reopen (dir name keeps original title)");
+            CHECK(cm2.meta().title == QStringLiteral("新标题"),
+                  "props: updated title persisted");
+            cm2.closeCase();
+        }
+
+        // 根目录设置（QSettings 往返；恢复原有值避免污染真实配置）
+        QSettings s(QStringLiteral("LumenArc"), QStringLiteral("LumenArc"));
+        const QString savedRoot = s.value(QStringLiteral("case/rootDir"))
+                                      .toString();
+        CaseManager::setCaseRootDir(QStringLiteral("D:/__case_test_root__"));
+        CHECK(CaseManager::caseRootDir()
+                  == QStringLiteral("D:/__case_test_root__"),
+              "rootdir: custom value");
+        CaseManager::setCaseRootDir(QString());   // 恢复默认
+        CHECK(CaseManager::caseRootDir() == CaseManager::defaultRootDir(),
+              "rootdir: reset to default");
+        if (!savedRoot.isEmpty())
+            CaseManager::setCaseRootDir(savedRoot);
     }
 
     fprintf(stderr, "case_test: %d checks, %d failures\n", g_checks, g_failures);

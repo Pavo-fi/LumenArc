@@ -123,6 +123,18 @@ private:
     void closeCaseWithPrompt();
     /// @brief 窗口标题拼接案件名（案件打开时）
     QString windowTitleWithCase(const QString &base) const;
+    /// @brief 新建案件（任务11）：对话框 → createCase → 自动进入案件模式
+    void onNewCase();
+    /// @brief 打开案件（浏览目录）
+    void onOpenCase();
+    /// @brief 打开案件流程（锁冲突提示 force / 警告展示 / 错误报告）
+    void openCaseFlow(const QString &dir);
+    /// @brief 案件属性对话框
+    void onCaseProperties();
+    /// @brief 案件根目录设置（QSettings case/rootDir）
+    void onCaseRootDir();
+    /// @brief 起始页（启动自动显示 + 案件菜单 reopen）
+    void onShowStartPage();
     /// @brief 自动检测系统中的 Python 解释器路径
     QString detectPythonPath() const;
     /// @brief 用 Python 分析引擎的真实帧数/FPS 计算可信时长
@@ -170,6 +182,7 @@ protected:
     CaseDock *m_caseDock = nullptr;          ///< 案件面板（任务10，仅案件模式可见）
     QPushButton *m_caseStatusBtn = nullptr;  ///< 状态栏📁标识（点击=退出案件模式）
     QAction *m_closeCaseAction = nullptr;    ///< 菜单「关闭案件」(Ctrl+W)
+    QAction *m_casePropsAction = nullptr;    ///< 菜单「案件属性」
     TimeCalibration m_calibration;   // 当前视频校时 SSOT（.vla v8 持久化）
     QPointer<TimeSettingsDialog> m_calibrationDialog;  // 非模态校时窗口（v1.2.1）
     QPointer<TimeSettingsDialog> m_roiDialog;          // 框选中的校时窗口

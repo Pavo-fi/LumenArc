@@ -227,6 +227,53 @@ QStringList CaseManager::recentCases() const
     return s.value(QString::fromLatin1(kSettingsRecent)).toStringList();
 }
 
+QString CaseManager::defaultRootDir()
+{
+    return QCoreApplication::applicationDirPath() + QStringLiteral("/cases");
+}
+
+QString CaseManager::caseRootDir()
+{
+    QSettings s(QStringLiteral("LumenArc"), QStringLiteral("LumenArc"));
+    const QString v = s.value(QStringLiteral("case/rootDir")).toString();
+    return v.isEmpty() ? defaultRootDir() : v;
+}
+
+void CaseManager::setCaseRootDir(const QString &dir)
+{
+    QSettings s(QStringLiteral("LumenArc"), QStringLiteral("LumenArc"));
+    if (dir.isEmpty() || dir == defaultRootDir())
+        s.remove(QStringLiteral("case/rootDir"));
+    else
+        s.setValue(QStringLiteral("case/rootDir"), dir);
+}
+
+bool CaseManager::updateCaseInfo(const QString &title,
+                                 const QString &investigator,
+                                 const QString &unit,
+                                 const QString &locationDetail,
+                                 const QString &description, QString *error)
+{
+    if (!m_open) {
+        if (error) *error = QStringLiteral("没有打开的案件");
+        return false;
+    }
+    if (title.trimmed().isEmpty()) {
+        if (error) *error = QStringLiteral("案件名称为必填项");
+        return false;
+    }
+    // 注意：title 变更不改案件目录名（目录名=编号+创建时标题，
+    // 编号/目录创建后固定；重命名目录会破坏根目录编号扫描与外部引用）
+    m_meta.title = title.trimmed();
+    m_meta.investigator = investigator.trimmed();
+    m_meta.unit = unit.trimmed();
+    m_meta.locationDetail = locationDetail.trimmed();
+    m_meta.description = description;
+    m_meta.modifiedMs = QDateTime::currentMSecsSinceEpoch();
+    setModified();
+    return true;
+}
+
 void CaseManager::pushRecent(const QString &dir)
 {
     QStringList list = recentCases();

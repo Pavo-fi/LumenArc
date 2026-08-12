@@ -22,6 +22,8 @@
 #include "app/calibration_service.h"
 #include "app/case_manager.h"
 #include "casedock.h"
+#include "casedialogs.h"
+#include "startpagewidget.h"
 #include "timesettingsdialog.h"
 #include "magnifierwidget.h"
 #include "snapshotoverlay.h"
@@ -588,6 +590,12 @@ MainWindow::MainWindow(QWidget *parent)
     createMenus();
     createToolBar();
     setupConnections();
+
+    // v1.3.0 M2 任务11：启动起始页（可勾选不再显示；独立模式= v1.2.2 行为）
+    QTimer::singleShot(0, this, [this]() {
+        if (StartPageDialog::showAtStartup())
+            onShowStartPage();
+    });
 }
 
 MainWindow::~MainWindow()
@@ -617,9 +625,37 @@ void MainWindow::createMenus()
     // v1.3.0 M2 任务7：临时打开（不入案）——有打开案件时与 Ctrl+O 的唯一区别
     fileMenu->addAction(lang("临时打开视频（不入案）(&T)...", "Open Video &Temporarily (no case)..."), this, &MainWindow::onOpenFileTemporary);
 
-    // v1.3.0 M2 任务10：案件菜单（关闭案件 Ctrl+W = 模式出口二；
-    // 新建/打开/最近/属性由任务11  prepend）
+    // v1.3.0 M2：案件菜单（新建/打开/最近/起始页/属性/根目录设置 +
+    // 关闭案件 Ctrl+W = 模式出口二）
     QMenu *caseMenu = menuBar()->addMenu(lang("案件(&C)", "&Case"));
+    caseMenu->addAction(lang("新建案件(&N)...", "&New Case..."), this,
+                        &MainWindow::onNewCase);
+    caseMenu->addAction(lang("打开案件(&O)...", "&Open Case..."), this,
+                        &MainWindow::onOpenCase);
+    QMenu *recentMenu = caseMenu->addMenu(lang("最近案件(&R)", "&Recent Cases"));
+    connect(recentMenu, &QMenu::aboutToShow, this, [this, recentMenu]() {
+        recentMenu->clear();
+        const QStringList recents = m_caseManager->recentCases();
+        if (recents.isEmpty()) {
+            recentMenu->addAction(lang("（暂无）", "(none)"))->setEnabled(false);
+            return;
+        }
+        for (const QString &dir : recents) {
+            recentMenu->addAction(QFileInfo(dir).fileName(), this,
+                [this, dir]() { openCaseFlow(dir); })
+                ->setToolTip(dir);
+        }
+    });
+    caseMenu->addAction(lang("起始页(&S)...", "&Start Page..."), this,
+                        &MainWindow::onShowStartPage);
+    caseMenu->addSeparator();
+    m_casePropsAction = caseMenu->addAction(
+        lang("案件属性(&P)...", "Case &Properties..."), this,
+        &MainWindow::onCaseProperties);
+    m_casePropsAction->setEnabled(false);
+    caseMenu->addAction(lang("案件根目录设置(&D)...", "Case &Root Folder..."),
+                        this, &MainWindow::onCaseRootDir);
+    caseMenu->addSeparator();
     m_closeCaseAction = caseMenu->addAction(
         lang("关闭案件(&W)", "&Close Case"), this,
         &MainWindow::closeCaseWithPrompt,
@@ -1617,6 +1653,8 @@ void MainWindow::enterCaseMode()
     m_caseStatusBtn->setVisible(true);
     if (m_closeCaseAction)
         m_closeCaseAction->setEnabled(true);
+    if (m_casePropsAction)
+        m_casePropsAction->setEnabled(true);
     setWindowTitle(windowTitleWithCase(
         lang("追光者 Lumen Arc v1.1.1", "Lumen Arc v1.1.1")));
     showOperationStatus(lang("案件已打开：%1", "Case opened: %1")
@@ -1637,6 +1675,8 @@ void MainWindow::exitCaseMode()
     m_caseStatusBtn->setVisible(false);
     if (m_closeCaseAction)
         m_closeCaseAction->setEnabled(false);
+    if (m_casePropsAction)
+        m_casePropsAction->setEnabled(false);
     setWindowTitle(lang("追光者 Lumen Arc v1.1.1", "Lumen Arc v1.1.1"));
     showOperationStatus(lang("案件已关闭", "Case closed"));
 }
@@ -1696,6 +1736,113 @@ void MainWindow::closeEvent(QCloseEvent *event)
         }
     }
     QMainWindow::closeEvent(event);
+}
+
+// ---------------------------------------------------------------------------
+// 案件对话框与起始页（v1.3.0 M2 任务11）
+// ---------------------------------------------------------------------------
+void MainWindow::onNewCase()
+{
+    if (m_caseManager->isOpen()) {
+        closeCaseWithPrompt();
+        if (m_caseManager->isOpen())
+            return;   // 用户取消，维持现案
+    }
+    QDir().mkpath(CaseManager::caseRootDir());
+    NewCaseDialog dlg(CaseManager::caseRootDir(), this);
+    if (dlg.exec() != QDialog::Accepted)
+        return;
+    QString err;
+    if (!m_caseManager->createCase(CaseManager::caseRootDir(), dlg.meta(), &err))
+        QMessageBox::critical(this, lang("新建案件失败", "New Case Failed"), err);
+    // 成功：caseOpened 信号 → enterCaseMode 自动
+}
+
+void MainWindow::onOpenCase()
+{
+    const QString dir = QFileDialog::getExistingDirectory(this,
+        lang("打开案件（选择案件目录）", "Open Case (choose case folder)"),
+        CaseManager::caseRootDir());
+    if (!dir.isEmpty())
+        openCaseFlow(dir);
+}
+
+void MainWindow::openCaseFlow(const QString &dir)
+{
+    if (dir.isEmpty())
+        return;
+    if (m_caseManager->isOpen()) {
+        closeCaseWithPrompt();
+        if (m_caseManager->isOpen())
+            return;   // 用户取消
+    }
+    QString err;
+    QStringList warnings;
+    bool lockConflict = false;
+    bool opened = m_caseManager->openCase(dir, &err, &warnings,
+                                          &lockConflict, false);
+    if (!opened && lockConflict) {
+        const auto reply = QMessageBox::warning(this,
+            lang("案件被锁定", "Case Locked"),
+            lang("该案件可能正在另一个实例中打开，或上次未正常关闭（残留锁）。\n\n"
+                 "%1\n\n仍要强制打开吗？",
+                 "The case may be open in another instance, or was not closed "
+                 "properly last time (stale lock).\n\n%1\n\nForce open anyway?")
+                .arg(err),
+            QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
+        if (reply != QMessageBox::Yes)
+            return;
+        opened = m_caseManager->openCase(dir, &err, &warnings,
+                                         nullptr, true);
+    }
+    if (!opened) {
+        QMessageBox::critical(this, lang("打开案件失败", "Open Case Failed"),
+                              err);
+        return;
+    }
+    if (!warnings.isEmpty())
+        showOperationStatus(warnings.join(QStringLiteral("；")));
+    // caseOpened 信号 → enterCaseMode 自动
+}
+
+void MainWindow::onCaseProperties()
+{
+    if (!m_caseManager->isOpen())
+        return;
+    CasePropertiesDialog dlg(m_caseManager, this);
+    dlg.exec();
+    // 名称可能已改：刷新标题/面板/状态栏
+    if (m_caseManager->isOpen()) {
+        setWindowTitle(windowTitleWithCase(
+            lang("追光者 Lumen Arc v1.1.1", "Lumen Arc v1.1.1")));
+        m_caseDock->refreshTree();
+        m_caseStatusBtn->setText(
+            QStringLiteral("📁 ") + m_caseManager->meta().caseNo);
+    }
+}
+
+void MainWindow::onCaseRootDir()
+{
+    const QString dir = QFileDialog::getExistingDirectory(this,
+        lang("选择案件根目录（新建案件的默认存放位置）",
+             "Choose case root folder (default location for new cases)"),
+        CaseManager::caseRootDir());
+    if (dir.isEmpty())
+        return;
+    CaseManager::setCaseRootDir(dir);
+    showOperationStatus(lang("案件根目录：%1", "Case root: %1").arg(dir));
+}
+
+void MainWindow::onShowStartPage()
+{
+    StartPageDialog dlg(this);
+    dlg.exec();
+    switch (dlg.choice()) {
+    case StartPageDialog::NewCase:    onNewCase(); break;
+    case StartPageDialog::OpenBrowse: onOpenCase(); break;
+    case StartPageDialog::OpenRecent: openCaseFlow(dlg.recentDir()); break;
+    case StartPageDialog::Independent: break;   // v1.2.2 行为照旧
+    }
 }
 
 void MainWindow::openVideoFile(const QString &filePath)

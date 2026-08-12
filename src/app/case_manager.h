@@ -66,6 +66,17 @@ public:
     QStringList recentCases() const;
     void removeRecent(const QString &dir);
 
+    // ---- 案件根目录（拍板§8-4：独立设置项，默认 <程序目录>/cases/）----
+    static QString caseRootDir();          ///< 当前生效根目录（设置值或默认）
+    static QString defaultRootDir();       ///< 默认 <程序目录>/cases/
+    static void setCaseRootDir(const QString &dir);
+
+    // ---- 案件属性（任务11：名称/调查员/单位/详细地址/备注可改；
+    //      编号/案发时间/地点创建后固定——编号是目录索引源）----
+    bool updateCaseInfo(const QString &title, const QString &investigator,
+                        const QString &unit, const QString &locationDetail,
+                        const QString &description, QString *error);
+
     // ---- 视频登记 ----
     /// 添加视频：分配 V###（高水位不复用）、登记 size/mtime、置 dirty。
     /// 重复路径拒绝（error 说明已有编号）。成功返回新 id，失败返回空串。
