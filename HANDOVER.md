@@ -1,6 +1,6 @@
 # LumenArc v1.3 工作交接文档
 
-> 编制日期：2026-07-28（2026-08-12 v1.2.2 收尾封版后更新）
+> 编制日期：2026-07-28（2026-08-13 v1.3.0 M1 完成后更新）
 > 最新标签：`v1.2.2`（2026-08-12 收尾封版：GO 预检第三点确认 + toast 通知 + ui_chain 入 CMake + 版本对齐）
 > 提交历史：`77c8e44`→`abd7b11`→`ff4c9a4`→`adb429b`→`5bbb59b`→`6b61a8d`→`25efc66`→`d978496`→`f496680`→`4447ca7`→`66b2b8f`→`0306427`→`e812e0c`→`f073804`→`16a64de`→`d9cc07a`→`977cb96`→`f9141f8`→`9d1230a`
 > 前处理批次：`9c97072`→`2ba4776`→`772c97f`→`7f5f20b`→`e34bdd9`→`40abd96`→`4b87a5a`（见第十三章）
@@ -12,6 +12,7 @@
 > 校时管线救复批次（2026-08-12）：`b7040eb`→`b87b68f`→`683c0d2`→`4a7a23f`
 >   （见第二十一章 21.6~21.9：重建死锁/中文路径/框选链路/星期 OSD 解析）
 > v1.2.2 收尾批次（2026-08-12）：见第二十二章（预检第三点确认/toast/ui_chain CMake/版本对齐）
+> v1.3.0 案件模块批次（2026-08-13 开工，M1 已完成）：施工方案 `ed71a6a` → M1 `7a5e355`/`0e6eb90`（见第二十三章）
 
 ## 〇、2026-08-12 校时管线救复速览（最先读）
 
@@ -587,6 +588,10 @@ POST_BUILD 自动：windeployqt（Qt DLLs）→ FFmpeg DLLs → analyze_video.py
 |---|---|---|---|---|---|
 | **v1.2.0** | **视频校时深化**（P4 OCR 的深化） | 前处理 OCR 结果反哺：相机时钟偏差检测（OSD vs 真实时间）、多机时间线对齐、图表"时间设置"自动校准替代手输 | 现有前处理 OCR + P1a 任务框架 | 1-2 周 | 时间线是火调证据骨架；自动对时消除手输误差 |
 | **v1.3.0** | **案件模块** | 案件=证据容器：视频、ROI/标签/辅助线、分析结果、前处理产物、证据报告统一入案；案件列表/归档/打包移交；.vla 关联案件存储 | 无 | 2-3 周 | 证据链完整性；换机/移交不再丢资料；多案件并行管理 |
+
+> **v1.3.0 状态（2026-08-13）**：施工中。施工方案终稿 `docs/DEVELOPMENT_PLAN_V1.3_CN.md`
+> （六模块讨论 13 项拍板，Q-8 修订为完整包默认/轻量可选）；M1（domain+app 层）已完成，
+> 见第二十三章。
 | **v1.4.0** | **分析报告模块** | 一键生成标准分析报告：案件信息 + 校时后的时间线 + 亮度曲线 + 音频分析 + 截图/标签 + 前处理证据 + 结论栏，PDF 输出（含盖章位） | 校时 + 案件模块 | 1.5-2 周 | **最终交付物**：报告从手工拼装（小时级）到一键生成，格式统一可提交 |
 
 ### 第二梯队：技术红利（重要性 ★★★★ / 紧迫性 ★★）
@@ -1393,3 +1398,63 @@ Info.plist 两项（原滞留 1.1.1）→ 1.2.2。
 
 校时窗口 ⚠ 错读点随报告显式标注"OSD 疑似错读，时间不可信"——依赖报告
 模块的报告上下文，已记入 v1.4.0 范围（docs/DEVELOPMENT_PLAN_V1.3_CN.md §六）。
+
+---
+
+## 二十三、v1.3.0 案件模块实施记录（2026-08-13 开工，进行中）
+
+### 23.0 施工依据
+
+- **方案**：`docs/DEVELOPMENT_PLAN_V1.3_CN.md`（终稿 `ed71a6a`）。六模块讨论
+  闭环、13 项拍板固化于 §8（与旧文冲突处以它为准）。
+- **关键修订**：Q-8 移交包从"轻量唯一"改为**完整包默认/轻量可选**
+  （用户拍板：否则移交后找不回原视频导入查看）；不做"添加视频时拷入案件"。
+- **三条底线**：独立模式（不建案件）行为与 v1.2.2 逐点一致（既有测试零修改
+  通过为准绳）；取证红线（源视频只读、重定位只改引用）；per-video
+  membership（视频是否在案决定其行为，非全局开关）。
+- **里程碑**：M1 domain+app 层（5 任务）✅ → M2 挂接+主 UI（6 任务）→
+  M3 移交+多机视图+封版。
+
+### 23.1 M1 完成内容（commits `7a5e355` + `0e6eb90`）
+
+| 任务 | 交付 |
+|---|---|
+| case_model | `domain/case_model.h/.cpp`：CaseMeta/CaseVideoRef/CasePreprocessRef；case.json（magic `LumenArcCase` + formatVersion=1 + QSaveFile 原子写）；F1/F4 版本规则；F3 未知根字段忽略并收集警告 |
+| 编号规则 | 案件编号 `YYYYMMDD-城市区县-x`（扫描根目录同前缀目录，提取"前缀后首个 '-' 前"的字母段）；`nextVideoSeq` 高水位入 case.json |
+| CaseManager | create/open(.lock 防双开+残留锁 lockConflict 出参+force)/save/close；recentCases(QSettings×10)；addVideo(路径去重/V### 分配/size+mtime 登记)；removeVideo(deleteData 可选删案内 .vla+证据帧) |
+| 双模式分流 | `vlaPathFor` / `evidenceDirFor`：入案→案件路径，未入案/无案件→独立模式老路径（逐字节照旧） |
+| 随案数据 | 框选记忆 timestampRoi、校时徽标缓存（hasCalibration+summary，.vla 为 SSOT） |
+| 哈希队列(Q-9) | QThreadPool×1 + OS 最低优先级 + 1MB 分块可中止 SHA-256；四触发（入案即排/开案补缺失/变更重算/手动全量）；hashProgress 逐文件 + hashQueueFinished |
+| 完整性校验 | 异步 Verify：快扫 size/mtime + 差异/全量重算比对（一致 0/已变更 1/缺失 2），变更后 sha 重登记；manifest.json 队列回填（排除锁/manifest 自身/sources） |
+| 证据帧瘦身 | probe_timestamps.py at 模式：A 框选命中帧存 ROI 裁剪图(外扩 25%)、无框选全帧降宽 1280；B 只留命中帧；C 首尾 2 张全帧 JPEG 上下文；D JPEG q90。实测 -87%（200KB vs 1.6MB/3 位置），重建规模推算 904MB→≤10MB(框选)/≤21MB(扫描) |
+
+### 23.2 实施中发现并固化的设计修正（后来者勿再踩）
+
+1. **V###"永不复用"内存 max+1 守不住**：移除最大编号后水位回退 → case.json
+   增加 `nextVideoSeq` 高水位字段（旧文件缺省=既有最大+1）。
+2. **案件编号扫描**：目录名 = 编号+标题，必须提取字母段比较（全名比较
+   永远不匹配）。
+3. **onVideoHashed 计数器需 `m_hashTotal>0` 守卫**：Verify 任务的逐路回投
+   不经过队列计数，否则会误发 hashQueueFinished 并打乱进度。
+4. **证据帧 context_map**：命中帧即上下文帧时 frameImg 必须改指 context
+   JPEG，否则 PNG 清理后路径悬挂。
+5. **JPEG 写入中文路径**：与 `_imread_unicode` 同款坑——cv2.imwrite 走 ANSI，
+   用 `imencode + buf.tofile`（numpy 写 Unicode 路径安全）。
+6. **abort 复位时机**：createCase/openCase 复位 `m_hashAbort`（上次关案
+   cancelHashes 会置位，不复位则新案哈希队列入队即空转）。
+7. **QSaveFile 原子写**：case.json 崩溃不留半文件（Qt 原生，勿手写 tmp+rename）。
+
+### 23.3 测试状态
+
+| 测试 | 结果 |
+|---|---|
+| **lumenarc_case_test（新增）** | 96/96：往返/版本/magic/未知字段/原子写/编号生成/高水位/锁冲突+force/双模式分流/框选记忆/徽标/重开持久化/deleteData/哈希队列(进度+排空)/校验(一致/篡改标变更/删除标缺失/sha 重登记)/manifest(含 case.json 排除锁) |
+| 既有回归 | calibration 73 / piecewise 96 / preprocess 168 / ui_chain 23 / ocr_atpositions 21 零修改全绿 |
+
+### 23.4 下一步 M2（任务 6-11，顺序 6→9→7→8→10→11）
+
+6 .vla 路径分流挂接（mainwindow.cpp:2467/1651/1733-1798 三处走 vlaPathFor，
+入案视频缓存探测不弹询问）→ 9 框选记忆迁移（注册表旧值只读复制一次）→
+7 Ctrl+O 自动入案/「临时打开(不入案)」/源旁 .vla 询问导入 → 8 校时证据目录
+override + 前处理横幅【导入案件/独立输出】+ finalize 自动登记 + sidecar 复制
+sidecars/ → 10 CaseDock 证据树 + 模式出口三处 → 11 新建/属性对话框 + 起始页。
