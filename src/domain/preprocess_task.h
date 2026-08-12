@@ -70,6 +70,7 @@ enum class PreprocessError {
 
 struct PreprocessReport {
     QString outputPath;           // 拼接输出（或转码目录）
+    QStringList outputPaths;      // 全部输出（多拼接组/逐文件转码，v1.3.0 案件登记用）
     QString evidenceDir;          // 证据目录（§9.1）
     QString reportCsvPath;
     QString reportHtmlPath;

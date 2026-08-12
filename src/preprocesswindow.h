@@ -36,12 +36,18 @@ class QScrollArea;
 class QFrame;
 class ClipTimelineWidget;
 class IAnalysisEngine;
+class CaseManager;
 
 class PreprocessWindow : public QMainWindow
 {
     Q_OBJECT
 public:
     explicit PreprocessWindow(IAnalysisEngine *analysis, QWidget *parent = nullptr);
+
+    /// 案件模式注入（v1.3.0 M2 任务8）：有打开案件时显示案件横幅，
+    /// 成果默认导入案件 preprocess/<ts>/ 并自动登记 case.json；
+    /// 横幅可切「独立输出」回到 v1.2.2 老行为。空指针 = 独立模式。
+    void setCaseManager(CaseManager *cm);
 
 signals:
     /// 请求主窗口播放输出文件（MainWindow 接线 openVideoFile，R2 不回转）
@@ -88,6 +94,7 @@ protected:
 
 private:
     QWidget *buildFormatBanner();
+    QWidget *buildCaseBanner();
     QWidget *buildPageImport();
     QWidget *buildPageReview();
     QWidget *buildPageSettings();
@@ -104,8 +111,24 @@ private:
     void showManualDialog(const QString &filePath);
     void updateSettingsPage();
     void updateDiskEstimate();
+    /// 案件会话目录（惰性生成：<案件>/preprocess/<yyyyMMdd_HHmmss>）
+    QString caseSessionDir() const;
+    /// 案件横幅模式切换（导入案件=true / 独立输出=false）
+    void setCaseImportMode(bool on);
+    /// 案件模式刷新（横幅可见性 + 输出目录行可用性）
+    void refreshCaseBanner();
     static QString fmtBytes(qint64 bytes);
     static QString fmtDuration(qint64 ms);
+
+    // 案件模式（v1.3.0 M2 任务8；不持有，SSOT 在 MainWindow）
+    CaseManager *m_caseManager = nullptr;
+    QFrame *m_caseBanner = nullptr;
+    QLabel *m_caseBannerLabel = nullptr;
+    QPushButton *m_btnCaseImport = nullptr;
+    QPushButton *m_btnCaseIndep = nullptr;
+    QPushButton *m_btnBrowseOutput = nullptr;
+    bool m_caseImportMode = true;      ///< 案件打开时默认导入案件（拍板§8-11）
+    mutable QString m_caseSessionDir;  ///< 本次处理会话目录（惰性生成）
 
     PreprocessingCoordinator *m_coord;
 

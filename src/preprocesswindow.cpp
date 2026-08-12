@@ -14,6 +14,7 @@
 #include "preprocesswindow.h"
 #include "cliptimelinewidget.h"
 #include "sortablefiletable.h"
+#include "app/case_manager.h"
 #include "i18n.h"
 #include "theme.h"
 
@@ -92,6 +93,7 @@ PreprocessWindow::PreprocessWindow(IAnalysisEngine *analysis, QWidget *parent)
     root->setContentsMargins(10, 8, 10, 8);
     root->setSpacing(8);
     root->addWidget(buildFormatBanner());
+    root->addWidget(buildCaseBanner());
     m_stack = new QStackedWidget(central);
     m_stack->addWidget(buildPageImport());
     m_stack->addWidget(buildPageReview());
@@ -159,6 +161,96 @@ QWidget *PreprocessWindow::buildFormatBanner()
     desc->setStyleSheet(QStringLiteral("color:%1;").arg(Theme::TextSecond));
     lay->addWidget(desc);
     return banner;
+}
+
+// ---------------------------------------------------------------------------
+// 案件横幅（v1.3.0 M2 任务8）：案件模式提示 +【导入案件】/【独立输出】选择
+// ---------------------------------------------------------------------------
+QWidget *PreprocessWindow::buildCaseBanner()
+{
+    m_caseBanner = new QFrame(this);
+    m_caseBanner->setStyleSheet(QStringLiteral(
+        "QFrame { background:%1; border:1px solid %2; border-radius:8px; }"
+        "QLabel { border:none; background:transparent; }")
+        .arg(Theme::BgCard, Theme::Accent));
+    auto *lay = new QHBoxLayout(m_caseBanner);
+    lay->setContentsMargins(12, 6, 12, 6);
+    m_caseBannerLabel = new QLabel(m_caseBanner);
+    m_caseBannerLabel->setStyleSheet(QStringLiteral(
+        "font-weight:bold; color:%1;").arg(Theme::TextPrimary));
+    lay->addWidget(m_caseBannerLabel, 1);
+    m_btnCaseImport = new QPushButton(
+        lang("导入案件（默认路径）", "Import into case (default)"), m_caseBanner);
+    m_btnCaseImport->setCheckable(true);
+    m_btnCaseImport->setChecked(true);
+    m_btnCaseImport->setToolTip(lang(
+        "成果输出到案件 preprocess/<时间戳>/，完成后自动登记 case.json；"
+        "sidecar 校时文件复制归类 sidecars/。",
+        "Outputs go to the case preprocess/<timestamp>/ folder and are "
+        "registered into case.json; calibration sidecars are copied into sidecars/."));
+    m_btnCaseIndep = new QPushButton(
+        lang("独立输出（自选）", "Independent output (custom)"), m_caseBanner);
+    m_btnCaseIndep->setCheckable(true);
+    m_btnCaseIndep->setToolTip(lang(
+        "本次不导入案件：输出目录自选，行为与无案件时一致。",
+        "Skip the case this time: pick any output folder, same as no-case mode."));
+    lay->addWidget(m_btnCaseImport);
+    lay->addWidget(m_btnCaseIndep);
+    connect(m_btnCaseImport, &QPushButton::clicked,
+            this, [this]() { setCaseImportMode(true); });
+    connect(m_btnCaseIndep, &QPushButton::clicked,
+            this, [this]() { setCaseImportMode(false); });
+    m_caseBanner->setVisible(false);   // 默认隐藏（无案件）；setCaseManager 刷新
+    return m_caseBanner;
+}
+
+void PreprocessWindow::setCaseManager(CaseManager *cm)
+{
+    m_caseManager = cm;
+    refreshCaseBanner();
+}
+
+QString PreprocessWindow::caseSessionDir() const
+{
+    // 惰性生成一次：同一次处理运行复用同一目录（报告/输出/登记三者一致）
+    if (m_caseSessionDir.isEmpty() && m_caseManager && m_caseManager->isOpen()) {
+        m_caseSessionDir = m_caseManager->caseDir()
+            + QStringLiteral("/preprocess/")
+            + QDateTime::currentDateTime().toString(
+                  QStringLiteral("yyyyMMdd_HHmmss"));
+    }
+    return m_caseSessionDir;
+}
+
+void PreprocessWindow::setCaseImportMode(bool on)
+{
+    m_caseImportMode = on;
+    m_caseSessionDir.clear();   // 换模式：下次运行时重新生成会话目录
+    if (m_btnCaseImport) m_btnCaseImport->setChecked(on);
+    if (m_btnCaseIndep)  m_btnCaseIndep->setChecked(!on);
+    refreshCaseBanner();
+}
+
+void PreprocessWindow::refreshCaseBanner()
+{
+    const bool caseOpen = m_caseManager && m_caseManager->isOpen();
+    if (m_caseBanner)
+        m_caseBanner->setVisible(caseOpen);
+    if (!caseOpen)
+        return;
+    m_caseBannerLabel->setText(
+        lang("📁 案件模式：成果自动导入《%1》",
+             "📁 Case mode: results auto-imported into “%1”")
+            .arg(m_caseManager->meta().caseNo
+                 + QStringLiteral("-") + m_caseManager->meta().title));
+    // 输出目录行：导入案件 = 会话目录（横幅控路径，禁手改）；独立输出 = 恢复手选
+    if (m_outputDirEdit) {
+        m_outputDirEdit->setEnabled(!m_caseImportMode);
+        if (m_caseImportMode)
+            m_outputDirEdit->setText(caseSessionDir());
+    }
+    if (m_btnBrowseOutput)
+        m_btnBrowseOutput->setEnabled(!m_caseImportMode);
 }
 
 void PreprocessWindow::setStep(int idx)
@@ -394,6 +486,9 @@ ProcessingOptions PreprocessWindow::collectProcessingOptions() const
 {
     ProcessingOptions opts;
     opts.outputDir = m_outputDirEdit ? m_outputDirEdit->text().trimmed() : QString();
+    // 案件导入模式：输出目录锁定案件会话目录（v1.3.0 M2 任务8）
+    if (m_caseImportMode && m_caseManager && m_caseManager->isOpen())
+        opts.outputDir = caseSessionDir();
     opts.crf = m_crfSpin ? m_crfSpin->value() : 18;
     opts.deinterlace = !m_deinterlaceCheck || m_deinterlaceCheck->isChecked();
     opts.normalizeTimestamps = m_normalizeCheck && m_normalizeCheck->isChecked();
@@ -863,6 +958,7 @@ QWidget *PreprocessWindow::buildPageSettings()
     outRow->addWidget(new QLabel(lang("输出文件夹：", "Output folder:"), w));
     m_outputDirEdit = new QLineEdit(w);
     auto *btnBrowse = new QPushButton(lang("浏览…", "Browse…"), w);
+    m_btnBrowseOutput = btnBrowse;   // 案件模式下禁用（v1.3.0 M2）
     outRow->addWidget(m_outputDirEdit, 1);
     outRow->addWidget(btnBrowse);
     lay->addLayout(outRow);
@@ -1013,7 +1109,10 @@ void PreprocessWindow::updateSettingsPage()
     m_precheckDetail->setPlainText(text);
 
     // 默认输出目录 + 输出文件名预告（与协调器 allocateOutput 规则一致）
-    if (m_outputDirEdit->text().trimmed().isEmpty() && !m_pendingFiles.isEmpty()) {
+    if (m_caseImportMode && m_caseManager && m_caseManager->isOpen()) {
+        // 案件导入模式：显示锁定的会话目录（v1.3.0 M2 任务8）
+        m_outputDirEdit->setText(caseSessionDir());
+    } else if (m_outputDirEdit->text().trimmed().isEmpty() && !m_pendingFiles.isEmpty()) {
         m_outputDirEdit->setText(
             QFileInfo(m_pendingFiles.first()).absolutePath()
             + QStringLiteral("/LumenArc_Merged_")
@@ -1077,6 +1176,9 @@ void PreprocessWindow::onStartProcessing()
 {
     ProcessingOptions opts;
     opts.outputDir = m_outputDirEdit->text().trimmed();
+    // 案件导入模式：输出目录锁定案件会话目录（v1.3.0 M2 任务8）
+    if (m_caseImportMode && m_caseManager && m_caseManager->isOpen())
+        opts.outputDir = caseSessionDir();
     opts.crf = m_crfSpin->value();
     opts.deinterlace = m_deinterlaceCheck->isChecked();
     opts.normalizeTimestamps = m_normalizeCheck->isChecked();
@@ -1346,6 +1448,8 @@ void PreprocessWindow::onFinished(const PreprocessReport &report)
         });
         return;
     }
+    // 案件登记结果附注（v1.3.0 M2；拼到证据报告文案后，避免被覆写）
+    QString caseRegNote;
     if (haveOutput) {
         m_resultTitle->setText(lang("✓ 拼接完成", "✓ Merge finished"));
         m_resultTitle->setStyleSheet(QStringLiteral(
@@ -1354,6 +1458,33 @@ void PreprocessWindow::onFinished(const PreprocessReport &report)
             .arg(report.outputPath, fmtBytes(fi.size()),
                  fmtDuration(m_runTimer.elapsed())));
         m_btnPlayOutput->setEnabled(true);
+
+        // v1.3.0 M2 任务8：案件导入模式 finalize 自动登记 ——
+        // 会话目录/报告/输出引用 + sidecar 复制归类 sidecars/ 入 case.json
+        if (m_caseImportMode && m_caseManager && m_caseManager->isOpen()) {
+            QStringList sidecars;
+            const QStringList outputs = report.outputPaths.isEmpty()
+                ? QStringList{report.outputPath} : report.outputPaths;
+            for (const QString &o : outputs) {
+                const QString sc = o + QStringLiteral(".lumencal.json");
+                if (QFile::exists(sc))
+                    sidecars << sc;
+            }
+            QString regErr;
+            if (m_caseManager->addPreprocessSession(
+                    m_caseSessionDir, report.reportCsvPath, outputs,
+                    sidecars, &regErr)) {
+                QString saveErr;
+                if (!m_caseManager->saveCase(&saveErr))
+                    regErr = saveErr;
+            }
+            caseRegNote = regErr.isEmpty()
+                ? lang("\n已登记案件：preprocess 会话 + sidecar 归类 sidecars/",
+                       "\nRegistered into case: preprocess session + sidecars/")
+                : lang("\n⚠ 案件登记失败：%1",
+                       "\n⚠ Case registration failed: %1").arg(regErr);
+        }
+        m_caseSessionDir.clear();   // 本次运行结束：下轮重新生成会话目录
     } else {
         // 防现场反馈：未产出文件时禁止绿勾成功
         m_resultTitle->setText(lang("⚠ 未产出输出文件", "⚠ No output file produced"));
@@ -1366,7 +1497,8 @@ void PreprocessWindow::onFinished(const PreprocessReport &report)
     }
     m_resultEvidence->setText(lang("证据报告：%1\n（首/尾帧截图、CSV 明细、操作日志均已留档）",
                                    "Evidence report: %1\n(frames, CSV, operation log archived)")
-                                  .arg(report.evidenceDir));
+                                  .arg(report.evidenceDir)
+                              + caseRegNote);
     m_resultCard->setVisible(true);
 
     setStep(3);

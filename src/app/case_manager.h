@@ -93,6 +93,17 @@ public:
     void updateCalibrationBadge(const QString &videoPath, bool has,
                                 const QString &summary);
 
+    // ---- 前处理会话登记（v1.3.0 M2 任务8）----
+    /// finalize 后由 PreprocessWindow 调用：sessionDirAbs 必须位于案件目录
+    /// 内（preprocess/<ts>）；sidecar 复制归类 sessionDir/sidecars/（原件
+    /// 保留在输出旁供独立打开继承）；输出引用制登记（不复制），size/mtime
+    /// 入册，sha256 留空（案内文件由 manifest 覆盖，见 M1 清单）。
+    bool addPreprocessSession(const QString &sessionDirAbs,
+                              const QString &reportCsvAbs,
+                              const QStringList &outputPaths,
+                              const QStringList &sidecarAbsPaths,
+                              QString *error);
+
     // ---- uiState ----
     void setLastVideoId(const QString &id);
 

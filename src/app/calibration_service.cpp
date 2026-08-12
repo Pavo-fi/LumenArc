@@ -25,10 +25,11 @@
 #include <QJsonObject>
 #include <QProcess>
 #include <algorithm>
+#include <utility>
 
 namespace {
-/// Q-6 过渡期证据帧目录（案件归档策略 v1.3.0 定稿后迁移）
-QString evidenceDirFor(const QString &videoPath)
+/// Q-6 过渡期证据帧默认目录（独立模式老路径；案件模式经分流器 override）
+QString defaultEvidenceDirFor(const QString &videoPath)
 {
     return QFileInfo(videoPath).absoluteDir().absoluteFilePath(
         QStringLiteral("LumenArc_Calibration"));
@@ -46,6 +47,23 @@ constexpr int    kMaxRefinePoints    = 200;    ///< 加密点总量上限（防�
 constexpr int    kMinRefinePerBoundary = 8;    ///< 每边界保底加密点数（弱边界定位）
 constexpr double kAudioConsistencyDev = 0.02;  ///< OSD跨度 vs 音频时长容差
 } // namespace
+
+void CalibrationService::setEvidenceDirResolver(
+    std::function<QString(const QString &videoPath)> fn)
+{
+    m_evidenceDirResolver = std::move(fn);
+}
+
+QString CalibrationService::evidenceDirFor(const QString &videoPath) const
+{
+    // v1.3.0 M2 任务8：分流器（CaseManager）优先；未注入走老路径
+    if (m_evidenceDirResolver) {
+        const QString r = m_evidenceDirResolver(videoPath);
+        if (!r.isEmpty())
+            return r;
+    }
+    return defaultEvidenceDirFor(videoPath);
+}
 
 CalibrationService::CalibrationService(IAnalysisEngine *analysisEngine,
                                        QObject *parent)

@@ -753,6 +753,13 @@ void PreprocessingCoordinator::finalize()
 
     m_report.evidenceDir = finalEvidence;
     m_report.reportCsvPath = csvPath;
+    // 全部输出清单（v1.3.0 案件登记 outputRefs 用；保持与旧 outputPath 同源）
+    m_report.outputPaths.clear();
+    for (auto it = m_concatOutputs.constBegin(); it != m_concatOutputs.constEnd(); ++it)
+        m_report.outputPaths.append(it.value());
+    for (auto it = m_outputs.constBegin(); it != m_outputs.constEnd(); ++it)
+        if (!m_report.outputPaths.contains(it.value()))
+            m_report.outputPaths.append(it.value());
     if (m_concatOutputs.isEmpty()) {
         if (!m_outputs.isEmpty()) {
             // 单文件转码导出：无拼接但有转码产物

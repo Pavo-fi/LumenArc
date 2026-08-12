@@ -377,6 +377,69 @@ void CaseManager::setLastVideoId(const QString &id)
     }
 }
 
+// ---------------------------------------------------------------------------
+// 前处理会话登记（M2 任务8）
+// ---------------------------------------------------------------------------
+bool CaseManager::addPreprocessSession(const QString &sessionDirAbs,
+                                       const QString &reportCsvAbs,
+                                       const QStringList &outputPaths,
+                                       const QStringList &sidecarAbsPaths,
+                                       QString *error)
+{
+    if (!m_open) {
+        if (error) *error = QStringLiteral("没有打开的案件");
+        return false;
+    }
+    const QDir caseDir(m_caseDir);
+    const QString normSession = normPath(sessionDirAbs);
+    const QString rel = caseDir.relativeFilePath(normSession);
+    if (rel.startsWith(QStringLiteral("..")) || QDir::isAbsolutePath(rel)) {
+        if (error)
+            *error = QStringLiteral("会话目录不在案件内：%1").arg(normSession);
+        return false;
+    }
+
+    CasePreprocessRef p;
+    p.sessionDirRelPath = rel;
+    if (!reportCsvAbs.isEmpty()) {
+        const QString relCsv = caseDir.relativeFilePath(normPath(reportCsvAbs));
+        if (!relCsv.startsWith(QStringLiteral(".."))
+            && !QDir::isAbsolutePath(relCsv))
+            p.reportCsvRelPath = relCsv;
+    }
+    // 输出引用制登记（P### 会话内编号；size/mtime 入册，sha256 待 manifest）
+    int outSeq = 1;
+    for (const QString &o : outputPaths) {
+        const QFileInfo fi(normPath(o));
+        if (!fi.exists() || !fi.isFile())
+            continue;   // 产物缺失不入册（部分失败场景 C2：日志已在协调器留痕）
+        CaseVideoRef out;
+        out.id = QStringLiteral("P%1").arg(outSeq++, 3, 10, QLatin1Char('0'));
+        out.originalPath = fi.absoluteFilePath();
+        out.sizeBytes = fi.size();
+        out.mtimeMs = fi.lastModified().toMSecsSinceEpoch();
+        p.outputRefs.append(out);
+    }
+    // sidecar 复制归类 sessionDir/sidecars/（原件保留在输出旁，拍板§8-11）
+    if (!sidecarAbsPaths.isEmpty()) {
+        const QString sidecarsDir = normSession + QStringLiteral("/sidecars");
+        for (const QString &s : sidecarAbsPaths) {
+            const QFileInfo fi(normPath(s));
+            if (!fi.exists() || !fi.isFile())
+                continue;
+            QDir().mkpath(sidecarsDir);
+            const QString dst = sidecarsDir + QLatin1Char('/') + fi.fileName();
+            if (QFile::exists(dst))
+                QFile::remove(dst);   // 同会话重跑：以最新为准
+            if (QFile::copy(fi.absoluteFilePath(), dst))
+                p.sidecarRelPaths.append(caseDir.relativeFilePath(dst));
+        }
+    }
+    m_meta.preprocessSessions.append(p);
+    setModified();
+    return true;
+}
+
 void CaseManager::setModified()
 {
     if (!m_dirty) {

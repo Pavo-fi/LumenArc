@@ -17,6 +17,7 @@
 #include <QString>
 #include <QRectF>
 #include <QVector>
+#include <functional>
 #include "domain/time_calibration.h"
 #include "domain/sort_model.h"
 #include "domain/probe_result.h"
@@ -38,6 +39,12 @@ public:
 
     /// python 路径注入（转发 OCR 引擎；空 = 自动探测）
     void setPythonExecutable(const QString &path);
+
+    /// 证据帧目录分流器（v1.3.0 M2 任务8）：注入后优先于默认老路径。
+    /// 典型接线 = CaseManager::evidenceDirFor（入案→evidence/calibration/V###，
+    /// 未入案/无案件→老路径，双模式分流集中于 CaseManager）。
+    void setEvidenceDirResolver(
+        std::function<QString(const QString &videoPath)> fn);
 
     /// 一键三点自动校时：首（1s）/当前位置/尾（时长-3s）三处取样 OCR，
     /// 最小二乘拟合仿射模型 → threePointReady（候选，不生效）。
@@ -108,8 +115,11 @@ private:
     void onReconBatchFinished(const QVector<TimeCalibration::Sample> &samples);
     void analyzeCoarse();        ///< 粗采样完成后：判边界 → 转加密或出结果
     void finalizeReconstruction(); ///< 加密完成后：detect → 构造候选
+    /// 证据帧目录：分流器优先（案件模式），否则老路径 LumenArc_Calibration
+    QString evidenceDirFor(const QString &videoPath) const;
 
     IAnalysisEngine *m_analysisEngine = nullptr;   // 不持有（引擎中立时长来源）
+    std::function<QString(const QString &)> m_evidenceDirResolver;  // v1.3.0 M2
     TimestampOcrEngine *m_ocrEngine = nullptr;     // 自持有（与预处理窗口互不干扰）
     MediaProbeEngine *m_probeEngine = nullptr;     // 自持有
     QString m_pendingVideo;
