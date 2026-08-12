@@ -95,7 +95,7 @@ static QPixmap createSplashPixmap(const QString &statusText, int progress = 30)
     QFont verFont = fontMono(10);
     p.setFont(verFont);
     p.setPen(QColor(255, 255, 240, 150));
-    p.drawText(QRect(60, 216, W - 120, 22), Qt::AlignLeft | Qt::AlignVCenter, "v1.1.1");
+    p.drawText(QRect(60, 216, W - 120, 22), Qt::AlignLeft | Qt::AlignVCenter, "v1.2.0");
 
     // --- Progress bar background ---
     int barX = 60;
