@@ -220,8 +220,14 @@ void TimestampOcrEngine::runAtPositions(const QString &path,
                                         const QString &evidenceDir,
                                         const QRectF &roi)
 {
-    if (isRunning() || path.isEmpty() || positionsMs.isEmpty())
+    if (isRunning() || path.isEmpty())
         return;
+    // 空位置表绝不能静默返回：调用方（重建状态机）在等待完成信号，
+    // 静默会永久挂起（v1.2.1 复盘：analyzeCoarse 空 jobs → 死锁最后一环）
+    if (positionsMs.isEmpty()) {
+        emit atPositionsFailed(QStringLiteral("no positions to sample"));
+        return;
+    }
     QString err;
     if (!available(&err)) {
         emit atPositionsFailed(err);

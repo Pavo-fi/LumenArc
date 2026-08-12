@@ -20,15 +20,20 @@
  *   4) 音频时长校验执行且吻合（±2%）
  *   5) piecewise JSON 序列化往返一致
  *
- * 用法：lumenarc_reconstruction_test <video.mp4> [pythonExe]
+ * 用法：lumenarc_reconstruction_test <video.mp4> [pythonExe] [--expect-normal]
  *   工作目录须为 build/Release（依赖旁置 probe_timestamps.py / ffmpeg/）
  *   视频不存在时打印 SKIP 返回 0（非失败）。
+ *
+ * --expect-normal（v1.2.x 复盘回归）：正常文件（无变速边界）跑重建必须
+ *   完成并退化单段仿射（piecewiseMode=false）——回归 P0：analyzeCoarse
+ *   悬空 for 导致无边界分支成死代码、状态机永久挂起（boundary 0 pts）。
  */
 #include <QCoreApplication>
 #include <QEventLoop>
 #include <QFileInfo>
 #include <QDir>
 #include <QTimer>
+#include <QStringList>
 #include <cstdio>
 #include <cmath>
 #include "app/calibration_service.h"
@@ -48,11 +53,19 @@ int main(int argc, char **argv)
         fprintf(stderr, "SKIP: video not found: %s\n", qPrintable(video));
         return 0;
     }
+    // --expect-normal：正常文件回归（重建须完成 + 仿射回退，不得挂起）
+    QStringList argsList;
+    for (int i = 0; i < argc; ++i)
+        argsList.append(QString::fromLocal8Bit(argv[i]));
+    const bool expectNormal = argsList.contains(QStringLiteral("--expect-normal"));
     QCoreApplication app(argc, argv);
 
     CalibrationService service(nullptr);
-    if (argc >= 3)
-        service.setPythonExecutable(QString::fromLocal8Bit(argv[2]));
+    for (int i = 2; i < argc; ++i) {
+        const QString a = QString::fromLocal8Bit(argv[i]);
+        if (!a.startsWith(QLatin1String("--")))
+            service.setPythonExecutable(a);
+    }
 
     TimeCalibration result;
     QString error;
@@ -76,16 +89,36 @@ int main(int argc, char **argv)
 
     fprintf(stderr, "video: %s\n", qPrintable(video));
     service.runReconstruction(video, 0);
-    // 看门狗：25 分钟（粗采样 60 点 + 加密 160 点，每点 ~3s）
-    QTimer::singleShot(1500000, &app, &QCoreApplication::quit);
+    // 看门狗：25 分钟（粗采样 60 点 + 加密 160 点，每点 ~3s）。
+    // --expect-normal 正常文件无加密阶段，5 分钟足够；挂起即失败（P0 回归）。
+    QTimer::singleShot(expectNormal ? 300000 : 1500000, &app,
+                       &QCoreApplication::quit);
     app.exec();
     if (!done) {
-        fprintf(stderr, "FAIL: reconstruction timeout\n");
+        fprintf(stderr, "FAIL: reconstruction timeout (hang — P0 regression)\n");
         return 1;
     }
     if (!error.isEmpty()) {
         fprintf(stderr, "FAIL: reconstruction error: %s\n", qPrintable(error));
         return 1;
+    }
+
+    if (expectNormal) {
+        // 正常文件：无边界 → 单段仿射回退（与三点识别同语义）
+        CHECK(!result.piecewiseMode(),
+              "normal file: piecewise mode NOT adopted (affine fallback)");
+        CHECK(!result.speedVariant, "normal file: speedVariant=false");
+        CHECK(result.isValid(), "normal file: calibration valid");
+        CHECK(result.samples.size() >= 2, "normal file: >=2 samples");
+        if (result.isValid() && result.samples.size() >= 2) {
+            const double r = result.effectiveRate();
+            CHECK(std::fabs(r - 1.0) <= 0.02,
+                  qPrintable(QStringLiteral("normal file: rate %1 ≈ 1.0")
+                                 .arg(r, 0, 'f', 4)));
+        }
+        fprintf(stderr, "reconstruction_integration(expect-normal): %d checks, %d failures\n",
+                g_checks, g_failures);
+        return g_failures ? 1 : 0;
     }
 
     CHECK(result.piecewiseMode(), "piecewise mode adopted");

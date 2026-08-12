@@ -252,6 +252,13 @@ void CalibrationService::onReconBatchFinished(
     const QVector<TimeCalibration::Sample> &samples)
 {
     m_reconSamples += samples;
+    // at 模式按位置分片并行：聚合顺序 = 完成顺序（随机），必须按 streamMs
+    // 排序——下游 no-boundary 分支与 overallRate 依赖 first/last 语义。
+    std::sort(m_reconSamples.begin(), m_reconSamples.end(),
+              [](const TimeCalibration::Sample &a,
+                 const TimeCalibration::Sample &b) {
+                  return a.streamMs < b.streamMs;
+              });
     if (m_reconStage == ReconStage::Coarse)
         analyzeCoarse();
     else if (m_reconStage == ReconStage::Boundary)
@@ -270,13 +277,13 @@ void CalibrationService::analyzeCoarse()
         p.conf = s.conf;
         ps.append(p);
     }
-    const CoarseAnalysis ca = PiecewiseTimeMap::analyzeCoarse(ps);
     if (ps.size() < 2) {
         m_reconStage = ReconStage::None;
+        m_reconSamples.clear();
         emit failed(m_pendingVideo, QStringLiteral("insufficient samples"));
         return;
     }
-    for (int i = 0; i < ca.ranges.size(); ++i)
+    const CoarseAnalysis ca = PiecewiseTimeMap::analyzeCoarse(ps);
 
     // 无边界：整体率正常 → 单段仿射（行为与三点一致）；异常 → 单段变速
     if (!ca.hasBoundary()) {
@@ -494,6 +501,10 @@ static qint64 ffprobeStreamDurationMs(const QString &videoPath,
                        QStringLiteral("-of"),
                        QStringLiteral("default=noprint_wrappers=1:nokey=1"),
                        videoPath});
+    // ffprobe.exe（动态版）的 av*.dll 部署在应用根目录而非 ffmpeg/ 子目录；
+    // DLL 搜索含工作目录 → 显式钉到应用目录，否则 cwd 不同时静默启动失败
+    // （视频流时长防御失效，容器虚标时尾部取样落空 → 三点退化）
+    proc.setWorkingDirectory(QCoreApplication::applicationDirPath());
     proc.start();
     if (!proc.waitForFinished(30000))
         return 0;

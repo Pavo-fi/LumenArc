@@ -1200,3 +1200,33 @@ wall 本身错）标 ⚠ 自动排除，音频校验吻合（OSD 6196s vs 音轨
   ±几秒）；
 - 校时窗口仍有优化空间：GO 完成通知气泡（Windows toast）、框选记忆迁移至案件
   模块（v1.3.0 目录制案件）。
+
+### 21.6 复盘修复：正常文件重建死锁（P0，2026-08-12）
+
+> **背景**：v1.2.1 发布后重建管线对正常文件"完全不可用"。全面复盘定位三组缺陷，
+> 已修复并补回归。
+
+**P0-1 悬空 for（已实机复现）**：`CalibrationService::analyzeCoarse()` 残留一行
+无循环体的 `for (int i = 0; i < ca.ranges.size(); ++i)`，使紧随其后的
+`if (!ca.hasBoundary()) {...}`（单段仿射/单段变速分支）成为该 for 的循环体——
+无边界（正常文件）时 ranges 为空、循环体 0 次，整个分支沦为死代码；控制流落入
+边界加密阶段，jobs 为空 → 空位置表 → OCR 引擎 `positionsMs.isEmpty()` 静默
+return → 状态机永久停 Boundary，UI 永远"重建中…boundary 0 pts"。影响面：
+①「强制变速重建」对正常文件必挂；②GO 预检误判后粗采样无边界必挂；③失败文案
+恰好引导用户点「强制变速重建」。**盲区**：黄金用例 B3 有边界走不到死代码，且文件
+移走后集成测试长期 SKIP，正常文件重建无任何覆盖。
+
+**P0-2 测点乱序**：at 模式按位置分片并行，C++ 按 as_completed 完成顺序聚合，
+`m_reconSamples` 不保证按 streamMs 排序；修复 P0-1 后 no-boundary 分支可达，其
+`first()/last()` overallRate 计算在乱序下 ds 可为负 → 正常文件误判"整体变速"
+且 rate 错误。修复：`onReconBatchFinished` 聚合后统一按 streamMs 排序。
+
+**P1**：`analyzeCoarse(ps)` 与 `size<2` 检查顺序颠倒（先检后调）；ffprobe 动态版
+av*.dll 在应用根目录而非 ffmpeg/ 子目录，显式 `setWorkingDirectory(appDir)` 防 cwd
+不同时静默启动失败（视频流时长防御失效）；`runAtPositions` 空位置表改 emit
+`atPositionsFailed`（静默 return 是死锁最后一环）。
+
+**回归**：`lumenarc_reconstruction_test --expect-normal`（正常文件跑重建必须完成
+且仿射回退 piecewiseMode=false，不得挂起；挂起即 P0 回归）。实测 synth.mp4：修复前
+boundary 0 pts 挂死；修复后 5 checks 0 failures。全套：calibration 73 / piecewise
+96 / ocr_atpositions 21 全过。
