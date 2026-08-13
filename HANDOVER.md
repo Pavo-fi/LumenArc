@@ -1741,3 +1741,24 @@ calibration 73 / ui_chain 23 / ocr_atpositions 21 全绿；冒烟 8s 无崩溃�
 
 回归：case_test 231 / case_e2e 51 / ui_chain 23 / preprocess 168 全绿；
 冒烟 7s（含欢迎面板路径）无崩溃。
+
+### 23.19 移除启动画面（QSplashScreen）——彻底消除先于主界面的窗口（2026-08-14）
+
+人工反馈「目前还是先于主界面的弹窗」：前两轮已改锁弹窗与模态起始页，
+但**启动画面 QSplashScreen**（780×450 独立置顶窗口，主界面构造前 show）
+一直存在——它就是用户看到的先于主界面的窗口。
+
+改动：
+- main.cpp 删除 QSplashScreen 全部逻辑（createSplashPixmap 函数 +
+  show/processEvents/finish 序列），启动 = 直接构造 MainWindow →
+  showMaximized；文件头注释更新
+- 顺带修复：CMakeLists 残留 startpagewidget.h 引用导致 reconfigure
+  失败（上一提交只删了 .cpp 条目）；重新 configure 后 vcxproj 恢复
+  src/main.cpp 条目（此前链接 LNK2019 即因 vcxproj 缺 main.cpp 且
+  增量构建未触发重编译）
+
+回归：case_test 231 / case_e2e 51 / ui_chain 23 / preprocess 168 /
+piecewise 96 全绿；冒烟 6s 无崩溃。
+
+启动序列（最终）：主界面直接打开 → 中央欢迎面板（页面内，非模态）
+→ 新建/打开/独立/关闭。任何窗口不再先于主界面出现。

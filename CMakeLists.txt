@@ -146,7 +146,6 @@ set(HEADERS
     src/app/case_manager.h
     src/casedock.h
     src/casedialogs.h
-    src/startpagewidget.h
     src/multicamview.h
     src/app/cam_timeline.h
     src/app/preprocessing_coordinator.h
