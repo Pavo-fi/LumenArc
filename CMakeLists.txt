@@ -334,6 +334,21 @@ target_link_libraries(lumenarc_case_test PRIVATE
     Qt6::Gui   # QRectF
 )
 
+# --- Case system end-to-end self-check (v1.3.0 封版全面自检) ---
+add_executable(lumenarc_case_e2e
+    tests/case_e2e_main.cpp
+    src/domain/case_model.cpp
+    src/app/case_manager.cpp
+    src/videostatemanager.cpp
+)
+target_include_directories(lumenarc_case_e2e PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+)
+target_link_libraries(lumenarc_case_e2e PRIVATE
+    Qt6::Core
+    Qt6::Gui
+)
+
 # --- UI chain test (offscreen): GO/框选全链路（v1.2.x UX，真实对话框+服务） ---
 add_executable(lumenarc_ui_chain_test
     tests/ui_chain_test_main.cpp

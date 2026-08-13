@@ -941,6 +941,10 @@ private:
             *msg = QStringLiteral("目标目录已存在：%1").arg(pkgDir);
             return false;
         }
+        // pkgDir 必须先建：轻量包且案内无文件时③④循环均空转，
+        // ⑤ CaseModel::save(QSaveFile) 在不存在目录中必失败（v1.3.0 封版后
+        // e2e 自检抓到的边缘 bug；writeManifest 同理随此修复）
+        QDir().mkpath(pkgDir);
         // ① 收集案内文件（排除锁/manifest/sources）
         QStringList caseFiles;
         const QDir root(m_caseDir);
@@ -956,19 +960,21 @@ private:
             caseFiles.append(abs);
             m_total += QFileInfo(abs).size();
         }
-        // ② 完整包：源视频副本清单
+        // ② 完整包：源视频副本清单（有效路径：原路径缺失时以包内副本为源，
+        //    接收端再导出完整包不丢副本；副本名仍按原名登记，不复发前缀）
         QVector<QPair<QString, QString>> sources;   // src → bundledRelPath
         QStringList skipBundled;
         if (m_full) {
             for (const auto &v : m_meta.videos) {
-                const QFileInfo fi(v.originalPath);
+                const QString eff = m_mgr->effectivePathFor(v);
+                const QFileInfo fi(eff);
                 if (!fi.exists()) {
                     skipBundled << v.id;   // 缺失源：不携带，README 注明
                     continue;
                 }
                 const QString rel = QStringLiteral("sources/%1__%2")
-                                        .arg(v.id, fi.fileName());
-                sources.append({v.originalPath, rel});
+                                        .arg(v.id, QFileInfo(v.originalPath).fileName());
+                sources.append({eff, rel});
                 m_total += fi.size();
             }
         }
@@ -1176,7 +1182,9 @@ CaseManager::CaseExportPrecheck CaseManager::exportPrecheck(
     for (const auto &v : m_meta.videos) {
         if (v.sha256.isEmpty())
             ++pc.missingHashCount;
-        const QFileInfo fi(v.originalPath);
+        // 有效路径（与哈希队列/完整性校验同语义）：原路径缺失但包内副本
+        // 在场时不算缺失——完整包接收端自检不误报（v1.3.0 后对齐）
+        const QFileInfo fi(effectivePathFor(v));
         if (!fi.exists()) {
             pc.missingVideoIds << v.id;
             continue;
