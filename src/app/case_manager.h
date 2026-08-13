@@ -83,6 +83,17 @@ public:
     QString addVideo(const QString &path, QString *error);
     /// 移除视频；deleteData=true 时连同案内 .vla 与校时证据帧一并删除。
     bool removeVideo(const QString &id, bool deleteData, QString *error);
+    /// 移除前处理会话（deleteFiles=同时删会话目录；2026-08 右键删除）
+    bool removePreprocessSession(int sessIdx, bool deleteFiles,
+                                 QString *error = nullptr);
+    /// 移除会话内单个输出（deleteFile=同时删文件；2026-08）
+    bool removePreprocessOutput(int sessIdx, int outIdx, bool deleteFile,
+                                QString *error = nullptr);
+    /// 移除报告（deleteFile=同时删文件；2026-08）
+    bool removeReport(int idx, bool deleteFile, QString *error = nullptr);
+    /// 移除会话内 sidecar（按绝对路径匹配；deleteFile=同时删文件；2026-08）
+    bool removeSidecar(int sessIdx, const QString &absPath, bool deleteFile,
+                       QString *error = nullptr);
     /// 移除登记中已不存在的文件引用（外部删除自动清理，2026-08）；
     /// 返回移除数；不删任何现存文件
     int pruneMissingFiles(QString *error = nullptr);

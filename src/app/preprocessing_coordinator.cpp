@@ -315,10 +315,14 @@ void PreprocessingCoordinator::logProbeStats()
 
 void PreprocessingCoordinator::buildListOrderGroups()
 {
+    // 文件名时间戳轻量自动排序（2026-08 人工反馈：素材文件名含明确时间
+    // 时仍混乱；不依赖 OCR 的最简排序——`20260722-050041` 式解析）
+    QStringList ordered = m_files;
+    sortFilesByNameTime(ordered);
     m_groups.clear();
     SortGroup g;
     g.channel = QStringLiteral("(默认组)");
-    for (const QString &f : m_files) {
+    for (const QString &f : ordered) {
         SortEntry e;
         e.filePath = f;
         e.durationMs = durationOf(f);
@@ -328,6 +332,45 @@ void PreprocessingCoordinator::buildListOrderGroups()
     }
     g.suspicious = false;
     m_groups.append(g);
+}
+
+void PreprocessingCoordinator::sortFilesByNameTime(QStringList &files)
+{
+    // 解析 `20260722-050041` / `20260722_050041M` 式文件名时间戳；
+    // 解析失败的文件按文件名排末尾（稳定序）。
+    struct Item { QString file; QDateTime dt; QString name; };
+    QVector<Item> items;
+    items.reserve(files.size());
+    static const QRegularExpression re(
+        QStringLiteral(R"((\d{4})(\d{2})(\d{2})[-_]?(\d{2})(\d{2})(\d{2}))"));
+    for (const QString &f : files) {
+        const QString name = QFileInfo(f).completeBaseName();
+        Item it{f, QDateTime(), name};
+        const auto m = re.match(name);
+        if (m.hasMatch()) {
+            it.dt = QDateTime(QDate(m.captured(1).toInt(), m.captured(2).toInt(),
+                                    m.captured(3).toInt()),
+                              QTime(m.captured(4).toInt(), m.captured(5).toInt(),
+                                    m.captured(6).toInt()));
+        }
+        items.append(it);
+    }
+    std::stable_sort(items.begin(), items.end(),
+        [](const Item &a, const Item &b) {
+            if (a.dt.isValid() && b.dt.isValid())
+                return a.dt < b.dt;
+            if (a.dt.isValid() != b.dt.isValid())
+                return a.dt.isValid();   // 有时间戳的排前
+            return a.name < b.name;      // 都无时间戳：按文件名
+        });
+    files.clear();
+    for (const auto &it : items)
+        files.append(it.file);
+    if (items.size() > 1 && items.first().dt.isValid())
+        log(QStringLiteral("[%1] 已按文件名时间戳自动排序：%2 → %3")
+                .arg(tsLog(),
+                     QFileInfo(items.first().file).fileName(),
+                     QFileInfo(items.last().file).fileName()));
 }
 
 void PreprocessingCoordinator::runAutoSort()
@@ -539,6 +582,9 @@ void PreprocessingCoordinator::startProcessing(const ProcessingOptions &opts)
         }
         const bool copy = uniform && first && first->audioStreams > 0
             && first->audioCodec == QLatin1String("aac");
+        // 注（2026-08 取证）：监控源音频多为 pcm_alaw 8k——带限 3.4kHz
+        // 是源固有特性；alaw 无 mp4 sample entry（muxer 拒绝），只能
+        // 重编码 aac（保留 8k mono），属容器限制下的最小有损
         m_groupCopyAudio.insert(g.channel, copy);
         if (first && !copy && first->audioStreams > 0)
             log(QStringLiteral("[%1] 组「%2」音频参数不统一或非 AAC，整组重编码"
@@ -638,9 +684,7 @@ void PreprocessingCoordinator::startNextTranscode()
     // 隔行源 → 默认反交错（探测驱动，可配置关闭）
     const ProbeResult p = m_probes.value(m_currentTranscode);
     req.deinterlace = m_opts.deinterlace && p.fieldOrder > 1;  // 1=progressive
-    // 音频：组内全部 AAC 同参 → 直拷保留原始数据层级（2026-08 人工反馈）；
-    // 否则整组重编码且保留组内首个参数档
-    const QString ch = [&]() {
+        const QString ch = [&]() {
         for (const auto &g : m_groups)
             for (const auto &e : g.ordered)
                 if (e.filePath == m_currentTranscode)

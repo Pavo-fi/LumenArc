@@ -385,6 +385,93 @@ bool CaseManager::removeVideo(const QString &id, bool deleteData,
     return false;
 }
 
+bool CaseManager::removePreprocessSession(int sessIdx, bool deleteFiles,
+                                          QString *error)
+{
+    if (!m_open) {
+        if (error) *error = QStringLiteral("没有打开的案件");
+        return false;
+    }
+    if (sessIdx < 0 || sessIdx >= m_meta.preprocessSessions.size()) {
+        if (error) *error = QStringLiteral("会话索引越界");
+        return false;
+    }
+    const auto &p = m_meta.preprocessSessions[sessIdx];
+    if (deleteFiles) {
+        const QDir caseDir(m_caseDir);
+        QDir(caseDir.absoluteFilePath(p.sessionDirRelPath))
+            .removeRecursively();   // 会话目录（含输出/sidecar）
+    }
+    m_meta.preprocessSessions.remove(sessIdx);
+    setModified();
+    return true;
+}
+
+bool CaseManager::removePreprocessOutput(int sessIdx, int outIdx,
+                                         bool deleteFile, QString *error)
+{
+    if (!m_open) {
+        if (error) *error = QStringLiteral("没有打开的案件");
+        return false;
+    }
+    if (sessIdx < 0 || sessIdx >= m_meta.preprocessSessions.size()
+        || outIdx < 0
+        || outIdx >= m_meta.preprocessSessions[sessIdx].outputRefs.size()) {
+        if (error) *error = QStringLiteral("输出索引越界");
+        return false;
+    }
+    auto &p = m_meta.preprocessSessions[sessIdx];
+    if (deleteFile)
+        QFile::remove(p.outputRefs[outIdx].originalPath);
+    p.outputRefs.remove(outIdx);
+    setModified();
+    return true;
+}
+
+bool CaseManager::removeReport(int idx, bool deleteFile, QString *error)
+{
+    if (!m_open) {
+        if (error) *error = QStringLiteral("没有打开的案件");
+        return false;
+    }
+    if (idx < 0 || idx >= m_meta.reports.size()) {
+        if (error) *error = QStringLiteral("报告索引越界");
+        return false;
+    }
+    if (deleteFile)
+        QFile::remove(QDir(m_caseDir).absoluteFilePath(m_meta.reports[idx]));
+    m_meta.reports.remove(idx);
+    setModified();
+    return true;
+}
+
+bool CaseManager::removeSidecar(int sessIdx, const QString &absPath,
+                                bool deleteFile, QString *error)
+{
+    if (!m_open) {
+        if (error) *error = QStringLiteral("没有打开的案件");
+        return false;
+    }
+    if (sessIdx < 0 || sessIdx >= m_meta.preprocessSessions.size()) {
+        if (error) *error = QStringLiteral("会话索引越界");
+        return false;
+    }
+    auto &p = m_meta.preprocessSessions[sessIdx];
+    const QString rel = QDir(m_caseDir).relativeFilePath(
+        QDir::cleanPath(absPath));
+    for (int i = 0; i < p.sidecarRelPaths.size(); ++i) {
+        if (p.sidecarRelPaths[i] != rel)
+            continue;
+        if (deleteFile)
+            QFile::remove(absPath);
+        p.sidecarRelPaths.remove(i);
+        setModified();
+        return true;
+    }
+    if (error) *error = QStringLiteral("会话中未找到该 sidecar");
+    return false;
+}
+
 int CaseManager::pruneMissingFiles(QString *error)
 {
     // 外部删除自动清理登记（2026-08 人工反馈：资源管理器删文件后列表应

@@ -40,6 +40,8 @@ namespace {
 constexpr int kRoleKind = Qt::UserRole;      // "video" / "output" / "file"
 constexpr int kRoleId   = Qt::UserRole + 1;  // V### / P###（video/output）
 constexpr int kRolePath = Qt::UserRole + 2;  // 绝对路径
+constexpr int kRoleIdx  = Qt::UserRole + 3;  // 会话索引/报告索引（2026-08）
+constexpr int kRoleIdx2 = Qt::UserRole + 4;  // 输出索引（2026-08）
 } // namespace
 
 CaseDock::CaseDock(CaseManager *cm, QWidget *parent)
@@ -206,7 +208,8 @@ void CaseDock::fillPreprocess(QTreeWidgetItem *group)
 {
     const auto &sessions = m_caseManager->meta().preprocessSessions;
     const QDir caseDir(m_caseManager->caseDir());
-    for (const auto &p : sessions) {
+    for (int si = 0; si < sessions.size(); ++si) {
+        const auto &p = sessions[si];
         auto *sIt = new QTreeWidgetItem(group,
             {QStringLiteral("🗜 %1（%2 输出）")
                  .arg(QFileInfo(p.sessionDirRelPath).fileName())
@@ -215,14 +218,18 @@ void CaseDock::fillPreprocess(QTreeWidgetItem *group)
         sIt->setForeground(0, QColor(Theme::TextSecond));
         sIt->setData(0, kRoleKind, QStringLiteral("session"));
         sIt->setData(0, kRolePath, caseDir.absoluteFilePath(p.sessionDirRelPath));
+        sIt->setData(0, kRoleIdx, si);
         sIt->setToolTip(0, caseDir.absoluteFilePath(p.sessionDirRelPath));
-        for (const auto &o : p.outputRefs) {
+        for (int oi = 0; oi < p.outputRefs.size(); ++oi) {
+            const auto &o = p.outputRefs[oi];
             auto *oIt = new QTreeWidgetItem(sIt,
                 {QStringLiteral("%1  %2")
                      .arg(o.id, QFileInfo(o.originalPath).fileName())});
             oIt->setData(0, kRoleKind, QStringLiteral("output"));
             oIt->setData(0, kRoleId, o.id);
             oIt->setData(0, kRolePath, o.originalPath);
+            oIt->setData(0, kRoleIdx, si);
+            oIt->setData(0, kRoleIdx2, oi);
             oIt->setToolTip(0, o.originalPath);
             oIt->setForeground(0, QColor(Theme::TextPrimary));
         }
@@ -231,6 +238,7 @@ void CaseDock::fillPreprocess(QTreeWidgetItem *group)
                 {QStringLiteral("📄 ") + QFileInfo(sc).fileName()});
             cIt->setData(0, kRoleKind, QStringLiteral("file"));
             cIt->setData(0, kRolePath, caseDir.absoluteFilePath(sc));
+            cIt->setData(0, kRoleIdx, si);
             cIt->setToolTip(0, caseDir.absoluteFilePath(sc));
             cIt->setForeground(0, QColor(Theme::TextMuted));
         }
@@ -243,11 +251,13 @@ void CaseDock::fillReports(QTreeWidgetItem *group)
 {
     const auto &reports = m_caseManager->meta().reports;
     const QDir caseDir(m_caseManager->caseDir());
-    for (const QString &r : reports) {
+    for (int ri = 0; ri < reports.size(); ++ri) {
+        const QString &r = reports[ri];
         auto *it = new QTreeWidgetItem(group,
             {QStringLiteral("📑 ") + QFileInfo(r).fileName()});
         it->setData(0, kRoleKind, QStringLiteral("file"));
         it->setData(0, kRolePath, caseDir.absoluteFilePath(r));
+        it->setData(0, kRoleIdx, ri);
         it->setToolTip(0, caseDir.absoluteFilePath(r));
         it->setForeground(0, QColor(Theme::TextPrimary));
     }
@@ -500,9 +510,126 @@ void CaseDock::onContextMenu(const QPoint &pos)
         });
         menu.addAction(lang("在资源管理器中显示", "Show in Explorer"), this,
                        [this, path]() { showInExplorer(path); });
-    } else {   // session / file
+        menu.addSeparator();
+        menu.addAction(lang("删除输出文件…", "Delete output file…"), this,
+                       [this, item]() {
+                           const int si = item->data(0, kRoleIdx).toInt();
+                           const int oi = item->data(0, kRoleIdx2).toInt();
+                           removePreprocessOutput(si, oi);
+                       });
+    } else if (kind == QLatin1String("session")) {
         menu.addAction(lang("在资源管理器中显示", "Show in Explorer"), this,
                        [this, path]() { showInExplorer(path); });
+        menu.addSeparator();
+        menu.addAction(lang("删除会话与文件…", "Delete session & files…"), this,
+                       [this, item]() {
+                           removePreprocessSession(
+                               item->data(0, kRoleIdx).toInt());
+                       });
+    } else {   // file：sidecar / 报告 / 快照
+        menu.addAction(lang("在资源管理器中显示", "Show in Explorer"), this,
+                       [this, path]() { showInExplorer(path); });
+        menu.addSeparator();
+        menu.addAction(lang("删除文件…", "Delete file…"), this,
+                       [this, item]() { removeCaseFile(item); });
     }
     menu.exec(m_tree->viewport()->mapToGlobal(pos));
+}
+
+void CaseDock::removePreprocessSession(int si)
+{
+    if (si < 0)
+        return;
+    const auto &sessions = m_caseManager->meta().preprocessSessions;
+    if (si >= sessions.size())
+        return;
+    QMessageBox box(this);
+    box.setWindowTitle(lang("删除会话", "Delete session"));
+    box.setIcon(QMessageBox::Warning);
+    box.setText(lang(
+        "将删除前处理会话及其全部文件（输出/sidecar/报告）：\n%1\n\n此操作不可恢复！",
+        "Delete the preprocess session and all its files (outputs/sidecars):\n"
+        "%1\n\nThis cannot be undone!")
+        .arg(QFileInfo(sessions[si].sessionDirRelPath).fileName()));
+    QAbstractButton *btnDel = box.addButton(
+        lang("删除", "Delete"), QMessageBox::DestructiveRole);
+    box.addButton(lang("取消", "Cancel"), QMessageBox::RejectRole);
+    box.exec();
+    if (box.clickedButton() != btnDel)
+        return;
+    QString err;
+    if (!m_caseManager->removePreprocessSession(si, true, &err)) {
+        QMessageBox::warning(this, lang("删除失败", "Delete failed"), err);
+        return;
+    }
+    m_caseManager->saveCase(&err);
+    refreshTree();
+}
+
+void CaseDock::removePreprocessOutput(int si, int oi)
+{
+    const auto &sessions = m_caseManager->meta().preprocessSessions;
+    if (si < 0 || si >= sessions.size() || oi < 0
+        || oi >= sessions[si].outputRefs.size())
+        return;
+    const QString path = sessions[si].outputRefs[oi].originalPath;
+    QMessageBox box(this);
+    box.setWindowTitle(lang("删除输出文件", "Delete output file"));
+    box.setIcon(QMessageBox::Warning);
+    box.setText(lang("将删除输出文件：\n%1\n\n此操作不可恢复！",
+                     "Delete output file:\n%1\n\nThis cannot be undone!")
+                    .arg(path));
+    QAbstractButton *btnDel = box.addButton(
+        lang("删除", "Delete"), QMessageBox::DestructiveRole);
+    box.addButton(lang("取消", "Cancel"), QMessageBox::RejectRole);
+    box.exec();
+    if (box.clickedButton() != btnDel)
+        return;
+    QString err;
+    if (!m_caseManager->removePreprocessOutput(si, oi, true, &err)) {
+        QMessageBox::warning(this, lang("删除失败", "Delete failed"), err);
+        return;
+    }
+    m_caseManager->saveCase(&err);
+    refreshTree();
+}
+
+void CaseDock::removeCaseFile(QTreeWidgetItem *item)
+{
+    if (!item)
+        return;
+    const QString path = item->data(0, kRolePath).toString();
+    const int si = item->data(0, kRoleIdx).toInt();
+    const bool underSession = item->parent()
+        && item->parent()->data(0, kRoleKind).toString()
+               == QLatin1String("session");
+    const bool isReport = !underSession && si >= 0;
+    QMessageBox box(this);
+    box.setWindowTitle(lang("删除文件", "Delete file"));
+    box.setIcon(QMessageBox::Warning);
+    box.setText(lang("将删除文件：\n%1\n\n此操作不可恢复！",
+                     "Delete file:\n%1\n\nThis cannot be undone!")
+                    .arg(path));
+    QAbstractButton *btnDel = box.addButton(
+        lang("删除", "Delete"), QMessageBox::DestructiveRole);
+    box.addButton(lang("取消", "Cancel"), QMessageBox::RejectRole);
+    box.exec();
+    if (box.clickedButton() != btnDel)
+        return;
+    QString err;
+    if (underSession) {
+        m_caseManager->removeSidecar(si, path, true, &err);
+    } else if (isReport) {
+        m_caseManager->removeReport(si, true, &err);
+    } else {
+        // 快照等无登记文件：直接删
+        if (!QFile::remove(path))
+            err = lang("无法删除文件", "Cannot delete file");
+    }
+    if (!err.isEmpty()) {
+        QMessageBox::warning(this, lang("删除失败", "Delete failed"), err);
+        return;
+    }
+    m_caseManager->saveCase(&err);
+    refreshTree();
 }

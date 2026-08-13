@@ -1805,3 +1805,34 @@ piecewise 96 全绿；冒烟 6s 无崩溃。
 exe 时间戳 17:15+ / 关于对话框 v1.3.1 / 任务管理器确认无旧进程。
 
 回归：case_test 239 / case_e2e 51 / ui_chain 23 全绿。
+
+### 23.22 右键删除补齐 + 音频取证 + 文件名时间自动排序（2026-08-14）
+
+人工反馈三连，逐一排查：
+
+**① 右键没有删除选项——根因**：删除菜单此前只实现于「视频」条目分支；
+前处理会话/输出/sidecar/报告/快照条目无删除。补齐：
+- CaseManager 新增 removePreprocessSession / removePreprocessOutput /
+  removeReport / removeSidecar（删文件可选，均落盘登记）
+- CaseDock：session 子项存会话索引、output 子项存输出索引、报告存
+  索引；右键新增「删除会话与文件…」「删除输出文件…」「删除文件…」
+  （sidecar/报告/快照按归属分支），全部带不可恢复确认
+
+**② 音频语谱高频缺失——取证结论（无损）**：
+- 源音频实为 **pcm_alaw 8kHz mono（G.711 电话带宽 ~3.4kHz）**——语谱
+  高频缺失是监控音频**固有特性**，非拼接损失
+- 实测：源与拼接产物 8kHz+ 高频能量完全一致（mean -91.0dB）；AAC 段
+  直拷路径下拼接逐样本无损
+- 尝试 alaw 直拷 → **mp4 容器不支持 alaw sample entry（muxer 拒绝）**，
+  故 alaw→aac（保留 8k mono）是容器限制下的最小有损，维持现状并注释
+- 整改方案（可选，待拍板）：输出容器改用 .ts/mkv 可无损承载 alaw；
+  或接受 aac 8k（推荐，播放兼容性优先）
+
+**③ 明确时间排序仍混乱——根因**：buildListOrderGroups 按**导入顺序**
+成组，无文件名时间解析。新增 `sortFilesByNameTime`：解析
+`20260722-050041` 式时间戳（正则 `(\d{8})[-_]?(\d{6})` 变体），稳定
+排序；无时间戳文件按文件名排末尾；日志记录「已按文件名时间戳自动
+排序：首 → 尾」。探测完成即生效（默认组），OCR 自动排序路径不变。
+
+回归：case_test 239 / e2e 51 / piecewise 96 / preprocess 168 /
+ui_chain 23 全绿；冒烟 6s。

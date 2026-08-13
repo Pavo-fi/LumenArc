@@ -64,6 +64,9 @@ private:
                       QColor *color) const;
     void relocateVideo(const QString &id);
     void deleteVideoFile(const QString &id);   // 删除源文件+案内数据（2026-08）
+    void removePreprocessSession(int si);      // 删除会话与文件（2026-08）
+    void removePreprocessOutput(int si, int oi);  // 删除输出文件（2026-08）
+    void removeCaseFile(QTreeWidgetItem *item);   // 删除 sidecar/报告/快照（2026-08）
     /// 案内引用文件存在性快照（外部变更检测用）
     QSet<QString> buildSnapshot() const;
     void removeVideo(const QString &id);

@@ -99,6 +99,7 @@ private:
     void setPhase(TaskPhase phase);
     void log(const QString &line);
     void logProbeStats();                   // 帧率/编码/分辨率统计 + 统一帧率预告
+    void sortFilesByNameTime(QStringList &files);  // 文件名时间戳排序（2026-08）
     QMap<QString, qint64> buildDurMap(const QMap<QString, qint64> &trusted) const;
     void buildListOrderGroups();            // 未自动排序：按导入顺序成组
     void runSorting();
