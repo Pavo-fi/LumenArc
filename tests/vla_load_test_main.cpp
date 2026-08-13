@@ -208,6 +208,57 @@ int main(int argc, char **argv)
         int r = testFile(&chart, &rm, &pm, &tm, app, f);
         if (r == 0) fail++;
     }
+
+    // ---- 音量曲线“短一截”回归（2026-08-13 根因修复）----
+    // 场景复刻：短视频 B(52min) ↔ 长视频 A(4h，仅音频分析无亮度数据)。
+    // 切回 A 时 dataReplaced 先到（ChartPanel::m_durationMs 仍是 B 的残留值），
+    // 引擎 durationChanged(A) 随后才到 —— 音量曲线必须在两步后都铺满全程。
+    {
+        TimelineModel tmA;
+        ChartPanel chartA;
+        RegionModel rmA;
+        chartA.setRegionModel(&rmA);
+        chartA.setTimelineModel(&tmA);
+        chartA.resize(1200, 400);
+
+        const qint64 durB = 52 * 60 * 1000;
+        const qint64 durA = qint64(4) * 3600 * 1000;
+        const qreal resMs = 32.0;
+        AudioData audio;
+        audio.timeResolutionMs = resMs;
+        const int n = int(durA / resMs);
+        audio.volume.resize(n);
+        for (int i = 0; i < n; ++i)
+            audio.volume[i] = 0.5;
+
+        chartA.setDuration(durB);            // 残留时长（上一视频 B）
+        tmA.setData({}, {}, {}, audio);      // 切回 A：dataReplaced（stale duration）
+        app.processEvents();
+
+        auto volLastX = [&]() -> qreal {
+            for (auto *s : chartA.chart()->series()) {
+                auto *ls = qobject_cast<QLineSeries *>(s);
+                if (ls && ls->name() == QStringLiteral("音量") && ls->count() > 0)
+                    return ls->at(ls->count() - 1).x();
+            }
+            return -1;
+        };
+        const qreal tol = (n / 8000 + 1) * resMs * 2;   // 下采样 stride 容差
+        const qreal x1 = volLastX();
+        bool ok1 = x1 >= durA - tol;
+        fprintf(stderr, "[bugA] after setData(stale durB): lastX=%.0f/%lld => %s\n",
+                x1, (long long)durA, ok1 ? "PASS" : "FAIL <<<");
+
+        chartA.setDuration(durA);            // 引擎 durationChanged(A) 到达
+        app.processEvents();
+        const qreal x2 = volLastX();
+        bool ok2 = x2 >= durA - tol;
+        fprintf(stderr, "[bugA] after setDuration(durA):  lastX=%.0f/%lld => %s\n",
+                x2, (long long)durA, ok2 ? "PASS" : "FAIL <<<");
+        if (!ok1 || !ok2)
+            ++fail;
+    }
+
     qInfo() << (fail == 0 ? "ALL PASS" : "FAILURES:") << (fail == 0 ? "" : QString::number(fail));
     return fail == 0 ? 0 : 1;
 }

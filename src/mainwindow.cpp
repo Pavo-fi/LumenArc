@@ -85,12 +85,22 @@
 #include <QHeaderView>
 #include <QLabel>
 
+/// 构建时间戳（2026-08-13）：标题栏常驻，杜绝“用户在跑旧构建”无法辨识
+/// （多次出现修复已提交但用户测的是旧 exe 的扯皮）。__DATE__/__TIME__
+/// 为本编译单元的编译时刻，随每次重编 mainwindow.cpp 更新。
+static QString buildStamp()
+{
+    return QStringLiteral(" (build %1)")
+        .arg(QStringLiteral(__DATE__) + QStringLiteral(" ")
+             + QStringLiteral(__TIME__).left(5));
+}
+
 /// @brief 构造主窗口：初始化引擎/组件/连接信号槽
 MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent)
 {
     loadLanguage();
-    setWindowTitle(lang("追光者 Lumen Arc v1.3.1", "Lumen Arc v1.3.1"));
+    setWindowTitle(lang("追光者 Lumen Arc v1.3.1", "Lumen Arc v1.3.1") + buildStamp());
     resize(1280, 720);
 
     m_regionModel = new RegionModel(this);
@@ -1683,11 +1693,12 @@ void MainWindow::admitVideoToCase(const QString &path, bool interactive)
 // ---------------------------------------------------------------------------
 QString MainWindow::windowTitleWithCase(const QString &base) const
 {
+    QString t = base;
     if (m_caseManager && m_caseManager->isOpen())
-        return base + QStringLiteral(" - 《")
+        t += QStringLiteral(" - 《")
             + m_caseManager->meta().caseNo + QStringLiteral("-")
             + m_caseManager->meta().title + QStringLiteral("》");
-    return base;
+    return t + buildStamp();   // 构建时间戳常驻标题栏
 }
 
 void MainWindow::enterCaseMode()

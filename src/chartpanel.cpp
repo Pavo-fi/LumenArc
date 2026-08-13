@@ -376,7 +376,13 @@ void ChartPanel::setDuration(qint64 durationMs)
         // Bug fix: If analysis data already exists, refresh the chart to ensure
         // the X range covers both the new duration and the data extent.
         // This handles the case where onDurationChanged fires after onDataReplaced.
-        if (m_timelineModel && !m_timelineModel->snapshot().isEmpty()) {
+        // 2026-08-13 修复（音量曲线“短一截”根因）：仅音频快照（无亮度时间戳）
+        // 也必须重填——否则切换视频瞬间按残留时长填充的音量曲线在正确时长
+        // 到达后永不补齐，曲线停在旧视频时长处。
+        const bool hasData = m_timelineModel
+            && (!m_timelineModel->snapshot().isEmpty()
+                || m_timelineModel->snapshot().hasAudio());
+        if (hasData) {
             onDataReplaced();
         } else {
             m_axisX->setRange(0, m_durationMs);
@@ -510,6 +516,11 @@ void ChartPanel::onDataReplaced()
         // timestamps from analysis. Use the larger of the two to prevent the
         // brightness curve from not reaching the right edge of the chart.
         qreal dataMax = snapshot.isEmpty() ? 0 : qreal(snapshot.timestamps.last());
+        // 2026-08-13：音量曲线按音频自身时间轴铺满。切换视频瞬间
+        // m_durationMs 可能仍是上一个视频的残留值（偏小），
+        // 不计入音频全长会把音量曲线截断在残留时长处（“短一截”）。
+        if (snapshot.hasAudio())
+            dataMax = qMax(dataMax, qreal(snapshot.audio.durationMs()));
         qreal xMax = qMax(qreal(m_durationMs), dataMax);
         if (xMax < 1000) xMax = 1000;
         m_axisX->setRange(0, xMax);

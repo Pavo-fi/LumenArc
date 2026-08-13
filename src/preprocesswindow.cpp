@@ -15,10 +15,12 @@
 #include "cliptimelinewidget.h"
 #include "sortablefiletable.h"
 #include "app/case_manager.h"
+#include "domain/filename_timestamp.h"
 #include "i18n.h"
 #include "theme.h"
 
 #include <functional>
+#include <algorithm>
 
 #include <QStackedWidget>
 #include <QHBoxLayout>
@@ -381,6 +383,33 @@ void PreprocessWindow::addFiles(const QStringList &files)
     }
     if (added == 0 && !files.isEmpty())
         return;
+
+    // 2026-08-13（Bug B 加固）：导入列表立即按文件名时间戳排序——
+    // 所见即所得（导入页顺序 = 校对页顺序 = 拼接顺序），不再等探测
+    // 完成才由 buildListOrderGroups 纠正；用户拖拽仍可在导入后微调
+    // （coordinator 侧 sortFilesByNameTime 为最终兜底，二者语义一致）。
+    // 无时间戳文件保持相对序排末尾（与 coordinator 同一约定）。
+    {
+        struct PendingItem { QString file; qint64 ts; bool hasTs; };
+        QVector<PendingItem> items;
+        items.reserve(m_pendingFiles.size());
+        for (const QString &f : m_pendingFiles) {
+            const FilenameTimestamp ft = parseFilenameTimestamp(
+                QFileInfo(f).fileName());
+            items.append({f, ft.epochMs, ft.hit()});
+        }
+        std::stable_sort(items.begin(), items.end(),
+            [](const PendingItem &a, const PendingItem &b) {
+                if (a.hasTs && b.hasTs)
+                    return a.ts < b.ts;
+                if (a.hasTs != b.hasTs)
+                    return a.hasTs;   // 有时间戳的排前
+                return a.file < b.file;
+            });
+        m_pendingFiles.clear();
+        for (const auto &it : items)
+            m_pendingFiles.append(it.file);
+    }
 
     m_fileTable->setRowCount(m_pendingFiles.size());
     qint64 totalBytes = 0;
