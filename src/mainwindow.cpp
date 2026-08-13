@@ -25,7 +25,6 @@
 #include "casedock.h"
 #include "casedialogs.h"
 #include "multicamview.h"
-#include "startpagewidget.h"
 #include "timesettingsdialog.h"
 #include "magnifierwidget.h"
 #include "snapshotoverlay.h"
@@ -531,6 +530,8 @@ MainWindow::MainWindow(QWidget *parent)
             this, &MainWindow::onOpenCaseBrowse);
     connect(m_caseOpenPanel, &CaseOpenPanel::newCaseRequested,
             this, [this]() { onNewCase(); });
+    connect(m_caseOpenPanel, &CaseOpenPanel::independentRequested,
+            this, [this]() { m_caseOpenPanel->hide(); });
     connect(m_caseOpenPanel, &CaseOpenPanel::closeRequested,
             this, [this]() { m_caseOpenPanel->hide(); });
     connect(m_caseManager, &CaseManager::caseOpened,
@@ -617,9 +618,10 @@ MainWindow::MainWindow(QWidget *parent)
     createToolBar();
     setupConnections();
 
-    // v1.3.0 M2 任务11：启动起始页（可勾选不再显示；独立模式= v1.2.2 行为）
+    // v1.3.0 M2 任务11：启动欢迎面板（2026-08 改为页面内居中非模态，
+    // 迁自模态起始页；可勾选不再显示；独立模式 = v1.2.2 行为）
     QTimer::singleShot(0, this, [this]() {
-        if (StartPageDialog::showAtStartup())
+        if (CaseOpenPanel::showStartupPanel())
             onShowStartPage();
     });
 }
@@ -1923,14 +1925,14 @@ void MainWindow::onCaseRootDir()
 
 void MainWindow::onShowStartPage()
 {
-    StartPageDialog dlg(this);
-    dlg.exec();
-    switch (dlg.choice()) {
-    case StartPageDialog::NewCase:    onNewCase(); break;
-    case StartPageDialog::OpenBrowse: onOpenCase(); break;
-    case StartPageDialog::OpenRecent: openCaseFlow(dlg.recentDir()); break;
-    case StartPageDialog::Independent: break;   // v1.2.2 行为照旧
-    }
+    // 页面内居中欢迎面板（Blender 式，非模态）：主界面已打开后才出现
+    if (!m_caseOpenPanel)
+        return;
+    centerCaseOpenPanel();
+    m_caseOpenPanel->refresh();
+    m_caseOpenPanel->show();
+    m_caseOpenPanel->raise();
+    m_caseOpenPanel->activateWindow();
 }
 
 void MainWindow::onExportCase()

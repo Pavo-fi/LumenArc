@@ -20,6 +20,7 @@ class QListWidget;
 class QListWidgetItem;
 class QLabel;
 class QPushButton;
+class QCheckBox;
 class CaseManager;
 
 class CaseOpenPanel : public QFrame
@@ -32,10 +33,15 @@ public:
     /// 重建最近案件列表并显示（父窗口 resize 时由 MainWindow 居中）
     void refresh();
 
+    /// 启动时是否显示欢迎面板（QSettings case/showStartPage，迁自起始页）
+    static bool showStartupPanel();
+    static void setShowStartupPanel(bool on);
+
 signals:
     void openCaseRequested(const QString &dir);
     void browseRequested();
     void newCaseRequested();
+    void independentRequested();   // 独立模式：关闭面板直接使用
     void closeRequested();
 
 private:
@@ -44,4 +50,5 @@ private:
     CaseManager *m_caseManager = nullptr;   // 不持有
     QListWidget *m_recentList = nullptr;
     QLabel *m_emptyLabel = nullptr;
+    QCheckBox *m_dontShowCheck = nullptr;   // 启动不再显示（2026-08）
 };

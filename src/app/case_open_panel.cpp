@@ -10,16 +10,30 @@
  */
 #include "case_open_panel.h"
 
+#include <QCheckBox>
 #include <QDir>
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QListWidget>
 #include <QPushButton>
+#include <QSettings>
 #include <QVBoxLayout>
 
 #include "app/case_manager.h"
 #include "i18n.h"
 #include "theme.h"
+
+bool CaseOpenPanel::showStartupPanel()
+{
+    QSettings s(QStringLiteral("LumenArc"), QStringLiteral("LumenArc"));
+    return s.value(QStringLiteral("case/showStartPage"), true).toBool();
+}
+
+void CaseOpenPanel::setShowStartupPanel(bool on)
+{
+    QSettings s(QStringLiteral("LumenArc"), QStringLiteral("LumenArc"));
+    s.setValue(QStringLiteral("case/showStartPage"), on);
+}
 
 CaseOpenPanel::CaseOpenPanel(CaseManager *cm, QWidget *parent)
     : QFrame(parent)
@@ -42,15 +56,17 @@ CaseOpenPanel::CaseOpenPanel(CaseManager *cm, QWidget *parent)
     lay->setContentsMargins(20, 18, 20, 18);
     lay->setSpacing(10);
 
-    auto *title = new QLabel(lang("打开案件", "Open Case"), this);
+    auto *title = new QLabel(lang("追光者 Lumen Arc", "Lumen Arc"), this);
     title->setStyleSheet(QStringLiteral(
         "font-size:20px; font-weight:bold; color:%1;").arg(Theme::TextPrimary));
     lay->addWidget(title);
 
-    auto *sub = new QLabel(lang("最近打开的案件（双击打开）",
-                                "Recent cases (double-click to open)"), this);
+    auto *sub = new QLabel(lang("案件 = 证据容器｜最近打开的案件（双击打开）",
+                                "A case is the evidence container — recent cases "
+                                "(double-click to open)"), this);
     sub->setStyleSheet(QStringLiteral(
         "color:%1;").arg(Theme::TextSecond));
+    sub->setWordWrap(true);
     lay->addWidget(sub);
 
     m_recentList = new QListWidget(this);
@@ -68,6 +84,10 @@ CaseOpenPanel::CaseOpenPanel(CaseManager *cm, QWidget *parent)
     row->addStretch(1);
     auto *btnNew = new QPushButton(lang("新建案件…", "New case…"), this);
     auto *btnBrowse = new QPushButton(lang("浏览案件目录…", "Browse…"), this);
+    auto *btnIndependent = new QPushButton(
+        lang("独立模式", "Independent"), this);
+    btnIndependent->setToolTip(lang("不使用案件，直接进入（与旧版一致）",
+                                    "No case; enter directly (as before)"));
     auto *btnClose = new QPushButton(lang("✕ 关闭", "✕ Close"), this);
     btnClose->setStyleSheet(QStringLiteral(
         "QPushButton { background:transparent; color:%1; border:none; }"
@@ -75,14 +95,29 @@ CaseOpenPanel::CaseOpenPanel(CaseManager *cm, QWidget *parent)
         .arg(Theme::TextSecond, Theme::TextPrimary));
     row->addWidget(btnNew);
     row->addWidget(btnBrowse);
+    row->addWidget(btnIndependent);
     row->addWidget(btnClose);
     lay->addLayout(row);
+
+    // 启动时不再显示（2026-08：迁自模态起始页；面板随时可从案件菜单打开）
+    m_dontShowCheck = new QCheckBox(
+        lang("启动时不再显示（案件菜单可随时打开）",
+             "Don't show at startup (reopen from Case menu)"), this);
+    m_dontShowCheck->setStyleSheet(QStringLiteral(
+        "color:%1;").arg(Theme::TextMuted));
+    m_dontShowCheck->setChecked(!showStartupPanel());
+    connect(m_dontShowCheck, &QCheckBox::toggled, this,
+            [](bool off) { setShowStartupPanel(!off); });
+    lay->addWidget(m_dontShowCheck);
 
     connect(btnNew, &QPushButton::clicked, this, [this]() {
         emit newCaseRequested();
     });
     connect(btnBrowse, &QPushButton::clicked, this, [this]() {
         emit browseRequested();
+    });
+    connect(btnIndependent, &QPushButton::clicked, this, [this]() {
+        emit independentRequested();
     });
     connect(btnClose, &QPushButton::clicked, this, [this]() {
         emit closeRequested();

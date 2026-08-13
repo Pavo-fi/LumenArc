@@ -91,7 +91,6 @@ set(SOURCES
     src/casedock.cpp
     src/app/case_open_panel.cpp
     src/casedialogs.cpp
-    src/startpagewidget.cpp
     src/multicamview.cpp
     src/app/cam_timeline.cpp
     src/app/preprocessing_coordinator.cpp
