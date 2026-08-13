@@ -23,6 +23,7 @@
 #include <QRegularExpression>
 #include <QSaveFile>
 #include <QSettings>
+#include <QStorageInfo>
 #include <QThread>
 
 namespace {
@@ -65,6 +66,7 @@ CaseManager::CaseManager(QObject *parent)
 
 CaseManager::~CaseManager()
 {
+    cancelExport();
     cancelHashes();
 }
 
@@ -406,7 +408,26 @@ const CaseVideoRef *CaseManager::videoByPath(const QString &path) const
     for (const auto &v : m_meta.videos)
         if (v.originalPath == norm)
             return &v;
+    // 完整包接收端：播放包内 sources/ 副本时按 bundledRelPath 命中
+    const QDir caseDir(m_caseDir);
+    for (const auto &v : m_meta.videos) {
+        if (!v.bundledRelPath.isEmpty()
+            && normPath(caseDir.absoluteFilePath(v.bundledRelPath)) == norm)
+            return &v;
+    }
     return nullptr;
+}
+
+QString CaseManager::effectivePathFor(const CaseVideoRef &v) const
+{
+    if (QFile::exists(v.originalPath))
+        return v.originalPath;
+    if (!v.bundledRelPath.isEmpty()) {
+        const QString bundled = QDir(m_caseDir).absoluteFilePath(v.bundledRelPath);
+        if (QFile::exists(bundled))
+            return bundled;
+    }
+    return v.originalPath;   // 缺失：原路径返回，调用方按 exists 判
 }
 
 // ---------------------------------------------------------------------------
@@ -632,20 +653,26 @@ private:
             CaseIntegrityItem it;
             it.label = v.id;
             it.path = v.originalPath;
-            const QFileInfo fi(v.originalPath);
+            // 完整包接收端：原路径缺失时以包内副本为校验对象（内容一致）
+            const QString eff = m_mgr->effectivePathFor(v);
+            const QFileInfo fi(eff);
             if (!fi.exists()) {
                 it.status = 2;   // 缺失
             } else {
+                const bool isBundled = (eff != v.originalPath);
+                // 包内副本 mtime 与登记值天然不同：不参与快扫变更判定；
+                // size 不一致（副本损坏/调包）仍触发重算
                 const bool metaChanged =
                     (fi.size() != v.sizeBytes)
-                    || (fi.lastModified().toMSecsSinceEpoch() != v.mtimeMs);
+                    || (!isBundled
+                        && fi.lastModified().toMSecsSinceEpoch() != v.mtimeMs);
                 if (!fullRehash && !metaChanged && !v.sha256.isEmpty()) {
                     it.status = 0;   // 快扫一致
                 } else {
                     QString sha;
                     if (m_mgr->m_hashAbort.load())
                         break;
-                    if (hashFileSha256(v.originalPath, &sha, m_mgr->m_hashAbort)
+                    if (hashFileSha256(eff, &sha, m_mgr->m_hashAbort)
                         && !v.sha256.isEmpty()) {
                         it.status = (sha == v.sha256) ? 0 : 1;
                     } else if (sha.isEmpty()) {
@@ -669,6 +696,296 @@ private:
 
     CaseManager *m_mgr;
     Kind m_kind;
+};
+
+// ---------------------------------------------------------------------------
+// ExportTask：移交包导出工作单元（1MB 分块可复制可取消，半成品清理）
+// ---------------------------------------------------------------------------
+class CaseManager::ExportTask : public QRunnable
+{
+public:
+    ExportTask(CaseManager *mgr, const QString &targetParentDir, bool full)
+        : m_mgr(mgr)
+        , m_parent(targetParentDir)
+        , m_full(full)
+        , m_caseDir(mgr->m_caseDir)
+        , m_meta(mgr->m_meta)   // 快照：导出期间源案件继续编辑不影响本包
+    {
+        setAutoDelete(true);
+    }
+
+    void run() override
+    {
+        QThread::currentThread()->setPriority(QThread::LowestPriority);
+        QString msg;
+        const bool ok = doExport(&msg);
+        QMetaObject::invokeMethod(m_mgr, "onExportFinished",
+                                  Qt::QueuedConnection,
+                                  Q_ARG(bool, ok), Q_ARG(QString, msg));
+    }
+
+private:
+    void progress(int pct, const QString &stage)
+    {
+        if (pct != m_lastPct) {
+            m_lastPct = pct;
+            QMetaObject::invokeMethod(m_mgr, "onExportProgress",
+                                      Qt::QueuedConnection,
+                                      Q_ARG(int, pct), Q_ARG(QString, stage));
+        }
+    }
+
+    bool copyFileChunked(const QString &src, const QString &dst,
+                         const QString &stage)
+    {
+        QFile in(src), out(dst);
+        if (!in.open(QIODevice::ReadOnly) || !out.open(QIODevice::WriteOnly))
+            return false;
+        while (!in.atEnd()) {
+            if (m_mgr->m_exportAbort.load())
+                return false;
+            const QByteArray chunk = in.read(1 << 20);
+            if (chunk.isEmpty())
+                break;
+            if (out.write(chunk) != chunk.size())
+                return false;
+            m_done += chunk.size();
+            progress(m_total > 0 ? int(m_done * 100 / m_total) : 99, stage);
+        }
+        return true;
+    }
+
+    /// 清单重建（包内 manifest.json；与 M1 runManifest 同排除语义）
+    bool writeManifest(const QString &root, QString *err)
+    {
+        QJsonArray files;
+        const QDir rootDir(root);
+        QDirIterator it(root, QDir::Files, QDirIterator::Subdirectories);
+        while (it.hasNext()) {
+            if (m_mgr->m_exportAbort.load())
+                return false;
+            const QString abs = it.next();
+            const QString rel = rootDir.relativeFilePath(abs);
+            if (rel == QLatin1String(kManifestName)
+                || rel == QLatin1String(CaseModel::kLockName)
+                || rel.startsWith(QStringLiteral("sources/")))
+                continue;
+            QString sha;
+            if (!hashFileSha256(abs, &sha, m_mgr->m_exportAbort))
+                continue;
+            QJsonObject e;
+            e[QStringLiteral("path")] = rel;
+            e[QStringLiteral("sizeBytes")] = QFileInfo(abs).size();
+            e[QStringLiteral("sha256")] = sha;
+            files.append(e);
+        }
+        QJsonObject rootObj;
+        rootObj[QStringLiteral("magic")] = QStringLiteral("LumenArcManifest");
+        rootObj[QStringLiteral("formatVersion")] = 1;
+        rootObj[QStringLiteral("generatedMs")] =
+            QDateTime::currentMSecsSinceEpoch();
+        rootObj[QStringLiteral("files")] = files;
+        QSaveFile f(root + QLatin1Char('/') + QString::fromLatin1(kManifestName));
+        if (!f.open(QIODevice::WriteOnly)) {
+            if (err) *err = QStringLiteral("manifest 写入失败");
+            return false;
+        }
+        f.write(QJsonDocument(rootObj).toJson(QJsonDocument::Indented));
+        return f.commit();
+    }
+
+    QString buildReadme(const QString &pkgType,
+                        const QStringList &skipBundled) const
+    {
+        const CaseMeta &m = m_meta;
+        QStringList lines;
+        lines << QStringLiteral("追光者 Lumen Arc 案件移交包")
+              << QStringLiteral("======================================")
+              << QStringLiteral("案件编号：%1").arg(m.caseNo)
+              << QStringLiteral("案件名称：%1").arg(m.title)
+              << QStringLiteral("调查员：%1　单位：%2").arg(m.investigator, m.unit)
+              << QStringLiteral("案发时间：%1")
+                     .arg(QDateTime::fromMSecsSinceEpoch(m.incidentTimeMs)
+                              .toString(QStringLiteral("yyyy-MM-dd")))
+              << QStringLiteral("案发地点：%1 %2 %3")
+                     .arg(m.city, m.district, m.locationDetail).trimmed()
+              << QStringLiteral("导出时间：%1")
+                     .arg(QDateTime::currentDateTime()
+                              .toString(QStringLiteral("yyyy-MM-dd HH:mm:ss")))
+              << QStringLiteral("导出类型：%1").arg(pkgType)
+              << QString()
+              << QStringLiteral("内容清单：")
+              << QStringLiteral("- case.json：案件登记（视频/分析/前处理/校时索引）")
+              << QStringLiteral("- manifest.json：案内文件完整性清单（SHA-256）")
+              << QStringLiteral("- videos/V###.vla：逐路分析结果")
+              << QStringLiteral("- evidence/calibration/V###/：校时证据帧")
+              << QStringLiteral("- preprocess/：前处理会话产物与报告")
+              << (m_full ? QStringLiteral("- sources/V###__原名：源视频副本（完整包）")
+                         : QStringLiteral("（轻量包不含源视频副本）"))
+              << QString()
+              << QStringLiteral("视频指纹（SHA-256）：");
+        for (const auto &v : m.videos) {
+            lines << QStringLiteral("%1  %2  %3")
+                         .arg(v.id, v.sha256.isEmpty()
+                                  ? QStringLiteral("（未算）") : v.sha256,
+                              QFileInfo(v.originalPath).fileName());
+        }
+        lines << QString()
+              << QStringLiteral("使用说明：")
+              << QStringLiteral("1. 用 Lumen Arc（v1.3.0+）「案件 → 打开案件」选择本目录，"
+                                "即可查看全部分析成果。")
+              << (m_full
+                      ? QStringLiteral("2. 完整包：视频已随包携带（sources/），零操作可播放核对。")
+                      : QStringLiteral("2. 轻量包：首次打开后请按提示将各路视频重新定位到本机文件；"
+                                       "定位后强制指纹比对，与上表一致方可采用。"))
+              << QStringLiteral("3. 「案件 → 完整性校验」可随时复核案内文件未被篡改。")
+              << QStringLiteral("4. 本包由 Lumen Arc v1.3.0 导出；案件数据只读引用，"
+                                "源视频与 .vla 分析数据分离管理。");
+        if (!skipBundled.isEmpty()) {
+            lines << QString()
+                  << QStringLiteral("注意：以下视频源文件导出时缺失，未随包携带副本：%1")
+                         .arg(skipBundled.join(QStringLiteral("、")));
+        }
+        return lines.join(QLatin1Char('\n')) + QLatin1Char('\n');
+    }
+
+    bool doExport(QString *msg)
+    {
+        const QString pkgDir = m_parent + QLatin1Char('/')
+            + CaseManager::caseDirName(m_meta);
+        if (QDir(pkgDir).exists()) {
+            *msg = QStringLiteral("目标目录已存在：%1").arg(pkgDir);
+            return false;
+        }
+        // ① 收集案内文件（排除锁/manifest/sources）
+        QStringList caseFiles;
+        const QDir root(m_caseDir);
+        QDirIterator it(m_caseDir, QDir::Files, QDirIterator::Subdirectories);
+        while (it.hasNext()) {
+            const QString abs = it.next();
+            const QString rel = root.relativeFilePath(abs);
+            if (rel == QLatin1String(kManifestName)
+                || rel == QLatin1String(CaseModel::kLockName)
+                || rel == QStringLiteral("case.json")   // 包内 case.json 后写（含 bundledRelPath）
+                || rel.startsWith(QStringLiteral("sources/")))
+                continue;
+            caseFiles.append(abs);
+            m_total += QFileInfo(abs).size();
+        }
+        // ② 完整包：源视频副本清单
+        QVector<QPair<QString, QString>> sources;   // src → bundledRelPath
+        QStringList skipBundled;
+        if (m_full) {
+            for (const auto &v : m_meta.videos) {
+                const QFileInfo fi(v.originalPath);
+                if (!fi.exists()) {
+                    skipBundled << v.id;   // 缺失源：不携带，README 注明
+                    continue;
+                }
+                const QString rel = QStringLiteral("sources/%1__%2")
+                                        .arg(v.id, fi.fileName());
+                sources.append({v.originalPath, rel});
+                m_total += fi.size();
+            }
+        }
+        // ③ 复制
+        progress(0, QStringLiteral("copying"));
+        auto fail = [&](const QString &why) {
+            QDir(pkgDir).removeRecursively();   // 半成品清理
+            *msg = why;
+            return false;
+        };
+        for (const QString &abs : caseFiles) {
+            if (m_mgr->m_exportAbort.load())
+                return fail(QStringLiteral("已取消（半成品已清理）"));
+            const QString rel = root.relativeFilePath(abs);
+            const QString dst = pkgDir + QLatin1Char('/') + rel;
+            QDir().mkpath(QFileInfo(dst).absolutePath());
+            if (!copyFileChunked(abs, dst, rel))
+                return fail(m_mgr->m_exportAbort.load()
+                                ? QStringLiteral("已取消（半成品已清理）")
+                                : QStringLiteral("复制失败：%1").arg(rel));
+        }
+        // ④ sources 副本
+        for (const auto &pr : sources) {
+            if (m_mgr->m_exportAbort.load())
+                return fail(QStringLiteral("已取消（半成品已清理）"));
+            const QString dst = pkgDir + QLatin1Char('/') + pr.second;
+            QDir().mkpath(QFileInfo(dst).absolutePath());
+            if (!copyFileChunked(pr.first, dst, pr.second))
+                return fail(m_mgr->m_exportAbort.load()
+                                ? QStringLiteral("已取消（半成品已清理）")
+                                : QStringLiteral("视频副本失败：%1").arg(pr.second));
+        }
+        // ⑤ 包内 case.json（bundledRelPath 写入包内副本；源案件不动）
+        CaseMeta pkg = m_meta;
+        for (auto &v : pkg.videos) {
+            for (const auto &pr : sources) {
+                if (pr.second.startsWith(QStringLiteral("sources/") + v.id
+                                         + QStringLiteral("__")))
+                    v.bundledRelPath = pr.second;
+            }
+        }
+        {
+            QString serr;
+            if (!CaseModel::save(pkgDir, pkg, &serr))
+                return fail(QStringLiteral("包内 case.json 写入失败：%1").arg(serr));
+        }
+        // ⑥ 包内 manifest
+        {
+            QString merr;
+            progress(97, QStringLiteral("manifest"));
+            if (!writeManifest(pkgDir, &merr))
+                return fail(m_mgr->m_exportAbort.load()
+                                ? QStringLiteral("已取消（半成品已清理）")
+                                : merr);
+        }
+        // ⑦ README.txt
+        {
+            QFile f(pkgDir + QStringLiteral("/README.txt"));
+            if (!f.open(QIODevice::WriteOnly | QIODevice::Text))
+                return fail(QStringLiteral("README 写入失败"));
+            f.write(buildReadme(m_full ? QStringLiteral("完整包（含视频副本）")
+                                       : QStringLiteral("轻量包（不含视频副本）"),
+                                skipBundled).toUtf8());
+        }
+        // ⑧ 导后快校（完整包拍板§8-9：副本 sha 与登记值逐路比对）
+        QStringList verifyNotes;
+        if (m_full) {
+            progress(98, QStringLiteral("verify"));
+            for (const auto &pr : sources) {
+                if (m_mgr->m_exportAbort.load())
+                    return fail(QStringLiteral("已取消（半成品已清理）"));
+                const QString vid = pr.second.mid(8, 4);   // sources/V###__
+                const auto *v = CaseModel::findVideo(m_meta, vid);
+                if (!v || v->sha256.isEmpty()) {
+                    verifyNotes << QStringLiteral("%1 未算指纹，快校跳过").arg(vid);
+                    continue;
+                }
+                QString sha;
+                if (!hashFileSha256(pkgDir + QLatin1Char('/') + pr.second,
+                                    &sha, m_mgr->m_exportAbort)
+                    || sha != v->sha256)
+                    return fail(QStringLiteral(
+                        "导后快校失败：%1 副本指纹与登记不一致（包不可靠，已清理）")
+                        .arg(vid));
+            }
+        }
+        progress(100, QStringLiteral("done"));
+        *msg = pkgDir;
+        if (!verifyNotes.isEmpty())
+            *msg += QStringLiteral("\n") + verifyNotes.join(QStringLiteral("\n"));
+        return true;
+    }
+
+    CaseManager *m_mgr;
+    QString m_parent;
+    bool m_full;
+    QString m_caseDir;
+    CaseMeta m_meta;
+    qint64 m_total = 0;
+    qint64 m_done = 0;
+    int m_lastPct = -1;
 };
 
 // ---------------------------------------------------------------------------
@@ -696,13 +1013,16 @@ void CaseManager::queueMissingHashes()
     if (!m_open)
         return;
     for (const auto &v : m_meta.videos) {
-        const QFileInfo fi(v.originalPath);
+        // 完整包接收端：原路径缺失时以包内副本为准（内容一致，sha 语义不变）
+        const QString eff = effectivePathFor(v);
+        const QFileInfo fi(eff);
         if (!fi.exists())
             continue;   // 缺失视频不入队（重定位后再算）
         const bool changed =
             (fi.size() != v.sizeBytes)
             || (fi.lastModified().toMSecsSinceEpoch() != v.mtimeMs);
-        if (v.sha256.isEmpty() || changed)
+        // 包内副本 mtime 与登记值天然不同：sha 一致即视为一致，不触发重算
+        if (v.sha256.isEmpty() || (changed && eff == v.originalPath))
             queueVideoHash(v.id);
     }
 }
@@ -746,6 +1066,78 @@ void CaseManager::verifyIntegrity(bool fullRehash)
     auto *task = new HashTask(this, HashTask::Verify);
     task->fullRehash = fullRehash;
     m_hashPool->start(task);
+}
+
+// ---------------------------------------------------------------------------
+// 移交包导出（v1.3.0 M3 任务12）
+// ---------------------------------------------------------------------------
+CaseManager::CaseExportPrecheck CaseManager::exportPrecheck(
+    const QString &targetDir, bool fullPackage) const
+{
+    CaseExportPrecheck pc;
+    if (!m_open)
+        return pc;
+    // 案内体量（排除锁/manifest 自身/sources 包内副本——与 M1 清单同语义）
+    const QDir root(m_caseDir);
+    QDirIterator it(m_caseDir, QDir::Files, QDirIterator::Subdirectories);
+    while (it.hasNext()) {
+        const QString abs = it.next();
+        const QString rel = root.relativeFilePath(abs);
+        if (rel == QLatin1String(kManifestName)
+            || rel == QLatin1String(CaseModel::kLockName)
+            || rel.startsWith(QStringLiteral("sources/")))
+            continue;
+        pc.caseBytes += QFileInfo(abs).size();
+    }
+    for (const auto &v : m_meta.videos) {
+        if (v.sha256.isEmpty())
+            ++pc.missingHashCount;
+        const QFileInfo fi(v.originalPath);
+        if (!fi.exists()) {
+            pc.missingVideoIds << v.id;
+            continue;
+        }
+        if (fullPackage)
+            pc.sourcesBytes += fi.size();
+    }
+    const QStorageInfo storage(targetDir);
+    if (storage.isValid() && storage.bytesAvailable() >= 0) {
+        pc.availableBytes = storage.bytesAvailable();
+        const qint64 need = pc.caseBytes
+            + (fullPackage ? pc.sourcesBytes : 0);
+        pc.insufficientSpace = (pc.availableBytes < need * 11 / 10);  // 10% 余量
+    }
+    return pc;
+}
+
+void CaseManager::exportCase(const QString &targetParentDir, bool fullPackage)
+{
+    if (!m_open || m_exportActive.load())
+        return;
+    m_exportAbort.store(false);
+    m_exportActive.store(true);
+    if (!m_hashPool) {
+        m_hashPool = new QThreadPool(this);
+        m_hashPool->setMaxThreadCount(1);
+    }
+    // 复用单线程池：导出与哈希/校验串行（IO 纪律，不抢播放）
+    m_hashPool->start(new ExportTask(this, targetParentDir, fullPackage));
+}
+
+void CaseManager::cancelExport()
+{
+    m_exportAbort.store(true);
+}
+
+void CaseManager::onExportProgress(int percent, const QString &stage)
+{
+    emit exportProgress(percent, stage);
+}
+
+void CaseManager::onExportFinished(bool ok, const QString &message)
+{
+    m_exportActive.store(false);
+    emit exportFinished(ok, message);
 }
 
 // ---------------------------------------------------------------------------

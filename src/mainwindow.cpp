@@ -653,6 +653,11 @@ void MainWindow::createMenus()
         lang("案件属性(&P)...", "Case &Properties..."), this,
         &MainWindow::onCaseProperties);
     m_casePropsAction->setEnabled(false);
+    // v1.3.0 M3 任务12：导出移交包
+    m_exportCaseAction = caseMenu->addAction(
+        lang("导出移交包(&E)...", "&Export Handover Package..."), this,
+        &MainWindow::onExportCase);
+    m_exportCaseAction->setEnabled(false);
     caseMenu->addAction(lang("案件根目录设置(&D)...", "Case &Root Folder..."),
                         this, &MainWindow::onCaseRootDir);
     caseMenu->addSeparator();
@@ -1655,6 +1660,8 @@ void MainWindow::enterCaseMode()
         m_closeCaseAction->setEnabled(true);
     if (m_casePropsAction)
         m_casePropsAction->setEnabled(true);
+    if (m_exportCaseAction)
+        m_exportCaseAction->setEnabled(true);
     setWindowTitle(windowTitleWithCase(
         lang("追光者 Lumen Arc v1.1.1", "Lumen Arc v1.1.1")));
     showOperationStatus(lang("案件已打开：%1", "Case opened: %1")
@@ -1677,6 +1684,8 @@ void MainWindow::exitCaseMode()
         m_closeCaseAction->setEnabled(false);
     if (m_casePropsAction)
         m_casePropsAction->setEnabled(false);
+    if (m_exportCaseAction)
+        m_exportCaseAction->setEnabled(false);
     setWindowTitle(lang("追光者 Lumen Arc v1.1.1", "Lumen Arc v1.1.1"));
     showOperationStatus(lang("案件已关闭", "Case closed"));
 }
@@ -1843,6 +1852,14 @@ void MainWindow::onShowStartPage()
     case StartPageDialog::OpenRecent: openCaseFlow(dlg.recentDir()); break;
     case StartPageDialog::Independent: break;   // v1.2.2 行为照旧
     }
+}
+
+void MainWindow::onExportCase()
+{
+    if (!m_caseManager->isOpen())
+        return;
+    ExportCaseDialog dlg(m_caseManager, this);
+    dlg.exec();
 }
 
 void MainWindow::openVideoFile(const QString &filePath)

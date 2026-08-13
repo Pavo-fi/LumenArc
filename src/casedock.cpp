@@ -29,6 +29,7 @@
 #include <QVBoxLayout>
 
 #include "app/case_manager.h"
+#include "casedialogs.h"
 #include "i18n.h"
 #include "theme.h"
 
@@ -98,15 +99,19 @@ QTreeWidgetItem *CaseDock::addGroup(const QString &text)
 QString CaseDock::hashBadge(const CaseVideoRef &v, QString *tooltip,
                             QColor *color) const
 {
-    const QFileInfo fi(v.originalPath);
+    // 完整包接收端：原路径缺失时以包内 sources/ 副本为准（M3 任务12）
+    const QString eff = m_caseManager->effectivePathFor(v);
+    const QFileInfo fi(eff);
+    const bool bundled = (eff != v.originalPath);
     if (!fi.exists()) {
         if (tooltip) *tooltip = lang("源文件缺失（右键可重新定位）",
                                      "Source missing (right-click to relocate)");
         if (color) *color = QColor(Theme::Danger);
         return QStringLiteral("✗");
     }
-    if (fi.size() != v.sizeBytes
-        || fi.lastModified().toMSecsSinceEpoch() != v.mtimeMs) {
+    if (!bundled
+        && (fi.size() != v.sizeBytes
+            || fi.lastModified().toMSecsSinceEpoch() != v.mtimeMs)) {
         if (tooltip) *tooltip = lang("源文件已变更（大小/时间不符），指纹将重算",
                                      "Source changed (size/mtime), will re-hash");
         if (color) *color = QColor(Theme::Accent);
@@ -118,7 +123,9 @@ QString CaseDock::hashBadge(const CaseVideoRef &v, QString *tooltip,
         if (color) *color = QColor(Theme::TextMuted);
         return QStringLiteral("⏳");
     }
-    if (tooltip) *tooltip = lang("指纹一致", "Fingerprint verified");
+    if (tooltip) *tooltip = bundled
+        ? lang("包内副本，指纹一致", "Bundled copy, fingerprint verified")
+        : lang("指纹一致", "Fingerprint verified");
     if (color) *color = QColor(Theme::Success);
     return QStringLiteral("✓");
 }
@@ -131,14 +138,24 @@ void CaseDock::fillVideos(QTreeWidgetItem *group)
         const QString badge = hashBadge(v, &badgeTip, &badgeColor);
         const QString calMark = v.hasCalibration
             ? QStringLiteral(" ⏰") : QString();
+        // 有效路径：包内副本兜底（双击直接可播，完整包零操作）
+        const QString eff = m_caseManager->effectivePathFor(v);
+        const bool bundled = (eff != v.originalPath);
+        const QString name = bundled
+            ? QStringLiteral("📦") + QFileInfo(eff).fileName()
+            : QFileInfo(v.originalPath).fileName();
         auto *it = new QTreeWidgetItem(group,
             {QStringLiteral("%1  %2%3  %4")
-                 .arg(v.id, QFileInfo(v.originalPath).fileName(), calMark, badge)});
+                 .arg(v.id, name, calMark, badge)});
         it->setData(0, kRoleKind, QStringLiteral("video"));
         it->setData(0, kRoleId, v.id);
-        it->setData(0, kRolePath, v.originalPath);
+        it->setData(0, kRolePath, eff);
         it->setForeground(0, badgeColor);
-        QString tip = v.originalPath + QStringLiteral("\n") + badgeTip;
+        QString tip = v.originalPath
+            + (bundled ? QStringLiteral("\n") + lang("（原路径缺失，包内副本：%1）",
+                                                      "(original missing, bundled: %1)").arg(eff)
+                       : QString())
+            + QStringLiteral("\n") + badgeTip;
         if (v.hasCalibration && !v.calibrationSummary.isEmpty())
             tip += QStringLiteral("\n") + lang("校时：", "Calibration: ")
                    + v.calibrationSummary;
@@ -260,40 +277,9 @@ void CaseDock::showInExplorer(const QString &path) const
 
 void CaseDock::relocateVideo(const QString &id)
 {
-    const auto *v = m_caseManager->videoById(id);
-    if (!v)
-        return;
-    const QString newPath = QFileDialog::getOpenFileName(this,
-        lang("重新定位源视频（只改引用，不动案件数据）",
-             "Relocate source video (reference only)"),
-        QFileInfo(v->originalPath).absolutePath(),
-        lang("视频文件 (*.mp4 *.avi *.mkv *.mov *.wmv *.flv *.webm);;所有文件 (*)",
-             "Video Files (*.mp4 *.avi *.mkv *.mov *.wmv *.flv *.webm);;All Files (*)"));
-    if (newPath.isEmpty())
-        return;
-    QString err;
-    bool mismatch = false;
-    if (!m_caseManager->relocateVideo(id, newPath, &err, &mismatch, false)) {
-        if (!mismatch) {
-            QMessageBox::warning(this, lang("重定位失败", "Relocate failed"), err);
-            return;
-        }
-        // 大小不一致：默认拒绝，显式【仍要采用】后强制（留档，拍板§8-8）
-        const auto reply = QMessageBox::warning(this,
-            lang("重定位校验", "Relocate check"),
-            err + QStringLiteral("\n\n") +
-            lang("确定仍要采用该文件作为 %1 的来源吗？\n（采用后指纹将重算，覆写轨迹将留档）",
-                 "Use this file as the source of %1 anyway?\n(Fingerprint will be "
-                 "recomputed; the override is archived)").arg(id),
-            QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
-        if (reply != QMessageBox::Yes)
-            return;
-        if (!m_caseManager->relocateVideo(id, newPath, &err, nullptr, true)) {
-            QMessageBox::warning(this, lang("重定位失败", "Relocate failed"), err);
-            return;
-        }
-    }
-    refreshTree();
+    // 共用交互（casedialogs）：大小不一致默认拒绝，显式「仍要采用」留档
+    if (relocateVideoInteractive(m_caseManager, id, this))
+        refreshTree();
 }
 
 void CaseDock::removeVideo(const QString &id)

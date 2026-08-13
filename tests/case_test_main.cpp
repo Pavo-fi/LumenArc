@@ -906,6 +906,170 @@ int main(int argc, char **argv)
             CaseManager::setCaseRootDir(savedRoot);
     }
 
+    // ---- 12. 导出移交包（v1.3.0 M3 任务12：exportCase/effectivePathFor）----
+    {
+        RecentGuard recentGuard;
+        QTemporaryDir root;
+        auto mkVideo = [&](const QString &name, const QByteArray &content) {
+            QFile f(root.filePath(name));
+            f.open(QIODevice::WriteOnly);
+            f.write(content);
+            f.close();
+            return f.fileName();
+        };
+        const QString va = mkVideo("a.mp4", QByteArray(3000, 'a'));
+        const QString vb = mkVideo("b.mp4", QByteArray(4000, 'b'));
+
+        CaseManager cm;
+        QString err;
+        CaseMeta meta;
+        meta.caseNo = QStringLiteral("20260813-导出-a");
+        meta.title = QStringLiteral("导出");
+        CHECK(cm.createCase(root.path(), meta, &err), "exp: createCase");
+        // 案内小文件（videos/.vla + evidence）
+        QDir().mkpath(cm.caseDir() + QStringLiteral("/videos"));
+        {
+            QFile f(cm.caseDir() + QStringLiteral("/videos/V001.vla"));
+            f.open(QIODevice::WriteOnly);
+            f.write("{\"vla\":1}");
+            f.close();
+        }
+        int finishedCount = 0;
+        QObject::connect(&cm, &CaseManager::hashQueueFinished,
+                         [&]() { ++finishedCount; });
+        const QString idA = cm.addVideo(va, &err);
+        const QString idB = cm.addVideo(vb, &err);
+        CHECK(!idA.isEmpty() && !idB.isEmpty(), "exp: videos added");
+        QElapsedTimer t;
+        t.start();
+        while (finishedCount == 0 && t.elapsed() < 10000)
+            QCoreApplication::processEvents(QEventLoop::AllEvents, 50);
+        CHECK(finishedCount == 1, "exp: hashes done");
+
+        // 自检
+        const QTemporaryDir outRoot;
+        auto pc = cm.exportPrecheck(outRoot.path(), true);
+        CHECK(pc.missingHashCount == 0 && pc.missingVideoIds.isEmpty(),
+              "exp: precheck clean");
+        CHECK(pc.sourcesBytes == 7000 && pc.caseBytes > 0,
+              "exp: precheck sizes");
+        CHECK(!pc.insufficientSpace, "exp: space ok");
+
+        // ① 完整包导出
+        int exportDone = 0;
+        bool exportOk = false;
+        QString exportMsg;
+        QObject::connect(&cm, &CaseManager::exportFinished,
+                         [&](bool ok, const QString &m) {
+                             ++exportDone; exportOk = ok; exportMsg = m;
+                         });
+        cm.exportCase(outRoot.path(), true);
+        t.restart();
+        while (exportDone == 0 && t.elapsed() < 30000)
+            QCoreApplication::processEvents(QEventLoop::AllEvents, 50);
+        CHECK(exportDone == 1 && exportOk, "exp: full export ok");
+        const QString pkgDir = outRoot.path()
+            + QStringLiteral("/20260813-导出-a-导出");
+        CHECK(QDir(pkgDir).exists(), "exp: package dir");
+        CHECK(QFile::exists(pkgDir + "/case.json"), "exp: package case.json");
+        CHECK(QFile::exists(pkgDir + "/manifest.json"), "exp: package manifest");
+        CHECK(QFile::exists(pkgDir + "/README.txt"), "exp: README");
+        CHECK(!QFile::exists(pkgDir + "/case.json.lock"), "exp: no lock in package");
+        CHECK(QFile::exists(pkgDir + "/sources/V001__a.mp4")
+              && QFile::exists(pkgDir + "/sources/V002__b.mp4"),
+              "exp: sources copies");
+        CHECK(QFile::exists(pkgDir + "/videos/V001.vla"), "exp: vla copied");
+        {
+            QFile f(pkgDir + "/sources/V001__a.mp4");
+            f.open(QIODevice::ReadOnly);
+            CHECK(f.readAll() == QByteArray(3000, 'a'), "exp: copy content intact");
+            QFile rf(pkgDir + "/README.txt");
+            rf.open(QIODevice::ReadOnly);
+            const QString readme = QString::fromUtf8(rf.readAll());
+            CHECK(readme.contains("20260813-导出-a")
+                  && readme.contains(cm.videoById(idA)->sha256),
+                  "exp: README case no + sha");
+        }
+        // 源案件不动（取证红线）：bundledRelPath 只写入包内副本
+        CHECK(cm.videoById(idA)->bundledRelPath.isEmpty(),
+              "exp: source case untouched");
+
+        // 接收端场景：原路径缺失（删除原文件模拟换机）→ 包内副本兼底
+        QFile::remove(va);
+        QFile::remove(vb);
+
+        // ② 打开完整包：零操作可用（有效路径=包内副本、分流命中、校验一致）
+        {
+            CaseManager recv;
+            CHECK(recv.openCase(pkgDir, &err), "exp: reopen package");
+            const auto *rv = recv.videoById(idA);
+            CHECK(rv && !rv->bundledRelPath.isEmpty(),
+                  "exp: bundledRelPath in package");
+            const QString eff = recv.effectivePathFor(*rv);
+            CHECK(eff.contains("sources/V001__a.mp4"),
+                  "exp: effectivePathFor → bundled");
+            CHECK(recv.isCaseVideo(eff), "exp: bundled path matches videoByPath");
+            CHECK(recv.vlaPathFor(eff).contains("videos/V001.vla"),
+                  "exp: vlaPathFor hits via bundled path");
+            QVector<CaseIntegrityItem> report;
+            QObject::connect(&recv, &CaseManager::integrityReportReady,
+                             [&](const QVector<CaseIntegrityItem> &items) {
+                                 report = items;
+                             });
+            recv.verifyIntegrity(true);   // 全量重算：副本内容与登记一致
+            t.restart();
+            while (report.isEmpty() && t.elapsed() < 10000)
+                QCoreApplication::processEvents(QEventLoop::AllEvents, 50);
+            bool allOk = report.size() == 2;
+            for (const auto &it : report)
+                if (it.status != 0) allOk = false;
+            CHECK(allOk, "exp: package verify all consistent");
+            recv.closeCase();
+        }
+
+        // ③ 轻量包：无 sources/、无 bundledRelPath
+        int exportDone2 = 0;
+        bool exportOk2 = false;
+        QObject::connect(&cm, &CaseManager::exportFinished,
+                         [&](bool ok, const QString &) {
+                             ++exportDone2; exportOk2 = ok;
+                         });
+        const QTemporaryDir outRoot2;
+        cm.exportCase(outRoot2.path(), false);
+        t.restart();
+        while (exportDone2 == 0 && t.elapsed() < 30000)
+            QCoreApplication::processEvents(QEventLoop::AllEvents, 50);
+        CHECK(exportDone2 == 1 && exportOk2, "exp: light export ok");
+        const QString pkgDir2 = outRoot2.path()
+            + QStringLiteral("/20260813-导出-a-导出");
+        CHECK(!QDir(pkgDir2 + "/sources").exists(), "exp: light no sources");
+        {
+            CaseManager recv;
+            CHECK(recv.openCase(pkgDir2, &err), "exp: reopen light package");
+            const auto *rv = recv.videoById(idA);
+            CHECK(rv && rv->bundledRelPath.isEmpty(),
+                  "exp: light package has no bundledRelPath");
+            // 轻量包无副本：有效路径按约定返回 originalPath（缺失由调用方判）
+            CHECK(recv.effectivePathFor(*rv) == va,
+                  "exp: light effective = original reference");
+            recv.closeCase();
+        }
+
+        // ④ 重复导出同一目标：拒绝（不覆盖）
+        int exportDone3 = 0;
+        bool exportOk3 = true;
+        QObject::connect(&cm, &CaseManager::exportFinished,
+                         [&](bool ok, const QString &) {
+                             ++exportDone3; exportOk3 = ok;
+                         });
+        cm.exportCase(outRoot.path(), true);
+        t.restart();
+        while (exportDone3 == 0 && t.elapsed() < 30000)
+            QCoreApplication::processEvents(QEventLoop::AllEvents, 50);
+        CHECK(exportDone3 == 1 && !exportOk3, "exp: existing target rejected");
+        cm.closeCase();
+    }
+
     fprintf(stderr, "case_test: %d checks, %d failures\n", g_checks, g_failures);
     return g_failures ? 1 : 0;
 }

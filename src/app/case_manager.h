@@ -96,9 +96,16 @@ public:
     void queueHashFor(const QString &id) { queueVideoHash(id); }
 
     const CaseVideoRef *videoById(const QString &id) const;
+    /// originalPath 或包内副本（sources/）绝对路径匹配（完整包接收端播放
+    /// 副本时 vlaPathFor/timestampRoi 等分流仍命中本路视频）
     const CaseVideoRef *videoByPath(const QString &path) const;
     bool isCaseVideo(const QString &path) const
     { return videoByPath(path) != nullptr; }
+
+    /// 有效路径（v1.3.0 M3 任务12）：originalPath 存在→原路径；否则包内
+    /// sources/ 副本存在→副本绝对路径。originalPath 永不改写（取证红线）。
+    /// 均无→返回 originalPath（缺失语义由调用方按 exists 判）。
+    QString effectivePathFor(const CaseVideoRef &v) const;
 
     // ---- 路径分流（双模式核心）----
     /// 入案视频 → <案件>/videos/V###.vla；未入案/无案件 → 视频路径+".vla"
@@ -140,6 +147,25 @@ public:
     // ---- 完整性校验（异步：快扫 size/mtime + 差异/全量重算比对）----
     void verifyIntegrity(bool fullRehash);
 
+    // ---- 移交包导出（v1.3.0 M3 任务12）----
+    /// 导出前自检（同步快判，对话框展示用）
+    struct CaseExportPrecheck {
+        int missingHashCount = 0;     ///< 未算指纹视频数（可即补）
+        QStringList missingVideoIds;  ///< 源文件缺失的 V###（可即定位）
+        qint64 caseBytes = 0;         ///< 案件目录体量（不含 sources/）
+        qint64 sourcesBytes = 0;      ///< 完整包 sources/ 增量体量（存在的源文件）
+        qint64 availableBytes = -1;   ///< 目标卷可用空间（-1=未取得）
+        bool insufficientSpace = false;
+    };
+    CaseExportPrecheck exportPrecheck(const QString &targetDir,
+                                      bool fullPackage) const;
+    /// 后台导出移交包：完整包=案件目录+sources/ 视频副本+包内 case.json
+    ///（bundledRelPath 写入包内副本，源案件不动）+manifest+README+导后快校；
+    /// 轻量包=案件目录（无 sources/）。半成品清理，可取消。
+    void exportCase(const QString &targetParentDir, bool fullPackage);
+    void cancelExport();
+    bool exportActive() const { return m_exportActive.load(); }
+
     // ---- manifest.json（机器维护：保存后队列回填 + 校验时重建）----
     void queueManifestRefresh();
 
@@ -157,6 +183,9 @@ signals:
     void hashQueueFinished();
     /// 完整性校验报告：status 0=一致 1=已变更 2=缺失
     void integrityReportReady(const QVector<CaseIntegrityItem> &items);
+    /// 移交包导出进度/结果（M3 任务12）
+    void exportProgress(int percent, const QString &stage);
+    void exportFinished(bool ok, const QString &message);
 
 private slots:
     // 工作线程结果回投（QueuedConnection，UI 线程更新 meta）
@@ -164,6 +193,8 @@ private slots:
                        qint64 sizeBytes, qint64 mtimeMs);
     void onManifestRefreshed(int fileCount);
     void onVerifyDone(const QVector<CaseIntegrityItem> &items);
+    void onExportProgress(int percent, const QString &stage);
+    void onExportFinished(bool ok, const QString &message);
 
 private:
     void pushRecent(const QString &dir);
@@ -179,10 +210,14 @@ private:
 
     // 哈希队列状态（QThreadPool×1，worker 经 QueuedConnection 回投）
     class HashTask;
+    class ExportTask;
     QThreadPool *m_hashPool = nullptr;
     std::atomic<bool> m_hashAbort{false};
     std::atomic<int> m_hashPending{0};
     int m_hashTotal = 0, m_hashDone = 0;
     bool m_verifyPending = false;
+    std::atomic<bool> m_exportActive{false};
+    std::atomic<bool> m_exportAbort{false};
     friend class HashTask;
+    friend class ExportTask;
 };

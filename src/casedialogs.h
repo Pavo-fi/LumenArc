@@ -24,6 +24,8 @@ class QDateEdit;
 class QPlainTextEdit;
 class QLabel;
 class QDialogButtonBox;
+class QRadioButton;
+class QProgressBar;
 class CaseManager;
 
 /// 新建案件对话框：收集 CaseMeta 必填字段 + 编号预览
@@ -69,4 +71,39 @@ private:
     QLineEdit *m_unit = nullptr;
     QLineEdit *m_locationDetail = nullptr;
     QPlainTextEdit *m_description = nullptr;
+};
+
+/// 重定位交互流程（CaseDock 右键 / 导出前自检共用）：
+/// 选文件 → relocateVideo；大小不一致默认拒绝、显式「仍要采用」后 force。
+/// 返回 true = 已採用新引用。
+bool relocateVideoInteractive(CaseManager *cm, const QString &id,
+                              QWidget *parent);
+
+/// 导出移交包对话框（v1.3.0 M3 任务12）：
+/// 完整包默认/轻量可选；导前自检（未算可即补/缺失可即定位/知情可仍要导出）；
+/// 空间预检；后台进度可取消。
+class ExportCaseDialog : public QDialog
+{
+    Q_OBJECT
+public:
+    explicit ExportCaseDialog(CaseManager *cm, QWidget *parent = nullptr);
+
+private slots:
+    void refreshPrecheck();
+    void onExport();
+    void onComputeHashes();
+    void onRelocateMissing();
+
+private:
+    CaseManager *m_cm = nullptr;
+    QRadioButton *m_fullRadio = nullptr;
+    QRadioButton *m_lightRadio = nullptr;
+    QLineEdit *m_targetEdit = nullptr;
+    QLabel *m_checkLabel = nullptr;
+    QPushButton *m_btnExport = nullptr;
+    QPushButton *m_btnHash = nullptr;
+    QPushButton *m_btnRelocate = nullptr;
+    QPushButton *m_btnCancelExport = nullptr;
+    QProgressBar *m_progress = nullptr;
+    bool m_exporting = false;
 };

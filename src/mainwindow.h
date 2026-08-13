@@ -135,6 +135,8 @@ private:
     void onCaseRootDir();
     /// @brief 起始页（启动自动显示 + 案件菜单 reopen）
     void onShowStartPage();
+    /// @brief 导出移交包（v1.3.0 M3 任务12）
+    void onExportCase();
     /// @brief 自动检测系统中的 Python 解释器路径
     QString detectPythonPath() const;
     /// @brief 用 Python 分析引擎的真实帧数/FPS 计算可信时长
@@ -183,6 +185,7 @@ protected:
     QPushButton *m_caseStatusBtn = nullptr;  ///< 状态栏📁标识（点击=退出案件模式）
     QAction *m_closeCaseAction = nullptr;    ///< 菜单「关闭案件」(Ctrl+W)
     QAction *m_casePropsAction = nullptr;    ///< 菜单「案件属性」
+    QAction *m_exportCaseAction = nullptr;   ///< 菜单「导出移交包」(M3)
     TimeCalibration m_calibration;   // 当前视频校时 SSOT（.vla v8 持久化）
     QPointer<TimeSettingsDialog> m_calibrationDialog;  // 非模态校时窗口（v1.2.1）
     QPointer<TimeSettingsDialog> m_roiDialog;          // 框选中的校时窗口
