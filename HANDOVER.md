@@ -1591,3 +1591,20 @@ v1.3.1 一并出（或拍板重打 v1.3.0）。
 
 注：`v1.3.0` 标签保留（历史节点，含轻量包边缘 bug）；用户侧升级路径 =
 直接用 v1.3.1。
+
+### 23.13 人工测试反馈修复：前处理成果列表不刷新 + 路径可见性（2026-08-14）
+
+真机人工测试（案件模式 + 素材转码拼接）反馈：「处理完后文件点击按钮无法
+导入案件列表，也不知道保存路径在哪里」。排查结果：
+
+| 现象 | 根因 | 修复 |
+|---|---|---|
+| 处理完成案件列表无会话条目 | **非登记失败**——`addPreprocessSession` 已把会话/输出引用/sidecar 写入 case.json（关案重开可见），但 `MainWindow::refreshDock` 只连了 videoAdded/Removed/InfoChanged/hashProgress/hashQueueFinished，**漏连 `caseSaved`** → 登记落盘后 dock 不刷新，看起来"没导入" | `mainwindow.cpp` 补 `connect(caseSaved → refreshDock)`（一行） |
+| 不知道保存路径 | 横幅只显示案件标题 + tooltip 相对路径；结果页虽有完整路径（可选中复制）与【打开输出文件夹】按钮，但登记附注文案不含路径 | 结果页附注改为「已登记案件：**<会话绝对路径>**（sidecar 归类 sidecars/）」 |
+| 边缘 | 单文件已合格 MP4（noOp 分支）提前 return 未清 `m_caseSessionDir` → 下次处理复用旧时间戳会话目录 | return 前 `m_caseSessionDir.clear()` |
+
+**答案（用户侧）**：案件模式处理完 → 成果在 `<案件目录>/preprocess/<时间戳>/`，
+自动登记 case.json 并**立即**出现在案件列表「前处理会话」组（本次修复后），
+条目内 P### 输出文件双击可播放，sidecar 校时文件归类同会话 `sidecars/`。
+
+回归：ui_chain 23 / case_e2e 51 / case_test 228 全绿；offscreen 冒烟 8s 无崩溃。

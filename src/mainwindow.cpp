@@ -534,6 +534,9 @@ MainWindow::MainWindow(QWidget *parent)
     connect(m_caseManager, &CaseManager::videoRemoved, this, refreshDock);
     connect(m_caseManager, &CaseManager::videoInfoChanged, this, refreshDock);
     connect(m_caseManager, &CaseManager::hashProgress, this, refreshDock);
+    // v1.3.0 M2 任务8：前处理会话登记/sidecar 归类等落盘即刷新——
+    // 缺失此连接时处理完成案件列表不出现会话条目（人工测试反馈）
+    connect(m_caseManager, &CaseManager::caseSaved, this, refreshDock);
     connect(m_caseManager, &CaseManager::hashQueueFinished, this,
             [this, refreshDock]() {
                 refreshDock();

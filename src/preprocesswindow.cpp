@@ -1436,6 +1436,7 @@ void PreprocessWindow::onFinished(const PreprocessReport &report)
         setStep(3);
         m_btnBeginSort->setEnabled(!m_pendingFiles.isEmpty());
         m_btnQuickMerge->setEnabled(!m_pendingFiles.isEmpty());
+        m_caseSessionDir.clear();   // 未产出新会话：下轮重新生成目录
         // 明确弹窗（与“分析完成”同风格，5 秒自动关）
         QTimer::singleShot(0, this, [this]() {
             auto *box = new QMessageBox(QMessageBox::Information, windowTitle(),
@@ -1479,8 +1480,9 @@ void PreprocessWindow::onFinished(const PreprocessReport &report)
                     regErr = saveErr;
             }
             caseRegNote = regErr.isEmpty()
-                ? lang("\n已登记案件：preprocess 会话 + sidecar 归类 sidecars/",
-                       "\nRegistered into case: preprocess session + sidecars/")
+                ? lang("\n已登记案件：%1（sidecar 归类 sidecars/）",
+                       "\nRegistered into case: %1 (sidecars → sidecars/)")
+                      .arg(m_caseSessionDir)
                 : lang("\n⚠ 案件登记失败：%1",
                        "\n⚠ Case registration failed: %1").arg(regErr);
         }
