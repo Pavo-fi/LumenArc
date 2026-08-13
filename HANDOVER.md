@@ -1578,3 +1578,16 @@ fmtSpan 时长串），多机语义差异：重叠=互为印证（≥2 同覆）
 
 **标签决策（待拍板）**：以上修复在 `v1.3.0` 标签之后，建议累积至
 v1.3.1 一并出（或拍板重打 v1.3.0）。
+
+### 23.12 v1.3.1 修复版封版（2026-08-14）
+
+按拍板「修复累积到 v1.3.1 一并出」封版，标签 `v1.3.1`。
+
+| 项 | 内容 |
+|---|---|
+| 版本号 1.3.1 | CMakeLists project(VERSION)+MACOSX 两项 / aboutdialog / **app.rc 四项**（字符串两项 + **数值 FILEVERSION/PRODUCTVERSION 回追修正**：v1.3.0 封版只改了字符串，数值滞留 1,2,0,0 → 本次 1,3,1,0）/ Info.plist 两项 / 主窗标题 7 处 |
+| 包含修复 | `0da1400`：ExportTask pkgDir 未创建（轻量包+纯新案件导出必失败）+ exportPrecheck/sources 收集 effectivePathFor 对齐；端到端自检 `lumenarc_case_e2e` 51/51 |
+| 回归 | e2e 51 / case_test 228 / calibration 73 / piecewise 96 / preprocess 168 / ui_chain 23 / ocr_atpositions 21 / vla 3×PASS 全绿；offscreen 冒烟 10s 无崩溃；**exe 文件版本实测 1.3.1.0 / 产品版本 1.3.1.0**（字符串+数值一致） |
+
+注：`v1.3.0` 标签保留（历史节点，含轻量包边缘 bug）；用户侧升级路径 =
+直接用 v1.3.1。

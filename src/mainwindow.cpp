@@ -90,7 +90,7 @@ MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent)
 {
     loadLanguage();
-    setWindowTitle(lang("追光者 Lumen Arc v1.3.0", "Lumen Arc v1.3.0"));
+    setWindowTitle(lang("追光者 Lumen Arc v1.3.1", "Lumen Arc v1.3.1"));
     resize(1280, 720);
 
     m_regionModel = new RegionModel(this);
@@ -1462,7 +1462,7 @@ void MainWindow::setupConnections()
                 m_captureBtn->setEnabled(false);
 
                 setWindowTitle(windowTitleWithCase(
-                    lang("追光者 Lumen Arc v1.3.0", "Lumen Arc v1.3.0")));
+                    lang("追光者 Lumen Arc v1.3.1", "Lumen Arc v1.3.1")));
                 updateTimeDisplay();
                 showOperationStatus(lang("已清空视频列表", "Video list cleared"));
             });
@@ -1693,7 +1693,7 @@ void MainWindow::enterCaseMode()
     if (m_batchRelocateAction)
         m_batchRelocateAction->setEnabled(true);
     setWindowTitle(windowTitleWithCase(
-        lang("追光者 Lumen Arc v1.3.0", "Lumen Arc v1.3.0")));
+        lang("追光者 Lumen Arc v1.3.1", "Lumen Arc v1.3.1")));
     showOperationStatus(lang("案件已打开：%1", "Case opened: %1")
                             .arg(m_caseManager->meta().caseNo));
     // 开案恢复现场（uiState.lastVideoId）：.vla 缓存探测自动加载分析数据
@@ -1718,7 +1718,7 @@ void MainWindow::exitCaseMode()
         m_exportCaseAction->setEnabled(false);
     if (m_batchRelocateAction)
         m_batchRelocateAction->setEnabled(false);
-    setWindowTitle(lang("追光者 Lumen Arc v1.3.0", "Lumen Arc v1.3.0"));
+    setWindowTitle(lang("追光者 Lumen Arc v1.3.1", "Lumen Arc v1.3.1"));
     showOperationStatus(lang("案件已关闭", "Case closed"));
 }
 
@@ -1855,7 +1855,7 @@ void MainWindow::onCaseProperties()
     // 名称可能已改：刷新标题/面板/状态栏
     if (m_caseManager->isOpen()) {
         setWindowTitle(windowTitleWithCase(
-            lang("追光者 Lumen Arc v1.3.0", "Lumen Arc v1.3.0")));
+            lang("追光者 Lumen Arc v1.3.1", "Lumen Arc v1.3.1")));
         m_caseDock->refreshTree();
         m_caseStatusBtn->setText(
             QStringLiteral("📁 ") + m_caseManager->meta().caseNo);
@@ -1960,7 +1960,7 @@ void MainWindow::openVideoFile(const QString &filePath)
 
         // Do NOT overwrite m_currentVideoPath with the .vla path: it is an
         // analysis file, not a playable video, and it keys VideoStateManager.
-        setWindowTitle(windowTitleWithCase("Lumen Arc v1.3.0 - [Loaded: " +
+        setWindowTitle(windowTitleWithCase("Lumen Arc v1.3.1 - [Loaded: " +
                            QFileInfo(filePath).fileName() + "]"));
         } else {
             QMessageBox::critical(this, lang("错误", "Error"),
@@ -2294,7 +2294,7 @@ void MainWindow::onLoadAnalysis()
                 m_guideLineModel->addLine(line);
 
             // Do NOT overwrite m_currentVideoPath with the .vla path (see openVideoFile).
-        setWindowTitle(windowTitleWithCase("Lumen Arc v1.3.0 - [Loaded: " +
+        setWindowTitle(windowTitleWithCase("Lumen Arc v1.3.1 - [Loaded: " +
                        QFileInfo(filePath).fileName() + "]"));
         QMessageBox::information(this, lang("已加载", "Loaded"),
             lang("分析结果加载成功。", "Analysis result loaded successfully."));
