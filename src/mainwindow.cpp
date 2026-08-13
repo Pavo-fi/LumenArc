@@ -1870,12 +1870,13 @@ void MainWindow::openCaseFlow(const QString &dir)
     bool opened = m_caseManager->openCase(dir, &err, &warnings,
                                           &lockConflict, false);
     if (!opened && lockConflict) {
+        // 残留锁已自动清理；到此 = 真双开冲突（持有者进程仍在）
         const auto reply = QMessageBox::warning(this,
             lang("案件被锁定", "Case Locked"),
-            lang("该案件可能正在另一个实例中打开，或上次未正常关闭（残留锁）。\n\n"
-                 "%1\n\n仍要强制打开吗？",
-                 "The case may be open in another instance, or was not closed "
-                 "properly last time (stale lock).\n\n%1\n\nForce open anyway?")
+            lang("案件正在另一个实例中打开。\n\n%1\n\n"
+                 "仍要强制打开吗？（建议先关闭另一实例）",
+                 "The case is open in another instance.\n\n%1\n\n"
+                 "Force open anyway? (close the other instance first)")
                 .arg(err),
             QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
         if (reply != QMessageBox::Yes)

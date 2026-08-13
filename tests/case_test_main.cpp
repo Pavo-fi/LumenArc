@@ -396,6 +396,31 @@ int main(int argc, char **argv)
             cm2.closeCase();
         }
 
+        // 外部删除自动清理（2026-08）：源文件不存在 → prune 移除登记
+        {
+            CaseManager cm3;
+            CHECK(cm3.openCase(cdir, &err), "prune: reopen");
+            const QString vx = root.filePath("prune_test.mp4");
+            {
+                QFile f(vx);
+                f.open(QIODevice::WriteOnly);
+                f.write("prune-me");
+            }
+            const QString idx = cm3.addVideo(vx, &err);
+            CHECK(!idx.isEmpty(), "prune: added");
+            CHECK(cm3.meta().videos.size() == 3, "prune: 3 videos");
+            QFile::remove(vx);   // 资源管理器删除模拟
+            QString perr;
+            CHECK(cm3.pruneMissingFiles(&perr) == 1,
+                  "prune: removed missing source");
+            CHECK(cm3.videoById(idx) == nullptr, "prune: registration gone");
+            CHECK(cm3.meta().videos.size() == 2, "prune: 2 videos left");
+            // 现存文件不受影响
+            CHECK(cm3.videoById(id3) != nullptr, "prune: existing kept");
+            CHECK(cm3.saveCase(&err), "prune: saved");
+            cm3.closeCase();
+        }
+
         // 恢复注册表（直接写 QSettings，绕过私有 pushRecent）
         {
             QSettings s(QStringLiteral("LumenArc"), QStringLiteral("LumenArc"));

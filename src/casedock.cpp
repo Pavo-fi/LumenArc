@@ -427,6 +427,14 @@ void CaseDock::onWatchTimer()
     const QSet<QString> now = buildSnapshot();
     if (now != m_snapshot) {
         m_snapshot = now;
+        // 外部删除：自动清理已不存在的登记引用（2026-08 人工反馈：
+        // 资源管理器删文件后列表应清除对应条目；不删任何现存文件）
+        QString err;
+        const int pruned = m_caseManager->pruneMissingFiles(&err);
+        if (pruned > 0) {
+            m_caseManager->saveCase(&err);
+            m_snapshot = buildSnapshot();   // 清理后重新对齐
+        }
         refreshTree();
     }
 }

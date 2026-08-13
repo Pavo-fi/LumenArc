@@ -83,6 +83,9 @@ public:
     QString addVideo(const QString &path, QString *error);
     /// 移除视频；deleteData=true 时连同案内 .vla 与校时证据帧一并删除。
     bool removeVideo(const QString &id, bool deleteData, QString *error);
+    /// 移除登记中已不存在的文件引用（外部删除自动清理，2026-08）；
+    /// 返回移除数；不删任何现存文件
+    int pruneMissingFiles(QString *error = nullptr);
 
     /// 重定位（M2 基础版；取证红线：只改引用路径，绝不动 .vla 数据）。
     /// 新文件必须存在；大小与登记不一致 → 返回 false 且 sizeMismatch=true

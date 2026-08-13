@@ -385,6 +385,54 @@ bool CaseManager::removeVideo(const QString &id, bool deleteData,
     return false;
 }
 
+int CaseManager::pruneMissingFiles(QString *error)
+{
+    // 外部删除自动清理登记（2026-08 人工反馈：资源管理器删文件后列表应
+    // 清除对应条目）。只移除「文件确实不存在」的引用，不删任何现存文件；
+    // 完整包接收端（原路径缺失但包内副本在场）不受影响。
+    if (!m_open) {
+        if (error) *error = QStringLiteral("没有打开的案件");
+        return 0;
+    }
+    int removed = 0;
+    for (int i = m_meta.videos.size() - 1; i >= 0; --i) {
+        const auto &v = m_meta.videos[i];
+        if (!QFileInfo::exists(v.originalPath)
+            && !QFileInfo::exists(effectivePathFor(v))) {
+            m_meta.videos.remove(i);
+            if (m_meta.lastVideoId == v.id)
+                m_meta.lastVideoId.clear();
+            ++removed;
+        }
+    }
+    const QDir caseDir(m_caseDir);
+    for (int i = m_meta.preprocessSessions.size() - 1; i >= 0; --i) {
+        auto &p = m_meta.preprocessSessions[i];
+        const QString sdir = caseDir.absoluteFilePath(p.sessionDirRelPath);
+        if (!QDir(sdir).exists()) {
+            m_meta.preprocessSessions.remove(i);
+            ++removed;
+            continue;
+        }
+        for (int j = p.outputRefs.size() - 1; j >= 0; --j) {
+            if (!QFileInfo::exists(p.outputRefs[j].originalPath)) {
+                p.outputRefs.remove(j);
+                ++removed;
+            }
+        }
+    }
+    for (int i = m_meta.reports.size() - 1; i >= 0; --i) {
+        const QString rp = caseDir.absoluteFilePath(m_meta.reports[i]);
+        if (!QFileInfo::exists(rp)) {
+            m_meta.reports.remove(i);
+            ++removed;
+        }
+    }
+    if (removed > 0)
+        setModified();
+    return removed;
+}
+
 bool CaseManager::relocateVideo(const QString &id, const QString &newPath,
                                 QString *error, bool *sizeMismatch,
                                 bool force, const QString &knownSha)
