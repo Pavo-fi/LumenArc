@@ -63,6 +63,8 @@ public:
     bool restoreState(const QString &videoPath, VideoState &state) const;
     bool hasState(const QString &videoPath) const;
     void removeState(const QString &videoPath);
+    /// 键迁移（v1.3.0 M3 任务13：重定位后内存状态跟随新路径）
+    void migrateKey(const QString &oldPath, const QString &newPath);
     void clear();
 
 private:

@@ -66,6 +66,18 @@ void VideoStateManager::removeState(const QString &videoPath)
     m_states.remove(videoPath);
 }
 
+void VideoStateManager::migrateKey(const QString &oldPath,
+                                   const QString &newPath)
+{
+    auto it = m_states.find(oldPath);
+    if (it == m_states.end())
+        return;
+    VideoState st = it.value();
+    st.filePath = newPath;
+    m_states.erase(it);
+    m_states.insert(newPath, st);
+}
+
 void VideoStateManager::clear()
 {
     m_states.clear();

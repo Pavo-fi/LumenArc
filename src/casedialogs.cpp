@@ -16,6 +16,7 @@
 #include <QFileDialog>
 #include <QFormLayout>
 #include <QHBoxLayout>
+#include <QHeaderView>
 #include <QLabel>
 #include <QLineEdit>
 #include <QMessageBox>
@@ -23,7 +24,10 @@
 #include <QProgressBar>
 #include <QPushButton>
 #include <QRadioButton>
+#include <QTableWidget>
 #include <QVBoxLayout>
+#include <QFutureWatcher>
+#include <QtConcurrent>
 
 #include "app/case_manager.h"
 #include "i18n.h"
@@ -460,4 +464,383 @@ void ExportCaseDialog::onExport()
     m_progress->setValue(0);
     m_btnCancelExport->setVisible(true);
     m_cm->exportCase(target, m_fullRadio->isChecked());
+}
+
+// ---------------------------------------------------------------------------
+// BatchRelocateDialog（M3 任务13）
+// ---------------------------------------------------------------------------
+BatchRelocateDialog::BatchRelocateDialog(CaseManager *cm, QWidget *parent)
+    : QDialog(parent)
+    , m_cm(cm)
+{
+    setWindowTitle(lang("批量重新定位", "Batch Relocate"));
+    setMinimumSize(860, 480);
+    auto *lay = new QVBoxLayout(this);
+
+    // 候选目录行
+    auto *dirRow = new QHBoxLayout();
+    dirRow->addWidget(new QLabel(lang("候选目录：", "Search folder:"), this));
+    m_dirEdit = new QLineEdit(this);
+    m_dirEdit->setPlaceholderText(
+        lang("选择源视频当前所在目录（递归扫描，名+大小模糊匹配）",
+             "Folder where source videos now live (recursive, name+size match)"));
+    auto *btnDir = new QPushButton(lang("浏览…", "Browse…"), this);
+    m_btnScan = new QPushButton(lang("扫描候选", "Scan"), this);
+    dirRow->addWidget(m_dirEdit, 1);
+    dirRow->addWidget(btnDir);
+    dirRow->addWidget(m_btnScan);
+    lay->addLayout(dirRow);
+    connect(btnDir, &QPushButton::clicked, this, [this]() {
+        const QString dir = QFileDialog::getExistingDirectory(this,
+            lang("选择候选目录", "Choose search folder"), m_dirEdit->text());
+        if (!dir.isEmpty())
+            m_dirEdit->setText(dir);
+    });
+    connect(m_btnScan, &QPushButton::clicked, this, &BatchRelocateDialog::onScan);
+
+    // 候选表：V### | 原路径（缺失） | 候选新路径 | 匹配 | 状态/备注
+    m_table = new QTableWidget(this);
+    m_table->setColumnCount(5);
+    m_table->setHorizontalHeaderLabels(
+        {lang("编号", "ID"), lang("原路径（缺失）", "Original (missing)"),
+         lang("候选新路径", "Candidate"), lang("匹配", "Match"),
+         lang("状态/备注", "Status")});
+    m_table->horizontalHeader()->setSectionResizeMode(1, QHeaderView::Stretch);
+    m_table->horizontalHeader()->setSectionResizeMode(2, QHeaderView::Stretch);
+    m_table->setSelectionBehavior(QAbstractItemView::SelectRows);
+    m_table->setEditTriggers(QAbstractItemView::NoEditTriggers);
+    lay->addWidget(m_table, 1);
+
+    // 行操作 + 摘要
+    auto *rowOps = new QHBoxLayout();
+    m_btnBrowseRow = new QPushButton(
+        lang("浏览覆盖选中行候选…", "Browse candidate for row…"), this);
+    m_btnBrowseRow->setEnabled(false);
+    rowOps->addWidget(m_btnBrowseRow);
+    m_summary = new QLabel(this);
+    m_summary->setStyleSheet(QStringLiteral("color:%1;").arg(Theme::TextSecond));
+    rowOps->addWidget(m_summary, 1);
+    lay->addLayout(rowOps);
+    connect(m_btnBrowseRow, &QPushButton::clicked,
+            this, &BatchRelocateDialog::onBrowseRow);
+    connect(m_table, &QTableWidget::itemSelectionChanged, this, [this]() {
+        m_btnBrowseRow->setEnabled(!m_hashing
+                                   && !m_table->selectedItems().isEmpty());
+    });
+
+    // 比对进度
+    m_progress = new QProgressBar(this);
+    m_progress->setVisible(false);
+    lay->addWidget(m_progress);
+
+    // 主按钮行
+    auto *btnRow = new QHBoxLayout();
+    m_btnVerify = new QPushButton(lang("比对并采用", "Verify && Apply"), this);
+    m_btnVerify->setDefault(true);
+    m_btnVerify->setEnabled(false);
+    m_btnOverride = new QPushButton(
+        lang("仍要采用（留档）", "Apply anyway (archived)"), this);
+    m_btnOverride->setEnabled(false);
+    m_btnCancelHash = new QPushButton(lang("取消比对", "Cancel verify"), this);
+    m_btnCancelHash->setVisible(false);
+    auto *btnClose = new QPushButton(lang("关闭", "Close"), this);
+    btnRow->addStretch(1);
+    btnRow->addWidget(m_btnVerify);
+    btnRow->addWidget(m_btnOverride);
+    btnRow->addWidget(m_btnCancelHash);
+    btnRow->addWidget(btnClose);
+    lay->addLayout(btnRow);
+    connect(m_btnVerify, &QPushButton::clicked,
+            this, &BatchRelocateDialog::onVerifyAndApply);
+    connect(m_btnOverride, &QPushButton::clicked,
+            this, &BatchRelocateDialog::onApplyOverrides);
+    connect(m_btnCancelHash, &QPushButton::clicked, this, [this]() {
+        m_hashCancel = true;
+        if (m_workerAbort)
+            m_workerAbort->store(true);
+    });
+    connect(btnClose, &QPushButton::clicked, this, &QDialog::reject);
+
+    refreshSummary();
+}
+
+void BatchRelocateDialog::reject()
+{
+    // 关闭前先取消后台比对；watcher 是本对话框子对象，随销毁断链，
+    // 工作线程持有独立 abort 副本（shared_ptr）不会悬垂
+    m_hashCancel = true;
+    if (m_workerAbort)
+        m_workerAbort->store(true);
+    QDialog::reject();
+}
+
+void BatchRelocateDialog::onScan()
+{
+    const QString dir = m_dirEdit->text().trimmed();
+    if (dir.isEmpty())
+        return;
+    const auto cands = m_cm->proposeRelocations(dir);
+    m_rows.clear();
+    m_rows.reserve(cands.size());
+    for (const auto &c : cands) {
+        Row r;
+        r.videoId = c.videoId;
+        r.originalPath = c.originalPath;
+        r.candidatePath = c.candidatePath;
+        r.matchLevel = c.matchLevel;
+        r.status = c.candidatePath.isEmpty() ? 5 : 0;   // 无候选 / 待比对
+        m_rows.append(r);
+    }
+    rebuildTable();
+    refreshSummary();
+}
+
+void BatchRelocateDialog::onBrowseRow()
+{
+    const int row = m_table->currentRow();
+    if (row < 0 || row >= m_rows.size())
+        return;
+    const QString path = QFileDialog::getOpenFileName(this,
+        lang("为 %1 指定候选文件", "Pick candidate for %1")
+            .arg(m_rows[row].videoId),
+        m_dirEdit->text().trimmed(),
+        lang("视频文件 (*.mp4 *.avi *.mkv *.mov *.wmv *.flv *.webm);;所有文件 (*)",
+             "Video Files (*.mp4 *.avi *.mkv *.mov *.wmv *.flv *.webm);;All Files (*)"));
+    if (path.isEmpty())
+        return;
+    m_rows[row].candidatePath = path;
+    m_rows[row].manual = true;
+    m_rows[row].status = 0;      // 回到待比对
+    m_rows[row].note.clear();
+    m_rows[row].computedSha.clear();
+    rebuildTable();
+    refreshSummary();
+}
+
+void BatchRelocateDialog::rebuildTable()
+{
+    m_table->setRowCount(m_rows.size());
+    for (int i = 0; i < m_rows.size(); ++i) {
+        const Row &r = m_rows[i];
+        auto mk = [](const QString &t) { return new QTableWidgetItem(t); };
+        m_table->setItem(i, 0, mk(r.videoId));
+        auto *orig = mk(QFileInfo(r.originalPath).fileName());
+        orig->setToolTip(r.originalPath);
+        m_table->setItem(i, 1, orig);
+        auto *cand = mk(r.candidatePath.isEmpty()
+                            ? lang("（无候选）", "(none)")
+                            : QFileInfo(r.candidatePath).fileName());
+        cand->setToolTip(r.candidatePath);
+        m_table->setItem(i, 2, cand);
+        QString matchTxt;
+        if (r.manual)
+            matchTxt = lang("人工指定", "Manual");
+        else if (r.matchLevel == 2)
+            matchTxt = lang("名+大小一致", "Name+size");
+        else if (r.matchLevel == 1)
+            matchTxt = lang("仅文件名", "Name only");
+        else
+            matchTxt = QStringLiteral("—");
+        m_table->setItem(i, 3, mk(matchTxt));
+        setRowStatus(i);
+    }
+    m_table->resizeColumnsToContents();
+    m_table->horizontalHeader()->setSectionResizeMode(1, QHeaderView::Stretch);
+    m_table->horizontalHeader()->setSectionResizeMode(2, QHeaderView::Stretch);
+}
+
+void BatchRelocateDialog::setRowStatus(int row)
+{
+    if (row < 0 || row >= m_rows.size() || row >= m_table->rowCount())
+        return;
+    const Row &r = m_rows[row];
+    QString txt;
+    QColor color(Theme::TextMuted);
+    switch (r.status) {
+    case 1: txt = lang("✓ 已採用", "✓ Applied"); color = QColor(Theme::Success); break;
+    case 2: txt = lang("⚠ 指纹不一致（默认拒绝）", "⚠ Hash mismatch (rejected)");
+        color = QColor(Theme::Danger); break;
+    case 3: txt = lang("✓ 已採用（留档）", "✓ Applied (archived)");
+        color = QColor(Theme::Accent); break;
+    case 4: txt = lang("✗ 失败", "✗ Failed"); color = QColor(Theme::Danger); break;
+    case 5: txt = lang("✗ 无候选", "✗ No candidate");
+        color = QColor(Theme::Danger); break;
+    default: txt = lang("待比对", "Pending"); break;
+    }
+    if (!r.note.isEmpty())
+        txt += QStringLiteral(" — ") + r.note;
+    auto *it = new QTableWidgetItem(txt);
+    it->setForeground(color);
+    m_table->setItem(row, 4, it);
+}
+
+void BatchRelocateDialog::refreshSummary()
+{
+    int adopted = 0, pending = 0, mismatch = 0, missing = 0, failed = 0;
+    for (const Row &r : m_rows) {
+        switch (r.status) {
+        case 1: case 3: ++adopted; break;
+        case 2: ++mismatch; break;
+        case 4: ++failed; break;
+        case 5: ++missing; break;
+        default: ++pending; break;
+        }
+    }
+    m_summary->setText(
+        lang("缺失 %1 路 · 已採用 %2 · 待比对 %3 · 不一致 %4 · 无候选 %5",
+             "%1 missing · %2 applied · %3 pending · %4 mismatch · %5 no candidate")
+            .arg(m_rows.size()).arg(adopted).arg(pending).arg(mismatch)
+            .arg(missing)
+        + (failed ? lang(" · 失败 %1", " · %1 failed").arg(failed) : QString()));
+    const bool hasWork = pending > 0 || failed > 0;
+    m_btnVerify->setEnabled(!m_hashing && hasWork);
+    m_btnOverride->setEnabled(!m_hashing && mismatch > 0);
+    m_btnScan->setEnabled(!m_hashing);
+}
+
+QString BatchRelocateDialog::registeredSha(const QString &id) const
+{
+    const auto *v = m_cm->videoById(id);
+    return v ? v->sha256 : QString();
+}
+
+void BatchRelocateDialog::onVerifyAndApply()
+{
+    m_pending.clear();
+    for (int i = 0; i < m_rows.size(); ++i)
+        if (!m_rows[i].candidatePath.isEmpty()
+            && (m_rows[i].status == 0 || m_rows[i].status == 4))
+            m_pending.append(i);
+    if (m_pending.isEmpty())
+        return;
+    m_hashCancel = false;
+    m_workerAbort = std::make_shared<std::atomic<bool>>(false);
+    m_hashing = true;
+    m_progress->setVisible(true);
+    m_progress->setRange(0, m_pending.size());
+    m_progress->setValue(0);
+    m_btnCancelHash->setVisible(true);
+    refreshSummary();   // 禁用扫描/比对按钮
+    startNextHash();
+}
+
+void BatchRelocateDialog::startNextHash()
+{
+    if (m_hashCancel || m_pending.isEmpty()) {
+        onAllHashed();
+        return;
+    }
+    const int row = m_pending.takeFirst();
+    const QString path = m_rows[row].candidatePath;
+    auto abort = m_workerAbort;
+    // 逐路串行（同哈希队列 IO 纪律）；结果经 watcher 回 GUI 线程
+    auto *watcher = new QFutureWatcher<QPair<bool, QString>>(this);
+    connect(watcher, &QFutureWatcher<QPair<bool, QString>>::finished,
+            this, [this, watcher, row]() {
+                const auto res = watcher->result();
+                watcher->deleteLater();
+                onRowHashed(row, res.first, res.second);
+                startNextHash();
+            });
+    watcher->setFuture(QtConcurrent::run([path, abort]() {
+        QString sha;
+        const bool ok = CaseManager::computeSha256(path, &sha, abort.get());
+        return qMakePair(ok, sha);
+    }));
+}
+
+void BatchRelocateDialog::onRowHashed(int row, bool ok, const QString &sha)
+{
+    if (row < 0 || row >= m_rows.size())
+        return;
+    Row &r = m_rows[row];
+    if (!ok) {
+        // 取消导致的失败回到待比对（可再次比对）；读取失败保持失败态
+        r.status = m_hashCancel ? 0 : 4;
+        r.note = m_hashCancel ? QString() : lang("读取失败", "Read failed");
+    } else {
+        r.computedSha = sha;
+        const QString reg = registeredSha(r.videoId);
+        if (!reg.isEmpty() && reg != sha) {
+            // 指纹强制比对：不一致默认拒绝（拍板§8-8，显式【仍要采用】留档）
+            r.status = 2;
+            r.note = lang("登记 %1… ≠ 候选 %2…", "reg %1… ≠ cand %2…")
+                         .arg(reg.left(8), sha.left(8));
+        } else {
+            // 一致（或无登记基线）→ 採用；knownSha 直接登记免二次哈希
+            QString err;
+            bool mismatch = false;
+            if (m_cm->relocateVideo(r.videoId, r.candidatePath, &err,
+                                    &mismatch, false, sha)) {
+                r.status = 1;
+                r.note.clear();
+            } else if (mismatch) {
+                r.status = 2;
+                r.note = err;
+            } else {
+                r.status = 4;
+                r.note = err;
+            }
+        }
+    }
+    setRowStatus(row);
+    m_progress->setValue(m_progress->value() + 1);
+    refreshSummary();
+}
+
+void BatchRelocateDialog::onAllHashed()
+{
+    m_hashing = false;
+    m_progress->setVisible(false);
+    m_btnCancelHash->setVisible(false);
+    // 採用已落 meta：静默落盘（机器维护写，与哈希队列排空同理）
+    if (m_cm->isDirty()) {
+        QString err;
+        m_cm->saveCase(&err);
+    }
+    refreshSummary();
+}
+
+void BatchRelocateDialog::onApplyOverrides()
+{
+    QVector<int> targets;
+    for (int i = 0; i < m_rows.size(); ++i)
+        if (m_rows[i].status == 2 && !m_rows[i].computedSha.isEmpty())
+            targets.append(i);
+    if (targets.isEmpty())
+        return;
+    // 默认拒绝，显式【仍要采用】后强制（留档，拍板§8-8）
+    QMessageBox box(this);
+    box.setWindowTitle(lang("仍要采用", "Apply anyway"));
+    box.setIcon(QMessageBox::Warning);
+    box.setText(lang("%1 路候选指纹与登记不一致。\n仍要采用将以候选为准重登记指纹，"
+                     "覆写轨迹留档于 case.json。",
+                     "%1 candidate(s) mismatch the registered fingerprint.\n"
+                     "Applying anyway re-registers the candidate fingerprint; "
+                     "the override is archived in case.json.").arg(targets.size()));
+    QAbstractButton *btnYes = box.addButton(
+        lang("仍要采用（留档）", "Apply anyway (archived)"),
+        QMessageBox::YesRole);
+    box.addButton(lang("取消", "Cancel"), QMessageBox::NoRole);
+    box.exec();
+    if (box.clickedButton() != btnYes)
+        return;
+    for (int row : targets) {
+        Row &r = m_rows[row];
+        QString err;
+        if (m_cm->relocateVideo(r.videoId, r.candidatePath, &err,
+                                nullptr, true, r.computedSha)) {
+            r.status = 3;
+            r.note = lang("覆写轨迹已留档", "Override archived");
+        } else {
+            r.status = 4;
+            r.note = err;
+        }
+        setRowStatus(row);
+    }
+    if (m_cm->isDirty()) {
+        QString err;
+        m_cm->saveCase(&err);
+    }
+    refreshSummary();
 }

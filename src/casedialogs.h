@@ -17,6 +17,8 @@
 #pragma once
 
 #include <QDialog>
+#include <atomic>
+#include <memory>
 #include "domain/case_model.h"
 
 class QLineEdit;
@@ -26,6 +28,7 @@ class QLabel;
 class QDialogButtonBox;
 class QRadioButton;
 class QProgressBar;
+class QTableWidget;
 class CaseManager;
 
 /// 新建案件对话框：收集 CaseMeta 必填字段 + 编号预览
@@ -106,4 +109,56 @@ private:
     QPushButton *m_btnCancelExport = nullptr;
     QProgressBar *m_progress = nullptr;
     bool m_exporting = false;
+};
+
+/// 批量重新定位对话框（v1.3.0 M3 任务13）：
+/// 文件夹名+大小模糊匹配 → 人工确认 → 定位后强制指纹比对，
+/// 不一致默认拒绝、显式【仍要采用】留档。
+class BatchRelocateDialog : public QDialog
+{
+    Q_OBJECT
+public:
+    explicit BatchRelocateDialog(CaseManager *cm, QWidget *parent = nullptr);
+    void reject() override;   // 关闭前先取消后台指纹比对
+
+private slots:
+    void onScan();
+    void onBrowseRow();
+    void onVerifyAndApply();
+    void onApplyOverrides();
+    void onRowHashed(int row, bool ok, const QString &sha);
+    void onAllHashed();
+
+private:
+    struct Row {
+        QString videoId;
+        QString originalPath;
+        QString candidatePath;   // 可被【浏览…】覆盖
+        int matchLevel = 0;
+        bool manual = false;     // 候选由【浏览…】人工指定
+        QString computedSha;     // 比对后填入
+        int status = 0;          // 0=待比对 1=已採用 2=不一致(待决) 3=採用(留档) 4=失败 5=无候选
+        QString note;
+    };
+    void rebuildTable();
+    void setRowStatus(int row);
+    void refreshSummary();
+    void startNextHash();        // 逐路串行比对（IO 纪律同哈希队列）
+    QString registeredSha(const QString &id) const;
+
+    CaseManager *m_cm = nullptr;
+    QLineEdit *m_dirEdit = nullptr;
+    QTableWidget *m_table = nullptr;
+    QLabel *m_summary = nullptr;
+    QProgressBar *m_progress = nullptr;
+    QPushButton *m_btnScan = nullptr;
+    QPushButton *m_btnBrowseRow = nullptr;
+    QPushButton *m_btnVerify = nullptr;
+    QPushButton *m_btnOverride = nullptr;
+    QPushButton *m_btnCancelHash = nullptr;
+    QVector<Row> m_rows;
+    QVector<int> m_pending;      // 待比对行号队列（startNextHash 消费）
+    std::atomic<bool> m_hashCancel{false};
+    std::shared_ptr<std::atomic<bool>> m_workerAbort;  // 工作线程持有副本防悬垂
+    bool m_hashing = false;
 };

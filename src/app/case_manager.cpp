@@ -353,7 +353,7 @@ bool CaseManager::removeVideo(const QString &id, bool deleteData,
 
 bool CaseManager::relocateVideo(const QString &id, const QString &newPath,
                                 QString *error, bool *sizeMismatch,
-                                bool force)
+                                bool force, const QString &knownSha)
 {
     if (sizeMismatch) *sizeMismatch = false;
     auto *v = const_cast<CaseVideoRef *>(videoById(id));
@@ -385,14 +385,87 @@ bool CaseManager::relocateVideo(const QString &id, const QString &newPath,
                 .arg(v->sizeBytes)
                 .arg(fi.size());
     }
+    // M3 任务13：同尺寸但指纹不一致的「仍要采用」同样留档（指纹强制比对
+    // 的覆写轨迹；旧登记指纹与新候选指纹一并记录）
+    if (force && !knownSha.isEmpty() && !v->sha256.isEmpty()
+        && v->sha256 != knownSha) {
+        m_meta.extraFields[QStringLiteral("relocateShaOverride/") + id] =
+            QStringLiteral("%1: %2 -> %3 (sha %4... -> %5...)")
+                .arg(QDateTime::currentDateTime().toString(Qt::ISODate),
+                     v->originalPath, norm,
+                     v->sha256.left(8), knownSha.left(8));
+    }
+    const QString oldPath = v->originalPath;
     v->originalPath = norm;
     v->sizeBytes = fi.size();
     v->mtimeMs = fi.lastModified().toMSecsSinceEpoch();
-    v->sha256.clear();   // 引用已变：指纹作废，入队重算
+    // 已知指纹（批量比对场景）直接登记免二次哈希；否则作废入队重算
+    v->sha256 = knownSha;
     setModified();
     emit videoInfoChanged(id);
-    queueVideoHash(id);
+    emit videoRelocated(id, oldPath, norm);   // M3：状态键迁移用
+    if (knownSha.isEmpty())
+        queueVideoHash(id);
     return true;
+}
+
+// ---------------------------------------------------------------------------
+// 批量重新定位（v1.3.0 M3 任务13）
+// ---------------------------------------------------------------------------
+QVector<CaseManager::CaseRelocateCandidate>
+CaseManager::proposeRelocations(const QString &dir) const
+{
+    QVector<CaseRelocateCandidate> out;
+    if (!m_open || dir.isEmpty())
+        return out;
+    // 收集目录下全部视频文件（递归）
+    static const char *kExts[] = {
+        "mp4", "avi", "mkv", "mov", "wmv", "flv", "webm",
+        "ts", "m2ts", "dav", "mpg", "mpeg", "3gp"};
+    QStringList files;
+    QDirIterator it(dir, QDir::Files, QDirIterator::Subdirectories);
+    while (it.hasNext()) {
+        const QString f = it.next();
+        const QString suf = QFileInfo(f).suffix().toLower();
+        for (const char *e : kExts)
+            if (suf == QLatin1String(e)) {
+                files << f;
+                break;
+            }
+    }
+    for (const auto &v : m_meta.videos) {
+        // 仅有效路径缺失的视频需要重定位（完整包副本兼底场景跳过）
+        if (QFile::exists(effectivePathFor(v)))
+            continue;
+        CaseRelocateCandidate c;
+        c.videoId = v.id;
+        c.originalPath = v.originalPath;
+        const QString wantName = QFileInfo(v.originalPath).fileName();
+        for (const QString &f : files) {
+            const QFileInfo fi(f);
+            if (fi.fileName() != wantName)
+                continue;
+            // 名+大小一致为最佳（level 2），仅文件名一致次之（level 1）
+            if (v.sizeBytes > 0 && fi.size() == v.sizeBytes) {
+                if (c.matchLevel < 2) {
+                    c.matchLevel = 2;
+                    c.candidatePath = f;
+                }
+            } else if (c.matchLevel < 1) {
+                c.matchLevel = 1;
+                c.candidatePath = f;
+            }
+        }
+        out.append(c);
+    }
+    return out;
+}
+
+bool CaseManager::computeSha256(const QString &path, QString *outHex,
+                                std::atomic<bool> *abort)
+{
+    static std::atomic<bool> dummyAbort{false};
+    return hashFileSha256(path, outHex, abort ? *abort : dummyAbort);
 }
 
 const CaseVideoRef *CaseManager::videoById(const QString &id) const

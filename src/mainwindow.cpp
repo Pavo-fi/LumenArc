@@ -540,6 +540,16 @@ MainWindow::MainWindow(QWidget *parent)
                 QString err;
                 m_caseManager->saveCase(&err);
             });
+    // v1.3.0 M3 任务13：重定位后内存状态键迁移 + 当前路径跟随
+    connect(m_caseManager, &CaseManager::videoRelocated, this,
+            [this](const QString &, const QString &oldPath,
+                   const QString &newPath) {
+                if (m_stateManager)
+                    m_stateManager->migrateKey(oldPath, newPath);
+                if (QDir::cleanPath(m_currentVideoPath)
+                    == QDir::cleanPath(oldPath))
+                    m_currentVideoPath = newPath;
+            });
     // 状态栏📁标识（模式出口三：点击 = 关闭案件）
     m_caseStatusBtn = new QPushButton(this);
     m_caseStatusBtn->setFlat(true);
@@ -658,6 +668,11 @@ void MainWindow::createMenus()
         lang("导出移交包(&E)...", "&Export Handover Package..."), this,
         &MainWindow::onExportCase);
     m_exportCaseAction->setEnabled(false);
+    // v1.3.0 M3 任务13：批量重新定位
+    m_batchRelocateAction = caseMenu->addAction(
+        lang("批量重新定位(&B)...", "&Batch Relocate..."), this,
+        &MainWindow::onBatchRelocate);
+    m_batchRelocateAction->setEnabled(false);
     caseMenu->addAction(lang("案件根目录设置(&D)...", "Case &Root Folder..."),
                         this, &MainWindow::onCaseRootDir);
     caseMenu->addSeparator();
@@ -1662,6 +1677,8 @@ void MainWindow::enterCaseMode()
         m_casePropsAction->setEnabled(true);
     if (m_exportCaseAction)
         m_exportCaseAction->setEnabled(true);
+    if (m_batchRelocateAction)
+        m_batchRelocateAction->setEnabled(true);
     setWindowTitle(windowTitleWithCase(
         lang("追光者 Lumen Arc v1.1.1", "Lumen Arc v1.1.1")));
     showOperationStatus(lang("案件已打开：%1", "Case opened: %1")
@@ -1686,6 +1703,8 @@ void MainWindow::exitCaseMode()
         m_casePropsAction->setEnabled(false);
     if (m_exportCaseAction)
         m_exportCaseAction->setEnabled(false);
+    if (m_batchRelocateAction)
+        m_batchRelocateAction->setEnabled(false);
     setWindowTitle(lang("追光者 Lumen Arc v1.1.1", "Lumen Arc v1.1.1"));
     showOperationStatus(lang("案件已关闭", "Case closed"));
 }
@@ -1859,6 +1878,14 @@ void MainWindow::onExportCase()
     if (!m_caseManager->isOpen())
         return;
     ExportCaseDialog dlg(m_caseManager, this);
+    dlg.exec();
+}
+
+void MainWindow::onBatchRelocate()
+{
+    if (!m_caseManager->isOpen())
+        return;
+    BatchRelocateDialog dlg(m_caseManager, this);
     dlg.exec();
 }
 

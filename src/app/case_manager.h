@@ -87,13 +87,28 @@ public:
     /// 重定位（M2 基础版；取证红线：只改引用路径，绝不动 .vla 数据）。
     /// 新文件必须存在；大小与登记不一致 → 返回 false 且 sizeMismatch=true
     /// （调用方默认拒绝，显式「仍要采用」后以 force=true 重调，extraFields
-    /// 留档）。採用后重登记 size/mtime、清 sha256 并入队重算。
+    /// 留档）。採用后重登记 size/mtime；knownSha 非空=候选指纹已比对
+    ///（批量场景免二次哈希，直接登记），否则清 sha256 入队重算。
     /// M3 任务13 批量版在此基础上加指纹强制比对。
     bool relocateVideo(const QString &id, const QString &newPath,
                        QString *error, bool *sizeMismatch = nullptr,
-                       bool force = false);
+                       bool force = false,
+                       const QString &knownSha = QString());
     /// 手动算单路指纹（右键「算指纹」；幂等，已排队不重复）
     void queueHashFor(const QString &id) { queueVideoHash(id); }
+
+    // ---- 批量重新定位（v1.3.0 M3 任务13）----
+    struct CaseRelocateCandidate {
+        QString videoId;
+        QString originalPath;   ///< 缺失的原路径
+        QString candidatePath;  ///< 提议的新路径（空=无候选）
+        int matchLevel = 0;     ///< 2=文件名+大小一致 1=仅文件名一致 0=无候选
+    };
+    /// 扫描目录为缺失视频提议候选（名+大小模糊匹配，同步快判不哈希）
+    QVector<CaseRelocateCandidate> proposeRelocations(const QString &dir) const;
+    /// 候选指纹计算（对话框后台线程用；abort 可空=不可取消）
+    static bool computeSha256(const QString &path, QString *outHex,
+                              std::atomic<bool> *abort = nullptr);
 
     const CaseVideoRef *videoById(const QString &id) const;
     /// originalPath 或包内副本（sources/）绝对路径匹配（完整包接收端播放
@@ -178,6 +193,9 @@ signals:
     void videoRemoved(const QString &id);
     /// 视频引用信息变更（重定位/重登记后，面板刷新用）
     void videoInfoChanged(const QString &id);
+    /// 重定位完成（M3：VideoStateManager 键迁移/当前路径跟随用）
+    void videoRelocated(const QString &id, const QString &oldPath,
+                        const QString &newPath);
     /// 哈希逐文件完成（Q-9 逐文件提示）：done/total 为队列进度
     void hashProgress(const QString &videoId, int done, int total);
     void hashQueueFinished();

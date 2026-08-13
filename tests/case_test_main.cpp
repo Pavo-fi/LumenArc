@@ -11,9 +11,11 @@
 #include <QSettings>
 #include <QCryptographicHash>
 #include <QThread>
+#include <atomic>
 #include <cstdio>
 #include "domain/case_model.h"
 #include "app/case_manager.h"
+#include "videostatemanager.h"
 
 static int g_checks = 0, g_failures = 0;
 #define CHECK(cond, msg) do { ++g_checks; if (!(cond)) { ++g_failures; \
@@ -1067,6 +1069,156 @@ int main(int argc, char **argv)
         while (exportDone3 == 0 && t.elapsed() < 30000)
             QCoreApplication::processEvents(QEventLoop::AllEvents, 50);
         CHECK(exportDone3 == 1 && !exportOk3, "exp: existing target rejected");
+        cm.closeCase();
+    }
+
+    // ---- 13. 批量重新定位（v1.3.0 M3 任务13：proposeRelocations/knownSha/migrateKey）----
+    {
+        RecentGuard recentGuard;
+        QTemporaryDir root;
+        auto mkVideo = [&](const QString &dir, const QString &name,
+                           const QByteArray &content) {
+            QDir().mkpath(dir);
+            QFile f(QDir(dir).filePath(name));
+            f.open(QIODevice::WriteOnly);
+            f.write(content);
+            f.close();
+            return f.fileName();
+        };
+        const QString srcDir = root.filePath(QStringLiteral("src"));
+        const QString newDir = root.filePath(QStringLiteral("newloc"));
+        // 源：keep 保留 / gone 将被删（newloc 有同名同大小同内容副本）/
+        //     sized 将被删（newloc 有同名不同大小）/ none 将被删（无候选）/
+        //     twin 将被删（newloc 有同名同大小异内容 → 指纹不一致）
+        const QByteArray goneContent(4000, 'g');
+        const QString keep = mkVideo(srcDir, QStringLiteral("keep.mp4"), QByteArray(2000, 'k'));
+        const QString gone = mkVideo(srcDir, QStringLiteral("gone.mp4"), goneContent);
+        const QString sized = mkVideo(srcDir, QStringLiteral("sized.mp4"), QByteArray(6000, 's'));
+        const QString none = mkVideo(srcDir, QStringLiteral("none.mp4"), QByteArray(7000, 'n'));
+        const QString twinSrc = mkVideo(srcDir, QStringLiteral("twin.mp4"), QByteArray(5000, 't'));
+        const QString goneCopy = mkVideo(newDir, QStringLiteral("gone.mp4"), goneContent);
+        mkVideo(newDir, QStringLiteral("sized.mp4"), QByteArray(3000, 'x'));
+        const QString twinNew = mkVideo(newDir, QStringLiteral("twin.mp4"), QByteArray(5000, 'T'));
+
+        CaseManager cm;
+        QString err;
+        CaseMeta meta;
+        meta.caseNo = QStringLiteral("20260813-批定位-a");
+        meta.title = QStringLiteral("批定位");
+        CHECK(cm.createCase(root.path(), meta, &err), "breloc: createCase");
+        int finishedCount = 0;
+        QObject::connect(&cm, &CaseManager::hashQueueFinished,
+                         [&]() { ++finishedCount; });
+        const QString idKeep = cm.addVideo(keep, &err);
+        const QString idGone = cm.addVideo(gone, &err);
+        const QString idSized = cm.addVideo(sized, &err);
+        const QString idNone = cm.addVideo(none, &err);
+        const QString idTwin = cm.addVideo(twinSrc, &err);
+        CHECK(!idKeep.isEmpty() && !idGone.isEmpty() && !idSized.isEmpty()
+              && !idNone.isEmpty() && !idTwin.isEmpty(), "breloc: videos added");
+        QElapsedTimer t;
+        t.start();
+        while (finishedCount == 0 && t.elapsed() < 10000)
+            QCoreApplication::processEvents(QEventLoop::AllEvents, 50);
+        CHECK(finishedCount == 1, "breloc: initial hashes done");
+        const QString shaGone = cm.videoById(idGone)->sha256;
+        const QString shaTwin = cm.videoById(idTwin)->sha256;
+
+        // 删除源文件模拟缺失（keep 保留 → 不参与候选）
+        QFile::remove(gone);
+        QFile::remove(sized);
+        QFile::remove(none);
+        QFile::remove(twinSrc);
+
+        // ① 模糊匹配分级：名+大小 level2 / 仅名 level1 / 无候选 level0；
+        //    存在源（keep）不列入
+        const auto cands = cm.proposeRelocations(newDir);
+        CHECK(cands.size() == 4, "breloc: existing source skipped");
+        int lvlGone = -1, lvlSized = -1, lvlNone = -1, lvlTwin = -1;
+        QString candGone;
+        for (const auto &c : cands) {
+            if (c.videoId == idGone)  { lvlGone = c.matchLevel; candGone = c.candidatePath; }
+            if (c.videoId == idSized) lvlSized = c.matchLevel;
+            if (c.videoId == idNone)  lvlNone = c.matchLevel;
+            if (c.videoId == idTwin)  lvlTwin = c.matchLevel;
+        }
+        CHECK(lvlGone == 2, "breloc: name+size → level 2");
+        CHECK(lvlSized == 1, "breloc: name-only → level 1");
+        CHECK(lvlNone == 0, "breloc: no candidate → level 0");
+        CHECK(lvlTwin == 2, "breloc: same-size twin → level 2 (hash decides)");
+        CHECK(QDir::cleanPath(candGone) == QDir::cleanPath(goneCopy),
+              "breloc: level-2 candidate path");
+
+        // ② computeSha256 与 QCryptographicHash 一致 + abort 语义
+        {
+            QString sha;
+            CHECK(CaseManager::computeSha256(goneCopy, &sha),
+                  "breloc: computeSha256");
+            QFile f(goneCopy);
+            f.open(QIODevice::ReadOnly);
+            const QString expect = QString::fromLatin1(
+                QCryptographicHash::hash(f.readAll(),
+                                         QCryptographicHash::Sha256).toHex());
+            CHECK(sha == expect, "breloc: computeSha256 correct");
+            CHECK(sha == shaGone, "breloc: copy sha == registered sha");
+            std::atomic<bool> ab{true};
+            CHECK(!CaseManager::computeSha256(goneCopy, &sha, &ab),
+                  "breloc: computeSha256 aborted");
+        }
+
+        // ③ 指纹一致採用：knownSha 直接登记（免二次哈希）+ videoRelocated 信号
+        QString relId, relOld, relNew;
+        QObject::connect(&cm, &CaseManager::videoRelocated,
+                         [&](const QString &i, const QString &o,
+                             const QString &n) {
+                             relId = i; relOld = o; relNew = n;
+                         });
+        QString candSha;
+        CHECK(CaseManager::computeSha256(goneCopy, &candSha),
+              "breloc: hash candidate");
+        CHECK(cm.relocateVideo(idGone, goneCopy, &err, nullptr, false, candSha),
+              "breloc: hash-consistent adopt");
+        CHECK(cm.videoById(idGone)->sha256 == candSha,
+              "breloc: knownSha registered directly");
+        CHECK(!cm.hashQueueActive(), "breloc: no rehash queued for knownSha");
+        CHECK(relId == idGone && QDir::cleanPath(relOld) == QDir::cleanPath(gone)
+              && QDir::cleanPath(relNew) == QDir::cleanPath(goneCopy),
+              "breloc: videoRelocated emitted");
+        const QString goneOld = relOld, goneNew = relNew;   // ⑤备用
+        t.restart();
+        while (t.elapsed() < 500)
+            QCoreApplication::processEvents(QEventLoop::AllEvents, 50);
+        CHECK(finishedCount == 1, "breloc: knownSha adopt queues nothing");
+
+        // ④ 同尺寸异内容（指纹不一致）显式「仍要采用」：force + knownSha ≠
+        //    旧登记 → 採用 + relocateShaOverride 留档
+        QString twinSha;
+        CHECK(CaseManager::computeSha256(twinNew, &twinSha), "breloc: hash twin");
+        CHECK(twinSha != shaTwin, "breloc: twin content differs");
+        CHECK(cm.relocateVideo(idTwin, twinNew, &err, nullptr, true, twinSha),
+              "breloc: force adopt sha-mismatch");
+        CHECK(cm.videoById(idTwin)->sha256 == twinSha,
+              "breloc: override sha registered");
+        CHECK(cm.meta().extraFields.contains(
+                  QStringLiteral("relocateShaOverride/") + idTwin),
+              "breloc: sha override archived");
+
+        // ⑤ VideoStateManager 键迁移（任务13：重定位后状态可恢复）
+        {
+            VideoStateManager vsm;
+            QVector<QRect> regs{QRect(1, 2, 3, 4)};
+            vsm.saveState(goneOld, {}, regs, {}, {}, {}, {}, {});
+            CHECK(vsm.hasState(goneOld), "breloc: state saved under old key");
+            vsm.migrateKey(goneOld, goneNew);
+            CHECK(!vsm.hasState(goneOld), "breloc: old key migrated away");
+            VideoState st;
+            CHECK(vsm.restoreState(goneNew, st),
+                  "breloc: state restorable under new key");
+            CHECK(st.filePath == goneNew && st.regions.size() == 1,
+                  "breloc: state content intact after migration");
+            vsm.migrateKey(goneOld, goneNew);   // 无该键：幂等
+            CHECK(vsm.hasState(goneNew), "breloc: migrate missing key no-op");
+        }
         cm.closeCase();
     }
 

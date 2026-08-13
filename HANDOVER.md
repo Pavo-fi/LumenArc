@@ -1402,7 +1402,7 @@ Info.plist 两项（原滞留 1.1.1）→ 1.2.2。
 
 ---
 
-## 二十三、v1.3.0 案件模块实施记录（2026-08-13 开工，M1/M2 完成）
+## 二十三、v1.3.0 案件模块实施记录（2026-08-13 开工，M1/M2 完成，M3 任务12/13 完成）
 
 ### 23.0 施工依据
 
@@ -1413,8 +1413,8 @@ Info.plist 两项（原滞留 1.1.1）→ 1.2.2。
 - **三条底线**：独立模式（不建案件）行为与 v1.2.2 逐点一致（既有测试零修改
   通过为准绳）；取证红线（源视频只读、重定位只改引用）；per-video
   membership（视频是否在案决定其行为，非全局开关）。
-- **里程碑**：M1 domain+app 层（5 任务）✅ → M2 挂接+主 UI（6 任务）→
-  M3 移交+多机视图+封版。
+- **里程碑**：M1 domain+app 层（5 任务）✅ → M2 挂接+主 UI（6 任务）✅ →
+  M3 移交+多机视图+封版（任务 12/13 ✅，余 14/15）。
 
 ### 23.1 M1 完成内容（commits `7a5e355` + `0e6eb90`）
 
@@ -1496,10 +1496,34 @@ Info.plist 两项（原滞留 1.1.1）→ 1.2.2。
 ### 23.7 下一步 M3（任务 12-15）
 
 12 导出移交包（完整包默认/轻量可选；导前自检；空间预检；后台可取消+半成品
-清理；sources/+包内 case.json+manifest+导后快校；README.txt）→ 13 批量重新
-定位（名+大小模糊→人工确认→**指纹强制比对**默认拒绝「仍要采用」留档；
-VideoStateManager 键迁移；M2 的 relocateVideo 基础版已就位可复用）→ 14 多机
+清理；sources/+包内 case.json+manifest+导后快校；README.txt）✅（`415ef0c`）
+→ 13 批量重新定位 ✅（见 §23.8）→ 14 多机
 时间线对齐视图（只读；复用 ClipTimelineWidget；末位可砍）→ 15 文档与封版
 （MANUAL 新章/README/手工点检清单；全回归；版本号 1.3.0 五处；打标签）。
 **手工矩阵（§4.3）待实机跑**：新建→加 3 视频(含中文路径)→校时→框选记忆随案
 →关案重开现场全恢复→删源视频重开(重定位)→双模式逐点比对。
+
+### 23.8 M3 任务 13 完成内容（批量重新定位）
+
+| 交付 | 内容 |
+|---|---|
+| 模糊匹配 | `CaseManager::proposeRelocations(dir)`：递归扫候选目录视频扩展名集；仅缺失视频（effectivePathFor 不存在，完整包副本兼底场景跳过）列入；名+大小一致 level 2 / 仅文件名 level 1 / 无候选 level 0。同步快判不哈希 |
+| 指纹强制比对 | `BatchRelocateDialog`（casedialogs）：扫描候选→表格人工确认（可【浏览】逐行覆盖候选）→【比对并采用】逐路串行后台算指纹（QtConcurrent+QFutureWatcher 链式，同哈希队列 IO 纪律）→登记指纹一致或无基线→採用；不一致**默认拒绝**（⚠ 状态行展示登记/候选前 8 位）→显式【仍要采用（留档）】二次确认后 force |
+| knownSha 免二次哈希 | `relocateVideo` 增 `knownSha` 参：批量场景指纹已比对，直接登记不再入队重算；空值走老路径（作废入队重算，独立模式/M2 行为不变） |
+| 留档 | 大小不一致覆写留档（M2 既有）；**新增**同尺寸异内容指纹覆写 `relocateShaOverride/<id>`（force+knownSha≠旧登记时，前后指纹前 8 位入 extraFields） |
+| 键迁移 | `VideoStateManager::migrateKey(old,new)`（内存状态跟随）；`videoRelocated(id,old,new)` 信号由 relocateVideo 发出，MainWindow 挂接：migrateKey + 当前播放路径跟随（cleanPath 比较）；採用后静默落盘（同哈希队列排空纪律） |
+| 入口 | 案件菜单「批量重新定位(&B)...」（随案开关启用）+ CaseDock 视频右键「批量重新定位…」 |
+
+实施固化：① 工作线程 abort 用 `shared_ptr<atomic<bool>>` 副本传递（对话框
+模态销毁后工作线程不悬垂；watcher 为对话框子对象随销毁断链）；② 比对取消
+的行回到「待比对」可重试，读取失败保持失败态；③ 指纹比对属对话框职责，
+manager 层 size 守卫对同尺寸异内容不拦——**勿把指纹比对下沉 manager**（批量
+与独立重定位的红线一致：比对在交互层，留档在 manager 层）。
+
+#### 测试状态（任务 13 封版）
+
+| 测试 | 结果 |
+|---|---|
+| **lumenarc_case_test** | **213/213**（新增组 13：匹配分级/存在源跳过/computeSha256 正确性+abort/knownSha 直接登记免重算/videoRelocated 信号/同尺寸异内容 force 採用+留档/migrateKey 迁移+幂等） |
+| 既有回归 | calibration 73 / piecewise 96 / preprocess 168 / ui_chain 23 / ocr_atpositions 21 / vla 3×PASS 零修改全绿 |
+| 离屏冒烟 | LumenArc.exe offscreen 启动 10s 无崩溃 |

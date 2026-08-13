@@ -329,6 +329,13 @@ void CaseDock::onContextMenu(const QPoint &pos)
         menu.addSeparator();
         menu.addAction(lang("重新定位…", "Relocate…"), this,
                        [this, id]() { relocateVideo(id); });
+        // 批量重新定位（M3 任务13）：对话框为案件级操作，任意视频行可入
+        menu.addAction(lang("批量重新定位…", "Batch relocate…"), this,
+                       [this]() {
+                           BatchRelocateDialog dlg(m_caseManager, this);
+                           dlg.exec();
+                           refreshTree();
+                       });
         menu.addAction(lang("移除出案件…", "Remove from case…"), this,
                        [this, id]() { removeVideo(id); });
         menu.addSeparator();

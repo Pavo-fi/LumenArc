@@ -316,6 +316,7 @@ add_executable(lumenarc_case_test
     tests/case_test_main.cpp
     src/domain/case_model.cpp
     src/app/case_manager.cpp
+    src/videostatemanager.cpp   # M3 任务13：migrateKey 键迁移测试
 )
 target_include_directories(lumenarc_case_test PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src
