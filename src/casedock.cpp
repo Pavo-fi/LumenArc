@@ -70,9 +70,9 @@ CaseDock::CaseDock(CaseManager *cm, QWidget *parent)
     m_btnDelete = new QPushButton(lang("🗑 删除选中", "🗑 Delete selected"), host);
     m_btnDelete->setEnabled(false);
     m_btnDelete->setToolTip(lang(
-        "删除选中的视频：源文件 + 案内数据一并删除（不可恢复；包内副本保留）",
-        "Delete selected video: source file + in-case data (irreversible; "
-        "bundled copy kept)"));
+        "删除选中的视频：源文件在案件内则一并删除；案件外仅删分析结果（不可恢复）",
+        "Delete selected video: source inside case dir is also deleted; "
+        "outside sources are kept (irreversible)"));
     auto *btnRefresh = new QPushButton(lang("🔄 刷新", "🔄 Refresh"), host);
     btnRefresh->setToolTip(lang("重新扫描案件目录文件状态",
                                 "Re-scan case files"));
@@ -348,24 +348,36 @@ void CaseDock::removeVideo(const QString &id)
 
 void CaseDock::deleteVideoFile(const QString &id)
 {
-    // 删除源文件 + 案内数据（2026-08 人工反馈：误入/不需要的视频需显式
-    // 删除入口）。包内副本（📦）不删，保护完整包取证完整性。
+    // 删除策略（2026-08 人工反馈拍板）：
+    //  - 源文件在案件目录外 → 只删案内分析结果（.vla/校时帧/登记），
+    //    源文件保留（取证红线，用户素材不被误删）
+    //  - 源文件在案件目录内（如 videos/ 下）→ 源文件 + 案内数据一并删
+    // 包内副本（📦，原路径缺失时生效）不主动删，保护完整包取证完整性。
     const auto *v = m_caseManager->videoById(id);
     if (!v)
         return;
-    const QString eff = m_caseManager->effectivePathFor(*v);
-    const QString target = (eff != v->originalPath)
-        ? v->originalPath   // 包内副本场景：只删原路径（若存在），副本保留
-        : eff;
+    const QDir caseDir(m_caseManager->caseDir());
+    const QString rel = caseDir.relativeFilePath(v->originalPath);
+    const bool insideCase = !rel.startsWith(QStringLiteral(".."))
+        && !QDir::isAbsolutePath(rel);
     QMessageBox box(this);
-    box.setWindowTitle(lang("删除视频文件", "Delete video file"));
+    box.setWindowTitle(lang("删除视频", "Delete video"));
     box.setIcon(QMessageBox::Warning);
-    box.setText(lang(
-        "将删除视频「%1」：\n源文件：%2\n案内数据（.vla 分析/校时证据帧）\n\n"
-        "此操作不可恢复！包内副本（如有）保留。",
-        "Delete video “%1”:\nsource: %2\nin-case data (.vla / calibration)\n\n"
-        "This cannot be undone! Bundled copy (if any) is kept.")
-        .arg(id, target));
+    if (insideCase) {
+        box.setText(lang(
+            "将删除视频「%1」：\n源文件（案件目录内）：%2\n案内数据（.vla 分析/校时证据帧）\n\n"
+            "此操作不可恢复！包内副本（如有）保留。",
+            "Delete video “%1”:\nsource (inside case dir): %2\nin-case data (.vla / calibration)\n\n"
+            "This cannot be undone! Bundled copy (if any) is kept.")
+            .arg(id, v->originalPath));
+    } else {
+        box.setText(lang(
+            "将删除视频「%1」的分析结果：\n案内数据（.vla 分析/校时证据帧）+ 案件登记\n\n"
+            "源文件在案件外，保留：%2",
+            "Delete analysis of “%1”:\nin-case data (.vla / calibration) + registration\n\n"
+            "Source stays untouched (outside case dir): %2")
+            .arg(id, v->originalPath));
+    }
     QAbstractButton *btnDel = box.addButton(
         lang("删除", "Delete"), QMessageBox::DestructiveRole);
     box.addButton(lang("取消", "Cancel"), QMessageBox::RejectRole);
@@ -373,8 +385,8 @@ void CaseDock::deleteVideoFile(const QString &id)
     if (box.clickedButton() != btnDel)
         return;
     QString err;
-    if (QFileInfo::exists(target))
-        QFile::remove(target);
+    if (insideCase && QFileInfo::exists(v->originalPath))
+        QFile::remove(v->originalPath);   // 案件内源文件：一并删除
     if (!m_caseManager->removeVideo(id, true, &err)) {
         QMessageBox::warning(this, lang("删除失败", "Delete failed"), err);
         refreshTree();
@@ -457,7 +469,7 @@ void CaseDock::onContextMenu(const QPoint &pos)
                        });
         menu.addAction(lang("移除出案件…", "Remove from case…"), this,
                        [this, id]() { removeVideo(id); });
-        menu.addAction(lang("删除视频文件（含源文件）…", "Delete video file…"), this,
+        menu.addAction(lang("删除视频…", "Delete video…"), this,
                        [this, id]() { deleteVideoFile(id); });
         menu.addSeparator();
         menu.addAction(lang("计算指纹", "Compute fingerprint"), this,
