@@ -1836,3 +1836,24 @@ exe 时间戳 17:15+ / 关于对话框 v1.3.1 / 任务管理器确认无旧进�
 
 回归：case_test 239 / e2e 51 / piecewise 96 / preprocess 168 /
 ui_chain 23 全绿；冒烟 6s。
+
+### 23.23 音量曲线切换视频"短一截"修复 + 排序验证（2026-08-14）
+
+**① 音量曲线短一截（真 bug，已修复）**：
+- 根因一：`ChartPanel::onDataReplaced` 对空快照直接 return——切换视频后
+  旧音量曲线残留、X 轴换成新视频时长 → 曲线"短一截"（或错位）
+- 根因二：rebuild 分支 `rebuildSeries(); return;`——rebuildSeries 只
+  重建**空** volumeSeries 不填充数据 → 有亮度数据的视频切换后音量
+  曲线为空（需重新分析才恢复）
+- 修复：空快照分支清空并隐藏 volumeSeries；rebuild 分支去掉 return，
+  继续走后半段统一填充亮度+音量（幂等）
+
+**② 排序（04 时段验证）**：
+- 79 个文件名全为 `20260722-HHMMSS[M]` 格式；parseFilenameTimestamp
+  M2 正则匹配 ✓（补 M 后缀回归用例，preprocess_test 170 全绿）
+- 04 目录按文件名时间排序实测单调递增（040007M → 045938）——排序
+  逻辑正确；若用户仍见乱序 = 运行旧构建（f75c00f 之前的 exe 无
+  sortFilesByNameTime），验证方法：关于对话框 v1.3.1 + exe 时间戳
+
+回归：case_test 239 / e2e 51 / piecewise 96 / preprocess 170 /
+ui_chain 23 全绿；冒烟 6s。

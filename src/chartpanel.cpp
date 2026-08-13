@@ -456,8 +456,17 @@ void ChartPanel::onDataReplaced()
              << "spectrogram:" << snapshot.audio.spectrogram.size()
              << "durationMs:" << m_durationMs;
     // Need either timestamps (luminance) or audio data to proceed
-    if (snapshot.isEmpty() && !snapshot.hasAudio())
+    if (snapshot.isEmpty() && !snapshot.hasAudio()) {
+        // 2026-08 修复：切换视频后旧音量曲线残留 + X 轴换成新时长 →
+        // 曲线“短一截”。空快照必须清掉音量曲线，而不是直接 return 残留
+        if (m_volumeSeries) {
+            m_volumeSeries->clear();
+            m_volumeSeries->setVisible(false);
+        }
+        if (m_axisYVolume)
+            m_axisYVolume->setVisible(false);
         return;
+    }
 
     // If no luminance series exist, only continue when audio is present
     if (m_seriesList.isEmpty()) {
@@ -491,7 +500,8 @@ void ChartPanel::onDataReplaced()
     // match the latest data. The m_rebuilding flag prevents recursion.
     if (!m_rebuilding && !snapshot.dataEntries.isEmpty()) {
         rebuildSeries();
-        return;
+        // 不 return：rebuildSeries 重建的空音量曲线需要继续填充，
+        // 否则有亮度数据的视频切换后音量曲线为空（2026-08 修复）
     }
 
     if (m_durationMs > 0) {

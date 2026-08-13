@@ -69,6 +69,11 @@ static void testFilenamePatterns()
     ft = parseFilenameTimestamp(QStringLiteral("20240701-120000.mp4"));
     CHECK(ft.hit() && ft.patternId == 2);
 
+    // M2 带后缀（监控常见：20260722-040007M——M=移动侦测标记等）
+    ft = parseFilenameTimestamp(QStringLiteral("20260722-040007M.mp4"));
+    CHECK(ft.hit() && ft.patternId == 2);
+    CHECK(ft.epochMs == epochOf(2026, 7, 22, 4, 0, 7));
+
     // M3: 20240701120000
     ft = parseFilenameTimestamp(QStringLiteral("20240701120000.mp4"));
     CHECK(ft.hit() && ft.patternId == 3);
