@@ -80,6 +80,7 @@ private slots:
     void onPhaseChanged(TaskPhase phase);
     void onProgress(int percent, const QString &detail);
     void onProbeDone(const QVector<ProbeResult> &results);
+    QString buildProbeStatsText() const;   // 结果页源素材统计（2026-08）
     void onEvidenceReady(const QVector<SortGroup> &groups);
     void onPrecheckReady(const QMap<QString, PrecheckResult> &byGroup);
     void onFinished(const PreprocessReport &report);
@@ -154,6 +155,7 @@ private:
     QScrollArea *m_cardScroll = nullptr;
     QWidget *m_cardHost = nullptr;
     QVector<SortGroup> m_groups;
+    QVector<ProbeResult> m_probeResults;   // 探测结果存档（结果页统计用，2026-08）
     QString m_selectedPath;
     QMap<QString, QPixmap> m_thumbCache;
     static constexpr int kThumbCacheCap = 96;
@@ -192,6 +194,7 @@ private:
     QWidget *m_resultCard = nullptr;
     QLabel *m_resultTitle = nullptr;
     QLabel *m_resultOutput = nullptr;
+    QLabel *m_resultStats = nullptr;      // 源素材统计 + 统一帧率醒目提示（2026-08）
     QLabel *m_resultEvidence = nullptr;
     QPushButton *m_btnOpenFolder = nullptr;
     QPushButton *m_btnOpenReport = nullptr;

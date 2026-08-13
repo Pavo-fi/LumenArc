@@ -32,7 +32,8 @@ struct TranscodeRequest {
     qint64  durationMs = 0;       // 进度换算分母
     int     crf = 18;
     bool    deinterlace = true;   // 隔行源默认 yadif（可配置）
-    bool    copyAudio = false;    // 音轨已为 AAC 且达标时直拷（探测驱动）
+    float   fps = 0.0f;           // >0 时统一 CFR 输出该帧率（多段帧率不一
+                                  // 时拼接前置要求；0=保留源节奏）
     int     keyframeInterval = 0; // 关键帧间隔（帧数）；0=libx264 默认 250
                                   // 现场反馈：默认 GOP 太长（15fps≈17s），
                                   // 拖拽 seek 需从上一关键帧逐帧解码 → 卡死

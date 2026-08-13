@@ -98,6 +98,7 @@ private slots:
 private:
     void setPhase(TaskPhase phase);
     void log(const QString &line);
+    void logProbeStats();                   // 帧率/编码/分辨率统计 + 统一帧率预告
     QMap<QString, qint64> buildDurMap(const QMap<QString, qint64> &trusted) const;
     void buildListOrderGroups();            // 未自动排序：按导入顺序成组
     void runSorting();
@@ -120,6 +121,7 @@ private:
     TaskPhase m_phase = TaskPhase::Idle;
     QStringList m_files;
     QMap<QString, ProbeResult> m_probes;
+    float m_unifiedFps = 0.0f;                  // 统一 CFR 帧率（多段帧率不一时取全局最大 avg，2026-08）
     QMap<QString, OcrResult> m_ocrs;
     QVector<SortGroup> m_groups;
     QMap<QString, PrecheckResult> m_prechecks;

@@ -251,6 +251,7 @@ void PreprocessingCoordinator::onTrustedDurationsReady(const QMap<QString, qint6
     // 就绪：按导入顺序成组（自动排序为可选步骤，不强制——现场反馈）
     setPhase(TaskPhase::UserConfirm);
     buildListOrderGroups();
+    logProbeStats();   // 帧率/编码/分辨率统计 + 统一帧率预告（2026-08）
     log(QStringLiteral("[%1] 探测完成，%2 个文件已按导入顺序就绪（可开始拼接或自动排序）")
             .arg(tsLog()).arg(m_files.size()));
     emit evidenceReady(m_groups);
@@ -258,6 +259,57 @@ void PreprocessingCoordinator::onTrustedDurationsReady(const QMap<QString, qint6
         m_autoSortAfterProbe = false;
         runAutoSort();
     }
+}
+
+void PreprocessingCoordinator::logProbeStats()
+{
+    // 统计源素材帧率/编码/分辨率分布，并预告统一 CFR 帧率
+    // （2026-08 人工测试：8fps/12.5fps 混排 concat 时间戳错位 → 尾段卡住）
+    QMap<double, int> fpsCnt;
+    QMap<QString, int> codecCnt, resCnt;
+    float maxFps = 0.0f;
+    int okN = 0;
+    for (const auto &r : m_probes) {
+        if (!r.ok())
+            continue;
+        ++okN;
+        fpsCnt[qRound(r.fps * 10.0) / 10.0] += 1;
+        codecCnt[r.videoCodec] += 1;
+        resCnt[QStringLiteral("%1×%2").arg(r.width).arg(r.height)] += 1;
+        if (r.fps > maxFps)
+            maxFps = r.fps;
+    }
+    if (okN == 0)
+        return;
+    // 统一帧率 = 全局最大 avg fps（不丢帧；低帧率段重复帧差分≈0），
+    // 上限 60 防异常元数据；PreprocessWindow 提示用同一公式
+    m_unifiedFps = qBound(1.0f, qRound(maxFps * 10.0f) / 10.0f, 60.0f);
+    log(QStringLiteral("[%1] 素材统计：%2 段 | 帧率分布：%3 | 编码：%4 | 分辨率：%5")
+            .arg(tsLog()).arg(okN)
+            .arg([&]() {
+                QStringList parts;
+                for (auto it = fpsCnt.constBegin(); it != fpsCnt.constEnd(); ++it)
+                    parts << QStringLiteral("%1fps×%2").arg(it.key()).arg(it.value());
+                return parts.join(QStringLiteral("、"));
+            }())
+            .arg([&]() {
+                QStringList parts;
+                for (auto it = codecCnt.constBegin(); it != codecCnt.constEnd(); ++it)
+                    parts << QStringLiteral("%1×%2").arg(it.key()).arg(it.value());
+                return parts.join(QStringLiteral("、"));
+            }())
+            .arg([&]() {
+                QStringList parts;
+                for (auto it = resCnt.constBegin(); it != resCnt.constEnd(); ++it)
+                    parts << QStringLiteral("%1×%2").arg(it.key()).arg(it.value());
+                return parts.join(QStringLiteral("、"));
+            }()));
+    if (fpsCnt.size() > 1)
+        log(QStringLiteral("[%1] ⚠ 源素材帧率不统一，将统一按 %2fps（CFR）转码后拼接")
+                .arg(tsLog()).arg(m_unifiedFps));
+    else
+        log(QStringLiteral("[%1] 源素材帧率统一：%2fps")
+                .arg(tsLog()).arg(m_unifiedFps));
 }
 
 void PreprocessingCoordinator::buildListOrderGroups()
@@ -550,16 +602,19 @@ void PreprocessingCoordinator::startNextTranscode()
     req.output = allocateOutput(m_outputDir, base);
     req.durationMs = durationOf(m_currentTranscode);
     req.crf = m_opts.crf;
-    // 关键帧间隔 ≈ 2 秒（探测 fps 换算；0 兜底交给引擎默认）
-    const ProbeResult p = m_probes.value(m_currentTranscode);
-    if (p.fps > 0.0f && p.fps <= 240.0f)
-        req.keyframeInterval = qMax(1, qRound(2.0f * p.fps));
+    // 统一 CFR（拼接前置要求，2026-08）：全局最大 avg fps，低帧率段插帧
+    req.fps = m_unifiedFps;
+    // 关键帧间隔 ≈ 2 秒（按统一帧率换算；0 兜底交给引擎默认）
+    if (m_unifiedFps > 0.0f && m_unifiedFps <= 240.0f)
+        req.keyframeInterval = qMax(1, qRound(2.0f * m_unifiedFps));
     // 隔行源 → 默认反交错（探测驱动，可配置关闭）
+    const ProbeResult p = m_probes.value(m_currentTranscode);
     req.deinterlace = m_opts.deinterlace && p.fieldOrder > 1;  // 1=progressive
-    // 音轨已为 AAC 时直拷（探测驱动，§5.5.1）
-    req.copyAudio = p.audioStreams > 0 && p.audioCodec == QLatin1String("aac");
-    log(QStringLiteral("[%1] 转码开始：%2 → %3")
-            .arg(tsLog(), req.input, req.output));
+    log(QStringLiteral("[%1] 转码开始：%2 → %3%4")
+            .arg(tsLog(), req.input, req.output)
+            .arg(m_unifiedFps > 0.0f
+                     ? QStringLiteral("（统一 %1fps）").arg(m_unifiedFps)
+                     : QString()));
     m_transcodeEngine->run(req);
 }
 
@@ -689,6 +744,32 @@ void PreprocessingCoordinator::onConcatOneFinished(const QString &outputPath)
         safe.replace(QRegularExpression(QStringLiteral(R"([\\/:*?"<>|()])")),
                      QStringLiteral("_"));
         QFile::rename(src, m_evidenceDir + QStringLiteral("/concat_list_%1.txt").arg(safe));
+    }
+    // 拼接成功 → 清理该组中间转码产物（2026-08 需求：只保留最终拼接文件；
+    // 每段命令已留痕 operations.log，取证不受影响；失败场景不删，便于排查）
+    int removed = 0;
+    if (group) {
+        QStringList removedNames;
+        for (const auto &e : group->ordered) {
+            const QString seg = m_transcoded.value(e.filePath);
+            if (!seg.isEmpty() && seg != outputPath && QFile::remove(seg)) {
+                ++removed;
+                removedNames << QFileInfo(seg).fileName();
+            }
+        }
+        // 归一化临时文件（remux 副本，同属中间产物）
+        const QDir evDir(m_evidenceDir);
+        for (const QString &nf : evDir.entryList({QStringLiteral("norm_*.mp4")},
+                                                 QDir::Files)) {
+            if (QFile::remove(evDir.absoluteFilePath(nf))) {
+                ++removed;
+                removedNames << nf;
+            }
+        }
+        if (removed > 0)
+            log(QStringLiteral("[%1] 已清理中间转码产物 %2 个：%3")
+                    .arg(tsLog()).arg(removed)
+                    .arg(removedNames.join(QStringLiteral("、"))));
     }
     startNextConcat();
 }

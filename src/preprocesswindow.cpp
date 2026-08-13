@@ -1237,6 +1237,17 @@ QWidget *PreprocessWindow::buildPageRun()
     m_resultOutput->setTextInteractionFlags(Qt::TextSelectableByMouse);
     m_resultOutput->setWordWrap(true);
     rcLay->addWidget(m_resultOutput);
+    // 源素材统计 + 统一帧率醒目提示（2026-08 人工测试：8/12.5fps 混排拼接
+    // 尾段卡住 → 统计入日志 + 完成页醒目提示）
+    m_resultStats = new QLabel(m_resultCard);
+    m_resultStats->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    m_resultStats->setWordWrap(true);
+    m_resultStats->setStyleSheet(QStringLiteral(
+        "QLabel { background:%1; border:1px solid %2; border-radius:6px;"
+        " padding:6px 10px; color:%3; font-weight:bold; }")
+        .arg(Theme::BgCard, Theme::Accent, Theme::TextPrimary));
+    m_resultStats->setVisible(false);
+    rcLay->addWidget(m_resultStats);
     m_resultEvidence = new QLabel(m_resultCard);
     m_resultEvidence->setTextInteractionFlags(Qt::TextSelectableByMouse);
     m_resultEvidence->setWordWrap(true);
@@ -1354,6 +1365,7 @@ void PreprocessWindow::onProgress(int percent, const QString &detail)
 
 void PreprocessWindow::onProbeDone(const QVector<ProbeResult> &results)
 {
+    m_probeResults = results;   // 存档：结果页统计源素材帧率/编码分布
     for (const auto &r : results) {
         for (int i = 0; i < m_fileTable->rowCount(); ++i) {
             auto *nameItem = m_fileTable->item(i, 0);
@@ -1402,6 +1414,47 @@ void PreprocessWindow::onPrecheckReady(const QMap<QString, PrecheckResult> &)
     }
 }
 
+/// 源素材统计 + 统一帧率提示（与 coordinator::logProbeStats 同源同公式：
+/// 全局最大 avg fps，四舍五入到 0.1，上限 60）
+QString PreprocessWindow::buildProbeStatsText() const
+{
+    QMap<double, int> fpsCnt;
+    QMap<QString, int> codecCnt;
+    float maxFps = 0.0f;
+    int okN = 0;
+    for (const auto &r : m_probeResults) {
+        if (!r.ok())
+            continue;
+        ++okN;
+        fpsCnt[qRound(r.fps * 10.0) / 10.0] += 1;
+        codecCnt[r.videoCodec] += 1;
+        if (r.fps > maxFps)
+            maxFps = r.fps;
+    }
+    if (okN == 0)
+        return QString();
+    const float unified = qBound(1.0f, qRound(maxFps * 10.0f) / 10.0f, 60.0f);
+    QStringList fpsParts;
+    for (auto it = fpsCnt.constBegin(); it != fpsCnt.constEnd(); ++it)
+        fpsParts << QStringLiteral("%1fps×%2").arg(it.key()).arg(it.value());
+    QStringList codecParts;
+    for (auto it = codecCnt.constBegin(); it != codecCnt.constEnd(); ++it)
+        codecParts << QStringLiteral("%1×%2").arg(it.key()).arg(it.value());
+    const QString base = lang("源素材 %1 段：帧率 %2；编码 %3",
+                              "Sources: %1 clips; fps %2; codec %3")
+        .arg(okN).arg(fpsParts.join(QStringLiteral("、")),
+                      codecParts.join(QStringLiteral("、")));
+    if (fpsCnt.size() > 1)
+        return lang("⚠ %1\n帧率不统一，已统一按 %2fps 转码拼接（低帧率段自动补帧，"
+                    "体积影响可忽略；统计详见运行日志）",
+                    "⚠ %1\nFPS differ; all segments were normalized to %2fps "
+                    "before merging (dup frames, negligible size impact; "
+                    "stats in the run log)")
+            .arg(base).arg(unified);
+    return lang("✓ %1（帧率统一，无补帧）", "✓ %1 (uniform FPS, no dup frames)")
+        .arg(base);
+}
+
 void PreprocessWindow::onFinished(const PreprocessReport &report)
 {
     m_runProgress->setValue(100);
@@ -1437,6 +1490,11 @@ void PreprocessWindow::onFinished(const PreprocessReport &report)
         m_btnBeginSort->setEnabled(!m_pendingFiles.isEmpty());
         m_btnQuickMerge->setEnabled(!m_pendingFiles.isEmpty());
         m_caseSessionDir.clear();   // 未产出新会话：下轮重新生成目录
+        // 单文件场景也展示源统计（若已探测）
+        if (!m_probeResults.isEmpty()) {
+            m_resultStats->setText(buildProbeStatsText());
+            m_resultStats->setVisible(true);
+        }
         // 明确弹窗（与“分析完成”同风格，5 秒自动关）
         QTimer::singleShot(0, this, [this]() {
             auto *box = new QMessageBox(QMessageBox::Information, windowTitle(),
@@ -1459,6 +1517,9 @@ void PreprocessWindow::onFinished(const PreprocessReport &report)
             .arg(report.outputPath, fmtBytes(fi.size()),
                  fmtDuration(m_runTimer.elapsed())));
         m_btnPlayOutput->setEnabled(true);
+        // 源素材统计 + 统一帧率醒目提示（2026-08；与 operations.log 同源同公式）
+        m_resultStats->setText(buildProbeStatsText());
+        m_resultStats->setVisible(true);
 
         // v1.3.0 M2 任务8：案件导入模式 finalize 自动登记 ——
         // 会话目录/报告/输出引用 + sidecar 复制归类 sidecars/ 入 case.json
@@ -1496,6 +1557,7 @@ void PreprocessWindow::onFinished(const PreprocessReport &report)
             "拼接流程已结束但没有任何输出文件（详见详细日志与证据报告）。",
             "Merge finished but produced no output (see log and evidence report)."));
         m_btnPlayOutput->setEnabled(false);
+        m_resultStats->setVisible(false);
     }
     m_resultEvidence->setText(lang("证据报告：%1\n（首/尾帧截图、CSV 明细、操作日志均已留档）",
                                    "Evidence report: %1\n(frames, CSV, operation log archived)")

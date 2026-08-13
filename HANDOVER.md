@@ -1608,3 +1608,40 @@ v1.3.1 一并出（或拍板重打 v1.3.0）。
 条目内 P### 输出文件双击可播放，sidecar 校时文件归类同会话 `sidecars/`。
 
 回归：ui_chain 23 / case_e2e 51 / case_test 228 全绿；offscreen 冒烟 8s 无崩溃。
+
+### 23.14 前处理转码拼接修复：统一 CFR + 时间戳归零 + 中间产物清理 + 统计提示（2026-08-14）
+
+真机人工测试发现 `merged_concat.mp4` 播放到尾段卡住。取证（帧级 PTS 分析 +
+66 段源素材全量 probe + 完整解码）：
+
+| 证据 | 数值 |
+|---|---|
+| moov 声明时长 | 59:52.7（3592.7s） |
+| 实际帧时间轴末尾 | **2806.7s**（差 786s ≈ 13 分钟无帧 → 尾段卡住） |
+| DTS 非单调 | 完整解码报错重复 950 次，第 2223 帧（第 4 段接缝 ≈278s）PTS 回退 0.25s |
+| 源素材真实帧率 | **12.5fps×57、8fps×8（前 5 分钟静止降帧）、9.17/11.93 各 1**；tbr 标称 25/50/13 为 DVR 乱写（实测仍是 12.5） |
+| 转码产物 | 无 -r 统一 → 段间帧率节奏各异；首帧偏移 0.138~0.23s 不归一 |
+
+**根因**：转码未统一帧率/未归零时间戳 → concat demuxer 按时间戳拼接时接缝
+错位逐段累积 → 尾部无帧。修复：
+
+1. **统一 CFR**（transcode_engine）：`-r <统一帧率>`（= 全局最大 avg fps，
+   四舍五入 0.1、上限 60；低帧率段重复帧差分编码体积≈0）
+2. **时间戳归零**：`-vf setpts=PTS-STARTPTS`（与 yadif 合并）；音频取消直拷、
+   恒 aac 128k/48k + `-af asetpts=PTS-STARTPTS`（重编码 PTS 天然归零）
+3. **keyframeInterval 按统一帧率换算**（2s GOP）
+4. **中间产物清理**（需求：只保留最终拼接文件）：拼接成功后删除该组转码段
+   + 证据目录 `norm_*.mp4`，operations.log 留痕；**失败场景保留**便于排查；
+   证据目录 concat_list 留档不动，取证不受影响
+5. **统计入日志 + 完成页醒目提示**：探测完成后 operations.log 输出帧率/
+   编码/分辨率分布 + 统一帧率预告（⚠ 帧率不统一时）；结果页新增醒目
+   统计卡片（`buildProbeStatsText`，与 coordinator 同公式同源）
+
+**验证**：
+- 三段合成（8fps+0.25s 偏移 / 12.5fps / 25fps）走修复后链路：转码产物全部
+  12.5fps、tbn 统一、start 一致；concat 后 **152 帧 PTS 全程单调**、首帧 0、
+  末帧 12.08 ≈ 元数据 12.16（修复前 2806 vs 3592 背离）
+- preprocess_integration：probe/sort/precheck/concat/transcode 全过
+  （6 项 OCR 失败为素材无文字时间戳的环境性失败，与本次无关）
+- 回归：case_e2e 51 / case_test 228 / piecewise 96 / preprocess 168 /
+  ui_chain 23 / ocr_atpositions 21 / calibration 73 全绿；冒烟 8s 无崩溃

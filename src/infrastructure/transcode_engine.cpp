@@ -48,24 +48,33 @@ QStringList TranscodeEngine::buildArgs(const TranscodeRequest &req,
     // 编码线程上限 = 核心数 - 2（≥2）：转码期间主窗口播放/操作保持响应
     args << QStringLiteral("-threads")
          << QString::number(qMax(2, QThread::idealThreadCount() - 2));
+    if (req.fps > 0.0f) {
+        // 多段帧率不一时统一 CFR（拼接前置要求，2026-08 人工测试：
+        // 8fps/12.5fps 混排 concat 时间戳错位 → 尾段无帧卡住）；
+        // 低帧率段重复帧差分编码，体积增量≈0
+        args << QStringLiteral("-r") << QString::number(double(req.fps), 'f', 2);
+    }
+    // 时间戳归零：监控源首帧偏移/时间基各异，concat demuxer 按时间戳
+    // 拼接，段间偏移不归一必然错位（PTS-STARTPTS 每段从 0 起播）
+    QString vf = QStringLiteral("setpts=PTS-STARTPTS");
     if (req.deinterlace) {
         // 隔行源默认 yadif（探测到 field_order≠progressive 时由调用方置位）
-        args << QStringLiteral("-vf") << QStringLiteral("yadif");
+        vf = QStringLiteral("yadif,") + vf;
     }
+    args << QStringLiteral("-vf") << vf;
     if (req.keyframeInterval > 0) {
         // 短 GOP：拖拽 seek 只解码 ≤2s（现场反馈：默认 GOP 250 帧太长，
         // 15fps 源 16.7s 才一个关键帧，seek 需逐帧解码整段 → 拖拽卡死）
         args << QStringLiteral("-g") << QString::number(req.keyframeInterval)
              << QStringLiteral("-keyint_min") << QString::number(req.keyframeInterval);
     }
-    if (req.copyAudio) {
-        args << QStringLiteral("-c:a") << QStringLiteral("copy");
-    } else {
-        args << QStringLiteral("-c:a") << QStringLiteral("aac")
-             << QStringLiteral("-b:a") << QStringLiteral("128k")
-             << QStringLiteral("-ac") << QStringLiteral("2")
-             << QStringLiteral("-ar") << QStringLiteral("48000");
-    }
+    // 音频统一重编码（不再直拷）：重编码 PTS 天然从 0 起 + asetpts 显式
+    // 归零，消除 concat 音频时间戳错位隐患（音画不同步）
+    args << QStringLiteral("-af") << QStringLiteral("asetpts=PTS-STARTPTS")
+         << QStringLiteral("-c:a") << QStringLiteral("aac")
+         << QStringLiteral("-b:a") << QStringLiteral("128k")
+         << QStringLiteral("-ac") << QStringLiteral("2")
+         << QStringLiteral("-ar") << QStringLiteral("48000");
     args << QStringLiteral("-movflags") << QStringLiteral("+faststart")
          << QStringLiteral("-avoid_negative_ts") << QStringLiteral("make_zero")
          << QStringLiteral("-f") << QStringLiteral("mp4")
