@@ -15,6 +15,9 @@
 #include <cstdio>
 #include "domain/case_model.h"
 #include "app/case_manager.h"
+#include "app/cam_timeline.h"
+#include "domain/timeline_model.h"
+#include "domain/time_calibration.h"
 #include "videostatemanager.h"
 
 static int g_checks = 0, g_failures = 0;
@@ -1218,6 +1221,80 @@ int main(int argc, char **argv)
                   "breloc: state content intact after migration");
             vsm.migrateKey(goneOld, goneNew);   // 无该键：幂等
             CHECK(vsm.hasState(goneNew), "breloc: migrate missing key no-op");
+        }
+        cm.closeCase();
+    }
+
+    // ---- 14. 多机时间线装配（v1.3.0 M3 任务14：buildCamLanes/calibratedVideoCount）----
+    {
+        RecentGuard recentGuard;
+        QTemporaryDir root;
+        auto mkVideo = [&](const QString &name, const QByteArray &content) {
+            QFile f(root.filePath(name));
+            f.open(QIODevice::WriteOnly);
+            f.write(content);
+            f.close();
+            return f.fileName();
+        };
+        CaseManager cm;
+        QString err;
+        CaseMeta meta;
+        meta.caseNo = QStringLiteral("20260813-多机-a");
+        meta.title = QStringLiteral("多机");
+        CHECK(cm.createCase(root.path(), meta, &err), "cam: createCase");
+        const QString idA = cm.addVideo(mkVideo("a.mp4", QByteArray(1000, 'a')), &err);
+        const QString idB = cm.addVideo(mkVideo("b.mp4", QByteArray(1000, 'b')), &err);
+        const QString idC = cm.addVideo(mkVideo("c.mp4", QByteArray(1000, 'c')), &err);
+        CHECK(!idA.isEmpty() && !idB.isEmpty() && !idC.isEmpty(),
+              "cam: videos added");
+        CHECK(cm.calibratedVideoCount() == 0, "cam: none calibrated initially");
+
+        // A/B 写案内 .vla（校时 + 分析数据）；C 不写（未校时跳过）
+        // A: offset=T0, 数据 0..60000 → 墙钟 [T0, T0+60s]
+        // B: offset=T0+45000, 数据 0..90000 → 与 A 重叠 15s
+        const qint64 T0 = 1755000000000LL;
+        {
+            TimelineModel m;
+            TimeCalibration cal;
+            cal.source = TimeCalibration::Source::Ocr;
+            cal.offsetMs = T0;
+            cal.rate = 1.0;
+            m.setData({0, 30000, 60000}, {{0.1, 0.2, 0.3}}, AudioData());
+            CHECK(m.saveToFile(cm.caseDir() + QStringLiteral("/videos/")
+                               + idA + QStringLiteral(".vla"), {}, cal, {}),
+                  "cam: vla A saved");
+        }
+        {
+            TimelineModel m;
+            TimeCalibration cal;
+            cal.source = TimeCalibration::Source::Manual;
+            cal.offsetMs = T0 + 45000;
+            m.setData({0, 90000}, {{0.5, 0.6}}, AudioData());
+            CHECK(m.saveToFile(cm.caseDir() + QStringLiteral("/videos/")
+                               + idB + QStringLiteral(".vla"), {}, cal, {}),
+                  "cam: vla B saved");
+        }
+        // 徽标缓存（calibratedVideoCount 口径）
+        cm.updateCalibrationBadge(cm.videoById(idA)->originalPath, true,
+                                  QStringLiteral("OCR 3点"));
+        cm.updateCalibrationBadge(cm.videoById(idB)->originalPath, true,
+                                  QStringLiteral("手动"));
+        CHECK(cm.calibratedVideoCount() == 2, "cam: badge count 2");
+
+        const auto lanes = buildCamLanes(cm.caseDir(), cm.meta().videos);
+        CHECK(lanes.size() == 2, "cam: uncalibrated C skipped");
+        if (lanes.size() == 2) {
+            CHECK(lanes[0].videoId == idA, "cam: sorted by wall start");
+            CHECK(lanes[0].wallStartMs == T0, "cam: A wall start = offset");
+            CHECK(lanes[0].wallEndMs == T0 + 60000, "cam: A wall end");
+            CHECK(lanes[0].streamDurationMs == 60000, "cam: A stream span");
+            CHECK(lanes[1].wallStartMs == T0 + 45000, "cam: B wall start");
+            CHECK(lanes[1].wallEndMs == T0 + 135000, "cam: B wall end");
+            // 重叠窗口 [T0+45s, T0+60s] 可由条目推出（视图扫掠的数据基础）
+            CHECK(lanes[1].wallStartMs < lanes[0].wallEndMs,
+                  "cam: overlap derivable");
+            CHECK(!lanes[0].calibrationSummary.isEmpty(),
+                  "cam: summary carried");
         }
         cm.closeCase();
     }

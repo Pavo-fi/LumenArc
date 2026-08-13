@@ -122,6 +122,9 @@ public:
     /// 均无→返回 originalPath（缺失语义由调用方按 exists 判）。
     QString effectivePathFor(const CaseVideoRef &v) const;
 
+    /// 已校时视频数（徽标缓存口径；多机视图 <2 路置灰用，M3 任务14）
+    int calibratedVideoCount() const;
+
     // ---- 路径分流（双模式核心）----
     /// 入案视频 → <案件>/videos/V###.vla；未入案/无案件 → 视频路径+".vla"
     QString vlaPathFor(const QString &videoPath) const;

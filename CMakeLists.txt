@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(LumenArc VERSION 1.2.2 LANGUAGES CXX)
+project(LumenArc VERSION 1.3.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -91,6 +91,8 @@ set(SOURCES
     src/casedock.cpp
     src/casedialogs.cpp
     src/startpagewidget.cpp
+    src/multicamview.cpp
+    src/app/cam_timeline.cpp
     src/app/preprocessing_coordinator.cpp
     src/app/calibration_service.cpp
     src/timesettingsdialog.cpp
@@ -145,6 +147,8 @@ set(HEADERS
     src/casedock.h
     src/casedialogs.h
     src/startpagewidget.h
+    src/multicamview.h
+    src/app/cam_timeline.h
     src/app/preprocessing_coordinator.h
     src/app/calibration_service.h
     src/timesettingsdialog.h
@@ -317,6 +321,10 @@ add_executable(lumenarc_case_test
     src/domain/case_model.cpp
     src/app/case_manager.cpp
     src/videostatemanager.cpp   # M3 任务13：migrateKey 键迁移测试
+    src/app/cam_timeline.cpp    # M3 任务14：buildCamLanes 装配测试
+    src/domain/timeline_model.cpp
+    src/domain/time_calibration.cpp
+    src/domain/time_piecewise.cpp
 )
 target_include_directories(lumenarc_case_test PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src
@@ -386,8 +394,8 @@ elseif(APPLE)
         MACOSX_BUNDLE TRUE
         MACOSX_BUNDLE_INFO_PLIST "${CMAKE_CURRENT_SOURCE_DIR}/src/Info.plist"
         MACOSX_BUNDLE_BUNDLE_NAME "LumenArc"
-        MACOSX_BUNDLE_BUNDLE_VERSION "1.2.2"
-        MACOSX_BUNDLE_SHORT_VERSION_STRING "1.2.2"
+        MACOSX_BUNDLE_BUNDLE_VERSION "1.3.0"
+        MACOSX_BUNDLE_SHORT_VERSION_STRING "1.3.0"
         MACOSX_BUNDLE_GUI_IDENTIFIER "com.firetech.lumenarc"
     )
 else()

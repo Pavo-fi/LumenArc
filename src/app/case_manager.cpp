@@ -503,6 +503,17 @@ QString CaseManager::effectivePathFor(const CaseVideoRef &v) const
     return v.originalPath;   // 缺失：原路径返回，调用方按 exists 判
 }
 
+int CaseManager::calibratedVideoCount() const
+{
+    if (!m_open)
+        return 0;
+    int n = 0;
+    for (const auto &v : m_meta.videos)
+        if (v.hasCalibration)
+            ++n;
+    return n;
+}
+
 // ---------------------------------------------------------------------------
 // 路径分流
 // ---------------------------------------------------------------------------

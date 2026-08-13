@@ -1402,7 +1402,7 @@ Info.plist 两项（原滞留 1.1.1）→ 1.2.2。
 
 ---
 
-## 二十三、v1.3.0 案件模块实施记录（2026-08-13 开工，M1/M2 完成，M3 任务12/13 完成）
+## 二十三、v1.3.0 案件模块实施记录（2026-08-13 开工，M1/M2/M3 全部完成，已封版）
 
 ### 23.0 施工依据
 
@@ -1414,7 +1414,7 @@ Info.plist 两项（原滞留 1.1.1）→ 1.2.2。
   通过为准绳）；取证红线（源视频只读、重定位只改引用）；per-video
   membership（视频是否在案决定其行为，非全局开关）。
 - **里程碑**：M1 domain+app 层（5 任务）✅ → M2 挂接+主 UI（6 任务）✅ →
-  M3 移交+多机视图+封版（任务 12/13 ✅，余 14/15）。
+  M3 移交+多机视图+封版（任务 12-15 全部 ✅，v1.3.0 已封版打标）。
 
 ### 23.1 M1 完成内容（commits `7a5e355` + `0e6eb90`）
 
@@ -1497,11 +1497,9 @@ Info.plist 两项（原滞留 1.1.1）→ 1.2.2。
 
 12 导出移交包（完整包默认/轻量可选；导前自检；空间预检；后台可取消+半成品
 清理；sources/+包内 case.json+manifest+导后快校；README.txt）✅（`415ef0c`）
-→ 13 批量重新定位 ✅（见 §23.8）→ 14 多机
-时间线对齐视图（只读；复用 ClipTimelineWidget；末位可砍）→ 15 文档与封版
-（MANUAL 新章/README/手工点检清单；全回归；版本号 1.3.0 五处；打标签）。
-**手工矩阵（§4.3）待实机跑**：新建→加 3 视频(含中文路径)→校时→框选记忆随案
-→关案重开现场全恢复→删源视频重开(重定位)→双模式逐点比对。
+→ 13 批量重新定位 ✅（见 §23.8）→ 14 多机时间线对齐视图 ✅（见 §23.9）→
+15 文档与封版 ✅（见 §23.10）。
+**手工矩阵（§4.3）待实机跑**：`docs/RELEASE_CHECKLIST_V1.3_CN.md`（A-H 八组）。
 
 ### 23.8 M3 任务 13 完成内容（批量重新定位）
 
@@ -1527,3 +1525,40 @@ manager 层 size 守卫对同尺寸异内容不拦——**勿把指纹比对下�
 | **lumenarc_case_test** | **213/213**（新增组 13：匹配分级/存在源跳过/computeSha256 正确性+abort/knownSha 直接登记免重算/videoRelocated 信号/同尺寸异内容 force 採用+留档/migrateKey 迁移+幂等） |
 | 既有回归 | calibration 73 / piecewise 96 / preprocess 168 / ui_chain 23 / ocr_atpositions 21 / vla 3×PASS 零修改全绿 |
 | 离屏冒烟 | LumenArc.exe offscreen 启动 10s 无崩溃 |
+
+### 23.9 M3 任务 14 完成内容（多机时间线对齐只读视图）
+
+| 交付 | 内容 |
+|---|---|
+| 数据装配（app 层） | `app/cam_timeline.{h,cpp}`：`buildCamLanes(caseDir, videos)` 逐已校时视频读案内 .vla（校时 SSOT）→ `wallMsOf(0)/wallMsOf(maxStream)` 墙钟块位；未校时/.vla 缺失/无分析数据跳过；按墙钟起点升序 |
+| 只读视图（ui 层） | `multicamview.{h,cpp}`：一机位一行，块位=墙钟、宽∝已分析时长；**覆盖率扫掠**——≥2 机位同覆红色叠加带、零覆盖灰纹缺口带（跨行竖带+时长标签）；刻度首标签含日期（≥1 天跨度切 MM-dd）；DataPalette 逐行着色；悬停 tooltip（墙钟起止/时长/校时徽标）；双击块发 laneActivated（只读，仅供打开） |
+| 置灰 | `CaseManager::calibratedVideoCount()`（徽标缓存口径）；案件菜单 aboutToShow 动态判定 <2 路已校时置灰；对话框内单路兜底提示 |
+| 入口 | 案件菜单「多机时间线(&M)...」；MainWindow 接 laneActivated → effectivePathFor 打开该路（包内副本兼底命中） |
+
+实施固化：① 装配与视图分层——`buildCamLanes` 纯函数可测（case_test 组 14），
+视图只消费结构不碰 IO；② 块位宽度数据源是 **.vla 已分析最大流内时刻**
+（方案口径"各路 .vla 校时→墙钟块位"，不依赖源视频在场，轻量包/缺源场景
+可用）；③ 画法参数与 ClipTimelineWidget 对齐（容差 2000ms/刻度步进表/
+fmtSpan 时长串），多机语义差异：重叠=互为印证（≥2 同覆）、缺口=零覆盖。
+
+#### 测试状态（任务 14）
+
+| 测试 | 结果 |
+|---|---|
+| **lumenarc_case_test** | **228/228**（新增组 14：未校时跳过/徽标计数/排序/墙钟起止/重叠可推出/徽标文案携带；.vla 真实 saveToFile→loadFromFile 往返） |
+| 既有回归 | 零修改全绿 |
+
+### 23.10 M3 任务 15 完成内容（文档与封版）
+
+| 项 | 内容 |
+|---|---|
+| MANUAL | 新增「十四、案件管理（v1.3）」：何时用/新建打开/证据树徽标表/入案行为/前处理导入/指纹校验/单路+批量重定位/移交包/多机视图/模式出口+取证红线；快捷键表补 Ctrl+W；标题 v1.2→v1.3 |
+| README | 功能表补「案件管理（v1.3）」行；快捷键表补 Ctrl+W |
+| 手工点检清单 | `docs/RELEASE_CHECKLIST_V1.3_CN.md`：A 生命周期/B 入案随案/C 指纹校验/D 重定位/E 移交包/F 多机视图/G 双模式逐点比对/H 封版确认（§4.3 手工矩阵全展开，待实机跑） |
+| 版本号 1.3.0 | CMakeLists project(VERSION)+MACOSX 两项 / aboutdialog / app.rc 两项（实测属性 1.3.0.0）/ Info.plist 两项；**附带回追修正**：主窗标题 7 处滞留 v1.1.1 → v1.3.0（v1.2.2 封版漏改项） |
+| 全回归 | case_test 228 / calibration 73 / piecewise 96 / preprocess 168 / ui_chain 23 / ocr_atpositions 21 / vla 3×PASS 全绿；LumenArc.exe offscreen 10s 无崩溃 |
+| 打标签 | `v1.3.0` |
+
+**遗留（v1.4.0 视野）**：⚠ 错读点"OSD 疑似错读，时间不可信"随报告标注
+（v1.2.2 挂账项）；报告模块（CaseMeta 头部/强制哈希清单/reports 登记位/
+多机视图截屏入报告）；手工矩阵 A-H 实机跑。
