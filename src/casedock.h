@@ -17,11 +17,14 @@
 #pragma once
 
 #include <QDockWidget>
+#include <QSet>
 #include <QString>
 
 class QTreeWidget;
 class QTreeWidgetItem;
 class QLabel;
+class QPushButton;
+class QTimer;
 class CaseManager;
 struct CaseVideoRef;
 
@@ -47,6 +50,8 @@ protected:
 private slots:
     void onItemDoubleClicked(QTreeWidgetItem *item, int column);
     void onContextMenu(const QPoint &pos);
+    void onSelectionChanged();
+    void onWatchTimer();      // 外部文件变动轮询（资源管理器删除/改名）
 
 private:
     QTreeWidgetItem *addGroup(const QString &text);
@@ -58,10 +63,16 @@ private:
     QString hashBadge(const CaseVideoRef &v, QString *tooltip,
                       QColor *color) const;
     void relocateVideo(const QString &id);
+    void deleteVideoFile(const QString &id);   // 删除源文件+案内数据（2026-08）
+    /// 案内引用文件存在性快照（外部变更检测用）
+    QSet<QString> buildSnapshot() const;
     void removeVideo(const QString &id);
     void showInExplorer(const QString &path) const;
 
     CaseManager *m_caseManager = nullptr;   // 不持有（SSOT 在 MainWindow）
     QTreeWidget *m_tree = nullptr;
     QLabel *m_titleLabel = nullptr;
+    QPushButton *m_btnDelete = nullptr;     // 删除选中视频（2026-08）
+    QTimer *m_watchTimer = nullptr;         // 外部变更轮询（2026-08）
+    QSet<QString> m_snapshot;               // 案内引用文件存在性快照
 };

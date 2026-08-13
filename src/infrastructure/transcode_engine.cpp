@@ -68,13 +68,24 @@ QStringList TranscodeEngine::buildArgs(const TranscodeRequest &req,
         args << QStringLiteral("-g") << QString::number(req.keyframeInterval)
              << QStringLiteral("-keyint_min") << QString::number(req.keyframeInterval);
     }
-    // 音频统一重编码（不再直拷）：重编码 PTS 天然从 0 起 + asetpts 显式
-    // 归零，消除 concat 音频时间戳错位隐患（音画不同步）
-    args << QStringLiteral("-af") << QStringLiteral("asetpts=PTS-STARTPTS")
-         << QStringLiteral("-c:a") << QStringLiteral("aac")
-         << QStringLiteral("-b:a") << QStringLiteral("128k")
-         << QStringLiteral("-ac") << QStringLiteral("2")
-         << QStringLiteral("-ar") << QStringLiteral("48000");
+    // 音频：原音轨为 AAC 时直拷（保留原始数据层级，零损失——2026-08
+    // 人工反馈：统一重编码可能丢监控音频特征）；否则 aac 重编码且
+    // 保留原采样率/声道，asetpts 归零时间戳
+    if (req.copyAudio) {
+        args << QStringLiteral("-c:a") << QStringLiteral("copy");
+    } else {
+        args << QStringLiteral("-af") << QStringLiteral("asetpts=PTS-STARTPTS")
+             << QStringLiteral("-c:a") << QStringLiteral("aac")
+             << QStringLiteral("-b:a") << QStringLiteral("128k");
+        if (req.audioSampleRate > 0)
+            args << QStringLiteral("-ar") << QString::number(req.audioSampleRate);
+        if (req.audioChannels > 0)
+            args << QStringLiteral("-ac") << QString::number(req.audioChannels);
+        if (req.audioSampleRate <= 0)
+            args << QStringLiteral("-ar") << QStringLiteral("48000");
+        if (req.audioChannels <= 0)
+            args << QStringLiteral("-ac") << QStringLiteral("2");
+    }
     args << QStringLiteral("-movflags") << QStringLiteral("+faststart")
          << QStringLiteral("-avoid_negative_ts") << QStringLiteral("make_zero")
          << QStringLiteral("-f") << QStringLiteral("mp4")

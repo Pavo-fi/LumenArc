@@ -185,6 +185,7 @@ void PreprocessingCoordinator::begin(const QStringList &files)
     m_groups.clear();
     m_prechecks.clear();
     m_channelOverrides.clear();
+    m_groupCopyAudio.clear();   // 音频直拷组级策略（2026-08）
     m_transcodeQueue.clear();
     m_transcoded.clear();
     m_transcodeFailed.clear();
@@ -517,6 +518,33 @@ void PreprocessingCoordinator::startProcessing(const ProcessingOptions &opts)
             ordered.append(m_probes.value(e.filePath));
         needTxCount += filesNeedingTranscode(ordered).size();
     }
+    // 组级音频策略（2026-08）：组内全部 AAC 且参数一致 → 直拷保留原始
+    // 数据层级；有异参（concat demuxer 会丢后续异参音轨）或非 AAC →
+    // 整组重编码（保留组内首个参数档）
+    for (const auto &g : m_groups) {
+        bool uniform = true;
+        const ProbeResult *first = nullptr;
+        for (const auto &e : g.ordered) {
+            const ProbeResult &p = m_probes.value(e.filePath);
+            if (!p.ok())
+                continue;
+            if (!first) {
+                first = &p;
+            } else if (p.audioCodec != first->audioCodec
+                       || p.audioSampleRate != first->audioSampleRate
+                       || p.audioChannels != first->audioChannels) {
+                uniform = false;
+                break;
+            }
+        }
+        const bool copy = uniform && first && first->audioStreams > 0
+            && first->audioCodec == QLatin1String("aac");
+        m_groupCopyAudio.insert(g.channel, copy);
+        if (first && !copy && first->audioStreams > 0)
+            log(QStringLiteral("[%1] 组「%2」音频参数不统一或非 AAC，整组重编码"
+                               "（避免拼接丢失异参音轨）")
+                    .arg(tsLog(), g.channel));
+    }
     const bool anyTranscode = needTxCount > 0;
     const qint64 estimate = qint64(inputBytes * (anyTranscode ? 1.2 : 1.05));
     const QStorageInfo storage(m_outputDir);
@@ -610,11 +638,26 @@ void PreprocessingCoordinator::startNextTranscode()
     // 隔行源 → 默认反交错（探测驱动，可配置关闭）
     const ProbeResult p = m_probes.value(m_currentTranscode);
     req.deinterlace = m_opts.deinterlace && p.fieldOrder > 1;  // 1=progressive
-    log(QStringLiteral("[%1] 转码开始：%2 → %3%4")
+    // 音频：组内全部 AAC 同参 → 直拷保留原始数据层级（2026-08 人工反馈）；
+    // 否则整组重编码且保留组内首个参数档
+    const QString ch = [&]() {
+        for (const auto &g : m_groups)
+            for (const auto &e : g.ordered)
+                if (e.filePath == m_currentTranscode)
+                    return g.channel;
+        return QString();
+    }();
+    req.copyAudio = m_groupCopyAudio.value(ch, false);
+    req.audioSampleRate = p.audioSampleRate.toInt();
+    req.audioChannels = p.audioChannels.toInt();
+    log(QStringLiteral("[%1] 转码开始：%2 → %3%4%5")
             .arg(tsLog(), req.input, req.output)
             .arg(m_unifiedFps > 0.0f
                      ? QStringLiteral("（统一 %1fps）").arg(m_unifiedFps)
-                     : QString()));
+                     : QString())
+            .arg(req.copyAudio
+                     ? QStringLiteral("，音频直拷 %1").arg(p.audioCodec)
+                     : QStringLiteral("，音频重编码 aac")));
     m_transcodeEngine->run(req);
 }
 

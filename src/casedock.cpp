@@ -17,6 +17,7 @@
 #include <QCloseEvent>
 #include <QDesktopServices>
 #include <QDir>
+#include <QFile>
 #include <QFileDialog>
 #include <QFileInfo>
 #include <QLabel>
@@ -24,6 +25,7 @@
 #include <QMessageBox>
 #include <QProcess>
 #include <QPushButton>
+#include <QTimer>
 #include <QTreeWidget>
 #include <QUrl>
 #include <QVBoxLayout>
@@ -61,6 +63,24 @@ CaseDock::CaseDock(CaseManager *cm, QWidget *parent)
     m_titleLabel->setWordWrap(true);
     lay->addWidget(m_titleLabel);
 
+    // 操作行：删除选中视频 + 手动刷新（2026-08 人工反馈：误入视频需显式
+    // 删除入口；外部删除文件后需刷新反映）
+    auto *btnRow = new QHBoxLayout();
+    btnRow->setContentsMargins(0, 0, 0, 0);
+    m_btnDelete = new QPushButton(lang("🗑 删除选中", "🗑 Delete selected"), host);
+    m_btnDelete->setEnabled(false);
+    m_btnDelete->setToolTip(lang(
+        "删除选中的视频：源文件 + 案内数据一并删除（不可恢复；包内副本保留）",
+        "Delete selected video: source file + in-case data (irreversible; "
+        "bundled copy kept)"));
+    auto *btnRefresh = new QPushButton(lang("🔄 刷新", "🔄 Refresh"), host);
+    btnRefresh->setToolTip(lang("重新扫描案件目录文件状态",
+                                "Re-scan case files"));
+    btnRow->addWidget(m_btnDelete);
+    btnRow->addStretch(1);
+    btnRow->addWidget(btnRefresh);
+    lay->addLayout(btnRow);
+
     m_tree = new QTreeWidget(host);
     m_tree->setHeaderHidden(true);
     m_tree->setContextMenuPolicy(Qt::CustomContextMenu);
@@ -75,6 +95,23 @@ CaseDock::CaseDock(CaseManager *cm, QWidget *parent)
             this, &CaseDock::onItemDoubleClicked);
     connect(m_tree, &QTreeWidget::customContextMenuRequested,
             this, &CaseDock::onContextMenu);
+    connect(m_tree, &QTreeWidget::itemSelectionChanged,
+            this, &CaseDock::onSelectionChanged);
+    connect(m_btnDelete, &QPushButton::clicked, this, [this]() {
+        auto *it = m_tree->currentItem();
+        if (it && it->data(0, kRoleKind).toString() == QLatin1String("video"))
+            deleteVideoFile(it->data(0, kRoleId).toString());
+    });
+    connect(btnRefresh, &QPushButton::clicked, this, [this]() {
+        refreshTree();
+        m_snapshot = buildSnapshot();
+    });
+    // 外部文件变动轮询（资源管理器删除/改名 → 自动刷新；2s 轻量存在性检查）
+    m_watchTimer = new QTimer(this);
+    m_watchTimer->setInterval(2000);
+    connect(m_watchTimer, &QTimer::timeout, this, &CaseDock::onWatchTimer);
+    m_watchTimer->start();
+    m_snapshot = buildSnapshot();
 }
 
 void CaseDock::closeEvent(QCloseEvent *event)
@@ -309,6 +346,88 @@ void CaseDock::removeVideo(const QString &id)
     refreshTree();
 }
 
+void CaseDock::deleteVideoFile(const QString &id)
+{
+    // 删除源文件 + 案内数据（2026-08 人工反馈：误入/不需要的视频需显式
+    // 删除入口）。包内副本（📦）不删，保护完整包取证完整性。
+    const auto *v = m_caseManager->videoById(id);
+    if (!v)
+        return;
+    const QString eff = m_caseManager->effectivePathFor(*v);
+    const QString target = (eff != v->originalPath)
+        ? v->originalPath   // 包内副本场景：只删原路径（若存在），副本保留
+        : eff;
+    QMessageBox box(this);
+    box.setWindowTitle(lang("删除视频文件", "Delete video file"));
+    box.setIcon(QMessageBox::Warning);
+    box.setText(lang(
+        "将删除视频「%1」：\n源文件：%2\n案内数据（.vla 分析/校时证据帧）\n\n"
+        "此操作不可恢复！包内副本（如有）保留。",
+        "Delete video “%1”:\nsource: %2\nin-case data (.vla / calibration)\n\n"
+        "This cannot be undone! Bundled copy (if any) is kept.")
+        .arg(id, target));
+    QAbstractButton *btnDel = box.addButton(
+        lang("删除", "Delete"), QMessageBox::DestructiveRole);
+    box.addButton(lang("取消", "Cancel"), QMessageBox::RejectRole);
+    box.exec();
+    if (box.clickedButton() != btnDel)
+        return;
+    QString err;
+    if (QFileInfo::exists(target))
+        QFile::remove(target);
+    if (!m_caseManager->removeVideo(id, true, &err)) {
+        QMessageBox::warning(this, lang("删除失败", "Delete failed"), err);
+        refreshTree();
+        return;
+    }
+    QString saveErr;
+    m_caseManager->saveCase(&saveErr);
+    refreshTree();
+}
+
+QSet<QString> CaseDock::buildSnapshot() const
+{
+    // 案内引用文件存在性快照（外部变更检测；文件数少，2s 轮询开销可忽略）
+    QSet<QString> snap;
+    if (!m_caseManager || !m_caseManager->isOpen())
+        return snap;
+    const QDir caseDir(m_caseManager->caseDir());
+    for (const auto &v : m_caseManager->meta().videos) {
+        snap.insert(v.originalPath);
+        snap.insert(m_caseManager->effectivePathFor(v));
+    }
+    for (const auto &p : m_caseManager->meta().preprocessSessions) {
+        snap.insert(caseDir.absoluteFilePath(p.sessionDirRelPath));
+        for (const auto &o : p.outputRefs)
+            snap.insert(o.originalPath);
+        for (const QString &sc : p.sidecarRelPaths)
+            snap.insert(caseDir.absoluteFilePath(sc));
+    }
+    for (const QString &r : m_caseManager->meta().reports)
+        snap.insert(caseDir.absoluteFilePath(r));
+    return snap;
+}
+
+void CaseDock::onWatchTimer()
+{
+    if (!isVisible() || !m_caseManager || !m_caseManager->isOpen())
+        return;
+    const QSet<QString> now = buildSnapshot();
+    if (now != m_snapshot) {
+        m_snapshot = now;
+        refreshTree();
+    }
+}
+
+void CaseDock::onSelectionChanged()
+{
+    const auto *it = m_tree->currentItem();
+    const bool video = it
+        && it->data(0, kRoleKind).toString() == QLatin1String("video");
+    if (m_btnDelete)
+        m_btnDelete->setEnabled(video);
+}
+
 void CaseDock::onContextMenu(const QPoint &pos)
 {
     auto *item = m_tree->itemAt(pos);
@@ -338,6 +457,8 @@ void CaseDock::onContextMenu(const QPoint &pos)
                        });
         menu.addAction(lang("移除出案件…", "Remove from case…"), this,
                        [this, id]() { removeVideo(id); });
+        menu.addAction(lang("删除视频文件（含源文件）…", "Delete video file…"), this,
+                       [this, id]() { deleteVideoFile(id); });
         menu.addSeparator();
         menu.addAction(lang("计算指纹", "Compute fingerprint"), this,
                        [this, id]() {

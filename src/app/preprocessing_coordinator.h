@@ -122,6 +122,7 @@ private:
     QStringList m_files;
     QMap<QString, ProbeResult> m_probes;
     float m_unifiedFps = 0.0f;                  // 统一 CFR 帧率（多段帧率不一时取全局最大 avg，2026-08）
+    QMap<QString, bool> m_groupCopyAudio;       // 组→音频直拷标志（组内 AAC 同参才直拷，2026-08）
     QMap<QString, OcrResult> m_ocrs;
     QVector<SortGroup> m_groups;
     QMap<QString, PrecheckResult> m_prechecks;
