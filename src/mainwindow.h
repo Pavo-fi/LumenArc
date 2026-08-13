@@ -31,6 +31,7 @@ class IAnalysisEngine;
 class CalibrationService;
 class CaseManager;
 class CaseDock;
+class CaseOpenPanel;
 class RegionModel;
 class PolygonModel;
 class GuideLineModel;
@@ -127,6 +128,8 @@ private:
     void onNewCase();
     /// @brief 打开案件（浏览目录）
     void onOpenCase();
+    void onOpenCaseBrowse();              // 面板内「浏览」→ 系统目录选择（2026-08）
+    void centerCaseOpenPanel();           // 面板居中于内容区（2026-08）
     /// @brief 打开案件流程（锁冲突提示 force / 警告展示 / 错误报告）
     void openCaseFlow(const QString &dir);
     /// @brief 案件属性对话框
@@ -171,6 +174,7 @@ protected:
     void dropEvent(QDropEvent *event) override;
     void keyReleaseEvent(QKeyEvent *event) override;
     void closeEvent(QCloseEvent *event) override;
+    void resizeEvent(QResizeEvent *event) override;   // 打开面板居中（2026-08）
     bool eventFilter(QObject *watched, QEvent *event) override;
 
     VideoWidget *m_videoWidget = nullptr;
@@ -186,6 +190,7 @@ protected:
     /// 无打开案件或未入案视频时全部回落独立模式老路径（v1.2.2 逐点一致）
     CaseManager *m_caseManager = nullptr;
     CaseDock *m_caseDock = nullptr;          ///< 案件面板（任务10，仅案件模式可见）
+    CaseOpenPanel *m_caseOpenPanel = nullptr; ///< 打开案件面板（2026-08，页面内居中）
     QPushButton *m_caseStatusBtn = nullptr;  ///< 状态栏📁标识（点击=退出案件模式）
     QAction *m_closeCaseAction = nullptr;    ///< 菜单「关闭案件」(Ctrl+W)
     QAction *m_casePropsAction = nullptr;    ///< 菜单「案件属性」

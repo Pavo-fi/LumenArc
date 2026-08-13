@@ -89,6 +89,7 @@ set(SOURCES
     src/domain/case_model.cpp
     src/app/case_manager.cpp
     src/casedock.cpp
+    src/app/case_open_panel.cpp
     src/casedialogs.cpp
     src/startpagewidget.cpp
     src/multicamview.cpp

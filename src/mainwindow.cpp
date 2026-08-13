@@ -21,6 +21,7 @@
 #include "infrastructure/python_analysis_engine.h"
 #include "app/calibration_service.h"
 #include "app/case_manager.h"
+#include "app/case_open_panel.h"
 #include "casedock.h"
 #include "casedialogs.h"
 #include "multicamview.h"
@@ -521,6 +522,17 @@ MainWindow::MainWindow(QWidget *parent)
             this, &MainWindow::openVideoFile);
     connect(m_caseDock, &CaseDock::closeCaseRequested,
             this, &MainWindow::closeCaseWithPrompt);
+    // 案件打开面板（Blender 式页面内居中，2026-08 人工反馈：不弹窗）
+    m_caseOpenPanel = new CaseOpenPanel(m_caseManager, this);
+    m_caseOpenPanel->hide();
+    connect(m_caseOpenPanel, &CaseOpenPanel::openCaseRequested,
+            this, &MainWindow::openCaseFlow);
+    connect(m_caseOpenPanel, &CaseOpenPanel::browseRequested,
+            this, &MainWindow::onOpenCaseBrowse);
+    connect(m_caseOpenPanel, &CaseOpenPanel::newCaseRequested,
+            this, [this]() { onNewCase(); });
+    connect(m_caseOpenPanel, &CaseOpenPanel::closeRequested,
+            this, [this]() { m_caseOpenPanel->hide(); });
     connect(m_caseManager, &CaseManager::caseOpened,
             this, &MainWindow::enterCaseMode);
     connect(m_caseManager, &CaseManager::caseClosed,
@@ -1804,11 +1816,41 @@ void MainWindow::onNewCase()
 
 void MainWindow::onOpenCase()
 {
+    // 页面内居中面板（Blender 式，2026-08 人工反馈：不弹窗打开案件）
+    if (!m_caseOpenPanel)
+        return;
+    centerCaseOpenPanel();
+    m_caseOpenPanel->refresh();
+    m_caseOpenPanel->show();
+    m_caseOpenPanel->raise();
+    m_caseOpenPanel->activateWindow();
+}
+
+void MainWindow::onOpenCaseBrowse()
+{
     const QString dir = QFileDialog::getExistingDirectory(this,
         lang("打开案件（选择案件目录）", "Open Case (choose case folder)"),
         CaseManager::caseRootDir());
-    if (!dir.isEmpty())
+    if (!dir.isEmpty()) {
+        m_caseOpenPanel->hide();
         openCaseFlow(dir);
+    }
+}
+
+void MainWindow::centerCaseOpenPanel()
+{
+    if (!m_caseOpenPanel || !centralWidget())
+        return;
+    // 以内容区为基准居中（dock/工具栏之外）
+    const QRect r = centralWidget()->rect();
+    m_caseOpenPanel->move(r.center() - m_caseOpenPanel->rect().center());
+}
+
+void MainWindow::resizeEvent(QResizeEvent *event)
+{
+    QMainWindow::resizeEvent(event);
+    if (m_caseOpenPanel && m_caseOpenPanel->isVisible())
+        centerCaseOpenPanel();
 }
 
 void MainWindow::openCaseFlow(const QString &dir)
@@ -1844,6 +1886,8 @@ void MainWindow::openCaseFlow(const QString &dir)
                               err);
         return;
     }
+    if (m_caseOpenPanel)
+        m_caseOpenPanel->hide();
     if (!warnings.isEmpty())
         showOperationStatus(warnings.join(QStringLiteral("；")));
     // caseOpened 信号 → enterCaseMode 自动

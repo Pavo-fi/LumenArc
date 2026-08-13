@@ -303,6 +303,25 @@ int main(int argc, char **argv)
             // force open 会重建锁；主 cm 稍后 closeCase 清自己那份
         }
 
+        // 残留锁自动清理（2026-08）：持有者 PID 已死 → 静默接管不弹窗
+        {
+            const QString lockPath = cdir + "/case.json.lock";
+            QFile lf(lockPath);   // 前块 force-open 已删锁；自建模拟残留
+            CHECK(lf.open(QIODevice::WriteOnly | QIODevice::Truncate),
+                  "overwrite lock with dead pid");
+            lf.write("pid=99999999 time=0");   // 不存在的进程
+            lf.close();
+            CaseManager other2;
+            QString err2;
+            bool conflict = false;
+            CHECK(other2.openCase(cdir, &err2, nullptr, &conflict),
+                  "stale lock auto-cleared, open ok");
+            CHECK(!conflict, "stale lock not reported as conflict");
+            other2.closeCase();
+            // 锁已被 other2 重建为当前进程 pid 再移除；主 cm 仍持有案件
+            // （内存态），349 行 closeCase 时 removeLock 幂等无害
+        }
+
         // 添加视频
         const QString id1 = cm.addVideo(vid1, &err);
         CHECK(id1 == "V001", "addVideo → V001");

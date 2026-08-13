@@ -10,6 +10,8 @@
  */
 #include "case_manager.h"
 
+#include <windows.h>   // OpenProcess（锁残留检测，2026-08）
+
 #include <QCoreApplication>
 #include <QCryptographicHash>
 #include <QDateTime>
@@ -143,10 +145,17 @@ bool CaseManager::openCase(const QString &dir, QString *error,
     const QString lockPath = QDir(dir).filePath(
         QString::fromLatin1(CaseModel::kLockName));
     if (QFile::exists(lockPath) && !force) {
-        if (lockConflict) *lockConflict = true;
-        if (error)
-            *error = QStringLiteral("案件已被其他实例打开，或上次未正常关闭");
-        return false;
+        // 残留锁自动清理（2026-08 人工反馈：每次打开都弹「强制打开」）。
+        // 锁内含 pid：持有者进程已不存在 → 上次未正常关闭的残留，
+        // 自动接管不打扰；进程仍在 → 真双开冲突才交由 UI 决策。
+        if (isLockStale(lockPath)) {
+            QFile::remove(lockPath);
+        } else {
+            if (lockConflict) *lockConflict = true;
+            if (error)
+                *error = QStringLiteral("案件已被其他实例打开");
+            return false;
+        }
     }
     CaseMeta meta;
     if (!CaseModel::load(dir, meta, error, warnings))
@@ -212,6 +221,31 @@ bool CaseManager::createLock(QString *error)
                 .arg(QDateTime::currentMSecsSinceEpoch())
                 .toUtf8());
     return true;
+}
+
+bool CaseManager::isLockStale(const QString &lockPath)
+{
+    // 锁内容 pid=<PID>：进程已不存在 → 残留锁。
+    // 解析失败/无 pid 也视为残留（旧格式或半写锁）。
+    QFile f(lockPath);
+    if (!f.open(QIODevice::ReadOnly))
+        return false;
+    const QByteArray data = f.readAll();
+    qint64 pid = -1;
+    const int p = data.indexOf("pid=");
+    if (p >= 0) {
+        const QByteArray rest = data.mid(p + 4);
+        const int sp = rest.indexOf(' ');
+        pid = (sp > 0 ? rest.left(sp) : rest).toLongLong();
+    }
+    if (pid <= 0)
+        return true;
+    HANDLE h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE,
+                           DWORD(pid));
+    if (!h)
+        return true;   // 进程不存在或无权访问 → 残留
+    CloseHandle(h);
+    return false;
 }
 
 void CaseManager::removeLock()

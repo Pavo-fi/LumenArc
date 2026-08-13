@@ -221,6 +221,7 @@ private:
     void pushRecent(const QString &dir);
     bool createLock(QString *error);
     void removeLock();
+    static bool isLockStale(const QString &lockPath);   ///< 持有者进程已死 = 残留（2026-08）
     static QString caseDirName(const CaseMeta &meta);
     void queueVideoHash(const QString &id);   ///< 单路入队（内部）
 
