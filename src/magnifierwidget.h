@@ -69,6 +69,12 @@ public:
     void setInvertPan(bool invert) { m_invertPan = invert; }
     bool isinvertPan() const { return m_invertPan; }
 
+    /// 显示旋转（Q1 方案 A）：放大视图随主画面一起转。
+    /// 源区域/光标/内部 overlay 仍全部工作在【原视频系】（内部逻辑不动），
+    /// 仅在 ContentWidget 显示前把裁剪图旋转；内部 overlay 由双向映射保证。
+    void setDisplayRotation(int degrees);
+    int displayRotation() const { return m_displayRotation; }
+
 private slots:
     void onInternalOverlayWheelZoom(int delta, QPoint videoPos);
 
@@ -91,6 +97,7 @@ private:
     int m_snapshotContrast = 0;
     int m_snapshotOpacity = 0;
     bool m_invertPan = false;
+    int m_displayRotation = 0;   ///< 显示旋转档位（0/90/180/270 顺时针）
 
     void recalcSourceRect();
     /// 视频坐标源矩形 → 图像帧坐标（等比换算）。帧 = 原生分辨率时恒等；

@@ -11,6 +11,7 @@
 #include "pinnedwidget.h"
 #include <QPainter>
 #include <QResizeEvent>
+#include <QTransform>
 
 PinnedWidget::PinnedWidget(QWidget *parent)
     : QWidget(parent, Qt::Tool | Qt::WindowStaysOnTopHint)
@@ -46,9 +47,15 @@ void PinnedWidget::setPinnedImage(const QImage &fullFrame, const QRect &videoRec
 
     m_pinnedImage = fullFrame.copy(src);
     // Scale to fit typical timestamp size, keeping aspect ratio
-    int h = 30;
-    int w = src.width() * h / qMax(1, src.height());
-    if (w < 60) w = 60;
+    // （缩放系数按旋转前区域高度定为 30px 基准；90/270 旋转后等比应用到
+    //   旋转后尺寸，横长区域（如时间戳）旋转为竖长后保持同样视觉比例）
+    const qreal scale = 30.0 / qMax(1, src.height());
+    if (m_displayRotation != 0)
+        m_pinnedImage = m_pinnedImage.transformed(
+            QTransform().rotate(m_displayRotation));
+    int w = qMax(1, qRound(m_pinnedImage.width() * scale));
+    int h = qMax(1, qRound(m_pinnedImage.height() * scale));
+    if (w < 60 && h < 60) w = 60;
     resize(w, h);
     setVisible(true);
     update();

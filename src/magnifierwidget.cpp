@@ -18,6 +18,7 @@
 #include <QPainter>
 #include <QResizeEvent>
 #include <QContextMenuEvent>
+#include <QTransform>
 #include <climits>
 
 // =============================================================================
@@ -39,6 +40,9 @@ public:
     void clearSnapshotOverlay();
     bool hasSnapshot() const { return !m_snapshot.isNull(); }
     void reCropSnapshot(const QRect &sourceRect, const QImage &original);
+    /// 显示旋转档位（旋转在裁剪之后、显示之前应用）
+    void setDisplayRotation(int degrees) { m_displayRotation = degrees; }
+    int displayRotation() const { return m_displayRotation; }
 
 protected:
     void paintEvent(QPaintEvent *event) override;
@@ -60,6 +64,7 @@ private:
     int m_snapshotOpacity = 0;
     int m_cachedBrightness = INT_MIN;
     int m_cachedContrast = INT_MIN;
+    int m_displayRotation = 0;   ///< 显示旋转档位（0/90/180/270 顺时针）
 };
 
 MagnifierWidget::ContentWidget::ContentWidget(MagnifierWidget *owner)
@@ -87,7 +92,10 @@ void MagnifierWidget::ContentWidget::setPolygonModel(PolygonModel *model)
 
 void MagnifierWidget::ContentWidget::onFrameReady(const QImage &frame)
 {
-    m_frameImage = frame;
+    // 裁剪图（原视频系）→ 显示前旋转（放大视图随主画面一起转）
+    m_frameImage = (m_displayRotation != 0)
+        ? frame.transformed(QTransform().rotate(m_displayRotation))
+        : frame;
     updateOverlayGeometry();
     update();
     if (m_overlay)
@@ -96,7 +104,10 @@ void MagnifierWidget::ContentWidget::onFrameReady(const QImage &frame)
 
 void MagnifierWidget::ContentWidget::setSnapshotOverlay(const QImage &img, int brightness, int contrast, int opacity)
 {
-    m_snapshot = img;
+    // 裁剪图（原视频系）→ 显示前旋转，与帧裁剪同一档位保持对齐
+    m_snapshot = (m_displayRotation != 0 && !img.isNull())
+        ? img.transformed(QTransform().rotate(m_displayRotation))
+        : img;
     m_snapshotBrightness = brightness;
     m_snapshotContrast = contrast;
     m_snapshotOpacity = opacity;
@@ -127,6 +138,8 @@ void MagnifierWidget::ContentWidget::reCropSnapshot(const QRect &sourceRect, con
         return;
     }
     m_snapshot = original.copy(src);
+    if (m_displayRotation != 0)
+        m_snapshot = m_snapshot.transformed(QTransform().rotate(m_displayRotation));
     m_cachedBrightness = INT_MIN;
     m_cachedContrast = INT_MIN;
     m_adjustedSnapshot = QImage();
@@ -248,6 +261,24 @@ MagnifierWidget::MagnifierWidget(QWidget *parent)
 }
 
 MagnifierWidget::~MagnifierWidget() = default;
+
+void MagnifierWidget::setDisplayRotation(int degrees)
+{
+    int d = degrees % 360;
+    if (d < 0) d += 360;
+    d = ((d + 45) / 90) * 90 % 360;
+    if (m_displayRotation == d)
+        return;
+    m_displayRotation = d;
+    if (m_overlay)
+        m_overlay->setDisplayRotation(d);
+    if (m_content)
+        m_content->setDisplayRotation(d);
+    // 立即刷新：recalcSourceRect 内部会以最近一帧重裁（ContentWidget 显示前
+    // 旋转），并按同一链路重裁截图叠加（含 m_snapshotOriginal 已置位但
+    // content 无快照的边界分支），源区域/光标/overlay 坐标全部不动。
+    recalcSourceRect();
+}
 
 void MagnifierWidget::onInternalOverlayWheelZoom(int delta, QPoint videoPos)
 {

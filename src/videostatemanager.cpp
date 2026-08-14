@@ -22,7 +22,8 @@ void VideoStateManager::saveState(const QString &videoPath,
                                    const QVector<int> &regionRoiIds,
                                    const QVector<int> &polygonRoiIds,
                                    int displayBrightness,
-                                   int displayContrast)
+                                   int displayContrast,
+                                   int displayRotation)
 {
     if (videoPath.isEmpty())
         return;
@@ -46,6 +47,7 @@ void VideoStateManager::saveState(const QString &videoPath,
     state.abLoop = abLoop;
     state.displayBrightness = displayBrightness;
     state.displayContrast = displayContrast;
+    state.displayRotation = displayRotation;
     
     m_states[videoPath] = state;
 }

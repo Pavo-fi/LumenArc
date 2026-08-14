@@ -63,3 +63,8 @@ CMakeUserPresets.json
 *.lastbuildstate
 *.recipe
 *.filelist
+
+# Local test evidence / runtime artifacts
+la_b3/
+la_at_test/
+case.json.lock

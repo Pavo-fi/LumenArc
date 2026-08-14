@@ -1374,6 +1374,20 @@ void MainWindow::setupConnections()
                     // 暂停态拖滑杆同样实时预览。
                     m_videoWidget->setDisplayAdjust(b, c);
                 });
+        // 旋转档位（Q1 方案 A）：主画面 + 放大镜 + 钉图同步随转
+        connect(m_adjustPanel, &PlaybackAdjustPanel::rotationChanged, this,
+                [this](int degrees) {
+                    m_videoWidget->setDisplayRotation(degrees);
+                    if (m_magnifier)
+                        m_magnifier->setDisplayRotation(degrees);
+                    if (m_pinned)
+                        m_pinned->setDisplayRotation(degrees);
+                    showOperationStatus(degrees == 0
+                        ? lang("显示旋转已复位", "Display rotation reset")
+                        : lang("显示旋转 %1°（覆盖物随转，分析坐标不变）",
+                               "Display rotation %1° (overlays follow; analysis coords unchanged)")
+                                   .arg(degrees));
+                });
         connect(m_adjustPanel, &QDockWidget::visibilityChanged, this,
                 [this](bool vis) {
                     if (m_adjustBtn) {
@@ -1484,6 +1498,8 @@ void MainWindow::setupConnections()
                     });
                     m_pinned->show();
                 }
+                // 钉图内容随主画面旋转（Q1 方案 A）
+                m_pinned->setDisplayRotation(m_videoWidget->displayRotation());
             });
 
     // v0.3: Video list panel connections
@@ -1540,8 +1556,11 @@ void MainWindow::setupConnections()
                 if (m_snapshotBtn)
                     m_snapshotBtn->setEnabled(false);
                 if (m_adjustPanel) {   // 清空列表：调节回默认，面板状态保留
-                    m_adjustPanel->setValues(0, 0);
+                    m_adjustPanel->setValues(0, 0, 0);
                     m_videoWidget->setDisplayAdjust(0, 0);
+                    m_videoWidget->setDisplayRotation(0);
+                    if (m_pinned)
+                        m_pinned->setDisplayRotation(0);
                 }
 
                 setWindowTitle(windowTitleWithCase(
@@ -2108,7 +2127,8 @@ void MainWindow::openVideoFile(const QString &filePath)
             m_regionModel->roiIds(),
             m_polygonModel->roiIds(),
             m_adjustPanel ? m_adjustPanel->brightness() : 0,
-            m_adjustPanel ? m_adjustPanel->contrast() : 0
+            m_adjustPanel ? m_adjustPanel->contrast() : 0,
+            m_adjustPanel ? m_adjustPanel->rotation() : 0
         );
     }
 
@@ -2197,12 +2217,18 @@ void MainWindow::openVideoFile(const QString &filePath)
                 m_placeBtn->setEnabled(true);
             }
 
-            // 恢复播放画面调节（逐视频记忆）
+            // 恢复播放画面调节（逐视频记忆：亮度/对比度/旋转）
             if (m_adjustPanel) {
                 m_adjustPanel->setValues(savedState.displayBrightness,
-                                         savedState.displayContrast);
+                                         savedState.displayContrast,
+                                         savedState.displayRotation);
                 m_videoWidget->setDisplayAdjust(savedState.displayBrightness,
                                                 savedState.displayContrast);
+                m_videoWidget->setDisplayRotation(savedState.displayRotation);
+                if (m_magnifier)
+                    m_magnifier->setDisplayRotation(savedState.displayRotation);
+                if (m_pinned)
+                    m_pinned->setDisplayRotation(savedState.displayRotation);
             }
 
             if (m_spectrogramEnhanced && savedState.snapshot.hasAudio())
@@ -2242,8 +2268,9 @@ void MainWindow::openVideoFile(const QString &filePath)
         m_snapshotFusion = SnapshotFusionData();
         // 无状态视频：画面调节回默认（防跨视频泄漏）
         if (m_adjustPanel) {
-            m_adjustPanel->setValues(0, 0);
+            m_adjustPanel->setValues(0, 0, 0);
             m_videoWidget->setDisplayAdjust(0, 0);
+            m_videoWidget->setDisplayRotation(0);
         }
         if (m_snapshotOverlay)
             m_snapshotOverlay->clearSnapshot();
@@ -2815,6 +2842,9 @@ void MainWindow::createMagnifier()
     m_magnifier->setPolygonModel(m_polygonModel);
     m_magnifier->setGuideLineModel(m_guideLineModel);
 
+    // 旋转档位同步（Q1 方案 A：放大视图随主画面一起转）
+    m_magnifier->setDisplayRotation(m_videoWidget->displayRotation());
+
     // Sync current ROI mode to magnifier overlay
     if (m_magnifier->overlay()) {
         m_magnifier->overlay()->setPolygonMode(m_videoWidget->overlay()->isPolygonMode());
@@ -2890,8 +2920,10 @@ void MainWindow::createMagnifier()
 
     // Forward the current frame so the magnifier shows content immediately
     // even if the video is paused or has ended.
-    if (!m_videoWidget->currentFrame().isNull()) {
-        m_magnifier->onFrameReady(m_videoWidget->currentFrame());
+    // 注意必须给【原始帧】：放大镜内部按原视频系坐标裁剪（旋转由 ContentWidget
+    // 在显示前应用）；currentFrame() 是已旋转+LUT 的显示帧，裁剪几何会错。
+    if (!m_videoWidget->rawFrame().isNull()) {
+        m_magnifier->onFrameReady(m_videoWidget->rawFrame());
     }
 }
 
@@ -3632,11 +3664,12 @@ bool MainWindow::eventFilter(QObject *watched, QEvent *event)
 
 void MainWindow::onSnapshotQuick()
 {
-    const QImage frame = m_videoWidget->currentFrame();   // 已含画面调节（所见即所得）
+    const QImage frame = m_videoWidget->currentFrame();   // 已含画面调节+旋转（所见即所得）
     if (frame.isNull()) {
         showOperationStatus(lang("当前无画面，无法快照", "No frame to snapshot"));
         return;
     }
+    const int rotation = m_videoWidget->displayRotation();
     const qint64 posMs = m_videoEngine ? m_videoEngine->position() : 0;
 
     // ---- 时间码：校时后用北京时间；否则相对时间 ----
@@ -3719,6 +3752,10 @@ void MainWindow::onSnapshotQuick()
             p.drawImage(0, videoPart.height(), chartImg);
         p.end();
     }
+    // 取证留痕：旋转档位写入 PNG 文本元数据（0 不记，保持旧产物字节级一致）
+    if (rotation != 0)
+        out.setText(QStringLiteral("LumenArc:displayRotation"),
+                    QString::number(rotation));
 
     // ---- 保存：案件 snapshots/ 优先；无案件则视频同目录 snapshots/ ----
     const QString base = QFileInfo(m_currentVideoPath).completeBaseName();
@@ -3753,7 +3790,10 @@ void MainWindow::onSnapshotQuick()
     }
     if (inCase && m_caseDock)
         m_caseDock->refreshTree();   // 案件快照组即时可见（dock 扫描目录驱动）
-    showOperationStatus(lang("快照已保存：%1", "Snapshot saved: %1").arg(path));
+    showOperationStatus(lang("快照已保存：%1", "Snapshot saved: %1").arg(path)
+        + (rotation != 0
+            ? lang("（显示旋转 %1°）", " (rotated %1°)").arg(rotation)
+            : QString()));
 }
 
 void MainWindow::onVideoSelected(int index)

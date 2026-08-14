@@ -30,6 +30,25 @@ PlaybackAdjustPanel::PlaybackAdjustPanel(QWidget *parent)
     lay->addWidget(makeRow(lang("对比度", "Contrast"),
                            m_contrastSlider, m_cValLabel, -50, 50));
 
+    // 旋转行（Q1 拍板方案 A，2026-08-14）：90° 步进循环，覆盖物随画面一起转
+    {
+        auto *row = new QWidget(body);
+        auto *h = new QHBoxLayout(row);
+        h->setContentsMargins(0, 0, 0, 0);
+        h->setSpacing(8);
+        auto *lab = new QLabel(lang("旋转", "Rotation"), row);
+        lab->setFixedWidth(44);
+        m_rotateBtn = new QPushButton(lang("⟳ 顺时针 90°", "⟳ 90° CW"), row);
+        m_rotateBtn->setFixedHeight(26);
+        m_rotValLabel = new QLabel(QStringLiteral("0°"), row);
+        m_rotValLabel->setFixedWidth(30);
+        m_rotValLabel->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+        h->addWidget(lab);
+        h->addWidget(m_rotateBtn, 1);
+        h->addWidget(m_rotValLabel);
+        lay->addWidget(row);
+    }
+
     m_resetBtn = new QPushButton(lang("复位", "Reset"), body);
     m_resetBtn->setFixedHeight(28);
     lay->addWidget(m_resetBtn, 0, Qt::AlignRight);
@@ -56,8 +75,14 @@ PlaybackAdjustPanel::PlaybackAdjustPanel(QWidget *parent)
         emit adjustChanged(m_brightness, m_contrast);
     });
     connect(m_resetBtn, &QPushButton::clicked, this, [this]() {
-        setValues(0, 0);
+        setValues(0, 0, 0);
         emit adjustChanged(0, 0);
+        emit rotationChanged(0);
+    });
+    connect(m_rotateBtn, &QPushButton::clicked, this, [this]() {
+        m_rotation = (m_rotation + 90) % 360;
+        m_rotValLabel->setText(QString::number(m_rotation) + QStringLiteral("°"));
+        emit rotationChanged(m_rotation);
     });
 }
 
@@ -84,10 +109,13 @@ QWidget *PlaybackAdjustPanel::makeRow(const QString &label, QSlider *&slider,
     return row;
 }
 
-void PlaybackAdjustPanel::setValues(int brightness, int contrast)
+void PlaybackAdjustPanel::setValues(int brightness, int contrast, int rotation)
 {
     m_brightness = brightness;
     m_contrast = contrast;
+    int d = rotation % 360;
+    if (d < 0) d += 360;
+    m_rotation = ((d + 45) / 90) * 90 % 360;
     if (m_brightnessSlider) {
         QSignalBlocker b1(m_brightnessSlider), b2(m_contrastSlider);
         m_brightnessSlider->setValue(brightness);
@@ -97,4 +125,6 @@ void PlaybackAdjustPanel::setValues(int brightness, int contrast)
         m_bValLabel->setText(QString::number(brightness));
         m_cValLabel->setText(QString::number(contrast));
     }
+    if (m_rotValLabel)
+        m_rotValLabel->setText(QString::number(m_rotation) + QStringLiteral("°"));
 }

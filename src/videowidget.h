@@ -53,6 +53,14 @@ public:
     void endTimestampRoiSelection();
     bool isTimestampRoiMode() const { return m_timestampRoiMode; }
 
+    /// 显示旋转（2026-08-14 Q1 拍板方案 A）：0/90/180/270 顺时针。
+    /// 覆盖物存储坐标始终是【原视频系】；旋转只改变显示与输入映射：
+    /// mapFromVideo/mapToVideo 内部完成双向换算，调用点零改动。
+    /// m_videoWidth/m_videoHeight 保持【原视频尺寸】（引擎上报值），
+    /// 显示尺寸在映射函数内按档位推导（90/270 宽高互换）。
+    void setDisplayRotation(int degrees);
+    int displayRotation() const { return m_displayRotation; }
+
 signals:
     void timestampRoiConfirmed(const QRectF &normalized);
     void timestampRoiCancelled();
@@ -128,6 +136,16 @@ private:
     QPoint mapFromVideo(const QPoint &videoPos) const;
     QRect mapToVideo(const QRect &widgetRect) const;
     QRect mapFromVideo(const QRect &videoRect) const;
+
+    // 旋转双向换算（原视频系 ↔ 旋转后显示系；90° 步进精确整数映射）
+    QPoint storedToDisplay(const QPoint &stored) const;
+    QPoint displayToStored(const QPoint &display) const;
+    /// 位移向量的显示系→存储系换算（无 -1 偏移/无需尺寸；放大镜平移用）
+    QPoint displayDeltaToStored(const QPoint &delta) const;
+    /// 旋转后显示系尺寸（90/270 宽高互换）
+    QSize displayVideoSize() const;
+
+    int m_displayRotation = 0;   ///< 顺时针档位：0/90/180/270
 
     QRect m_videoDisplayRect;
 
@@ -211,6 +229,15 @@ public:
     void setDisplayAdjust(int brightness, int contrast);
     bool displayAdjustActive() const { return !m_displayLut.isEmpty(); }
 
+    /// 显示旋转（Q1 方案 A）：0/90/180/270 顺时针。显示链：
+    ///   原始帧 → 旋转(QImage::transformed) → 亮度/对比度 LUT → m_frameImage
+    /// 覆盖物随转由 OverlayWidget 双向映射保证；分析永远走原始帧。
+    /// 证据快照（currentFrame/grabFrameSnapshot 链路）所见即所得。
+    void setDisplayRotation(int degrees);
+    int displayRotation() const { return m_displayRotation; }
+    /// 未调节/未旋转的原始帧（放大镜首帧等需要【原视频系】像素的场景）
+    const QImage& rawFrame() const { return m_rawFrameImage; }
+
 signals:
     void frameSnapshotReady(const QImage &image);
     void timestampRoiConfirmed(const QRectF &normalized);
@@ -247,5 +274,7 @@ private:
     // 播放画面调节 LUT（空 = 恒等/关闭）
     QByteArray m_displayLut;
     QImage m_rawFrameImage;      ///< 未调节的原始帧（调节参数变化时重建显示帧）
-    void rebuildAdjustedFrame(); ///< 按当前 LUT 从原始帧重建 m_frameImage
+    int m_displayRotation = 0;   ///< 显示旋转档位（0/90/180/270 顺时针）
+    int m_cachedRotation = -1;   ///< 截图叠加缓存的旋转档位（缓存键一部分）
+    void rebuildAdjustedFrame(); ///< 按当前旋转+LUT 从原始帧重建 m_frameImage
 };

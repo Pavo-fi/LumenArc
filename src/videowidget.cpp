@@ -24,6 +24,7 @@
 #include <QWheelEvent>
 #include <QVBoxLayout>
 #include <QDebug>
+#include <QTransform>
 #include <climits>
 
 // =============================================================================
@@ -69,15 +70,12 @@ void OverlayWidget::beginTimestampRoiSelection(const QRectF &defaultRoi)
     m_timestampRoiMode = true;
     // 默认区域：右上角（监控时间戳常见位置）；无效时给 25%x8% 框
     if (defaultRoi.isValid() && m_videoWidth > 0 && m_videoHeight > 0) {
-        // 归一化 → 视频像素 → widget 坐标（线性映射，避免 QPointF 重载依赖）
-        const QRect dr = m_videoDisplayRect;
-        const QPoint p0 = QPoint(
-            dr.left() + int(defaultRoi.x() * dr.width()),
-            dr.top() + int(defaultRoi.y() * dr.height()));
-        const QPoint p1 = QPoint(
-            dr.left() + int((defaultRoi.x() + defaultRoi.width()) * dr.width()),
-            dr.top() + int((defaultRoi.y() + defaultRoi.height()) * dr.height()));
-        m_timestampRoiRect = QRect(p0, p1).normalized();
+        // 归一化（原视频系）→ 原视频像素 → mapFromVideo（含旋转映射）→ widget
+        const QPoint s0(int(defaultRoi.x() * m_videoWidth),
+                        int(defaultRoi.y() * m_videoHeight));
+        const QPoint s1(int((defaultRoi.x() + defaultRoi.width()) * m_videoWidth),
+                        int((defaultRoi.y() + defaultRoi.height()) * m_videoHeight));
+        m_timestampRoiRect = QRect(mapFromVideo(s0), mapFromVideo(s1)).normalized();
     } else {
         const QRect dr = m_videoDisplayRect;
         m_timestampRoiRect = QRect(dr.right() - dr.width() / 4,
@@ -193,6 +191,59 @@ void OverlayWidget::setVideoDisplayRect(const QRect &rect)
 void OverlayWidget::setVideoOriginOffset(const QPoint &offset)
 {
     m_videoOriginOffset = offset;
+}
+
+void OverlayWidget::setDisplayRotation(int degrees)
+{
+    // 归一化到 0/90/180/270 顺时针（负值/非 90 倍数吸附到最近档）
+    int d = degrees % 360;
+    if (d < 0) d += 360;
+    d = ((d + 45) / 90) * 90 % 360;
+    if (m_displayRotation == d)
+        return;
+    m_displayRotation = d;
+    update();
+}
+
+QSize OverlayWidget::displayVideoSize() const
+{
+    if (m_displayRotation == 90 || m_displayRotation == 270)
+        return QSize(m_videoHeight, m_videoWidth);
+    return QSize(m_videoWidth, m_videoHeight);
+}
+
+/// @brief 存储系（原视频坐标）→ 显示系（旋转后）。与 QTransform().rotate(档位) 逐点一致。
+QPoint OverlayWidget::storedToDisplay(const QPoint &p) const
+{
+    const int W = m_videoWidth, H = m_videoHeight;
+    switch (m_displayRotation) {
+    case 90:  return QPoint(H - 1 - p.y(), p.x());
+    case 180: return QPoint(W - 1 - p.x(), H - 1 - p.y());
+    case 270: return QPoint(p.y(), W - 1 - p.x());
+    default:  return p;
+    }
+}
+
+/// @brief 显示系 → 存储系（逆旋转；与 storedToDisplay 互为逆映射）
+QPoint OverlayWidget::displayToStored(const QPoint &p) const
+{
+    const int W = m_videoWidth, H = m_videoHeight;
+    switch (m_displayRotation) {
+    case 90:  return QPoint(p.y(), H - 1 - p.x());
+    case 180: return QPoint(W - 1 - p.x(), H - 1 - p.y());
+    case 270: return QPoint(W - 1 - p.y(), p.x());
+    default:  return p;
+    }
+}
+
+QPoint OverlayWidget::displayDeltaToStored(const QPoint &d) const
+{
+    switch (m_displayRotation) {
+    case 90:  return QPoint(d.y(), -d.x());
+    case 180: return QPoint(-d.x(), -d.y());
+    case 270: return QPoint(-d.y(), d.x());
+    default:  return d;
+    }
 }
 
 void OverlayWidget::paintEvent(QPaintEvent *event)
@@ -512,19 +563,23 @@ QPoint OverlayWidget::mapToVideo(const QPoint &widgetPos) const
 {
     if (m_videoWidth <= 0 || m_videoHeight <= 0 || m_videoDisplayRect.isEmpty())
         return widgetPos;
-    int x = (widgetPos.x() - m_videoDisplayRect.left()) * m_videoWidth / m_videoDisplayRect.width();
-    int y = (widgetPos.y() - m_videoDisplayRect.top()) * m_videoHeight / m_videoDisplayRect.height();
-    return QPoint(x + m_videoOriginOffset.x(), y + m_videoOriginOffset.y());
+    // widget → 显示系像素（旋转后尺寸）→ 逆旋转回原视频系 → 加原点偏移
+    const QSize disp = displayVideoSize();
+    int dx = (widgetPos.x() - m_videoDisplayRect.left()) * disp.width() / m_videoDisplayRect.width();
+    int dy = (widgetPos.y() - m_videoDisplayRect.top()) * disp.height() / m_videoDisplayRect.height();
+    const QPoint stored = displayToStored(QPoint(dx, dy));
+    return stored + m_videoOriginOffset;
 }
 
 QPoint OverlayWidget::mapFromVideo(const QPoint &videoPos) const
 {
     if (m_videoWidth <= 0 || m_videoHeight <= 0 || m_videoDisplayRect.isEmpty())
         return videoPos;
-    int x = videoPos.x() - m_videoOriginOffset.x();
-    int y = videoPos.y() - m_videoOriginOffset.y();
-    x = m_videoDisplayRect.left() + x * m_videoDisplayRect.width() / m_videoWidth;
-    y = m_videoDisplayRect.top() + y * m_videoDisplayRect.height() / m_videoHeight;
+    // 原视频系减原点偏移 → 旋转到显示系 → 线性映射到显示矩形
+    const QPoint disp = storedToDisplay(videoPos - m_videoOriginOffset);
+    const QSize ds = displayVideoSize();
+    int x = m_videoDisplayRect.left() + disp.x() * m_videoDisplayRect.width() / ds.width();
+    int y = m_videoDisplayRect.top() + disp.y() * m_videoDisplayRect.height() / ds.height();
     return QPoint(x, y);
 }
 
@@ -929,9 +984,12 @@ void OverlayWidget::mouseMoveEvent(QMouseEvent *event)
         m_dragStart = event->pos();
         if (m_videoDisplayRect.isEmpty() || m_videoWidth <= 0 || m_videoHeight <= 0)
             return;
-        qreal scaleX = qreal(m_videoWidth) / m_videoDisplayRect.width();
-        qreal scaleY = qreal(m_videoHeight) / m_videoDisplayRect.height();
+        const QSize disp = displayVideoSize();
+        qreal scaleX = qreal(disp.width()) / m_videoDisplayRect.width();
+        qreal scaleY = qreal(disp.height()) / m_videoDisplayRect.height();
         QPoint videoDelta(int(widgetDelta.x() * scaleX), int(widgetDelta.y() * scaleY));
+        // 显示系位移 → 存储系位移（旋转档位交换/取反轴向）
+        videoDelta = displayDeltaToStored(videoDelta);
         if (!videoDelta.isNull())
             emit magnifierPanRequested(videoDelta);
     } else {
@@ -1346,16 +1404,33 @@ void VideoWidget::setDisplayAdjust(int brightness, int contrast)
     rebuildAdjustedFrame();     // 暂停态拖滑杆也实时预览
 }
 
+void VideoWidget::setDisplayRotation(int degrees)
+{
+    int d = degrees % 360;
+    if (d < 0) d += 360;
+    d = ((d + 45) / 90) * 90 % 360;
+    if (m_displayRotation == d)
+        return;
+    m_displayRotation = d;
+    if (m_overlay)
+        m_overlay->setDisplayRotation(d);
+    rebuildAdjustedFrame();       // 原始帧 → 旋转 → LUT
+    updateOverlayGeometry();      // 90/270 宽高互换，显示矩形需重算
+}
+
 void VideoWidget::rebuildAdjustedFrame()
 {
     if (m_rawFrameImage.isNull())
         return;
+    // 显示链：原始帧 → 旋转 → LUT（Q1 拍板方案 A 规定的变换顺序）
+    QImage img = m_rawFrameImage;
+    if (m_displayRotation != 0)
+        img = img.transformed(QTransform().rotate(m_displayRotation));
     if (m_displayLut.isEmpty()) {
-        m_frameImage = m_rawFrameImage;   // COW 浅拷贝，零像素开销
+        m_frameImage = img;   // COW 浅拷贝（旋转非零时为变换产物，均零像素开销）
     } else {
-        const QImage &src = m_rawFrameImage;
-        QImage out = src.format() == QImage::Format_ARGB32
-            ? src.copy() : src.convertToFormat(QImage::Format_ARGB32);
+        QImage out = img.format() == QImage::Format_ARGB32
+            ? img.copy() : img.convertToFormat(QImage::Format_ARGB32);
         const auto *lut = reinterpret_cast<const uchar *>(m_displayLut.constData());
         const int h = out.height(), w = out.width();
         for (int y = 0; y < h; ++y) {
@@ -1376,7 +1451,7 @@ void VideoWidget::rebuildAdjustedFrame()
 void VideoWidget::onFrameReady(const QImage &image)
 {
     m_rawFrameImage = image;    // COW 浅拷贝；引擎发出后不再改
-    if (m_displayLut.isEmpty()) {
+    if (m_displayLut.isEmpty() && m_displayRotation == 0) {
         // No deep copy: QImage is implicitly shared and m_frameImage is only read afterwards.
         m_frameImage = image;
     } else {
@@ -1436,6 +1511,7 @@ void VideoWidget::setSnapshot(const QImage &snapshot, int brightness, int contra
     if (m_cachedBrightness != brightness || m_cachedContrast != contrast) {
         m_cachedBrightness = INT_MIN;
         m_cachedContrast = -999;
+        m_cachedRotation = -1;
         m_adjustedSnapshot = QImage();
     }
     update();
@@ -1447,13 +1523,21 @@ void VideoWidget::clearSnapshot()
     m_adjustedSnapshot = QImage();
     m_cachedBrightness = INT_MIN;
     m_cachedContrast = -999;
+    m_cachedRotation = -1;
     update();
 }
 
 void VideoWidget::grabFrameSnapshot()
 {
-    if (!m_frameImage.isNull())
-        emit frameSnapshotReady(m_frameImage);
+    if (m_frameImage.isNull())
+        return;
+    // 截图叠加/融合以【原视频系】存储（随画面一起转：绘制时按当前档位旋转，
+    /// 放大镜按原视频坐标裁剪）；显示系捕获的帧需逆旋转回原方位。
+    // 亮度/对比度 LUT 保持烘焙（所见即所得拍板 #2）。
+    QImage img = m_frameImage;
+    if (m_displayRotation != 0)
+        img = img.transformed(QTransform().rotate(-m_displayRotation));
+    emit frameSnapshotReady(img);
 }
 
 QRect VideoWidget::videoDisplayRect() const
@@ -1518,13 +1602,19 @@ void VideoWidget::paintEvent(QPaintEvent *event)
 
         // Draw snapshot overlay if active
         if (!m_snapshot.isNull()) {
-            // Rebuild cache if parameters changed
+            // Rebuild cache if parameters changed（亮度/对比度/旋转档位均为缓存键；
+            // 存储为原视频系方位，绘制缓存随画面一起转——Q1 方案 A）
             if (m_adjustedSnapshot.isNull() ||
                 m_cachedBrightness != m_snapshotBrightness ||
-                m_cachedContrast != m_snapshotContrast) {
+                m_cachedContrast != m_snapshotContrast ||
+                m_cachedRotation != m_displayRotation) {
                 m_adjustedSnapshot = applyBrightnessContrast(m_snapshot, m_snapshotBrightness, m_snapshotContrast);
+                if (m_displayRotation != 0)
+                    m_adjustedSnapshot = m_adjustedSnapshot.transformed(
+                        QTransform().rotate(m_displayRotation));
                 m_cachedBrightness = m_snapshotBrightness;
                 m_cachedContrast = m_snapshotContrast;
+                m_cachedRotation = m_displayRotation;
             }
             painter.setOpacity(1.0 - m_snapshotOpacity / 100.0);
             painter.drawImage(target, m_adjustedSnapshot);
