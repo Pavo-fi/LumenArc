@@ -62,6 +62,43 @@ public:
     void setDisplayRotation(int degrees);
     int displayRotation() const { return m_displayRotation; }
 
+    /// 原视频尺寸（存储系坐标基准；放大镜为当前源区域尺寸）
+    QSize videoSize() const { return QSize(m_videoWidth, m_videoHeight); }
+
+    /// 放大镜来源标识框（2026-08-14 §14 Q1 拍板）：原视频系源区域，
+    /// 空矩形 = 隐藏。仅绘制、不参与命中检测；放大镜 dock 开即显示、关即清。
+    /// zoom 用于倍率徽章（≤0 不画徽章）。绘制样式见 drawMagnifierIndicator。
+    void setMagnifierRect(const QRect &storedRect, qreal zoom);
+    QRect magnifierRect() const { return m_magnifierRect; }
+    qreal magnifierZoom() const { return m_magnifierZoom; }
+    /// 标识框的 widget 显示坐标（含旋转映射；测试断言用，无效时返回空）
+    QRect magnifierRectWidget() const;
+
+    /// 旋转双向换算的静态版（快照烧录与成员函数共用同一整数式，保证逐位一致）
+    static QSize displaySizeForRotation(const QSize &videoSize, int rotation);
+    static QPoint rotateStoredToDisplay(const QPoint &stored, const QSize &videoSize,
+                                        int rotation);
+    /// 存储系点/矩形 → 目标帧坐标（旋转 + 等比缩放；支持 scrub 降采样帧）
+    static QPoint mapStoredPointToFrame(const QPoint &stored, const QSize &frameSize,
+                                        const QSize &videoSize, int rotation);
+    static QRect mapStoredRectToFrame(const QRect &stored, const QSize &frameSize,
+                                      const QSize &videoSize, int rotation);
+    /// 放大镜来源标识框绘制（§14 Q1：金色四角括号 + 倍率徽章，无填充零遮挡）。
+    /// 屏上（widget 坐标）与快照烧录（全分辨率显示系坐标）共用的同一样式函数。
+    /// rect = painter 坐标系下的目标矩形；penWidth/fontPx 由调用方按分辨率缩放。
+    static void drawMagnifierIndicator(QPainter &painter, const QRect &rect,
+                                       qreal zoom, int penWidth = 2, int fontPx = 12);
+    /// 快照覆盖层烧录（§14 Q3 拍板）：ROI 矩形/多边形/辅助线按存储系→显示系映射
+    /// 全分辨率直接画到 target（合成 PNG 是报告产物，证据文件不动）。
+    /// frameSize = 目标图像尺寸（可能 ≠ 原生：scrub 降采样帧按比例缩放，
+    /// 与 mapFromVideo 同一整数式）；模型原色 + 半透明填充，屏上同款观感。
+    static void burnAnnotations(QPainter &painter, const QSize &frameSize,
+                                const QSize &videoSize, int rotation,
+                                const RegionModel *regions,
+                                const PolygonModel *polygons,
+                                const GuideLineModel *guideLines,
+                                int penWidth = 1);
+
 signals:
     void timestampRoiConfirmed(const QRectF &normalized);
     void timestampRoiCancelled();
@@ -147,6 +184,10 @@ private:
     QSize displayVideoSize() const;
 
     int m_displayRotation = 0;   ///< 顺时针档位：0/90/180/270
+
+    // 放大镜来源标识框（§14：仅绘制，不参与命中检测）
+    QRect m_magnifierRect;       ///< 原视频系；空 = 隐藏
+    qreal m_magnifierZoom = 0.0;
 
     QRect m_videoDisplayRect;
 

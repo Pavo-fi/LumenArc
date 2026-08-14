@@ -2865,6 +2865,15 @@ void MainWindow::createMagnifier()
     if (m_adjustPanel)
         m_magnifier->setDisplayAdjust(m_adjustPanel->adjust());
 
+    // 放大镜来源标识框（§14 Q1）：源区域变化实时同步到主画面 overlay；
+    // 初始值立即下发（setVideoSize 的信号早于 connect）
+    connect(m_magnifier, &MagnifierWidget::sourceRectChanged,
+            this, [this](const QRect &storedRect, qreal zoom) {
+                m_videoWidget->overlay()->setMagnifierRect(storedRect, zoom);
+            });
+    m_videoWidget->overlay()->setMagnifierRect(m_magnifier->currentSourceRect(),
+                                               m_magnifier->zoomLevel());
+
     // Sync current ROI mode to magnifier overlay
     if (m_magnifier->overlay()) {
         m_magnifier->overlay()->setPolygonMode(m_videoWidget->overlay()->isPolygonMode());
@@ -2966,6 +2975,7 @@ void MainWindow::removeMagnifier()
     }
     // else: user expanded video list while magnifier was open, keep it as is
 
+    m_videoWidget->overlay()->setMagnifierRect(QRect(), 0.0);   // 标识框随 dock 关闭消失
     m_magnifier->clearSnapshotOverlay();
     m_magnifier->close();
     m_magnifier->deleteLater();
@@ -3682,6 +3692,23 @@ bool MainWindow::eventFilter(QObject *watched, QEvent *event)
     return QMainWindow::eventFilter(watched, event);
 }
 
+/// @brief 面板足高重渲染抓取（§14 快照全面化：治「曲线被压缩」。
+/// 临时 resize 到视频全宽 + 至少 minHeight 高，原生重渲染后抓取并还原。
+/// resize 同步派发 QEvent::Resize，图表/GL 场景即时适配；还原交给布局。
+static QImage grabPanelFullHeight(QWidget *panel, int width, int minHeight)
+{
+    if (!panel || width <= 0)
+        return QImage();
+    panel->setUpdatesEnabled(false);
+    const QSize old = panel->size();
+    panel->resize(width, qMax(old.height(), minHeight));
+    QImage img = panel->grab().toImage();
+    panel->resize(old);
+    panel->setUpdatesEnabled(true);
+    panel->update();
+    return img;
+}
+
 void MainWindow::onSnapshotQuick()
 {
     const QImage frame = m_videoWidget->currentFrame();   // 已含画面调节+旋转（所见即所得）
@@ -3723,53 +3750,124 @@ void MainWindow::onSnapshotQuick()
             labelText.clear();
     }
 
-    // ---- 视频部分：OSD 烧录（标签 + 时间码，黑底阴影保证可读）----
+    // ---- 视频部分：覆盖层烧录（§14 Q3）→ 放大镜标识框（Q4）→ OSD（Q5）----
     QImage videoPart = frame.convertToFormat(QImage::Format_ARGB32);
+    const QSize videoSize = m_videoWidget->overlay()->videoSize();   // 原视频原生尺寸
+    // 线宽/字号随分辨率缩放（屏上 1~2px 观感 → 原生全分辨率等比）
+    const int annoPen = qBound(1, qRound(videoPart.width() / 1280.0), 4);
+    const int magPen  = qBound(2, qRound(videoPart.width() / 640.0), 8);
+    const int magFont = qBound(10, qRound(videoPart.width() * 12.0 / 1280.0), 28);
     {
         QPainter p(&videoPart);
         p.setRenderHint(QPainter::Antialiasing);
+        // Q3：ROI 矩形/多边形/辅助线按模型颜色全分辨率烧录
+        OverlayWidget::burnAnnotations(p, videoPart.size(), videoSize, rotation,
+                                       m_regionModel, m_polygonModel,
+                                       m_guideLineModel, annoPen);
+        // Q4：放大镜来源标识框（与屏上同款金色四角括号 + 倍率徽章）
+        if (m_magnifier && m_magnifier->currentSourceRect().isValid()) {
+            const QRect magRect = OverlayWidget::mapStoredRectToFrame(
+                m_magnifier->currentSourceRect(), videoPart.size(), videoSize, rotation);
+            if (magRect.isValid() && !magRect.isEmpty())
+                OverlayWidget::drawMagnifierIndicator(
+                    p, magRect, m_magnifier->zoomLevel(), magPen, magFont);
+        }
+        p.end();
+    }
+    {
+        // Q5：OSD = 文件名（白色小字）+ 标签（金色）+ 时间码，黑底阴影保证可读
+        QPainter p(&videoPart);
+        p.setRenderHint(QPainter::Antialiasing);
         const int fs = qBound(14, videoPart.height() / 40, 40);
-        p.setFont(fontSans(fs, QFont::Bold));
         const int pad = fs;
         int y = videoPart.height() - pad;
         const QString line2 = (m_calibration.dateKnown
             ? lang("北京时间 ", "Beijing ") : lang("相对时刻 ", "Stream ")) + timeText;
-        const QStringList lines = labelText.isEmpty()
-            ? QStringList{line2} : QStringList{labelText, line2};
-        for (int i = lines.size() - 1; i >= 0; --i) {
+        QStringList lines;
+        lines << line2;
+        if (!labelText.isEmpty())
+            lines << labelText;
+        const QString fileName = QFileInfo(m_currentVideoPath).fileName();
+        if (!fileName.isEmpty())
+            lines << fileName;   // 最上方一行
+        for (int i = 0; i < lines.size(); ++i) {
             const QString &txt = lines[i];
-            const QColor fg = (i == 0 && !labelText.isEmpty())
-                ? QColor(Theme::Accent) : Qt::white;
+            const bool isLabel = (i == 1 && !labelText.isEmpty());
+            const bool isFile = (i == lines.size() - 1 && !fileName.isEmpty());
+            const int thisFs = isFile ? qMax(10, fs * 3 / 4) : fs;
+            p.setFont(fontSans(thisFs, QFont::Bold));
+            const QColor fg = isLabel ? QColor(Theme::Accent) : Qt::white;
             p.setPen(QColor(0, 0, 0, 200));
-            p.drawText(QRect(pad + 2, y - fs * 13 / 10 + 2,
-                             videoPart.width() - pad * 2, fs * 13 / 10),
+            p.drawText(QRect(pad + 2, y - thisFs * 13 / 10 + 2,
+                             videoPart.width() - pad * 2, thisFs * 13 / 10),
                        Qt::AlignLeft | Qt::AlignVCenter, txt);
             p.setPen(fg);
-            p.drawText(QRect(pad, y - fs * 13 / 10,
-                             videoPart.width() - pad * 2, fs * 13 / 10),
+            p.drawText(QRect(pad, y - thisFs * 13 / 10,
+                             videoPart.width() - pad * 2, thisFs * 13 / 10),
                        Qt::AlignLeft | Qt::AlignVCenter, txt);
-            y -= fs * 3 / 2;
+            y -= thisFs * 3 / 2;
         }
         p.end();
     }
 
-    // ---- 曲线分析区（有分析数据才合成）----
-    QImage chartImg;
+    // ---- 分析数据区（有分析数据才合成）：足高重渲染，曲线不糊不扁 ----
     const AnalysisSnapshot snap = m_timelineModel->snapshot();
+    QImage chartImg, specImg, magImg;
     if (!snap.isEmpty() || snap.hasAudio()) {
-        chartImg = m_chartPanel->grab().toImage()
-            .scaledToWidth(videoPart.width(), Qt::SmoothTransformation);
+        chartImg = grabPanelFullHeight(m_chartPanel, videoPart.width(), 380);
+    }
+    if (snap.hasAudio() && m_spectrogramEnhanced) {
+        specImg = grabPanelFullHeight(m_spectrogramEnhanced, videoPart.width(), 320);
+    }
+    // ---- 放大镜段：原生裁剪图高度归一 ~320px，右侧黑边烧录来源标注 ----
+    QString magCaption;
+    if (m_magnifier) {
+        const QImage raw = m_magnifier->currentMagnifiedImage();
+        if (!raw.isNull()) {
+            const int magH = 320;
+            QImage scaled = raw.scaledToHeight(magH, Qt::SmoothTransformation);
+            if (scaled.width() > videoPart.width())   // 极端宽高比兜底：按宽适配
+                scaled = raw.scaledToWidth(videoPart.width(), Qt::SmoothTransformation);
+            magImg = scaled;
+            const QRect src = m_magnifier->currentSourceRect();
+            magCaption = lang("源区域 (%1, %2) %3×%4 · %5×",
+                              "Source (%1, %2) %3×%4 · %5×")
+                .arg(src.x()).arg(src.y()).arg(src.width()).arg(src.height())
+                .arg(m_magnifier->zoomLevel(), 0, 'f', 1);
+        }
     }
 
-    QImage out(videoPart.width(),
-               videoPart.height() + (chartImg.isNull() ? 0 : chartImg.height()),
-               QImage::Format_ARGB32);
+    // ---- 竖向全宽堆叠（§14 Q2）：视频 / 曲线 / 语谱图 / 放大镜，黑底无留白 ----
+    const int outH = videoPart.height()
+        + (chartImg.isNull() ? 0 : chartImg.height())
+        + (specImg.isNull() ? 0 : specImg.height())
+        + (magImg.isNull() ? 0 : magImg.height());
+    QImage out(videoPart.width(), outH, QImage::Format_ARGB32);
     out.fill(Qt::black);
     {
         QPainter p(&out);
-        p.drawImage(0, 0, videoPart);
-        if (!chartImg.isNull())
-            p.drawImage(0, videoPart.height(), chartImg);
+        int yy = 0;
+        p.drawImage(0, yy, videoPart);
+        yy += videoPart.height();
+        if (!chartImg.isNull()) {
+            p.drawImage(0, yy, chartImg);
+            yy += chartImg.height();
+        }
+        if (!specImg.isNull()) {
+            p.drawImage(0, yy, specImg);
+            yy += specImg.height();
+        }
+        if (!magImg.isNull()) {
+            p.drawImage(0, yy, magImg);
+            // 右侧黑边来源标注（放不下则省略）
+            const int textX = magImg.width() + 16;
+            if (textX + 80 < out.width()) {
+                p.setPen(QColor(Theme::Accent));
+                p.setFont(fontSans(qBound(12, out.width() / 100, 20), QFont::Bold));
+                p.drawText(QRect(textX, yy, out.width() - textX - 16, magImg.height()),
+                           Qt::AlignLeft | Qt::AlignVCenter, magCaption);
+            }
+        }
         p.end();
     }
     // 取证留痕：旋转档位写入 PNG 文本元数据（0 不记，保持旧产物字节级一致）

@@ -80,6 +80,15 @@ public:
     /// 作用于帧裁剪显示前（截图叠加融合参数独立，不受影响）。
     void setDisplayAdjust(const DisplayAdjust &adj);
 
+    /// 当前放大视图的裁剪图（旋转+画面调节已应用，与放大视图逐位一致；
+    /// §14 快照全面化用）。未收到帧时返回空图。
+    QImage currentMagnifiedImage() const;
+
+signals:
+    /// 源区域变化（原视频系）：光标跟随/滚轮缩放/中键平移/旋转/切视频
+    /// 全路径汇总于此（§14 放大镜来源标识框驱动主画面 overlay 同步）。
+    void sourceRectChanged(const QRect &storedRect, qreal zoom);
+
 private slots:
     void onInternalOverlayWheelZoom(int delta, QPoint videoPos);
 

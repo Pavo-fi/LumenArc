@@ -13,7 +13,9 @@
 #include "videowidget.h"
 #include "magnifierwidget.h"
 #include "displayadjust.h"
+#include "theme.h"
 #include "i18n.h"
+#include <QPainter>
 #include "app/calibration_service.h"
 #include "domain/region_model.h"
 #include "domain/polygon_model.h"
@@ -441,6 +443,204 @@ static bool runDisplayAdjustScenario()
     return g_failures == 0;
 }
 
+// ================= §14 放大镜标识框 + 快照烧录验收 =================
+// 视频 400x200，widget 400x400（显示矩形全幅）：放大镜 zoom2.0 居中源区域
+// = (100,50,200,100)。四角度映射手算锚点推导见 anchors 构造处注释。
+static bool runMagnifierIndicatorScenario()
+{
+    const int VW = 400, VH = 200;
+    QWidget host;
+    host.resize(VW, 400);
+    auto *vw = new VideoWidget(&host);
+    vw->setGeometry(host.rect());
+    RegionModel rm;
+    vw->setRegionModel(&rm);
+    OverlayWidget *ov = vw->overlay();
+    ov->setVideoSize(VW, VH);
+    ov->setVideoDisplayRect(QRect(0, 0, VW, 400));
+    host.show();
+
+    MagnifierWidget mag(nullptr);
+    mag.setVideoSize(VW, VH);   // zoom 2.0 → 源区域 (100,50,200,100)
+    mag.show();
+    QTest::qWait(50);
+
+    // MainWindow 接线逐字复刻：sourceRectChanged → overlay->setMagnifierRect
+    QObject::connect(&mag, &MagnifierWidget::sourceRectChanged, &host,
+                     [&](const QRect &r, qreal z) { ov->setMagnifierRect(r, z); });
+    ov->setMagnifierRect(mag.currentSourceRect(), mag.zoomLevel());
+
+    CHECK(ov->magnifierRect() == QRect(100, 50, 200, 100),
+          qPrintable(QStringLiteral("magind: initial source rect got (%1,%2 %3x%4)")
+                         .arg(ov->magnifierRect().x()).arg(ov->magnifierRect().y())
+                         .arg(ov->magnifierRect().width()).arg(ov->magnifierRect().height())));
+    CHECK(qAbs(ov->magnifierZoom() - 2.0) < 0.001, "magind: initial zoom 2.0");
+
+    // 四角度手算角点锚定（rot0: tl(100,50)->(100,100) br(299,149)->(299,298)；
+    // rot90: tl->disp(149,100)->(298,100) br->disp(50,299)->(100,299)；
+    // rot180: tl->(299,149)->(299,298) br->(100,50)->(100,100)；
+    // rot270: tl->disp(50,299)->(100,299) br->disp(149,100)->(298,100)）。
+    // QRect(p1,p2).normalized() quirk：角点交换轴每端损 1px（预存行为，
+    // HANDOVER 第三批 §12 已记载）——锚点经同一 normalized() 构造吸收。
+    const QRect anchors[4] = {
+        QRect(QPoint(100, 100), QPoint(299, 298)).normalized(),   // rot 0
+        QRect(QPoint(298, 100), QPoint(100, 299)).normalized(),   // rot 90 (x 轴交换)
+        QRect(QPoint(299, 298), QPoint(100, 100)).normalized(),   // rot 180 (双轴交换)
+        QRect(QPoint(100, 299), QPoint(298, 100)).normalized(),   // rot 270 (y 轴交换)
+    };
+    const int rots[4] = {0, 90, 180, 270};
+    for (int ri = 0; ri < 4; ++ri) {
+        const int rot = rots[ri];
+        vw->setDisplayRotation(rot);
+        const QRect got = ov->magnifierRectWidget();
+        CHECK(got == anchors[ri],
+              qPrintable(QStringLiteral("magind rot %1: widget rect got (%2,%3 %4x%5)")
+                             .arg(rot).arg(got.x()).arg(got.y())
+                             .arg(got.width()).arg(got.height())));
+        // 绘制链路不崩（offscreen 强制 paint）
+        ov->update();
+        QCoreApplication::processEvents();
+    }
+    vw->setDisplayRotation(0);
+
+    // 信号路径 1：锚点缩放 → 标识框跟随
+    mag.zoomAtPoint(120, QPoint(200, 100));   // 放大一档（2.0 → 2.25）
+    CHECK(ov->magnifierRect() == mag.currentSourceRect(),
+          "magind: zoomAtPoint propagates via sourceRectChanged");
+    CHECK(qAbs(ov->magnifierZoom() - mag.zoomLevel()) < 0.001,
+          "magind: zoom value propagates");
+    // 信号路径 2：光标移动 → 标识框跟随
+    mag.updateCursorPosition(QPoint(300, 150));
+    CHECK(ov->magnifierRect() == mag.currentSourceRect(),
+          "magind: cursor move propagates via sourceRectChanged");
+    // 关闭路径：空矩形隐藏
+    ov->setMagnifierRect(QRect(), 0.0);
+    CHECK(!ov->magnifierRectWidget().isValid(), "magind: empty rect hides indicator");
+
+    // ---- 标识框绘制像素级（公共静态 drawMagnifierIndicator）----
+    {
+        QImage canvas(300, 300, QImage::Format_ARGB32);
+        canvas.fill(qRgb(30, 30, 30));
+        {
+            QPainter p(&canvas);
+            OverlayWidget::drawMagnifierIndicator(p, QRect(50, 50, 100, 80), 2.0, 2, 12);
+        }
+        const QColor accent(Theme::Accent);
+        auto isAccent = [&](QRgb px) {
+            return qAbs(qRed(px) - accent.red()) < 30
+                && qAbs(qGreen(px) - accent.green()) < 30
+                && qAbs(qBlue(px) - accent.blue()) < 40;
+        };
+        // 四角括号：左上横臂（y=50 附近、x 52~70）应有金色像素
+        int armHits = 0;
+        for (int x = 52; x <= 70; ++x)
+            for (int y = 49; y <= 51; ++y)
+                if (isAccent(canvas.pixel(x, y))) ++armHits;
+        CHECK(armHits >= 4, "magind: bracket arm painted in accent");
+        // 框内无填充零遮挡：中心像素保持背景色
+        CHECK(canvas.pixel(100, 90) == qRgb(30, 30, 30),
+              "magind: zero occlusion inside bracket");
+        // 倍率徽章：框外右上角（y < 50 的上沿区域）应有金色文字像素
+        int badgeHits = 0;
+        for (int y = 10; y < 48; ++y)
+            for (int x = 60; x <= 160; ++x)
+                if (isAccent(canvas.pixel(x, y))) ++badgeHits;
+        CHECK(badgeHits >= 3, "magind: zoom badge painted outside top-right");
+    }
+
+    // ---- 快照覆盖层烧录（burnAnnotations）----
+    {
+        RegionModel brm;
+        brm.addRegion(QRect(10, 10, 100, 50));
+        PolygonModel bpm;
+        bpm.addPolygon(QPolygon() << QPoint(200, 150) << QPoint(300, 150)
+                                  << QPoint(250, 190));
+        GuideLineModel bgm;
+        GuideLine gl; gl.start = QPoint(0, 100); gl.end = QPoint(399, 100);
+        bgm.addLine(gl);
+
+        auto closerTo = [](QRgb px, const QColor &a, const QColor &b) {
+            auto dist = [](QRgb p, const QColor &c) {
+                return qAbs(qRed(p) - c.red()) + qAbs(qGreen(p) - c.green())
+                     + qAbs(qBlue(p) - c.blue());
+            };
+            return dist(px, a) < dist(px, b);
+        };
+        const QColor bg(40, 40, 40);
+
+        // rot 0：帧 400x200 与显示系 1:1
+        QImage f0(400, 200, QImage::Format_ARGB32);
+        f0.fill(bg);
+        {
+            QPainter p(&f0);
+            OverlayWidget::burnAnnotations(p, f0.size(), QSize(400, 200), 0,
+                                           &brm, &bpm, &bgm, 1);
+        }
+        // 矩形上边：y=10 附近，颜色更接近 regionColor(0) 而非背景
+        bool edgeOk = false;
+        for (int y = 9; y <= 11 && !edgeOk; ++y)
+            edgeOk = closerTo(f0.pixel(60, y), RegionModel::regionColor(0), bg);
+        CHECK(edgeOk, "burn: region border painted at stored coords");
+        // 填充：矩形内部像素被半透明染色（≠ 背景）
+        CHECK(f0.pixel(60, 30) != bg.rgb(), "burn: region translucent fill");
+        // 序号标签 R1：矩形左上内测有白色文字像素
+        bool tagOk = false;
+        for (int y = 12; y < 30 && !tagOk; ++y)
+            for (int x = 14; x < 40; ++x)
+                if (qRed(f0.pixel(x, y)) > 200 && qGreen(f0.pixel(x, y)) > 200
+                    && qBlue(f0.pixel(x, y)) > 200) { tagOk = true; break; }
+        CHECK(tagOk, "burn: region index label painted");
+        // 多边形上边（y=150, x=200..300 实线）
+        bool polyOk = false;
+        for (int y = 149; y <= 151 && !polyOk; ++y)
+            polyOk = closerTo(f0.pixel(250, y), PolygonModel::polygonColor(0), bg);
+        CHECK(polyOk, "burn: polygon edge painted");
+
+        // rot 90：显示系 200x400（与 QImage::transformed(rotate90) 输出同尺寸）
+        QImage f90(200, 400, QImage::Format_ARGB32);
+        f90.fill(bg);
+        {
+            QPainter p(&f90);
+            OverlayWidget::burnAnnotations(p, f90.size(), QSize(400, 200), 90,
+                                           &brm, nullptr, nullptr, 1);
+        }
+        // 矩形 (10,10,100,50) rot90：角点 (10,10)->(189,10) (109,59)->(140,109)
+        // → 映射矩形 (140,10,50,100)，左边 x=140 纵向 y∈[10,109]
+        bool rotOk = false;
+        for (int x = 139; x <= 141 && !rotOk; ++x)
+            rotOk = closerTo(f90.pixel(x, 60), RegionModel::regionColor(0), bg);
+        CHECK(rotOk, "burn: rot90 region mapped to display coords");
+        // 原位应为空（未旋转位置的 (60,10) 在 f90 中仍是背景）
+        CHECK(f90.pixel(60, 10) == bg.rgb(), "burn: rot90 leaves original spot empty");
+    }
+
+    // ---- 放大镜当前裁剪图（快照放大镜段数据源）----
+    {
+        MagnifierWidget mag2(nullptr);
+        mag2.setVideoSize(400, 200);
+        mag2.show();
+        QTest::qWait(50);
+        QImage gray(400, 200, QImage::Format_ARGB32);
+        gray.fill(qRgb(128, 128, 128));
+        mag2.onFrameReady(gray);
+        const QImage cur = mag2.currentMagnifiedImage();
+        CHECK(cur.size() == QSize(200, 100), "magsnap: cropped at source rect size");
+        if (cur.size() == QSize(200, 100)) {
+            const int g = qRed(cur.convertToFormat(QImage::Format_ARGB32)
+                                   .pixel(100, 50));
+            CHECK(g >= 120 && g <= 136, "magsnap: pixel content matches source");
+        }
+        // 旋转 90 后裁剪图宽高互换（与放大视图一致）
+        mag2.setDisplayRotation(90);   // 内部 recalc → 以最近帧重裁
+        const QImage cur90 = mag2.currentMagnifiedImage();
+        CHECK(cur90.size() == QSize(100, 200), "magsnap: rot90 swaps crop dims");
+        mag2.close();
+    }
+
+    mag.close();
+    return g_failures == 0;
+}
+
 int main(int argc, char **argv)
 {
     QApplication app(argc, argv);
@@ -520,6 +720,7 @@ int main(int argc, char **argv)
 
     runRotationScenario();   // 场景 0：显示旋转四角度双向映射（Q1 方案 A）
     runDisplayAdjustScenario();   // 场景 0b：画面调节 LUT + 放大镜生效验证
+    runMagnifierIndicatorScenario();   // 场景 0c：§14 标识框/快照烧录/放大图
     runFlow(c, "onRunGo");       // 场景 1：GO 入口
     if (argc < 4)
         runFlow(c, "onRoiButton");   // 场景 2：框选按钮入口（合成片）

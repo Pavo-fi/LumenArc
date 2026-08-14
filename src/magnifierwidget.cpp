@@ -46,6 +46,8 @@ public:
     int displayRotation() const { return m_displayRotation; }
     /// 画面调节 LUT（空表 = 恒等；在旋转之后应用，与主画面同一张表）
     void setDisplayLut(const QByteArray &lut) { m_displayLut = lut; }
+    /// 当前裁剪显示图（旋转+LUT 已应用）——快照全面化取用
+    QImage currentImage() const { return m_frameImage; }
 
 protected:
     void paintEvent(QPaintEvent *event) override;
@@ -294,6 +296,11 @@ void MagnifierWidget::setDisplayAdjust(const DisplayAdjust &adj)
         onFrameReady(m_lastFullFrame);
 }
 
+QImage MagnifierWidget::currentMagnifiedImage() const
+{
+    return m_content ? m_content->currentImage() : QImage();
+}
+
 void MagnifierWidget::onInternalOverlayWheelZoom(int delta, QPoint videoPos)
 {
     zoomAtPoint(delta, videoPos);
@@ -361,13 +368,17 @@ void MagnifierWidget::zoomAtPoint(int delta, QPoint videoPos)
     int newSrcY = (qBound(0, int(videoPos.y() - tY * newSrcH), m_videoHeight - newSrcH)) & ~1;
 
     m_zoomLevel = newZoom;
-    m_sourceRect = QRect(newSrcX, newSrcY, newSrcW, newSrcH);
+    const QRect newRect(newSrcX, newSrcY, newSrcW, newSrcH);
+    const bool changed = (newRect != m_sourceRect);
+    m_sourceRect = newRect;
     m_content->updateOverlayGeometry();
 
     if (m_overlay) {
         m_overlay->setVideoSize(newSrcW, newSrcH);
         m_overlay->setVideoOriginOffset(QPoint(newSrcX, newSrcY));
     }
+    if (changed)
+        emit sourceRectChanged(m_sourceRect, m_zoomLevel);
 
     if (!m_snapshotOriginal.isNull() && m_content->hasSnapshot())
         m_content->reCropSnapshot(sourceRectForImage(m_snapshotOriginal), m_snapshotOriginal);
@@ -461,13 +472,17 @@ void MagnifierWidget::recalcSourceRect()
     srcX &= ~1;
     srcY &= ~1;
 
-    m_sourceRect = QRect(srcX, srcY, srcW, srcH);
+    const QRect oldRect = m_sourceRect;
+    const QRect newRect(srcX, srcY, srcW, srcH);
+    m_sourceRect = newRect;
     m_content->updateOverlayGeometry();
 
     if (m_overlay) {
         m_overlay->setVideoSize(srcW, srcH);
         m_overlay->setVideoOriginOffset(QPoint(srcX, srcY));
     }
+    if (newRect != oldRect)
+        emit sourceRectChanged(m_sourceRect, m_zoomLevel);
 
     // Re-crop snapshot overlay to match new source rect
     if (!m_snapshotOriginal.isNull() && m_content->hasSnapshot()) {
