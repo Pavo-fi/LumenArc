@@ -9,104 +9,22 @@
 - **构建**：`cmd //c "build_tmp\build_target.bat ALL"`；测试：`QT_QPA_PLATFORM=offscreen`
   + PATH 含 `C:\code\Qt\6.8.0\msvc2022_64\bin`
 - **全回归基线**：case 239 / case_e2e 51 / piecewise 96 / preprocess 170 /
-  ui_chain 92 / calibration 73 / ocr_atpositions 21 / vla 11×PASS 含 [bugA][snaprender]
+  ui_chain 92 / calibration 73 / ocr_atpositions 21 / vla 13×PASS 含 [bugA][snaprender]
 - **当前保留批次**（新→旧）：
+  第八批 §17（快照 v2 真机反馈两连修：刻度轨重建 + 语谱频率轴）·
   第七批 §16（快照翻车重做：离屏重渲染路线，dock resize+grab 废止）·
   第六批 §15（§14 拍板落地：放大镜标识框 + 快照全面化，`855d5cf`）·
   第五批 §14（放大镜标识框 + 快照全面化方案拍板 Q1-Q5）·
-  第四批 §13（放大镜/钉图吃调节修复 + 伽马/色阶/反色扩展，`c022d70`）·
-  第三批 §12（显示旋转 90° 方案 A 落地，`eee4501`）
-- **最近归档动作**：2026-08-14 第七批——第二批（2026-08-13 深夜 §9-11：
-  音频时间轴对齐修复、问题 A/B 定案+加固、播放选项包拍板）移入
-  WORK_HISTORY.md，原文未删改。
-- **常用参考导航**（已归档，查 WORK_HISTORY.md）：项目规则 R1/R2 与问题
-  A/B 排查史（2026-08-13 晚批）、音频时间轴对齐与问题 A/B 定案（深夜批）、
-  架构分层与红线 R 规则（二章）、构建部署 CI（九章）、升级计划表
-  v1.2~v1.9（十章）、测试体系 28 项矩阵（七章）、校时管线救复速览（〇章）、
-  案件模块 M1-M3（二十三章）。
+  第四批 §13（放大镜/钉图吃调节修复 + 伽马/色阶/反色扩展，`c022d70`）
+- **最近归档动作**：2026-08-14 第八批——第三批（§12 显示旋转 90° 方案 A
+  全量实施）移入 WORK_HISTORY.md，原文未删改。
+- **常用参考导航**（已归档，查 WORK_HISTORY.md）：显示旋转 90° 方案 A
+  （第三批 §12）、音频时间轴对齐与问题 A/B 定案（深夜批）、项目规则 R1/R2
+  （08-13 晚批）、架构分层与红线 R 规则（二章）、构建部署 CI（九章）、
+  升级计划表 v1.2~v1.9（十章）、测试体系 28 项矩阵（七章）、校时管线
+  救复速览（〇章）、案件模块 M1-M3（二十三章）。
 
 ---
-
-# ============================================================================
-# 工作记录（2026-08-14 下午，第三批）——Q1 方案 A 旋转功能全量实施
-# ============================================================================
-
-## 12. 显示旋转 90° 步进（Q1 方案 A 落地，HEAD 待提交）
-
-### 依据
-§11 Q1 已拍板：方案 A（覆盖物随转 + 双向坐标映射），施工规格六项按原记录执行。
-
-### 已实现
-1. **VideoWidget 显示链**：`原始帧 → 旋转(QImage::transformed) → LUT → m_frameImage`
-   （setDisplayRotation，0/90/180/270 顺时针吸附归一化；默认零开销直通）。
-   新增 `rawFrame()` 公开原始帧访问器。
-2. **OverlayWidget 双向映射（核心）**：旋转烘焙进 mapToVideo/mapFromVideo——
-   widget↔显示系缩放 + storedToDisplay/displayToStored 精确整数互逆，
-   覆盖层 ~40 处调用点零改动。m_videoWidth/Height 保持【原视频尺寸】，
-   显示尺寸由 displayVideoSize() 按档位推导（90/270 宽高互换）。
-   ⚠ 对施工规格第 1 条的有意偏离：规格写「overlay()->setVideoSize(旋转后尺寸)」，
-   实施改为「overlay 保持原视频尺寸 + 映射函数内部旋转」——同一显示语义，
-   但消除逐调用点转换的漏改风险（规格意图双向映射，路径更安全）。
-3. **放大镜**：MagnifierWidget::setDisplayRotation——源区域/光标/内部 overlay
-   仍全部工作在原视频系（内部逻辑不动），ContentWidget 在显示前旋转裁剪图
-   （帧与截图叠加同一档位）；recalcSourceRect 链路复用完成即时刷新。
-   顺带修复预存 bug：createMagnifier 首帧原给 currentFrame()（已 LUT/旋转的
-   显示帧，裁剪几何错误），改给 rawFrame()。
-4. **钉图 PinnedWidget**：setDisplayRotation，裁剪后显示前旋转；缩放系数按
-   旋转前区域高度 30px 基准等比应用到旋转后尺寸（竖长时间戳不变形）。
-5. **截图叠加（融合）**：存储始终保持原视频系方位——VideoWidget 绘制缓存随
-   档位旋转（缓存键含旋转档）；grabFrameSnapshot 捕获时逆旋转回原方位
-   （LUT 保持烘焙＝所见即所得拍板 #2 不变）；放大镜叠加裁剪后同档旋转。
-6. **时间戳框选**：beginTimestampRoiSelection 默认 ROI 改走 mapFromVideo
-   （旋转映射）；normalizedRoi 天然正确（mapToVideo 已含逆旋转 + 按原视频
-   尺寸归一化——规格第 2 条「归一化前先做逆旋转」自然成立）。
-7. **放大镜平移**：MagnifierPan 位移向量新增 displayDeltaToStored（轴向随
-   档位置换取反；位移无 -1 偏移、无需尺寸）。
-8. **持久化**：VideoState += displayRotation，saveState/restoreState/无状态
-   重置/清空列表全链路；hasData 补判三个 display* 字段（仅旋转/调节过的
-   视频切走切回也能恢复）。不入 .vla（证据文件格式不动）。
-9. **UI**：PlaybackAdjustPanel 新增旋转行（「⟳ 顺时针 90°」循环按钮 +
-   档位标签），复位键连带旋转归零；rotationChanged 信号由 MainWindow
-   同步到主画面/放大镜/钉图。MANUAL.md 补「画面调节」小节。
-10. **证据快照**：currentFrame() 天然所见即所得（旋转+LUT 已含，OSD 文字
-    在旋转后帧上正立烧录）；旋转档 ≠0 时写 PNG 元数据
-    `LumenArc:displayRotation` + 保存提示注明档位（0 档不记，旧产物字节级一致）。
-11. **交互兜底**：A/B 打点/逐帧/拖拽 scrub/倍速/音量均时间轴语义，与像素
-    方位无关，零改动（规格第 5 条成立）。
-
-### 验证
-- 新增 ui_chain [rotation] 场景（offscreen，真实 VideoWidget+QTest 鼠标注入）：
-  四角度 ×（拖拽创建矩形=手算角点锚定 / 点击命中+拖拽移动位移方向语义 /
-  辅助线端点存储系 / 多边形闭合顶点 / 时间戳框选归一化 / 默认 ROI / 绘制
-  不崩）。**60 checks, 0 failures**（基线 23 → 60）。
-- 全回归绿：case 239 / case_e2e 51 / piecewise 96 / preprocess 170 /
-  calibration 73 / ocr_atpositions 21 / vla PASS 含 [bugA]。
-- offscreen 启动 5s 无崩溃。
-
-### 排查中固化的重要知识（后来者勿再踩）
-1. **QRect(p1,p2).normalized() 的 Qt 历史 quirk**：角点交换的轴（负尺寸）
-   归一化时每端损失 1px。例：QRect((100,149),(200,119)).normalized()
-   = (100,120,101,29) 而非 (100,119,101,31)。**预存行为**——无旋转时反向
-   拖拽（右下→左上）一直如此；旋转只是把某些拖拽方向映射为交换轴。
-   取证影响 ±1~2px 可忽略，不改产品代码；测试锚点需经同一 normalized()
-   构造吸收。
-2. **QTest::mouseDClick 在 offscreen 时间戳下不保证触发 QtGui 双击转换**
-   （第二个 press 不会变成 MouseButtonDblClick）——测双击逻辑应手构
-   QMouseEvent(MouseButtonDblClick) sendEvent，确定性 100%。
-3. Release 构建 QT_NO_DEBUG_OUTPUT 把 qDebug 编译掉——诊断输出用
-   fprintf(stderr)。
-4. offscreen 冒烟测试后必须 powershell Stop-Process 杀净（git-bash 的
-   kill/taskkill 转义不可靠）——残留实例锁 exe 导致 LNK1104。
-
-### 待真机 GUI 确认（offscreen 覆盖不到，建议用户在场走一遍）
-- 四角度 ×（放大镜观感/截图叠加对齐/钉图比例/快照合成观感/拖拽手感）；
-- 4K/1440p 旋转播放性能抽查（transformed 每帧 ~10-20ms，仅旋转非零付出；
-  若 4K 25fps 吃紧，follow-up 可做旋转+LUT 单趟合并，本轮从简）；
-- 滑杆/旋转按钮与状态栏提示文案观感。
-
-### 遗留（不本轮处理）
-- 旋转+LUT 单趟合并优化（性能余量，见上）；
-- 上一批待确项不变：面板滑杆手感、快照合成观感、OSD 字号比例。
 
 # ============================================================================
 # 工作记录（2026-08-14 下午，第四批）——放大镜调节修复 + 画面调节参数扩展
@@ -395,3 +313,50 @@ grab 出来；QOpenGLWidget 的 grab 绑定旧 FBO 尺寸。快照质量不得�
 ### 待真机 GUI 确认
 - 新快照产物观感（用户验收）；真机中文字体渲染；
   曲线段 420px / 语谱段 300px 高度手感；放大镜信息块排版。
+
+# ============================================================================
+# 工作记录（2026-08-14 深夜，第八批）——快照 v2 真机反馈两连修
+# ============================================================================
+
+## 17. 用户实测快照 v2：语谱图无单位 + 图表 X 轴刻度轨错位
+
+### 症状（真机 2560×2232 快照实测）
+① 语谱段是纯热力图，无频率轴（用户：「单位没有了」）；
+② 图表段中部横贯一条带刻度的横线（X 轴刻度轨浮在曲线中间），与底部
+   时间标签脱节（用户：「坐标系的 X 轴错位了」）。
+
+### 根因 ②（钉死，ChartPanel 预存架构弱点）
+`updateTimeLabels()` 创建的**刻度线/底部基线是固定坐标 QGraphicsLineItem**，
+`plotAreaChanged` 信号只驱动 `updateTimeLabelPositions()` 搬【文字】——刻度项
+永不重定位。renderToImage 的 `chart->resize(目标尺寸)` 后，文字已搬新位、
+刻度轨仍钉在旧 plotArea.bottom（屏上图表较矮 → 渲染图里浮在中部）。
+屏上从不触发：widget 尺寸变化只来自用户拖拽，此时 Qt 事件循环里
+resizeEvent→paint 序列中 updateTimeLabels 会被其他路径（rangeChanged 等）
+顺带重建——离屏一次性 resize 场景才暴露。
+
+### 修复
+1. `ChartPanel::renderToImage`：resize 后补 `updateTimeLabels()`（重建刻度/
+   基线，内部连带标签重排 + drawChartGuideLines），还原尺寸时同样重建。
+2. **频率轴计算提炼共享 helper** `freqAxisTicks()`（spectrogrampanel_enhanced.cpp
+   文件级静态）：标签样式/自适应步长/最小间距去重与原 drawAxes 逐字一致，
+   drawAxes 本体改为调用它（单一事实来源，防两份公式漂移）。
+3. `renderHeatmapImage` 加左侧频率轴条：轴宽 qBound(56, W/40, 96)，黑底 +
+   屏上同款橙色刻度/标签（2.0k 式）+ 轴竖线 + 左上「Hz」单位提示；
+   热力图/光标右移 axisW。轴条左缘 ≈ 图表 plotArea 左缘，两段视觉对齐。
+
+### 验证
+- vla_test [snaprender] 8 项全 PASS（新增：基线必须落在底部 1/4——
+  bestRow=360/420 hits=591；频率轴条内容 hits=522；光标列随轴条偏移 527）。
+- 全回归绿：vla 13×PASS / case 239 / e2e 51 / piecewise 96 / preprocess 170 /
+  ui_chain 92 / calibration 73 / ocr 21。
+- snap_preview 探针复渲 preview.png：刻度轨回到底部时间标签正上方，
+  语谱左轴频率刻度齐全（offscreen 无字体显示为方框，真机正常）。
+
+### 排查中固化
+- QGraphicsItem 固定坐标项（非 layout 管理）在离屏 resize 重渲时必须显式
+  重建——ChartPanel 的 m_tickMarkItems/m_startTimeLabel/m_endTimeLabel 皆属此类；
+  今后给图表加任何「按 plotArea 计算一次」的绘制项，必须挂 plotAreaChanged
+  或在 renderToImage 路径重建。
+
+### 待真机 GUI 确认
+- 快照全图终验（X 轴刻度轨贴底、语谱频率刻度读数、光标两段对齐）。
