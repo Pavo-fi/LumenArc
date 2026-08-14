@@ -24,8 +24,8 @@
 
 #include "domain/analysis_snapshot.h"
 
-class RegionModel;
-class PolygonModel;
+class RoiModel;
+class RoiModel;
 class TimelineModel;
 class QLabel;
 
@@ -41,8 +41,8 @@ public:
     explicit ChartPanel(QWidget *parent = nullptr);
     ~ChartPanel();
 
-    void setRegionModel(RegionModel *model);
-    void setPolygonModel(PolygonModel *model);
+    void setRegionModel(RoiModel *model);
+    void setPolygonModel(RoiModel *model);
     void setTimelineModel(TimelineModel *model);
 
     void setCursorTime(qint64 timeMs);
@@ -150,8 +150,8 @@ private:
     /// 光标用完整格式：dateKnown 时 yyyy-MM-dd HH:mm:ss.zzz
     QString formatDisplayTimeFull(qint64 displayMs) const;
 
-    RegionModel *m_regionModel = nullptr;
-    PolygonModel *m_polygonModel = nullptr;
+    RoiModel *m_regionModel = nullptr;
+    RoiModel *m_polygonModel = nullptr;
     TimelineModel *m_timelineModel = nullptr;
 
     QChart *m_chart = nullptr;

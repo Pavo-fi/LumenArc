@@ -10,8 +10,8 @@
  */
 #include "videowidget.h"
 #include "displayadjust.h"
-#include "domain/region_model.h"
-#include "domain/polygon_model.h"
+#include "domain/roi_model.h"
+#include "domain/roi_model.h"
 #include "domain/guide_line_model.h"
 #include "infrastructure/ivideo_engine.h"
 #include "i18n.h"
@@ -121,12 +121,12 @@ void OverlayWidget::placeRoiButtons()
     m_roiSkipBtn->move(x + m_roiConfirmBtn->sizeHint().width() + 8, y);
 }
 
-void OverlayWidget::setRegionModel(RegionModel *model)
+void OverlayWidget::setRegionModel(RoiModel *model)
 {
     m_regionModel = model;
 }
 
-void OverlayWidget::setPolygonModel(PolygonModel *model)
+void OverlayWidget::setPolygonModel(RoiModel *model)
 {
     m_polygonModel = model;
 }
@@ -358,8 +358,8 @@ void OverlayWidget::drawMagnifierIndicator(QPainter &painter, const QRect &rect,
 /// 支持 scrub 降采样帧）；颜色/填充/序号标签与屏上 drawRegions 等保持一致。
 void OverlayWidget::burnAnnotations(QPainter &painter, const QSize &frameSize,
                                     const QSize &videoSize, int rotation,
-                                    const RegionModel *regions,
-                                    const PolygonModel *polygons,
+                                    const RoiModel *regions,
+                                    const RoiModel *polygons,
                                     const GuideLineModel *guideLines,
                                     int penWidth)
 {
@@ -388,7 +388,7 @@ void OverlayWidget::burnAnnotations(QPainter &painter, const QSize &frameSize,
         const QVector<QRect> rects = regions->regions();
         for (int i = 0; i < rects.size(); ++i) {
             const QRect rc = mapRect(rects[i]);
-            const QColor base = RegionModel::regionColor(i);
+            const QColor base = RoiModel::regionColor(i);
             QColor fill = base;
             fill.setAlpha(20);
             painter.fillRect(rc, fill);
@@ -406,7 +406,7 @@ void OverlayWidget::burnAnnotations(QPainter &painter, const QSize &frameSize,
             QPolygon target;
             for (const QPoint &pt : polys[i])
                 target.append(mapPt(pt));
-            const QColor base = PolygonModel::polygonColor(i);
+            const QColor base = RoiModel::polygonColor(i);
             QColor fill = base;
             fill.setAlpha(20);
             painter.setBrush(fill);
@@ -484,7 +484,7 @@ void OverlayWidget::drawRegions(QPainter &painter)
     for (int i = 0; i < regions.size(); ++i) {
         QRect rc = mapFromVideo(regions[i]);
         bool selected = (i == m_selectedRegion);
-        QColor baseColor = RegionModel::regionColor(i);
+        QColor baseColor = RoiModel::regionColor(i);
 
         QColor fillColor = baseColor;
         fillColor.setAlpha(selected ? 40 : 20);
@@ -532,7 +532,7 @@ void OverlayWidget::drawPolygons(QPainter &painter)
         }
 
         bool selected = (i == m_selectedPolygon);
-        QColor baseColor = PolygonModel::polygonColor(i);
+        QColor baseColor = RoiModel::polygonColor(i);
 
         QColor fillColor = baseColor;
         fillColor.setAlpha(selected ? 40 : 20);
@@ -1564,12 +1564,12 @@ void VideoWidget::setVideoEngine(IVideoEngine *engine)
     }
 }
 
-void VideoWidget::setRegionModel(RegionModel *model)
+void VideoWidget::setRegionModel(RoiModel *model)
 {
     m_overlay->setRegionModel(model);
 }
 
-void VideoWidget::setPolygonModel(PolygonModel *model)
+void VideoWidget::setPolygonModel(RoiModel *model)
 {
     m_overlay->setPolygonModel(model);
 }

@@ -17,8 +17,8 @@
 #include "i18n.h"
 #include <QPainter>
 #include "app/calibration_service.h"
-#include "domain/region_model.h"
-#include "domain/polygon_model.h"
+#include "domain/roi_model.h"
+#include "domain/roi_model.h"
 #include "domain/guide_line_model.h"
 
 static int g_checks = 0, g_failures = 0;
@@ -194,8 +194,8 @@ static bool runRotationScenario()
     host.resize(VW, 400);
     auto *vw = new VideoWidget(&host);
     vw->setGeometry(host.rect());
-    RegionModel rm;
-    PolygonModel pm;
+    RoiModel rm;
+    RoiModel pm;
     GuideLineModel gm;
     vw->setRegionModel(&rm);
     vw->setPolygonModel(&pm);
@@ -453,7 +453,7 @@ static bool runMagnifierIndicatorScenario()
     host.resize(VW, 400);
     auto *vw = new VideoWidget(&host);
     vw->setGeometry(host.rect());
-    RegionModel rm;
+    RoiModel rm;
     vw->setRegionModel(&rm);
     OverlayWidget *ov = vw->overlay();
     ov->setVideoSize(VW, VH);
@@ -550,9 +550,9 @@ static bool runMagnifierIndicatorScenario()
 
     // ---- 快照覆盖层烧录（burnAnnotations）----
     {
-        RegionModel brm;
+        RoiModel brm;
         brm.addRegion(QRect(10, 10, 100, 50));
-        PolygonModel bpm;
+        RoiModel bpm;
         bpm.addPolygon(QPolygon() << QPoint(200, 150) << QPoint(300, 150)
                                   << QPoint(250, 190));
         GuideLineModel bgm;
@@ -579,7 +579,7 @@ static bool runMagnifierIndicatorScenario()
         // 矩形上边：y=10 附近，颜色更接近 regionColor(0) 而非背景
         bool edgeOk = false;
         for (int y = 9; y <= 11 && !edgeOk; ++y)
-            edgeOk = closerTo(f0.pixel(60, y), RegionModel::regionColor(0), bg);
+            edgeOk = closerTo(f0.pixel(60, y), RoiModel::regionColor(0), bg);
         CHECK(edgeOk, "burn: region border painted at stored coords");
         // 填充：矩形内部像素被半透明染色（≠ 背景）
         CHECK(f0.pixel(60, 30) != bg.rgb(), "burn: region translucent fill");
@@ -593,7 +593,7 @@ static bool runMagnifierIndicatorScenario()
         // 多边形上边（y=150, x=200..300 实线）
         bool polyOk = false;
         for (int y = 149; y <= 151 && !polyOk; ++y)
-            polyOk = closerTo(f0.pixel(250, y), PolygonModel::polygonColor(0), bg);
+            polyOk = closerTo(f0.pixel(250, y), RoiModel::polygonColor(0), bg);
         CHECK(polyOk, "burn: polygon edge painted");
 
         // rot 90：显示系 200x400（与 QImage::transformed(rotate90) 输出同尺寸）
@@ -608,7 +608,7 @@ static bool runMagnifierIndicatorScenario()
         // → 映射矩形 (140,10,50,100)，左边 x=140 纵向 y∈[10,109]
         bool rotOk = false;
         for (int x = 139; x <= 141 && !rotOk; ++x)
-            rotOk = closerTo(f90.pixel(x, 60), RegionModel::regionColor(0), bg);
+            rotOk = closerTo(f90.pixel(x, 60), RoiModel::regionColor(0), bg);
         CHECK(rotOk, "burn: rot90 region mapped to display coords");
         // 原位应为空（未旋转位置的 (60,10) 在 f90 中仍是背景）
         CHECK(f90.pixel(60, 10) == bg.rgb(), "burn: rot90 leaves original spot empty");

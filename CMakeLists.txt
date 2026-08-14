@@ -78,8 +78,7 @@ set(SOURCES
     src/cliptimelinewidget.cpp
     src/spectrogrampanel_enhanced.cpp
     src/videostatemanager.cpp
-    src/domain/region_model.cpp
-    src/domain/polygon_model.cpp
+    src/domain/roi_model.cpp
     src/domain/guide_line_model.cpp
     src/domain/timeline_model.cpp
     src/domain/filename_timestamp.cpp
@@ -129,9 +128,8 @@ set(HEADERS
     src/spectrogrampanel_enhanced.h
     src/videostatemanager.h
     src/domain/analysis_snapshot.h
-    src/domain/region_model.h
+    src/domain/roi_model.h
     src/domain/region_shape.h
-    src/domain/polygon_model.h
     src/domain/guide_line.h
     src/domain/guide_line_model.h
     src/domain/timeline_model.h
@@ -225,6 +223,19 @@ target_link_libraries(lumenarc_piecewise_test PRIVATE
     Qt6::Core
 )
 
+# --- RoiModel unified sequence domain test (v1.5.0 首批 Q-18) ---
+add_executable(lumenarc_roi_model_test
+    tests/roi_model_test_main.cpp
+    src/domain/roi_model.cpp
+)
+target_include_directories(lumenarc_roi_model_test PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+)
+target_link_libraries(lumenarc_roi_model_test PRIVATE
+    Qt6::Core
+    Qt6::Gui
+)
+
 # --- Reconstruction golden-case integration test (B3 elevator clip) ---
 add_executable(lumenarc_reconstruction_test
     tests/reconstruction_integration_main.cpp
@@ -302,8 +313,7 @@ add_executable(lumenarc_vla_test
     src/chartpanel.cpp
     src/spectrogrampanel_enhanced.cpp   # §14v2：renderHeatmapImage 离屏渲染测试
     src/i18n.cpp
-    src/domain/region_model.cpp
-    src/domain/polygon_model.cpp
+    src/domain/roi_model.cpp
     src/domain/timeline_model.cpp
     src/domain/guide_line_model.cpp
     src/domain/time_calibration.cpp
@@ -371,8 +381,7 @@ add_executable(lumenarc_ui_chain_test
     src/i18n.cpp
     src/domain/time_calibration.cpp
     src/domain/time_piecewise.cpp
-    src/domain/region_model.cpp
-    src/domain/polygon_model.cpp
+    src/domain/roi_model.cpp
     src/domain/guide_line_model.cpp
 )
 target_include_directories(lumenarc_ui_chain_test PRIVATE

@@ -259,3 +259,42 @@ v1.5.0 P3 FFmpeg 分析引擎等大改动前，先建独立开发副本，原仓
 ### 后续约定
 - 开发一律在本副本进行，提交推送走 github
 - 原仓库 = 冻结备份；需要回退时以本副本 git 历史或 GitHub 为准
+
+# ============================================================================
+# 工作记录（2026-08-15，第十一批）——v1.5.0 首批提交：RoiModel 合并（Q-18）
+# ============================================================================
+
+## 20. RoiModel 合并（RegionModel + PolygonModel → 统一模型，行为冻结）
+
+### 动机
+v1.5.0 开工前的首批提交（Q-18 拍板，V1_ERA_TECH_PLAN §9.2）：
+技术债「双模型复制」（RegionModel/PolygonModel 各 66/50 行头 + 118/113 行实现，
+增删改查/锁/调色板/信号几乎逐字重复）+「roiId 跨模型冲突」（两个模型各自
+m_nextRoiId 从 1 递增，矩形 id 与多边形 id 会撞号）。
+
+### 设计（行为冻结纯内部重构）
+- 新 `src/domain/roi_model.{h,cpp}`：单实例同时管理矩形表 + 多边形表
+  - 矩形 API 保留原 RegionModel 签名（addRegion/roiIdAt/roiIds/…）
+  - 多边形 API 保留原 PolygonModel 签名，方法名加 polygon 前缀防同名冲突
+    （polygonRoiIdAt/polygonRoiIds/findPolygonIndexByRoiId）
+  - 信号不变：regionsChanged/regionRemoved/polygonsChanged/polygonRemoved
+  - **roiId 统一序列**：两表共享一个递增器；clearRegions/clearPolygons
+    不再各自重置计数（否则与另一表撞号）；restore 取两表 max+1
+- mainwindow 单实例（两个 setter 传同一对象）；chartpanel/videowidget/
+  magnifierwidget 的 OverlayWidget/ChartPanel 保留双槽位成员
+  （m_regionModel/m_polygonModel，测试场景允许两个独立实例）
+
+### 过程踩坑（记录备查）
+1. 批量替换时把 OverlayWidget/ChartPanel 的【双槽位成员】误去重成单成员
+   → ui_chain「rot: rect created」失败：setPolygonModel 覆盖了矩形槽。
+   修：按方法名/上下文归位回 m_regionModel/m_polygonModel 双成员。
+2. robocopy 同步 build_tmp 时把 reconfigure.bat 覆盖回旧仓库路径版
+   → 一次 configure 误跑在旧仓库 build 目录（旧仓库源码未动、备份无损）。
+   修：重建副本版脚本并【提交入 git】，防再被覆盖。
+3. roi_model_test 需链接 Qt6::Gui（QPolygon 属 QtGui）。
+
+### 验证
+- 新 `lumenarc_roi_model_test`：23 checks 0 failures（统一序列/clear 不重置/
+  restore 取两表 max+1/双槽位信号独立/7 色调色板）
+- 全回归绿：ui_chain 92 / vla 13×PASS / case 239 / e2e 51 / piecewise 96 /
+  preprocess 170 / calibration 73 / ocr 21

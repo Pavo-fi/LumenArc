@@ -16,8 +16,8 @@
 #include "displayadjust.h"
 
 class OverlayWidget;
-class RegionModel;
-class PolygonModel;
+class RoiModel;
+class RoiModel;
 class GuideLineModel;
 class QWidget;
 
@@ -36,8 +36,8 @@ public:
     explicit MagnifierWidget(QWidget *parent = nullptr);
     ~MagnifierWidget();
 
-    void setRegionModel(RegionModel *model);
-    void setPolygonModel(PolygonModel *model);
+    void setRegionModel(RoiModel *model);
+    void setPolygonModel(RoiModel *model);
     void setGuideLineModel(GuideLineModel *model);
     /// @brief 设置源视频尺寸，用于坐标映射与裁剪范围计算
     void setVideoSize(int width, int height);

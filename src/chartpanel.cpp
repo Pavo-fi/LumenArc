@@ -9,8 +9,8 @@
  * Licensed under the Apache License, Version 2.0
  */
 #include "chartpanel.h"
-#include "domain/region_model.h"
-#include "domain/polygon_model.h"
+#include "domain/roi_model.h"
+#include "domain/roi_model.h"
 #include "domain/timeline_model.h"
 #include "domain/time_calibration.h"
 #include "i18n.h"
@@ -315,27 +315,27 @@ ChartPanel::~ChartPanel()
     m_labelGraphicsItems.clear();
 }
 
-void ChartPanel::setRegionModel(RegionModel *model)
+void ChartPanel::setRegionModel(RoiModel *model)
 {
     if (m_regionModel) {
         disconnect(m_regionModel, nullptr, this, nullptr);
     }
     m_regionModel = model;
     if (m_regionModel) {
-        connect(m_regionModel, &RegionModel::regionsChanged,
+        connect(m_regionModel, &RoiModel::regionsChanged,
                 this, &ChartPanel::onRegionsChanged);
         rebuildSeries();
     }
 }
 
-void ChartPanel::setPolygonModel(PolygonModel *model)
+void ChartPanel::setPolygonModel(RoiModel *model)
 {
     if (m_polygonModel) {
         disconnect(m_polygonModel, nullptr, this, nullptr);
     }
     m_polygonModel = model;
     if (m_polygonModel) {
-        connect(m_polygonModel, &PolygonModel::polygonsChanged,
+        connect(m_polygonModel, &RoiModel::polygonsChanged,
                 this, &ChartPanel::onRegionsChanged);
         rebuildSeries();
     }
@@ -484,7 +484,7 @@ void ChartPanel::onRegionsChanged()
     // This prevents rebuildSeries from running with unstable data state
     // (e.g., after removeRegionData shifts values[] but before all signals settle).
     QTimer::singleShot(0, this, [this]() {
-        if (m_regionModel)
+        if (m_regionModel && m_polygonModel)
             rebuildSeries();
     });
 }
@@ -908,11 +908,11 @@ void ChartPanel::rebuildSeries()
         m_volumeSeries = nullptr;
     }
 
-    if (!m_regionModel)
+    if (!m_regionModel && !m_polygonModel)
         return;
 
     // Always use ROI model count for series count (dataEntries may be stale after deletion)
-    int rectCount = m_regionModel->regionCount();
+    int rectCount = m_regionModel ? m_regionModel->regionCount() : 0;
     int polyCount = m_polygonModel ? m_polygonModel->polygonCount() : 0;
     int totalCount = rectCount + polyCount;
 
@@ -940,7 +940,7 @@ void ChartPanel::rebuildSeries()
         m_seriesMapping.append({DataEntry::Rect, roiId, dataIdx});
     }
     for (int i = 0; i < polyCount; ++i) {
-        int roiId = m_polygonModel->roiIdAt(i);
+        int roiId = m_polygonModel->polygonRoiIdAt(i);
         int dataIdx = -1;
         if (hasDataEntries) {
             for (int j = 0; j < snap.dataEntries.size(); ++j) {
@@ -958,13 +958,13 @@ void ChartPanel::rebuildSeries()
         auto *series = new QLineSeries();
         if (m_seriesMapping[i].type == DataEntry::Rect) {
             series->setName(QString(lang("区域 %1", "Region %1")).arg(rectCounter + 1));
-            QPen pen(RegionModel::regionColor(rectCounter));
+            QPen pen(RoiModel::regionColor(rectCounter));
             pen.setWidth(1);
             series->setPen(pen);
             rectCounter++;
         } else {
             series->setName(QString(lang("多边形 %1", "Polygon %1")).arg(polyCounter + 1));
-            QPen pen(PolygonModel::polygonColor(polyCounter));
+            QPen pen(RoiModel::polygonColor(polyCounter));
             pen.setWidth(1);
             series->setPen(pen);
             polyCounter++;

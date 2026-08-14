@@ -11,8 +11,8 @@
 #include "mainwindow.h"
 #include "videowidget.h"
 #include "chartpanel.h"
-#include "domain/region_model.h"
-#include "domain/polygon_model.h"
+#include "domain/roi_model.h"
+#include "domain/roi_model.h"
 #include "domain/guide_line_model.h"
 #include "domain/timeline_model.h"
 #include "infrastructure/ivideo_engine.h"
@@ -105,8 +105,7 @@ MainWindow::MainWindow(QWidget *parent)
     setWindowTitle(lang("追光者 Lumen Arc v1.3.1", "Lumen Arc v1.3.1") + buildStamp());
     resize(1280, 720);
 
-    m_regionModel = new RegionModel(this);
-    m_polygonModel = new PolygonModel(this);
+    m_roiModel = new RoiModel(this);   // 统一 ROI 模型（矩形+多边形，v1.5.0 Q-18）
     m_guideLineModel = new GuideLineModel(this);
     m_timelineModel = new TimelineModel(this);
     m_stateManager = new VideoStateManager(this);
@@ -124,13 +123,13 @@ MainWindow::MainWindow(QWidget *parent)
 
     m_videoWidget = new VideoWidget(this);
     m_videoWidget->setVideoEngine(m_videoEngine);
-    m_videoWidget->setRegionModel(m_regionModel);
-    m_videoWidget->setPolygonModel(m_polygonModel);
+    m_videoWidget->setRegionModel(m_roiModel);
+    m_videoWidget->setPolygonModel(m_roiModel);
     m_videoWidget->setGuideLineModel(m_guideLineModel);
 
     m_chartPanel = new ChartPanel(this);
-    m_chartPanel->setRegionModel(m_regionModel);
-    m_chartPanel->setPolygonModel(m_polygonModel);
+    m_chartPanel->setRegionModel(m_roiModel);
+    m_chartPanel->setPolygonModel(m_roiModel);
     m_chartPanel->setTimelineModel(m_timelineModel);
 
     // v0.3: Spectrogram panel below chart
@@ -1265,7 +1264,7 @@ void MainWindow::setupConnections()
                 Q_UNUSED(newRect);
                 AnalysisSnapshot snapshot = m_timelineModel->snapshot();
                 if (!snapshot.isEmpty()) {
-                    int roiId = m_regionModel->roiIdAt(regionIndex);
+                    int roiId = m_roiModel->roiIdAt(regionIndex);
                     if (roiId > 0 && snapshot.dataIndexOfRoiId(roiId, DataEntry::Rect) >= 0) {
                         auto reply = QMessageBox::question(this,
                             lang("数据失效警告", "Data Invalidation Warning"),
@@ -1275,7 +1274,7 @@ void MainWindow::setupConnections()
                         if (reply == QMessageBox::Yes) {
                             m_timelineModel->removeRegionDataByRoiId(roiId, DataEntry::Rect);
                         } else {
-                            m_regionModel->updateRegion(regionIndex, originalRect);
+                            m_roiModel->updateRegion(regionIndex, originalRect);
                         }
                     }
                 }
@@ -1283,7 +1282,7 @@ void MainWindow::setupConnections()
 
     // Bug fix: When an ROI region is deleted, remove its corresponding analysis data
     // to prevent stale curves from appearing when a new ROI is drawn at the same index.
-    connect(m_regionModel, &RegionModel::regionRemoved,
+    connect(m_roiModel, &RoiModel::regionRemoved,
             this, [this](int index, int roiId) {
                 Q_UNUSED(index);
                 AnalysisSnapshot snapshot = m_timelineModel->snapshot();
@@ -1293,7 +1292,7 @@ void MainWindow::setupConnections()
             });
 
     // When a polygon ROI is deleted, remove its data by ROI ID
-    connect(m_polygonModel, &PolygonModel::polygonRemoved,
+    connect(m_roiModel, &RoiModel::polygonRemoved,
             this, [this](int index, int roiId) {
                 Q_UNUSED(index);
                 AnalysisSnapshot snapshot = m_timelineModel->snapshot();
@@ -1308,7 +1307,7 @@ void MainWindow::setupConnections()
                 Q_UNUSED(newPolygon);
                 AnalysisSnapshot snapshot = m_timelineModel->snapshot();
                 if (!snapshot.isEmpty()) {
-                    int roiId = m_polygonModel->roiIdAt(polygonIndex);
+                    int roiId = m_roiModel->polygonRoiIdAt(polygonIndex);
                     int dataIdx = snapshot.dataIndexOfRoiId(roiId, DataEntry::Polygon);
                     if (dataIdx >= 0) {
                         auto reply = QMessageBox::question(this,
@@ -1319,7 +1318,7 @@ void MainWindow::setupConnections()
                         if (reply == QMessageBox::Yes) {
                             m_timelineModel->removeRegionDataByRoiId(roiId, DataEntry::Polygon);
                         } else {
-                            m_polygonModel->updatePolygon(polygonIndex, originalPolygon);
+                            m_roiModel->updatePolygon(polygonIndex, originalPolygon);
                         }
                     }
                 }
@@ -1526,8 +1525,8 @@ void MainWindow::setupConnections()
                 m_trustedDurationMs = 0;
                 m_currentDurationMs = 0;
 
-                m_regionModel->clearRegions();
-                m_polygonModel->clearPolygons();
+                m_roiModel->clearRegions();
+                m_roiModel->clearPolygons();
                 m_guideLineModel->clearLines();
                 m_timelineModel->clearData();
                 if (m_spectrogramEnhanced)
@@ -1632,10 +1631,10 @@ void MainWindow::setupConnections()
     });
 
     // v0.5: 更新粘贴按钮状态
-    connect(m_regionModel, &RegionModel::regionsChanged, this, [this]() {
+    connect(m_roiModel, &RoiModel::regionsChanged, this, [this]() {
         m_pasteRoiBtn->setEnabled(!m_roiClipboard.isEmpty() || !m_polygonClipboard.isEmpty());
     });
-    connect(m_polygonModel, &PolygonModel::polygonsChanged, this, [this]() {
+    connect(m_roiModel, &RoiModel::polygonsChanged, this, [this]() {
         m_pasteRoiBtn->setEnabled(!m_roiClipboard.isEmpty() || !m_polygonClipboard.isEmpty());
     });
 }
@@ -2096,11 +2095,11 @@ void MainWindow::openVideoFile(const QString &filePath)
                                        &loadedRegionRoiIds, &loadedPolygonRoiIds)) {
         restoreAnalysisState(regions, calibration, labels, pinnedRect, snapshotFusion, loadedRegionRoiIds);
         if (loadedPolygonRoiIds.size() == loadedPolygons.size())
-            m_polygonModel->restorePolygons(loadedPolygons, loadedPolygonRoiIds);
+            m_roiModel->restorePolygons(loadedPolygons, loadedPolygonRoiIds);
         else {
-            m_polygonModel->clearPolygons();
+            m_roiModel->clearPolygons();
             for (const QPolygon &poly : loadedPolygons)
-                m_polygonModel->addPolygon(poly);
+                m_roiModel->addPolygon(poly);
         }
         m_guideLineModel->clearLines();
         for (const GuideLine &line : loadedGuideLines)
@@ -2124,7 +2123,7 @@ void MainWindow::openVideoFile(const QString &filePath)
         m_stateManager->saveState(
             m_currentVideoPath,
             m_timelineModel->snapshot(),
-            m_regionModel->regions(),
+            m_roiModel->regions(),
             m_calibration,
             magRect,
             m_chartPanel->labels(),
@@ -2133,11 +2132,11 @@ void MainWindow::openVideoFile(const QString &filePath)
             m_chartPanel->abPointA(),
             m_chartPanel->abPointB(),
             m_chartPanel->isABLoop(),
-            m_polygonModel->polygons(),
+            m_roiModel->polygons(),
             m_guideLineModel->lines(),
             m_chartPanel->chartGuideLinesData(),
-            m_regionModel->roiIds(),
-            m_polygonModel->roiIds(),
+            m_roiModel->roiIds(),
+            m_roiModel->polygonRoiIds(),
             m_adjustPanel ? m_adjustPanel->adjust() : DisplayAdjust(),
             m_adjustPanel ? m_adjustPanel->rotation() : 0
         );
@@ -2178,19 +2177,19 @@ void MainWindow::openVideoFile(const QString &filePath)
         if (m_stateManager->restoreState(filePath, savedState)) {
             // 带 roiId 恢复：保持与分析数据 dataEntries 的 roi_id 对齐
             if (savedState.regionRoiIds.size() == savedState.regions.size())
-                m_regionModel->restoreRegions(savedState.regions, savedState.regionRoiIds);
+                m_roiModel->restoreRegions(savedState.regions, savedState.regionRoiIds);
             else {
-                m_regionModel->clearRegions();
+                m_roiModel->clearRegions();
                 for (const QRect &rc : savedState.regions)
-                    m_regionModel->addRegion(rc);
+                    m_roiModel->addRegion(rc);
             }
 
             if (savedState.polygonRoiIds.size() == savedState.polygons.size())
-                m_polygonModel->restorePolygons(savedState.polygons, savedState.polygonRoiIds);
+                m_roiModel->restorePolygons(savedState.polygons, savedState.polygonRoiIds);
             else {
-                m_polygonModel->clearPolygons();
+                m_roiModel->clearPolygons();
                 for (const QPolygon &poly : savedState.polygons)
-                    m_polygonModel->addPolygon(poly);
+                    m_roiModel->addPolygon(poly);
             }
 
             m_guideLineModel->clearLines();
@@ -2264,8 +2263,8 @@ void MainWindow::openVideoFile(const QString &filePath)
         }
 
         // No saved state, clear data and check for .vla cache
-        m_regionModel->clearRegions();
-        m_polygonModel->clearPolygons();
+        m_roiModel->clearRegions();
+        m_roiModel->clearPolygons();
         m_guideLineModel->clearLines();
         m_timelineModel->clearData();
         if (m_spectrogramEnhanced)
@@ -2339,11 +2338,11 @@ void MainWindow::openVideoFile(const QString &filePath)
                                                     &loadedRegionRoiIds, &loadedPolygonRoiIds)) {
                     restoreAnalysisState(regions, calibration, labels, pinnedRect, snapshotFusion, loadedRegionRoiIds);
                     if (loadedPolygonRoiIds.size() == loadedPolygons.size())
-                        m_polygonModel->restorePolygons(loadedPolygons, loadedPolygonRoiIds);
+                        m_roiModel->restorePolygons(loadedPolygons, loadedPolygonRoiIds);
                     else {
-                        m_polygonModel->clearPolygons();
+                        m_roiModel->clearPolygons();
                         for (const QPolygon &poly : loadedPolygons)
-                            m_polygonModel->addPolygon(poly);
+                            m_roiModel->addPolygon(poly);
                     }
                     m_guideLineModel->clearLines();
                     for (const GuideLine &line : loadedGuideLines)
@@ -2408,16 +2407,16 @@ void MainWindow::onSaveAnalysis()
         return;
 
     QRect magnifierRect = m_magnifier ? m_magnifier->currentSourceRect() : QRect();
-    if (m_timelineModel->saveToFile(filePath, m_regionModel->regions(),
+    if (m_timelineModel->saveToFile(filePath, m_roiModel->regions(),
                                      m_calibration,
                                      magnifierRect,
                                      m_chartPanel->labels(),
                                      m_pinnedRect,
                                      m_snapshotFusion,
-                                     m_polygonModel->polygons(),
+                                     m_roiModel->polygons(),
                                      m_guideLineModel->lines(),
-                                     m_regionModel->roiIds(),
-                                     m_polygonModel->roiIds())) {
+                                     m_roiModel->roiIds(),
+                                     m_roiModel->polygonRoiIds())) {
         // VLA2：频谱已内嵌于文件中，无需 .spec 伴随文件
         // 存入案件管理路径时同步刷新校时徽标缓存（.vla 为 SSOT）
         if (!m_currentVideoPath.isEmpty()
@@ -2464,11 +2463,11 @@ void MainWindow::onLoadAnalysis()
                                             &loadedRegionRoiIds, &loadedPolygonRoiIds)) {
             restoreAnalysisState(regions, calibration, labels, pinnedRect, snapshotFusion, loadedRegionRoiIds);
             if (loadedPolygonRoiIds.size() == loadedPolygons.size())
-                m_polygonModel->restorePolygons(loadedPolygons, loadedPolygonRoiIds);
+                m_roiModel->restorePolygons(loadedPolygons, loadedPolygonRoiIds);
             else {
-                m_polygonModel->clearPolygons();
+                m_roiModel->clearPolygons();
                 for (const QPolygon &poly : loadedPolygons)
-                    m_polygonModel->addPolygon(poly);
+                    m_roiModel->addPolygon(poly);
             }
             m_guideLineModel->clearLines();
             for (const GuideLine &line : loadedGuideLines)
@@ -2856,8 +2855,8 @@ void MainWindow::createMagnifier()
     int vw = m_videoEngine ? m_videoEngine->videoWidth() : 1920;
     int vh = m_videoEngine ? m_videoEngine->videoHeight() : 1080;
     m_magnifier->setVideoSize(vw, vh);
-    m_magnifier->setRegionModel(m_regionModel);
-    m_magnifier->setPolygonModel(m_polygonModel);
+    m_magnifier->setRegionModel(m_roiModel);
+    m_magnifier->setPolygonModel(m_roiModel);
     m_magnifier->setGuideLineModel(m_guideLineModel);
 
     // 旋转档位 + 画面调节同步（Q1 方案 A：放大视图随主画面一起转/调）
@@ -2908,7 +2907,7 @@ void MainWindow::createMagnifier()
                 Q_UNUSED(newRect);
                 AnalysisSnapshot snapshot = m_timelineModel->snapshot();
                 if (!snapshot.isEmpty()) {
-                    int roiId = m_regionModel->roiIdAt(regionIndex);
+                    int roiId = m_roiModel->roiIdAt(regionIndex);
                     if (roiId > 0 && snapshot.dataIndexOfRoiId(roiId, DataEntry::Rect) >= 0) {
                         auto reply = QMessageBox::question(this,
                             lang("数据失效警告", "Data Invalidation Warning"),
@@ -2918,7 +2917,7 @@ void MainWindow::createMagnifier()
                         if (reply == QMessageBox::Yes) {
                             m_timelineModel->removeRegionDataByRoiId(roiId, DataEntry::Rect);
                         } else {
-                            m_regionModel->updateRegion(regionIndex, originalRect);
+                            m_roiModel->updateRegion(regionIndex, originalRect);
                         }
                     }
                 }
@@ -2930,7 +2929,7 @@ void MainWindow::createMagnifier()
                 Q_UNUSED(newPolygon);
                 AnalysisSnapshot snapshot = m_timelineModel->snapshot();
                 if (!snapshot.isEmpty()) {
-                    int roiId = m_polygonModel->roiIdAt(polygonIndex);
+                    int roiId = m_roiModel->polygonRoiIdAt(polygonIndex);
                     int dataIdx = snapshot.dataIndexOfRoiId(roiId, DataEntry::Polygon);
                     if (dataIdx >= 0) {
                         auto reply = QMessageBox::question(this,
@@ -2941,7 +2940,7 @@ void MainWindow::createMagnifier()
                         if (reply == QMessageBox::Yes) {
                             m_timelineModel->removeRegionDataByRoiId(roiId, DataEntry::Polygon);
                         } else {
-                            m_polygonModel->updatePolygon(polygonIndex, originalPolygon);
+                            m_roiModel->updatePolygon(polygonIndex, originalPolygon);
                         }
                     }
                 }
@@ -3057,8 +3056,8 @@ void MainWindow::onAnalyze()
         }
     }
 
-    QVector<QRect> regions = m_regionModel->regions();
-    QVector<QPolygon> polygons = m_polygonModel->polygons();
+    QVector<QRect> regions = m_roiModel->regions();
+    QVector<QPolygon> polygons = m_roiModel->polygons();
     if (regions.isEmpty() && polygons.isEmpty()) {
         QMessageBox::information(this, lang("亮度分析", "Luminance Analysis"),
             lang("请先在视频上绘制至少一个 ROI 区域。",
@@ -3068,10 +3067,10 @@ void MainWindow::onAnalyze()
 
     // Collect ROI IDs for data tracking
     QVector<int> rectRoiIds, polygonRoiIds;
-    for (int i = 0; i < m_regionModel->regionCount(); ++i)
-        rectRoiIds.append(m_regionModel->roiIdAt(i));
-    for (int i = 0; i < m_polygonModel->polygonCount(); ++i)
-        polygonRoiIds.append(m_polygonModel->roiIdAt(i));
+    for (int i = 0; i < m_roiModel->regionCount(); ++i)
+        rectRoiIds.append(m_roiModel->roiIdAt(i));
+    for (int i = 0; i < m_roiModel->polygonCount(); ++i)
+        polygonRoiIds.append(m_roiModel->polygonRoiIdAt(i));
 
     if (m_analysisEngine->isRunning()) {
         QMessageBox::information(this, lang("亮度分析", "Luminance Analysis"),
@@ -3212,15 +3211,15 @@ void MainWindow::onAnalysisFinished(const AnalysisSnapshot &snapshot)
         QDir().mkpath(QFileInfo(vlaPath).absolutePath());
         const QRect magRect = m_magnifier ? m_magnifier->currentSourceRect() : QRect();
         // 全部参数为值拷贝（各 model 的 getter 返回副本），后台线程安全
-        const QVector<QRect> regions = m_regionModel->regions();
+        const QVector<QRect> regions = m_roiModel->regions();
         const TimeCalibration calibration = m_calibration;
         const QVector<ChartLabel> labels = m_chartPanel->labels();
         const QRect pinned = m_pinnedRect;
         const SnapshotFusionData fusion = m_snapshotFusion;
-        const QVector<QPolygon> polygons = m_polygonModel->polygons();
+        const QVector<QPolygon> polygons = m_roiModel->polygons();
         const QVector<GuideLine> lines = m_guideLineModel->lines();
-        const QVector<int> regionRoiIds = m_regionModel->roiIds();
-        const QVector<int> polygonRoiIds = m_polygonModel->roiIds();
+        const QVector<int> regionRoiIds = m_roiModel->roiIds();
+        const QVector<int> polygonRoiIds = m_roiModel->polygonRoiIds();
         TimelineModel *model = m_timelineModel;
         QtConcurrent::run([model, vlaPath, regions, calibration, magRect, labels,
                            pinned, fusion, polygons, lines,
@@ -3280,8 +3279,8 @@ void MainWindow::onAnalysisFailed(const QString &error)
 
 void MainWindow::onClearRegions()
 {
-    m_regionModel->clearRegions();
-    m_polygonModel->clearPolygons();
+    m_roiModel->clearRegions();
+    m_roiModel->clearPolygons();
     // Bug fix: Clear luminance data when all regions are removed.
     // The data is ROI-dependent and meaningless without regions.
     // Audio data is preserved.
@@ -3315,7 +3314,7 @@ void MainWindow::onExportCsv()
     if (filePath.isEmpty())
         return;
 
-    QVector<QRect> regions = m_regionModel->regions();
+    QVector<QRect> regions = m_roiModel->regions();
     if (snapshot.exportToCsv(filePath, regions, m_calibration)) {
         // Export labels to separate file
         QVector<ChartLabel> labels = m_chartPanel->labels();
@@ -3506,11 +3505,11 @@ void MainWindow::restoreAnalysisState(const QVector<QRect> &regions,
 {
     // 带 roiId 恢复：保持与分析数据 dataEntries 的 roi_id 对齐
     if (regionRoiIds.size() == regions.size())
-        m_regionModel->restoreRegions(regions, regionRoiIds);
+        m_roiModel->restoreRegions(regions, regionRoiIds);
     else {
-        m_regionModel->clearRegions();
+        m_roiModel->clearRegions();
         for (const QRect &rc : regions)
-            m_regionModel->addRegion(rc);
+            m_roiModel->addRegion(rc);
     }
     m_calibration = calibration;
     m_chartPanel->setCalibration(m_calibration);
@@ -3745,7 +3744,7 @@ void MainWindow::onSnapshotQuick()
         p.setRenderHint(QPainter::Antialiasing);
         // Q3：ROI 矩形/多边形/辅助线按模型颜色全分辨率烧录
         OverlayWidget::burnAnnotations(p, videoPart.size(), videoSize, rotation,
-                                       m_regionModel, m_polygonModel,
+                                       m_roiModel, m_roiModel,
                                        m_guideLineModel, annoPen);
         // Q4：放大镜来源标识框（与屏上同款金色四角括号 + 倍率徽章）
         if (m_magnifier && m_magnifier->currentSourceRect().isValid()) {
@@ -3983,8 +3982,8 @@ void MainWindow::onGuideLineMode()
 // v0.5: 复制ROI
 void MainWindow::onCopyRoi()
 {
-    m_roiClipboard = m_regionModel->regions();
-    m_polygonClipboard = m_polygonModel->polygons();
+    m_roiClipboard = m_roiModel->regions();
+    m_polygonClipboard = m_roiModel->polygons();
     m_guideLineClipboard = m_guideLineModel->lines();
     int total = m_roiClipboard.size() + m_polygonClipboard.size();
     if (total > 0) {
@@ -4033,16 +4032,16 @@ void MainWindow::onPasteRoi()
         return;
 
     if (msgBox.clickedButton() == replaceBtn) {
-        m_regionModel->clearRegions();
-        m_polygonModel->clearPolygons();
+        m_roiModel->clearRegions();
+        m_roiModel->clearPolygons();
         m_guideLineModel->clearLines();
     }
 
     for (const QRect &rc : m_roiClipboard) {
-        m_regionModel->addRegion(rc);
+        m_roiModel->addRegion(rc);
     }
     for (const QPolygon &poly : m_polygonClipboard) {
-        m_polygonModel->addPolygon(poly);
+        m_roiModel->addPolygon(poly);
     }
     for (const GuideLine &line : m_guideLineClipboard) {
         m_guideLineModel->addLine(line);

@@ -19,8 +19,8 @@
 #include <QImage>
 
 class IVideoEngine;
-class RegionModel;
-class PolygonModel;
+class RoiModel;
+class RoiModel;
 class GuideLineModel;
 struct DisplayAdjust;
 #include "domain/guide_line.h"
@@ -35,8 +35,8 @@ class OverlayWidget : public QWidget
 public:
     explicit OverlayWidget(QWidget *parent = nullptr);
 
-    void setRegionModel(RegionModel *model);
-    void setPolygonModel(PolygonModel *model);
+    void setRegionModel(RoiModel *model);
+    void setPolygonModel(RoiModel *model);
     void setGuideLineModel(GuideLineModel *model);
     void setVideoSize(int width, int height);
     void setVideoDisplayRect(const QRect &rect);
@@ -94,8 +94,8 @@ public:
     /// 与 mapFromVideo 同一整数式）；模型原色 + 半透明填充，屏上同款观感。
     static void burnAnnotations(QPainter &painter, const QSize &frameSize,
                                 const QSize &videoSize, int rotation,
-                                const RegionModel *regions,
-                                const PolygonModel *polygons,
+                                const RoiModel *regions,
+                                const RoiModel *polygons,
                                 const GuideLineModel *guideLines,
                                 int penWidth = 1);
 
@@ -191,8 +191,8 @@ private:
 
     QRect m_videoDisplayRect;
 
-    QPointer<RegionModel> m_regionModel;
-    QPointer<PolygonModel> m_polygonModel;
+    QPointer<RoiModel> m_regionModel;
+    QPointer<RoiModel> m_polygonModel;
     QPointer<GuideLineModel> m_guideLineModel;
     int m_videoWidth = 0;
     int m_videoHeight = 0;
@@ -247,8 +247,8 @@ public:
     ~VideoWidget();
 
     void setVideoEngine(IVideoEngine *engine);
-    void setRegionModel(RegionModel *model);
-    void setPolygonModel(PolygonModel *model);
+    void setRegionModel(RoiModel *model);
+    void setPolygonModel(RoiModel *model);
     void setGuideLineModel(GuideLineModel *model);
     OverlayWidget *overlay() const { return m_overlay; }
 

@@ -13,11 +13,11 @@
 #include "chartpanel.h"
 #include "spectrogrampanel_enhanced.h"
 #include "theme.h"
-#include "domain/region_model.h"
-#include "domain/polygon_model.h"
+#include "domain/roi_model.h"
+#include "domain/roi_model.h"
 #include "domain/timeline_model.h"
 
-static int testFile(ChartPanel *chart, RegionModel *rm, PolygonModel *pm,
+static int testFile(ChartPanel *chart, RoiModel *rm, RoiModel *pm,
                     TimelineModel *tm, QApplication &app,
                     const QString &path)
 {
@@ -96,7 +96,7 @@ static int testFile(ChartPanel *chart, RegionModel *rm, PolygonModel *pm,
     TimeCalibration saveCal = TimeCalibration::fromLegacyOffset(12345);
     bool saved = tm->saveToFile(tmp, rm->regions(), saveCal, QRect(1, 2, 3, 4), {},
                                 QRect(), SnapshotFusionData(), pm->polygons(), {},
-                                rm->roiIds(), pm->roiIds());
+                                rm->roiIds(), pm->polygonRoiIds());
     if (!saved) {
         fprintf(stderr, "[tf] VLA2 save FAILED <<<\n");
         return 0;
@@ -124,7 +124,7 @@ static int testFile(ChartPanel *chart, RegionModel *rm, PolygonModel *pm,
                 }
             }
             // roiId 保持：VLA2 必须原样带回
-            bool idsOk = (rIds2 == rm->roiIds()) && (pIds2 == pm->roiIds());
+            bool idsOk = (rIds2 == rm->roiIds()) && (pIds2 == pm->polygonRoiIds());
             // v8 校时往返：legacy 偏移原样带回（Q-19：v8 不再写 time_offset）
             bool calOk = cal2.isValid() && cal2.offsetMs == 12345
                          && !cal2.dateKnown && qAbs(cal2.rate - 1.0) < 1e-12;
@@ -190,8 +190,8 @@ int main(int argc, char **argv)
     for (int i = 1; i < argc; ++i)
         files << QString::fromLocal8Bit(argv[i]);
 
-    RegionModel rm;
-    PolygonModel pm;
+    RoiModel rm;
+    RoiModel pm;
     TimelineModel tm;
     ChartPanel chart;
     chart.setRegionModel(&rm);
@@ -218,7 +218,7 @@ int main(int argc, char **argv)
     {
         TimelineModel tmA;
         ChartPanel chartA;
-        RegionModel rmA;
+        RoiModel rmA;
         chartA.setRegionModel(&rmA);
         chartA.setTimelineModel(&tmA);
         chartA.resize(1200, 400);
@@ -266,7 +266,7 @@ int main(int argc, char **argv)
     {
         TimelineModel tm;
         ChartPanel chart;
-        RegionModel rm2;
+        RoiModel rm2;
         chart.setRegionModel(&rm2);
         chart.setTimelineModel(&tm);
         chart.resize(800, 300);

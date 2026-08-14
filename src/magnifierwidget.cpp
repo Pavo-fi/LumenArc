@@ -11,8 +11,8 @@
 #include "magnifierwidget.h"
 #include "videowidget.h"
 #include "displayadjust.h"
-#include "domain/region_model.h"
-#include "domain/polygon_model.h"
+#include "domain/roi_model.h"
+#include "domain/roi_model.h"
 #include "domain/guide_line_model.h"
 #include "i18n.h"
 
@@ -30,8 +30,8 @@ class MagnifierWidget::ContentWidget : public QWidget
 public:
     explicit ContentWidget(MagnifierWidget *owner);
 
-    void setRegionModel(RegionModel *model);
-    void setPolygonModel(PolygonModel *model);
+    void setRegionModel(RoiModel *model);
+    void setPolygonModel(RoiModel *model);
     void onFrameReady(const QImage &frame);
     void updateOverlayGeometry();
     OverlayWidget *overlay() const { return m_overlay; }
@@ -86,12 +86,12 @@ MagnifierWidget::ContentWidget::ContentWidget(MagnifierWidget *owner)
     m_overlay->show();
 }
 
-void MagnifierWidget::ContentWidget::setRegionModel(RegionModel *model)
+void MagnifierWidget::ContentWidget::setRegionModel(RoiModel *model)
 {
     m_overlay->setRegionModel(model);
 }
 
-void MagnifierWidget::ContentWidget::setPolygonModel(PolygonModel *model)
+void MagnifierWidget::ContentWidget::setPolygonModel(RoiModel *model)
 {
     m_overlay->setPolygonModel(model);
 }
@@ -306,13 +306,13 @@ void MagnifierWidget::onInternalOverlayWheelZoom(int delta, QPoint videoPos)
     zoomAtPoint(delta, videoPos);
 }
 
-void MagnifierWidget::setRegionModel(RegionModel *model)
+void MagnifierWidget::setRegionModel(RoiModel *model)
 {
     if (m_overlay)
         m_overlay->setRegionModel(model);
 }
 
-void MagnifierWidget::setPolygonModel(PolygonModel *model)
+void MagnifierWidget::setPolygonModel(RoiModel *model)
 {
     if (m_overlay)
         m_overlay->setPolygonModel(model);
