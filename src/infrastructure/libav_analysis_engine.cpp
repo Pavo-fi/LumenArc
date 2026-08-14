@@ -16,7 +16,9 @@ extern "C" {
 #include <libavutil/avutil.h>
 #include <libavutil/imgutils.h>
 #include <libavutil/pixdesc.h>
+#include <libavutil/tx.h>
 #include <libswscale/swscale.h>
+#include <libswresample/swresample.h>
 }
 
 #include <QThread>
@@ -34,6 +36,7 @@ public:
 
 public slots:
     void runLuminance() { m_engine->runLuminanceTask(); }
+    void runAudio() { m_engine->runAudioTask(); }
 
 private:
     LibavAnalysisEngine *m_engine = nullptr;
@@ -124,6 +127,8 @@ LibavAnalysisEngine::LibavAnalysisEngine(QObject *parent)
     connect(thread, &QThread::finished, m_worker, &QObject::deleteLater);
     connect(this, &LibavAnalysisEngine::beginAnalysis,
             m_worker, &Worker::runLuminance);
+    connect(this, &LibavAnalysisEngine::beginAudio,
+            m_worker, &Worker::runAudio);
     thread->start();
 }
 
@@ -174,9 +179,12 @@ void LibavAnalysisEngine::startAnalysis(const QString &videoPath,
 
 void LibavAnalysisEngine::startAudioAnalysis(const QString &videoPath)
 {
-    Q_UNUSED(videoPath)
-    // v1.5.0 第三批实现（swr→RMS→STFT）；过渡期由设置项切回 Python 引擎。
-    emit analysisFailed(tr("libav 音频通路尚未完成，请在设置中切回 Python 引擎"));
+    if (m_running.load())
+        return;
+    m_videoPath = videoPath;
+    m_cancel = false;
+    m_running = true;
+    emit beginAudio();
 }
 
 void LibavAnalysisEngine::cancelAnalysis()
@@ -597,6 +605,251 @@ void LibavAnalysisEngine::runLuminanceTask()
         e.type = (m_rois[k].kind == RoiSpec::Rect) ? DataEntry::Rect : DataEntry::Polygon;
         snap.dataEntries.append(e);
     }
+    emit analysisFinished(snap);
+}
+
+// ============================================================================
+// 音频分析（对齐 analyze_video.py analyze_audio 语义）
+// ============================================================================
+bool LibavAnalysisEngine::analyzeAudioOne(const QString &path, AudioData *out)
+{
+    AVFormatContext *fmt = nullptr;
+    if (avformat_open_input(&fmt, path.toUtf8().constData(), nullptr, nullptr) < 0)
+        return false;
+    if (avformat_find_stream_info(fmt, nullptr) < 0) {
+        avformat_close_input(&fmt);
+        return false;
+    }
+
+    int astream = -1;
+    for (unsigned i = 0; i < fmt->nb_streams; ++i) {
+        if (fmt->streams[i]->codecpar->codec_type == AVMEDIA_TYPE_AUDIO) {
+            astream = static_cast<int>(i);
+            break;
+        }
+    }
+    if (astream < 0) {
+        avformat_close_input(&fmt);
+        return false;   // 无音轨
+    }
+
+    const AVStream *ast = fmt->streams[astream];
+    const AVCodec *codec = avcodec_find_decoder(ast->codecpar->codec_id);
+    if (!codec) {
+        avformat_close_input(&fmt);
+        return false;
+    }
+    AVCodecContext *dec = avcodec_alloc_context3(codec);
+    if (!dec || avcodec_parameters_to_context(dec, ast->codecpar) < 0
+        || avcodec_open2(dec, codec, nullptr) < 0) {
+        if (dec)
+            avcodec_free_context(&dec);
+        avformat_close_input(&fmt);
+        return false;
+    }
+
+    // swr → float32 mono 24000Hz（与 Python extract_audio 的 -ac 1 -ar 24000 一致）
+    AVChannelLayout outLayout;
+    av_channel_layout_default(&outLayout, 1);
+    SwrContext *swr = nullptr;
+    if (swr_alloc_set_opts2(&swr, &outLayout, AV_SAMPLE_FMT_FLT, 24000,
+                            &dec->ch_layout, dec->sample_fmt, dec->sample_rate,
+                            0, nullptr) < 0 || !swr || swr_init(swr) < 0) {
+        if (swr)
+            swr_free(&swr);
+        avcodec_free_context(&dec);
+        avformat_close_input(&fmt);
+        return false;
+    }
+
+    QVector<float> pcm;
+    AVPacket *pkt = av_packet_alloc();
+    AVFrame *frame = av_frame_alloc();
+    bool flushed = false;
+    while (!m_cancel.load()) {
+        if (!flushed) {
+            const int r = av_read_frame(fmt, pkt);
+            if (r < 0) {
+                flushed = true;
+                avcodec_send_packet(dec, nullptr);
+                continue;
+            }
+            if (pkt->stream_index != astream) {
+                av_packet_unref(pkt);
+                continue;
+            }
+            if (avcodec_send_packet(dec, pkt) < 0) {
+                av_packet_unref(pkt);
+                break;
+            }
+            av_packet_unref(pkt);
+        }
+        const int d = avcodec_receive_frame(dec, frame);
+        if (d == 0) {
+            // AAC priming samples：ffmpeg CLI 默认 trim（skip_samples 侧数据），
+            // 引擎必须同样丢弃，否则 PCM 与 Python 通路错位（实测 corr 0.57）
+            int skip = 0;
+            const AVFrameSideData *sd = av_frame_get_side_data(
+                frame, AV_FRAME_DATA_SKIP_SAMPLES);
+            if (sd && sd->size >= static_cast<int>(sizeof(uint32_t) * 2)) {
+                const uint32_t *p = reinterpret_cast<const uint32_t *>(sd->data);
+                skip = static_cast<int>(p[0]);   // skip_samples
+            }
+            // 转换到输出缓冲
+            const int outSamples = swr_get_out_samples(swr, frame->nb_samples);
+            QVector<float> buf(static_cast<int>(outSamples));
+            uint8_t *outPtr = reinterpret_cast<uint8_t *>(buf.data());
+            const int got = swr_convert(swr, &outPtr, outSamples,
+                                        const_cast<const uint8_t **>(frame->data),
+                                        frame->nb_samples);
+            const int begin = qMin(skip, got);
+            if (got > begin) {
+                const int old = pcm.size();
+                pcm.resize(old + got - begin);
+                memcpy(pcm.data() + old, buf.constData() + begin,
+                       (got - begin) * sizeof(float));
+            }
+            av_frame_unref(frame);
+            continue;
+        }
+        if (d == AVERROR(EAGAIN)) {
+            if (flushed)
+                break;
+            continue;
+        }
+        break;   // AVERROR_EOF 或其他
+    }
+    av_frame_free(&frame);
+    av_packet_free(&pkt);
+    swr_free(&swr);
+    avcodec_free_context(&dec);
+
+    if (pcm.size() < 2048) {
+        avformat_close_input(&fmt);
+        return false;   // 有效 PCM 不足一个窗
+    }
+
+    // 音频流起始偏移补齐（对齐 probe_stream_starts + adelay：
+    // 音频晚于视频 >20ms 补前导静音，上限 30s；早于视频不裁切）
+    const double vt = (ast->start_time != AV_NOPTS_VALUE)
+        ? ast->start_time * av_q2d(ast->time_base) : 0.0;
+    double vs = 0.0;
+    for (unsigned i = 0; i < fmt->nb_streams; ++i) {
+        if (fmt->streams[i]->codecpar->codec_type == AVMEDIA_TYPE_VIDEO) {
+            const AVStream *s = fmt->streams[i];
+            vs = (s->start_time != AV_NOPTS_VALUE)
+                ? s->start_time * av_q2d(s->time_base)
+                : (fmt->start_time != AV_NOPTS_VALUE ? fmt->start_time / AV_TIME_BASE : 0.0);
+            break;
+        }
+    }
+    const double deltaMs = (vt - vs) * 1000.0;
+    if (deltaMs > 20.0) {
+        const double padMs = qMin(deltaMs, 30000.0);
+        QVector<float> pad(static_cast<int>(std::lround(padMs * 24.0)), 0.0f);
+        pcm = pad + pcm;
+    }
+    avformat_close_input(&fmt);
+
+    // ---- RMS 音量（frame 2048 / hop 512，除以 max 归一化） ----
+    QVector<qreal> volume;
+    volume.reserve(pcm.size() / 512);
+    for (int i = 0; i + 2048 <= pcm.size(); i += 512) {
+        double sum = 0.0;
+        for (int j = 0; j < 2048; ++j) {
+            const double v = pcm[i + j];
+            sum += v * v;
+        }
+        volume.append(std::sqrt(sum / 2048.0));
+    }
+    qreal volMax = 0.0;
+    for (qreal v : volume)
+        volMax = qMax(volMax, v);
+    if (volMax > 0.0)
+        for (qreal &v : volume)
+            v /= volMax;
+
+    // ---- STFT 语谱（n_fft 1920 / hop 512 / hanning / log10+1e-10） ----
+    // Q-15 拍板 av_rdft，但 av_rdft 仅支持 2^n 点；1920=2^7·3·5 非 2 幂，
+    // 改用同家族 libavutil av_tx（任意 N 混合基，零新依赖）。
+    // 精度：AV_TX_FLOAT_FFT(float32) 动态范围不足——主峰 ~700 时 1e-6 级
+    // 底噪被吞（实测 9kHz 底噪 -124dB vs numpy -66dB）；用 DOUBLE_FFT 对齐
+    // numpy float64（底噪差 <0.01）。stride 必须是 AVComplexDouble 大小（8+8）。
+    constexpr int kFft = 1920;
+    constexpr int kHop = 512;
+    constexpr int kFreqBins = kFft / 2 + 1;   // 961
+    AVTXContext *tx = nullptr;
+    av_tx_fn fn = nullptr;
+    if (av_tx_init(&tx, &fn, AV_TX_DOUBLE_FFT, 0, kFft, nullptr, 0) < 0) {
+        if (tx)
+            av_tx_uninit(&tx);
+        return false;
+    }
+
+    QVector<double> window(kFft);
+    for (int i = 0; i < kFft; ++i)
+        window[i] = 0.5 - 0.5 * std::cos(2.0 * M_PI * i / (kFft - 1));  // np.hanning
+
+    const int nFrames = 1 + (pcm.size() - kFft) / kHop;
+    QVector<QVector<qreal>> spec;
+    spec.resize(kFreqBins);
+    for (auto &b : spec)
+        b.resize(nFrames);
+    QVector<double> fftIn(2 * kFft, 0.0);
+    QVector<double> fftOut(2 * kFft, 0.0);
+    qreal specMin = std::numeric_limits<qreal>::max();
+    qreal specMax = std::numeric_limits<qreal>::lowest();
+
+    for (int f = 0; f < nFrames; ++f) {
+        const int start = f * kHop;
+        for (int i = 0; i < kFft; ++i) {
+            fftIn[2 * i] = pcm[start + i] * window[i];
+            fftIn[2 * i + 1] = 0.0;
+        }
+        fn(tx, fftOut.data(), fftIn.data(), sizeof(AVComplexDouble));
+        for (int k = 0; k < kFreqBins; ++k) {
+            const double re = fftOut[2 * k], im = fftOut[2 * k + 1];
+            const qreal mag = std::sqrt(re * re + im * im);
+            const qreal v = std::log10(mag + 1e-10);
+            spec[k][f] = v;
+            specMin = qMin(specMin, v);
+            specMax = qMax(specMax, v);
+        }
+        if (m_cancel.load())
+            break;
+        if ((f & 0x3F) == 0)
+            emit progressUpdated(f + 1, nFrames, 100.0 * (f + 1) / nFrames);
+    }
+    av_tx_uninit(&tx);
+    if (m_cancel.load())
+        return false;
+
+    out->volume = volume;
+    out->spectrogram = spec;
+    out->sampleRate = 24000;
+    out->hopLength = kHop;
+    out->nFft = kFft;
+    out->timeResolutionMs = 1000.0 * kHop / 24000.0;   // 21.3333… 全精度
+    out->specMin = specMin;
+    out->specMax = specMax;
+    return true;
+}
+
+void LibavAnalysisEngine::runAudioTask()
+{
+    AudioData audio;
+    const bool ok = analyzeAudioOne(m_videoPath, &audio);
+    m_running = false;
+    if (m_cancel.load()) {
+        emit analysisFailed(tr("分析已取消"));
+        return;
+    }
+    if (!ok) {
+        emit analysisFailed(tr("libav 音频分析失败：无法解码音轨"));
+        return;
+    }
+    AnalysisSnapshot snap;
+    snap.audio = audio;
     emit analysisFinished(snap);
 }
 

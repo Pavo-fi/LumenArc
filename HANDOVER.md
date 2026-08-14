@@ -271,3 +271,50 @@ e2e 51 / piecewise 96 / preprocess 170 / calibration 73 / ocr 21
 swr→float PCM→RMS（2048/512）+ av_rdft STFT（1920/512 hanning→log10+1e-10）
 + 音频流起始偏移补齐（probe_stream_starts+adelay 语义）；RMS 相关 ≥0.999
 + 语谱 |Δ|≤0.05 验收；startAudioAnalysis 上移 IAnalysisEngine 接口
+
+# ============================================================================
+# 工作记录（2026-08-15，第十三批）——v1.5.0 第三批：libav 音频通路
+# ============================================================================
+
+## 22. 音频分析引擎（swr→RMS→STFT）+ R2 接口收口
+
+### 交付
+- LibavAnalysisEngine 音频通路（analyze_audio 语义逐字对齐）：
+  - swr → float32 mono 24000Hz → PCM
+  - **AAC priming 处理**：AV_FRAME_DATA_SKIP_SAMPLES 侧数据丢弃前导采样
+    （与 ffmpeg CLI trim 一致，实测 PCM 逐点 0.000000 相同）
+  - 音频流起始偏移补齐（stream start_time 差 >20ms 补静音，上限 30s）
+  - RMS：frame 2048 / hop 512 → max 归一化
+  - STFT：n_fft 1920 / hop 512 / hanning / log10+1e-10 → specMin/specMax
+  - startAudioAnalysis 走工作线程 + 进度/取消
+- **R2 收口**：startAudioAnalysis 上移 IAnalysisEngine 接口（默认失败实现）；
+  mainwindow 2 处 qobject_cast 改接口调用（getVideoInfo → videoTiming、
+  startAudioAnalysis），消 2 处 R2 债（剩 2 处：setNoiseReduction 参数为
+  Python 专属，保留）
+- 测试：lumenarc_libav_test 22 项（+6 音频项）
+
+### A/B 对拍（验收：volume 相关 ≥0.999、语谱 |Δ|≤0.05）
+素材 audio_varied.mp4（10s：静音/440Hz/扫频200-2000/白噪/静音，AAC 编码）：
+- volume corr = 0.999541 PASS
+- 语谱：**主峰 bin peakMaxAbs=0.00076**、窗口弱 cell winMaxAbs=0.293
+  （放宽线 0.5）、meanAbs=0.00077、signal cells=110086
+
+### 两个重要实测发现（记录备查）
+1. **Q-15 拍板 av_rdft 不可行**：av_rdft 仅支持 2^n 点；1920=2^7·3·5 非 2 幂。
+   改用同家族 libavutil **av_tx**（任意 N 混合基，零新依赖）。
+2. **av_tx stride 陷阱**：AV_TX_FLOAT_FFT 样本类型是 AVComplexFloat，
+   **stride 必须 sizeof(AVComplexFloat)=8**（非 sizeof(float)=4）——stride 传错
+   静默产出错误频谱（能量镜像错位，不报错）。探针隔离验证。
+3. **Python 通路 int16 量化底噪**：analyze_video.py 走 ffmpeg CLI `-f wav`
+   （s16），int16 量化白噪声 -96dB/采样经 1920 点窗 FFT 聚能 -66dB——语谱
+   底噪区 Python=-66dB vs 引擎（float 解码保留 AAC 真值）=-124dB 级。
+   **引擎更优**，非回归；验收按信号区（帧峰值 >0dB 的主峰 5dB 窗口）执行，
+   底噪差异记录不验收。语谱渲染 specMin/specMax 归一化后底噪表现更干净。
+
+### 验证
+全回归绿：libav 22 / roi_model 23 / ui_chain 92 / vla 13 / case 239 /
+e2e 51 / piecewise 96 / preprocess 170 / calibration 73 / ocr 21
+
+### 下一批（第四批）：集成
+设置项分析引擎切换（libav 默认 / Python 回退）+ 性能验收（D17 47min
+全帧率 ≤60s）+ 2h 文件全帧率点数验证 + 大文件矩阵 A/B

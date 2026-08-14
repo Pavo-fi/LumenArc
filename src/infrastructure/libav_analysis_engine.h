@@ -75,6 +75,8 @@ public:
 signals:
     /// 内部：请求工作线程启动亮度分析（startAnalysis 时发射）
     void beginAnalysis();
+    /// 内部：请求工作线程启动音频分析（startAudioAnalysis 时发射）
+    void beginAudio();
 
 private:
     struct RoiSpec {
@@ -87,6 +89,7 @@ private:
 
     // ---- 分析任务（工作线程执行） ----
     void runLuminanceTask();
+    void runAudioTask();
 
     // ---- libav 封装 ----
     bool openVideo(const QString &path, AVFormatContext **fmt,
@@ -100,6 +103,10 @@ private:
     bool analyzeLuminanceOne(const QString &path, const QVector<RoiSpec> &rois,
                              qint64 totalFramesEst,
                              QVector<qint64> *outTs, QVector<QVector<qreal>> *outLums);
+
+    /// 单视频音频分析：PCM(24000 mono) → RMS + STFT（对齐 analyze_video.py 语义）。
+    /// 成功返回 true 且 out 已填。
+    bool analyzeAudioOne(const QString &path, AudioData *out);
 
     // 线程
     class Worker;

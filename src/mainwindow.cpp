@@ -2715,13 +2715,9 @@ void MainWindow::dropEvent(QDropEvent *event)
         // Get video metadata (fps + total frames -> duration)
         float fps = 30.0f;
         qint64 durationMs = 0;
-        auto *pyEngine = qobject_cast<PythonAnalysisEngine *>(m_analysisEngine);
-        if (pyEngine) {
-            auto info = pyEngine->getVideoInfo(filePath);
-            fps = info.fps;
-            if (fps > 0 && info.totalFrames > 0)
-                durationMs = static_cast<qint64>((info.totalFrames / fps) * 1000.0);
-        }
+        const auto timing = m_analysisEngine->videoTiming(filePath);   // R2：接口调用
+        fps = (timing.fps > 0) ? timing.fps : 30.0f;
+        durationMs = timing.durationMs;
         if (fps <= 0) fps = 30.0f;
 
         m_videoListPanel->addVideo(filePath, durationMs, fps);
@@ -3134,7 +3130,7 @@ void MainWindow::onAudioAnalysis()
     m_statusLabel->setText(lang("正在分析音频...", "Analyzing audio..."));
 
     m_analysisPhase = Audio;
-    pyEngine->startAudioAnalysis(m_currentVideoPath);
+    m_analysisEngine->startAudioAnalysis(m_currentVideoPath);   // R2：接口调用
 }
 
 void MainWindow::onAnalysisProgress(int analyzed, int total, qreal percent)

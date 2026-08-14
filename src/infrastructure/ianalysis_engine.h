@@ -64,6 +64,13 @@ public:
      */
     virtual qint64 trustedDurationMs(const QString &videoPath);
 
+    /**
+     * @brief Start audio-only analysis (volume + spectrogram).
+     * R2 收口：从 PythonAnalysisEngine 上移接口（v1.5.0-3）。
+     * 默认实现：不支持音频的引擎经 analysisFailed 报错。
+     */
+    virtual void startAudioAnalysis(const QString &videoPath);
+
 signals:
     void progressUpdated(int analyzed, int total, qreal percent);
     void analysisFinished(const AnalysisSnapshot &result);
@@ -80,4 +87,9 @@ inline qint64 IAnalysisEngine::trustedDurationMs(const QString &videoPath)
 {
     const VideoTiming t = videoTiming(videoPath);
     return t.durationMs;
+}
+
+inline void IAnalysisEngine::startAudioAnalysis(const QString &)
+{
+    emit analysisFailed(QObject::tr("当前分析引擎不支持音频分析"));
 }
