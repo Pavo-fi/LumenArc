@@ -368,17 +368,16 @@ void MagnifierWidget::zoomAtPoint(int delta, QPoint videoPos)
     int newSrcY = (qBound(0, int(videoPos.y() - tY * newSrcH), m_videoHeight - newSrcH)) & ~1;
 
     m_zoomLevel = newZoom;
-    const QRect newRect(newSrcX, newSrcY, newSrcW, newSrcH);
-    const bool changed = (newRect != m_sourceRect);
-    m_sourceRect = newRect;
+    m_sourceRect = QRect(newSrcX, newSrcY, newSrcW, newSrcH);
     m_content->updateOverlayGeometry();
 
     if (m_overlay) {
         m_overlay->setVideoSize(newSrcW, newSrcH);
         m_overlay->setVideoOriginOffset(QPoint(newSrcX, newSrcY));
     }
-    if (changed)
-        emit sourceRectChanged(m_sourceRect, m_zoomLevel);
+    // 去抖由接收方 setMagnifierRect 同值短路承担（避免源端漏发：
+    // 取偶后矩形不变但倍率变化时徽章仍要更新）
+    emit sourceRectChanged(m_sourceRect, m_zoomLevel);
 
     if (!m_snapshotOriginal.isNull() && m_content->hasSnapshot())
         m_content->reCropSnapshot(sourceRectForImage(m_snapshotOriginal), m_snapshotOriginal);
@@ -472,17 +471,16 @@ void MagnifierWidget::recalcSourceRect()
     srcX &= ~1;
     srcY &= ~1;
 
-    const QRect oldRect = m_sourceRect;
-    const QRect newRect(srcX, srcY, srcW, srcH);
-    m_sourceRect = newRect;
+    m_sourceRect = QRect(srcX, srcY, srcW, srcH);
     m_content->updateOverlayGeometry();
 
     if (m_overlay) {
         m_overlay->setVideoSize(srcW, srcH);
         m_overlay->setVideoOriginOffset(QPoint(srcX, srcY));
     }
-    if (newRect != oldRect)
-        emit sourceRectChanged(m_sourceRect, m_zoomLevel);
+    // 无条件发射（去抖在接收方）：setZoomLevel/restoreFromRect 先改倍率再进
+    // 这里，源端无法旧值比对；setMagnifierRect 同值短路保证无多余重绘
+    emit sourceRectChanged(m_sourceRect, m_zoomLevel);
 
     // Re-crop snapshot overlay to match new source rect
     if (!m_snapshotOriginal.isNull() && m_content->hasSnapshot()) {

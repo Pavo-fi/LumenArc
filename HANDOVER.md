@@ -456,8 +456,9 @@ MagnifierWidget::m_sourceRect（原视频系）所有变化汇经 recalcSourceRe
 **A. 放大镜来源标识框（规格 14.3.A）**
 1. `MagnifierWidget::sourceRectChanged(QRect, qreal)` 新信号：
    `recalcSourceRect()` 末尾发射（光标跟随/中键平移/旋转/切视频全路径），
-   `zoomAtPoint()` 直改 `m_sourceRect` 的旁路同样补发射；两处均仅在矩形
-   实际变化时发射（旧值比对去抖）。
+   `zoomAtPoint()` 直改 `m_sourceRect` 的旁路同样补发射；无条件发射、
+   去抖由接收方 `setMagnifierRect` 同值短路承担（源端旧值比对会漏掉
+   「取偶后矩形不变但倍率变化」的徽章更新）。
 2. `OverlayWidget::setMagnifierRect(QRect, qreal)` + paintEvent 末尾绘制
    （最上层，仅指示、零命中检测改动）：金色（Theme::Accent）四角括号
    2px + 1px 黑色半透明衬影，框内无填充无中线；倍率徽章深底金字「2.0×」
