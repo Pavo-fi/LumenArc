@@ -326,3 +326,35 @@ resizeEvent→paint 序列中 updateTimeLabels 会被其他路径（rangeChanged
   拍板→落地→翻车重做→两连修→真机终验）。
 - 快照质量已越过用户底线（不低于「页面截图 + OSD 烧录」），进入可用状态。
 - v1.3.0 施工恢复主线：M2「挂接 + 主 UI」任务 6（.vla 路径分流）起。
+
+# ============================================================================
+# 工作记录（2026-08-14 深夜，第十批）——v1.3.0 开发副本建立（防玩崩备份）
+# ============================================================================
+
+## 19. 开发工作区副本 C:\code\LumenArc\LumenArc_v1.3.0
+
+### 动机（用户要求）
+v1.5.0 P3 FFmpeg 分析引擎等大改动前，先建独立开发副本，原仓库
+`C:\code\LumenArc\LumenArc_v1.0 remake`（v1.3.1，HEAD bca4168）保持不动
+作为备份，避免改崩无退路。
+
+### 副本构成
+- git clone 本地仓库（同盘硬链接，含全历史，HEAD=bca4168 与原仓库一致）
+- 补齐 gitignore 不跟踪的运行时/构建件：third_party/ffmpeg（160MB SDK）、
+  vlc_extracted（185MB）、build_tmp/（构建脚本 + 测试数据 caltest/fps_test/
+  integ_clips 等，robocopy 全量同步；初版 cp 漏文件已修复）
+- build/ 全新配置构建（cmake VS17 + Qt6.8.0 prefix），LumenArc.exe 产出
+- 运行时依赖 build/Release/python + ffmpeg 从原仓库复制（非 CMake 产物）
+
+### git 布局
+- remote：backup → 原仓库目录（只读参考）；github → GitHub（主推）
+- master 跟踪 github/master；reconfigure.bat 已改指向本副本路径
+
+### 验证（本副本全绿）
+- 全回归：vla 13×PASS / case 239 / e2e 51 / piecewise 96 / preprocess 170 /
+  ui_chain 92 / calibration 73 / ocr 21
+- LumenArc.exe 构建成功；原仓库未动（备份成立）
+
+### 后续约定
+- 开发一律在本副本进行，提交推送走 github
+- 原仓库 = 冻结备份；需要回退时以本副本 git 历史或 GitHub 为准
