@@ -5,8 +5,7 @@
 
 ## 表头（每次写完 HANDOVER 与 WORK_HISTORY 后必须同步更新本表头——规则 R2）
 
-- **当前 HEAD**：`855d5cf`（2026-08-14 §14 落地：放大镜标识框 + 快照全面化）
-  · docs 提交见 git log（本表头同步提交）
+- **当前 HEAD**：`f046856`（2026-08-14 §15 信号发射修正；§14 落地主体 `855d5cf`）
 - **构建**：`cmd //c "build_tmp\build_target.bat ALL"`；测试：`QT_QPA_PLATFORM=offscreen`
   + PATH 含 `C:\code\Qt\6.8.0\msvc2022_64\bin`
 - **全回归基线**：case 239 / case_e2e 51 / piecewise 96 / preprocess 170 /
