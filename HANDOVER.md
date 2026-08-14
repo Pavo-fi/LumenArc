@@ -225,3 +225,49 @@ m_nextRoiId 从 1 递增，矩形 id 与多边形 id 会撞号）。
   restore 取两表 max+1/双槽位信号独立/7 色调色板）
 - 全回归绿：ui_chain 92 / vla 13×PASS / case 239 / e2e 51 / piecewise 96 /
   preprocess 170 / calibration 73 / ocr 21
+
+# ============================================================================
+# 工作记录（2026-08-15，第十二批）——v1.5.0 第二批：LibavAnalysisEngine 骨架
+# ============================================================================
+
+## 21. 进程内 libav 亮度分析引擎（A/B 对拍核心验收通过）
+
+### 交付
+- 新 `src/infrastructure/libav_analysis_engine.{h,cpp}`（IAnalysisEngine 第二实现）：
+  - 进程内 avformat→avcodec（软解）→swscale GRAY8（BT.601 表，Q-14 方案 A）
+  - **全帧率**亮度（解除 MAX_ANALYSIS_FRAMES=5000 抽稀上限）
+  - ROI 语义与 analyze_video.py 逐字对齐：矩形 int(round)+clamp 区域均值；
+    多边形扫描线掩码；时间戳=帧真实 PTS（showinfo 语义）；多视频 B2 合并
+  - QThread 工作线程 + 信号回投（不阻塞 UI）；取消支持
+  - videoTiming：容器 fps + 前 48 帧 PTS 实测校准（复刻 _probe_video）
+- 新 `lumenarc_libav_test`（16 项）：span 光栅化 / 缩放取整 / 真视频 A/B 对拍
+
+### A/B 对拍（验收线 |Δ|≤1 且均值 ≤0.5，Q-14）
+| 素材 | 点数 | 矩形 maxAbs/meanAbs | 多边形 maxAbs/meanAbs |
+|---|---|---|---|
+| basic.mp4（320x240 5fps 10帧） | 10 | 0.000 / 0.000 | 0.047 / 0.045 |
+| seg_00_normal.mp4（10MB） | 750 | 0.000 / 0.000 | 0.073 / 0.020 |
+
+矩形 ROI 与 Python 通路**逐点零偏差**（同 swscale 转换）；多边形亚 0.1 LSB。
+
+### 关键发现：cv2.fillPoly 扫描线精确规则（实测逆向）
+像素覆盖 = 边交点 x(y)（边按 ymin→ymax 归一，y∈[ymin,ymax) 半开）
+→ **round() 取整 → 闭合区间 [round(x1), round(x2)]**（含右端点）。
+与几何面积不同（三角形 (0,0),(8,0),(8,8) 几何 32 vs cv2 45）；
+50 行实测 49 行精确匹配，仅 y=ymax 顶点行差 1px（亮度影响 <0.001 LSB）。
+初版用 floor+半开 → 多边形偏差 0.9 LSB；改 round+闭合 → 0.047。
+
+### 其他修复
+- readNextVideoFrame 补解码器 flush（send NULL 包）：h264 B 帧缓冲
+  尾帧不再丢失（basic.mp4 8/10 帧 → 10/10）
+- moc 陷阱：struct 定义误入 signals: 区 → moc "Not a signal or slot"
+- 单测需 Qt6::Gui（QPolygon）+ QTimer include
+
+### 验证
+全回归绿：roi_model 23 / libav 16 / ui_chain 92 / vla 13 / case 239 /
+e2e 51 / piecewise 96 / preprocess 170 / calibration 73 / ocr 21
+
+### 下一批（第三批）：音频通路
+swr→float PCM→RMS（2048/512）+ av_rdft STFT（1920/512 hanning→log10+1e-10）
++ 音频流起始偏移补齐（probe_stream_starts+adelay 语义）；RMS 相关 ≥0.999
++ 语谱 |Δ|≤0.05 验收；startAudioAnalysis 上移 IAnalysisEngine 接口

@@ -99,6 +99,7 @@ set(SOURCES
     src/timesettingsdialog.cpp
     src/infrastructure/ffmpeg_video_engine.cpp
     src/infrastructure/python_analysis_engine.cpp
+    src/infrastructure/libav_analysis_engine.cpp
     src/infrastructure/media_probe_engine.cpp
     src/infrastructure/timestamp_ocr_engine.cpp
     src/infrastructure/concat_engine.cpp
@@ -157,6 +158,7 @@ set(HEADERS
     src/infrastructure/ianalysis_engine.h
     src/infrastructure/ffmpeg_video_engine.h
     src/infrastructure/python_analysis_engine.h
+    src/infrastructure/libav_analysis_engine.h
     src/infrastructure/media_probe_engine.h
     src/infrastructure/timestamp_ocr_engine.h
     src/infrastructure/concat_engine.h
@@ -234,6 +236,23 @@ target_include_directories(lumenarc_roi_model_test PRIVATE
 target_link_libraries(lumenarc_roi_model_test PRIVATE
     Qt6::Core
     Qt6::Gui
+)
+
+# --- libav analysis engine test (v1.5.0 P3): spans/scale + A/B vs Python ---
+add_executable(lumenarc_libav_test
+    tests/libav_analysis_test_main.cpp
+    src/infrastructure/libav_analysis_engine.cpp
+    src/infrastructure/libav_analysis_engine.h
+    src/infrastructure/ianalysis_engine.h
+)
+target_include_directories(lumenarc_libav_test PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+    ${FFMPEG_INCLUDE_DIR}
+)
+target_link_libraries(lumenarc_libav_test PRIVATE
+    Qt6::Core
+    Qt6::Gui
+    ${FFMPEG_LIBRARIES}
 )
 
 # --- Reconstruction golden-case integration test (B3 elevator clip) ---
