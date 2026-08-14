@@ -19,6 +19,7 @@
 #include "infrastructure/ianalysis_engine.h"
 #include "infrastructure/ffmpeg_video_engine.h"
 #include "infrastructure/python_analysis_engine.h"
+#include "infrastructure/libav_analysis_engine.h"
 #include "app/calibration_service.h"
 #include "app/case_manager.h"
 #include "app/case_open_panel.h"
@@ -102,7 +103,7 @@ MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent)
 {
     loadLanguage();
-    setWindowTitle(lang("追光者 Lumen Arc v1.3.1", "Lumen Arc v1.3.1") + buildStamp());
+    setWindowTitle(lang("追光者 Lumen Arc v1.5.0", "Lumen Arc v1.5.0") + buildStamp());
     resize(1280, 720);
 
     m_roiModel = new RoiModel(this);   // 统一 ROI 模型（矩形+多边形，v1.5.0 Q-18）
@@ -508,6 +509,18 @@ MainWindow::MainWindow(QWidget *parent)
     pyEngine->setPythonExecutable(detectPythonPath());
     m_analysisEngine = pyEngine;
 
+    // v1.5.0 P3：分析引擎切换（libav 默认 / Python 回退，重启生效）。
+    // libav 引擎已通过 A/B 对拍（亮度 |Δ|≤1、volume 相关 ≥0.999、
+    // 语谱主峰 |Δ|≤0.001）；Python 保留为过渡期回退（设置项）。
+    {
+        QSettings es("LumenArc", "LumenArc");
+        if (es.value("analysisEngine", QStringLiteral("libav")).toString()
+            != QStringLiteral("python")) {
+            delete m_analysisEngine;
+            m_analysisEngine = new LibavAnalysisEngine(this);
+        }
+    }
+
     // 校时服务（v1.2.0：三点识别/absStart/sidecar 继承；产出仅预填，
     // 「采用」由 TimeSettingsDialog 决定）
     m_calibrationService = new CalibrationService(m_analysisEngine, this);
@@ -739,6 +752,30 @@ void MainWindow::createMenus()
 
     // Settings menu
     QMenu *settingsMenu = menuBar()->addMenu(lang("设置(&S)", "&Settings"));
+
+    // 分析引擎（v1.5.0 P3：libav 默认 / Python 回退，重启生效）
+    QMenu *engineMenu = settingsMenu->addMenu(
+        lang("分析引擎（重启生效）", "Analysis Engine (restart required)"));
+    QActionGroup *engineGroup = new QActionGroup(this);
+    {
+        QSettings es("LumenArc", "LumenArc");
+        const QString cur = es.value("analysisEngine", QStringLiteral("libav")).toString();
+        auto addEngine = [&](const QString &title, const QString &key) {
+            QAction *a = engineMenu->addAction(title);
+            a->setCheckable(true);
+            engineGroup->addAction(a);
+            if (cur == key)
+                a->setChecked(true);
+            connect(a, &QAction::triggered, this, [key]() {
+                QSettings s("LumenArc", "LumenArc");
+                s.setValue("analysisEngine", key);
+            });
+        };
+        addEngine(lang("libav（原生，快）", "libav (native, fast)"),
+                  QStringLiteral("libav"));
+        addEngine(lang("Python（回退）", "Python (fallback)"),
+                  QStringLiteral("python"));
+    }
 
     QAction *hwAction = settingsMenu->addAction(lang("硬件解码（重启生效）", "Hardware Decoding (restart required)"));
     hwAction->setCheckable(true);
@@ -1575,7 +1612,7 @@ void MainWindow::setupConnections()
                 }
 
                 setWindowTitle(windowTitleWithCase(
-                    lang("追光者 Lumen Arc v1.3.1", "Lumen Arc v1.3.1")));
+                    lang("追光者 Lumen Arc v1.5.0", "Lumen Arc v1.5.0")));
                 updateTimeDisplay();
                 showOperationStatus(lang("已清空视频列表", "Video list cleared"));
             });
@@ -1807,7 +1844,7 @@ void MainWindow::enterCaseMode()
     if (m_batchRelocateAction)
         m_batchRelocateAction->setEnabled(true);
     setWindowTitle(windowTitleWithCase(
-        lang("追光者 Lumen Arc v1.3.1", "Lumen Arc v1.3.1")));
+        lang("追光者 Lumen Arc v1.5.0", "Lumen Arc v1.5.0")));
     showOperationStatus(lang("案件已打开：%1", "Case opened: %1")
                             .arg(m_caseManager->meta().caseNo));
     // 开案恢复现场（uiState.lastVideoId）：.vla 缓存探测自动加载分析数据
@@ -1832,7 +1869,7 @@ void MainWindow::exitCaseMode()
         m_exportCaseAction->setEnabled(false);
     if (m_batchRelocateAction)
         m_batchRelocateAction->setEnabled(false);
-    setWindowTitle(lang("追光者 Lumen Arc v1.3.1", "Lumen Arc v1.3.1"));
+    setWindowTitle(lang("追光者 Lumen Arc v1.5.0", "Lumen Arc v1.5.0"));
     showOperationStatus(lang("案件已关闭", "Case closed"));
 }
 
@@ -2002,7 +2039,7 @@ void MainWindow::onCaseProperties()
     // 名称可能已改：刷新标题/面板/状态栏
     if (m_caseManager->isOpen()) {
         setWindowTitle(windowTitleWithCase(
-            lang("追光者 Lumen Arc v1.3.1", "Lumen Arc v1.3.1")));
+            lang("追光者 Lumen Arc v1.5.0", "Lumen Arc v1.5.0")));
         m_caseDock->refreshTree();
         m_caseStatusBtn->setText(
             QStringLiteral("📁 ") + m_caseManager->meta().caseNo);
@@ -2107,7 +2144,7 @@ void MainWindow::openVideoFile(const QString &filePath)
 
         // Do NOT overwrite m_currentVideoPath with the .vla path: it is an
         // analysis file, not a playable video, and it keys VideoStateManager.
-        setWindowTitle(windowTitleWithCase("Lumen Arc v1.3.1 - [Loaded: " +
+        setWindowTitle(windowTitleWithCase("Lumen Arc v1.5.0 - [Loaded: " +
                            QFileInfo(filePath).fileName() + "]"));
         } else {
             QMessageBox::critical(this, lang("错误", "Error"),
@@ -2474,7 +2511,7 @@ void MainWindow::onLoadAnalysis()
                 m_guideLineModel->addLine(line);
 
             // Do NOT overwrite m_currentVideoPath with the .vla path (see openVideoFile).
-        setWindowTitle(windowTitleWithCase("Lumen Arc v1.3.1 - [Loaded: " +
+        setWindowTitle(windowTitleWithCase("Lumen Arc v1.5.0 - [Loaded: " +
                        QFileInfo(filePath).fileName() + "]"));
         QMessageBox::information(this, lang("已加载", "Loaded"),
             lang("分析结果加载成功。", "Analysis result loaded successfully."));

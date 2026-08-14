@@ -305,6 +305,8 @@ bool LibavAnalysisEngine::openVideo(const QString &path, AVFormatContext **fmtOu
         avformat_close_input(&fmt);
         return false;
     }
+    // 软解自动多线程（对齐播放引擎：thread_count=0；硬解才需单线程）
+    dec->thread_count = 0;
     if (avcodec_parameters_to_context(dec, fmt->streams[vstream]->codecpar) < 0
         || avcodec_open2(dec, codec, nullptr) < 0) {
         avcodec_free_context(&dec);

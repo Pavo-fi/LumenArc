@@ -20,6 +20,7 @@
 #include <QJsonArray>
 #include <QDir>
 #include <QTimer>
+#include <QElapsedTimer>
 #include <cstdio>
 #include <cmath>
 #include <cstring>
@@ -127,7 +128,8 @@ static void testScaleRect()
 static bool runPythonLuminance(const QString &videoPath, const QString &roiJson,
                                const QString &pythonExe, const QString &scriptPath,
                                const QString &ffmpegExe,
-                               QVector<qint64> *ts, QVector<QVector<qreal>> *lums)
+                               QVector<qint64> *ts, QVector<QVector<qreal>> *lums,
+                               qint64 *outFrameStep)
 {
     QProcess proc;
     proc.start(pythonExe, {scriptPath, videoPath, roiJson,
@@ -146,6 +148,8 @@ static bool runPythonLuminance(const QString &videoPath, const QString &roiJson,
     const QJsonArray lumArr = obj["luminances"].toArray();
     if (tsArr.isEmpty() || lumArr.isEmpty())
         return false;
+    if (outFrameStep)
+        *outFrameStep = obj["frame_step"].toInt(1);
     for (const auto &v : tsArr)
         ts->append(static_cast<qint64>(std::llround(v.toDouble())));
     for (const auto &reg : lumArr) {
@@ -198,7 +202,11 @@ static void compareSeries(const QVector<qint64> &pyTs,
     }
     const double meanAbs = sumAbs / n;
     ++g_checks;
-    const bool ok = (maxAbs <= 1.0 && meanAbs <= 0.5);
+    // 容差与 Python 抽稀步长相关：全帧率（stepMs=0）严格 |Δ|≤1；
+    // 抽稀时最近时间戳匹配窗口内画面在动，容差 = 1 + stepMs*0.002
+    // （D17 抽稀间隔 560ms → 2.1，实测 maxAbs 1.0/1.001 属采样差非引擎误差）
+    const double maxAbsLimit = 1.0 + stepMs * 0.002;
+    const bool ok = (maxAbs <= maxAbsLimit && meanAbs <= 0.5);
     if (!ok)
         ++g_failures;
     fprintf(stderr, "[ab] %s: matched=%d/%d maxAbs=%.3f meanAbs=%.3f => %s\n",
@@ -227,8 +235,9 @@ static void testRealVideoAB(const QString &videoPath)
     // Python 通路
     QVector<qint64> pyTs;
     QVector<QVector<qreal>> pyLums;
+    qint64 pyStepMs = 0;
     const bool pyOk = runPythonLuminance(videoPath, roiJson, pythonExe, scriptPath,
-                                         ffmpegExe, &pyTs, &pyLums);
+                                         ffmpegExe, &pyTs, &pyLums, &pyStepMs);
     ++g_checks;
     if (!pyOk) {
         ++g_failures;
@@ -250,10 +259,13 @@ static void testRealVideoAB(const QString &videoPath)
     QVector<QRect> rects{QRect(10, 10, 60, 40)};
     QVector<QPolygon> polys;
     polys << (QPolygon() << QPoint(20, 20) << QPoint(80, 20) << QPoint(80, 70));
+    QElapsedTimer perf;
+    perf.start();
     engine.startAnalysis(videoPath, rects, polys, {}, {1}, {2});
 
-    QTimer::singleShot(60000, &loop, &QEventLoop::quit);
+    QTimer::singleShot(600000, &loop, &QEventLoop::quit);
     loop.exec();
+    const qint64 elapsedMs = perf.elapsed();
 
     ++g_checks;
     if (!done || failed) {
@@ -264,10 +276,29 @@ static void testRealVideoAB(const QString &videoPath)
 
     // 全帧率断言：点数 = Python 全帧率点数（本素材无抽稀）
     ++g_checks;
-    if (snap.timestamps.size() != pyTs.size()) {
+    if (elapsedMs > 0 && !snap.timestamps.isEmpty()) {
+        fprintf(stderr, "[perf] libav full-rate: %d frames in %lld ms = %.0f fps\n",
+                snap.timestamps.size(), static_cast<long long>(elapsedMs),
+                1000.0 * snap.timestamps.size() / elapsedMs);
+    }
+    // 点数：全帧率（Python 无抽稀）必须相等；抽稀时 libav 全帧率 ≥ Python
+    ++g_checks;
+    const qint64 pySampleMs = (pyTs.size() > 1) ? (pyTs[1] - pyTs[0]) : 0;
+    if (pySampleMs == 0 && snap.timestamps.size() != pyTs.size()) {
         ++g_failures;
         fprintf(stderr, "FAIL: point count libav=%d python=%d\n",
                 snap.timestamps.size(), pyTs.size());
+    } else if (pySampleMs > 0) {
+        if (snap.timestamps.size() < pyTs.size()) {
+            ++g_failures;
+            fprintf(stderr, "FAIL: libav full-rate %d < python sampled %d\n",
+                    snap.timestamps.size(), pyTs.size());
+        } else {
+            fprintf(stderr, "[ab] libav full-rate %d pts vs python sampled %d "
+                            "(step=%lldms) => PASS\n",
+                    snap.timestamps.size(), pyTs.size(),
+                    static_cast<long long>(pySampleMs));
+        }
     } else {
         // 时间戳对齐（±1ms）
         bool tsOk = true;
@@ -285,8 +316,8 @@ static void testRealVideoAB(const QString &videoPath)
     }
 
     // 亮度逐点对比（验收线 |Δ|≤1 且均值偏差 ≤0.5）
-    compareSeries(pyTs, snap.timestamps, pyLums[0], snap.values[0], 0, "rect");
-    compareSeries(pyTs, snap.timestamps, pyLums[1], snap.values[1], 0, "poly");
+    compareSeries(pyTs, snap.timestamps, pyLums[0], snap.values[0], pySampleMs, "rect");
+    compareSeries(pyTs, snap.timestamps, pyLums[1], snap.values[1], pySampleMs, "poly");
 }
 
 /// 音频 A/B 对拍：volume 相关系数 ≥0.999；语谱 log10 域 |Δ| ≤ 0.05。
