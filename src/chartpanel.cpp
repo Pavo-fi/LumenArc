@@ -451,9 +451,12 @@ QImage ChartPanel::renderToImage(const QSize &targetSize)
     setUpdatesEnabled(false);
     const QSizeF oldSize = m_chart->size();
     // 重新布局到目标尺寸：plotAreaChanged 同步驱动时间标签/图表标签/AB 标记
-    // 重排（同线程 DirectConnection）；光标项不听该信号，手动刷新。
+    // 重排（同线程 DirectConnection）；但【刻度线/底部基线是固定坐标项、不听
+    // 该信号】（plotAreaChanged 只搬文字）——必须 updateTimeLabels() 重建，
+    // 否则快照里 X 轴刻度轨残留在旧 plotArea 位置（中部浮线，用户实测）。
     m_chart->resize(QSizeF(targetSize));
-    updateCursorPosition();
+    updateTimeLabels();      // 重建刻度/基线（内部连带 updateTimeLabelPositions + drawChartGuideLines）
+    updateCursorPosition();  // 光标项不听 plotAreaChanged，手动刷新
     sc->update();   // 强制场景立即 polish/布局（离屏无事件循环兜底）
     QCoreApplication::sendPostedEvents(m_chart, QEvent::Polish);
 
@@ -468,6 +471,7 @@ QImage ChartPanel::renderToImage(const QSize &targetSize)
     }
 
     m_chart->resize(oldSize);   // 恢复原布局（屏幕 widget 尺寸不变）
+    updateTimeLabels();         // 刻度项同样重建回原位
     updateCursorPosition();
     setUpdatesEnabled(true);
     update();

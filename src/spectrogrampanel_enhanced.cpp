@@ -77,6 +77,53 @@ static const double logFreqLabels[] = {
     1000, 1250, 1600, 2000, 2500, 3150, 4000, 5000, 6300, 8000, 10000, 12500, 16000, 20000
 };
 
+/// 频率轴刻度计算（drawAxes 屏上绘制与 renderHeatmapImage 离屏渲染共用，
+/// 单一事实来源）。返回 (标签, yRatio) 列表，yRatio：0=底 / 1=顶。
+/// 标签样式与间距规则与原 drawAxes 逐字一致（2.0k / 500 式 + 最小间距去重）。
+static QVector<QPair<QString, qreal>> freqAxisTicks(
+    SpectrogramPanelEnhanced::FreqScale scale, double yMin, double yMax,
+    double nyquist, int heatH, int minLabelSpacing)
+{
+    QVector<QPair<QString, qreal>> out;
+    if (heatH <= 0 || nyquist <= 0 || yMax <= yMin)
+        return out;
+    auto fmt = [](double freq) -> QString {
+        return (freq >= 1000)
+            ? QStringLiteral("%1k").arg(freq / 1000.0, 0, 'f', 1)
+            : QString::number(static_cast<int>(freq));
+    };
+    int lastY = -9999;
+    auto tryAdd = [&](double freq, qreal ratio) {
+        const int y = static_cast<int>(ratio * heatH);
+        if (qAbs(y - lastY) < minLabelSpacing)
+            return;
+        lastY = y;
+        out.append({fmt(freq), ratio});
+    };
+    if (scale == SpectrogramPanelEnhanced::FreqScale::Logarithmic) {
+        const double logMin = std::log(yMin), logMax = std::log(yMax);
+        for (double freq : logFreqLabels) {
+            if (freq < yMin || freq > yMax)
+                continue;
+            const qreal ratio = (logMax > logMin)
+                ? qreal((std::log(freq) - logMin) / (logMax - logMin)) : 0.5;
+            tryAdd(freq, ratio);
+        }
+    } else {
+        double freqStep = (nyquist > 8000) ? 2000.0 : (nyquist > 4000) ? 1000.0
+                        : (nyquist > 2000) ? 500.0 : 200.0;
+        const double pxPerFreq = heatH / (yMax - yMin);
+        while (freqStep * pxPerFreq < minLabelSpacing && freqStep < nyquist)
+            freqStep *= 2;
+        for (double freq = 0; freq <= nyquist; freq += freqStep) {
+            if (freq < yMin || freq > yMax)
+                continue;
+            tryAdd(freq, qreal((freq - yMin) / (yMax - yMin)));
+        }
+    }
+    return out;
+}
+
 SpectrogramPanelEnhanced::SpectrogramPanelEnhanced(QWidget *parent)
     : QOpenGLWidget(parent)
 {
@@ -398,7 +445,12 @@ QImage SpectrogramPanelEnhanced::renderHeatmapImage(const QSize &targetSize)
         ? 1.0 : (m_maxValue - m_minValue);
 
     const int W = targetSize.width(), H = targetSize.height();
+    // 左侧频率轴条（用户实测：快照语谱图要有单位/刻度）——热力图画在
+    // [axisW, W)，轴条黑底 + 与屏上同款的刻度/标签（freqAxisTicks 共享）。
+    const int axisW = qBound(56, W / 40, 96);
+    const int heatW = W - axisW;
     QImage img(W, H, QImage::Format_ARGB32);
+    img.fill(Qt::black);
     for (int r = 0; r < H; ++r) {
         const double t = 1.0 - double(r) / qMax(1, H - 1);   // 顶行 = 最高频
         const double freqFrac = logScale
@@ -407,9 +459,9 @@ QImage SpectrogramPanelEnhanced::renderHeatmapImage(const QSize &targetSize)
         const int bin = qBound(0, int(freqFrac * (nFreqBins - 1) + 0.5),
                                nFreqBins - 1);
         const auto &bins = m_audioData.spectrogram[bin];
-        QRgb *line = reinterpret_cast<QRgb *>(img.scanLine(r));
-        for (int c = 0; c < W; ++c) {
-            const qreal ms = x0 + (qreal(c) / qMax(1, W - 1)) * (x1 - x0);
+        QRgb *line = reinterpret_cast<QRgb *>(img.scanLine(r)) + axisW;
+        for (int c = 0; c < heatW; ++c) {
+            const qreal ms = x0 + (qreal(c) / qMax(1, heatW - 1)) * (x1 - x0);
             const int fr = qBound(0, int(ms / resMs + 0.5), nFrames - 1);
             const qreal norm = qBound(0.0, (bins[fr] - m_minValue) / range, 1.0);
             line[c] = m_colorLUT[qBound(0, int(norm * 255 + 0.5), 255)]
@@ -417,15 +469,39 @@ QImage SpectrogramPanelEnhanced::renderHeatmapImage(const QSize &targetSize)
         }
     }
 
-    // 时间光标（与 paintGL 同款橙色虚线）
-    if (m_cursorTimeMs >= 0 && x1 > x0) {
-        const qreal ratio = (m_cursorTimeMs - x0) / (x1 - x0);
-        if (ratio >= 0.0 && ratio <= 1.0) {
-            QPainter p(&img);
-            p.setPen(QPen(QColor(0xFF, 0x98, 0x1C), 2, Qt::DashLine));
-            const int cx = int(ratio * (W - 1));
-            p.drawLine(cx, 0, cx, H - 1);
+    {
+        QPainter p(&img);
+        p.setRenderHint(QPainter::Antialiasing);
+        const QColor labelColor(0xFF, 0x98, 0x1C);          // 与屏上 drawAxes 同色
+        const QColor tickColor(0xFF, 0x98, 0x1C, 180);
+        const int fs = qBound(10, W / 180, 16);
+        p.setFont(QFont(QStringLiteral("Consolas"), fs, QFont::Bold));
+        // 单位提示（左上）
+        p.setPen(QColor(0x9A, 0xA0, 0xAB));
+        p.drawText(QRect(4, 2, axisW - 6, fs + 6),
+                   Qt::AlignLeft | Qt::AlignTop, QStringLiteral("Hz"));
+        const auto ticks = freqAxisTicks(m_freqScale, y0, y1, nyquist, H, 30);
+        for (const auto &tk : ticks) {
+            const int y = int((1.0 - tk.second) * (H - 1));
+            p.setPen(tickColor);
+            p.drawLine(axisW - 6, y, axisW, y);
+            p.setPen(labelColor);
+            p.drawText(QRect(0, y - fs * 3 / 4, axisW - 10, fs * 3 / 2),
+                       Qt::AlignRight | Qt::AlignVCenter, tk.first);
         }
+        // 轴竖线
+        p.setPen(tickColor);
+        p.drawLine(axisW, 0, axisW, H - 1);
+        // 时间光标（与 paintGL 同款橙色虚线）
+        if (m_cursorTimeMs >= 0 && x1 > x0) {
+            const qreal ratio = (m_cursorTimeMs - x0) / (x1 - x0);
+            if (ratio >= 0.0 && ratio <= 1.0) {
+                p.setPen(QPen(QColor(0xFF, 0x98, 0x1C), 2, Qt::DashLine));
+                const int cx = axisW + int(ratio * (heatW - 1));
+                p.drawLine(cx, 0, cx, H - 1);
+            }
+        }
+        p.end();
     }
     return img;
 }
@@ -487,58 +563,18 @@ void SpectrogramPanelEnhanced::drawAxes(QPainter &painter)
     painter.setFont(font);
 
     double nyquist = m_audioData.sampleRate / 2.0;
-    int minLabelSpacing = 25;
-    int lastLabelY = -999;
+    const int minLabelSpacing = 25;
 
-    if (m_freqScale == FreqScale::Logarithmic) {
-        for (double freq : logFreqLabels) {
-            if (freq < m_viewYMin || freq > m_viewYMax)
-                continue;
-            double logMin = log(m_viewYMin);
-            double logMax = log(m_viewYMax);
-            double yRatio = (logMax > logMin) ? (log(freq) - logMin) / (logMax - logMin) : 0.5;
-            int y = TOP_MARGIN + heatH - static_cast<int>(yRatio * heatH);
-            if (y < TOP_MARGIN || y > TOP_MARGIN + heatH)
-                continue;
-            if (qAbs(y - lastLabelY) < minLabelSpacing)
-                continue;
-            lastLabelY = y;
-
-            painter.setPen(tickColor);
-            painter.drawLine(m_leftMargin - 5, y, m_leftMargin, y);
-            painter.setPen(labelColor);
-            QString label = (freq >= 1000)
-                ? QString("%1k").arg(freq / 1000.0, 0, 'f', 1)
-                : QString::number(static_cast<int>(freq));
-            painter.drawText(QRect(0, y - 8, m_leftMargin - 8, 16),
-                             Qt::AlignRight | Qt::AlignVCenter, label);
-        }
-    } else {
-        double freqStep = (nyquist > 8000) ? 2000.0 : (nyquist > 4000) ? 1000.0 : (nyquist > 2000) ? 500.0 : 200.0;
-        double pixelsPerFreq = (m_viewYMax > m_viewYMin) ? heatH / (m_viewYMax - m_viewYMin) : 1.0;
-        while (freqStep * pixelsPerFreq < minLabelSpacing && freqStep < nyquist)
-            freqStep *= 2;
-
-        for (double freq = 0; freq <= nyquist; freq += freqStep) {
-            if (freq < m_viewYMin || freq > m_viewYMax)
-                continue;
-            double yRatio = (m_viewYMax > m_viewYMin) ? (freq - m_viewYMin) / (m_viewYMax - m_viewYMin) : 0.5;
-            int y = TOP_MARGIN + heatH - static_cast<int>(yRatio * heatH);
-            if (y < TOP_MARGIN || y > TOP_MARGIN + heatH)
-                continue;
-            if (qAbs(y - lastLabelY) < minLabelSpacing)
-                continue;
-            lastLabelY = y;
-
-            painter.setPen(tickColor);
-            painter.drawLine(m_leftMargin - 5, y, m_leftMargin, y);
-            painter.setPen(labelColor);
-            QString label = (freq >= 1000)
-                ? QString("%1k").arg(freq / 1000.0, 0, 'f', 1)
-                : QString::number(static_cast<int>(freq));
-            painter.drawText(QRect(0, y - 8, m_leftMargin - 8, 16),
-                             Qt::AlignRight | Qt::AlignVCenter, label);
-        }
+    // 频率轴刻度（计算与 renderHeatmapImage 共用 freqAxisTicks）
+    const auto ticks = freqAxisTicks(m_freqScale, m_viewYMin, m_viewYMax,
+                                     nyquist, heatH, minLabelSpacing);
+    for (const auto &tk : ticks) {
+        const int y = TOP_MARGIN + heatH - static_cast<int>(tk.second * heatH);
+        painter.setPen(tickColor);
+        painter.drawLine(m_leftMargin - 5, y, m_leftMargin, y);
+        painter.setPen(labelColor);
+        painter.drawText(QRect(0, y - 8, m_leftMargin - 8, 16),
+                         Qt::AlignRight | Qt::AlignVCenter, tk.first);
     }
 
     painter.setPen(tickColor);

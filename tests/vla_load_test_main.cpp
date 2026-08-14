@@ -322,6 +322,24 @@ int main(int argc, char **argv)
         fprintf(stderr, "[snaprender] chart content spread L=%d R=%d => %s\n",
                 left, right, spread ? "PASS" : "FAIL <<<");
         if (!spread) ++fail;
+
+        // X 轴刻度轨/基线必须在底部 1/4 内（旧 bug：固定坐标刻度项不听
+        // plotAreaChanged，resize 后残留在旧 plotArea.bottom 处 → 中部浮线）
+        int bestRow = -1, bestHits = 0;
+        for (int y = 0; y < 420; ++y) {
+            int hits = 0;
+            for (int x = 80; x < 2500; x += 4) {
+                const QRgb px = img.pixel(x, y);
+                if (qAbs(qRed(px) - 58) < 26 && qAbs(qGreen(px) - 65) < 26
+                    && qAbs(qBlue(px) - 82) < 26)
+                    ++hits;   // 基线色 (58,65,82)，AA 混合背景后半值亦纳入
+            }
+            if (hits > bestHits) { bestHits = hits; bestRow = y; }
+        }
+        const bool baselineOk = (bestRow > 315 && bestHits > 30);
+        fprintf(stderr, "[snaprender] chart baseline row=%d/420 hits=%d => %s\n",
+                bestRow, bestHits, baselineOk ? "PASS" : "FAIL <<<");
+        if (!baselineOk) ++fail;
     }
 
     // SpectrogramPanelEnhanced::renderHeatmapImage：纯 CPU 光栅化（不经 GL）。
@@ -350,10 +368,13 @@ int main(int argc, char **argv)
         if (!sizeOk) ++fail;
 
         if (sizeOk) {
+            // 布局：左侧频率轴条 axisW = qBound(56, 1000/40=25, 96) = 56，
+            // 热力图在 [56, 1000)，光标列 cx = 56 + int(0.5*(944-1)) = 527
+            const int axisW = 56;
             auto rowMean = [&](int y0, int y1) {
                 double s = 0; int n = 0;
                 for (int y = y0; y < y1; ++y)
-                    for (int x = 0; x < 1000; x += 4) {
+                    for (int x = axisW + 2; x < 1000; x += 4) {
                         const QRgb px = img.pixel(x, y);
                         s += qRed(px) + qGreen(px) + qBlue(px); ++n;
                     }
@@ -366,10 +387,23 @@ int main(int argc, char **argv)
                     top, bottom, orient ? "PASS" : "FAIL <<<");
             if (!orient) ++fail;
 
-            // 时间光标：中点列应有橙色虚线像素（#FF981C）
+            // 频率轴条：左条应有刻度/标签像素（非纯黑）
+            int axisHits = 0;
+            for (int y = 0; y < 120; ++y)
+                for (int x = 0; x < axisW - 1; ++x) {
+                    const QRgb px = img.pixel(x, y);
+                    if (qRed(px) + qGreen(px) + qBlue(px) > 60)
+                        ++axisHits;
+                }
+            const bool axisOk = axisHits >= 20;
+            fprintf(stderr, "[snaprender] spec freq axis labels hits=%d => %s\n",
+                    axisHits, axisOk ? "PASS" : "FAIL <<<");
+            if (!axisOk) ++fail;
+
+            // 时间光标：中点列（轴条右侧偏移）应有橙色虚线像素（#FF981C）
             int cursorHits = 0;
             for (int y = 0; y < 120; ++y) {
-                const QRgb px = img.pixel(500, y);
+                const QRgb px = img.pixel(527, y);
                 if (qRed(px) > 200 && qGreen(px) > 100 && qGreen(px) < 210
                     && qBlue(px) < 80)
                     ++cursorHits;
