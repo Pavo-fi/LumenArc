@@ -28,6 +28,7 @@
 #include "timesettingsdialog.h"
 #include "magnifierwidget.h"
 #include "snapshotoverlay.h"
+#include "playbackadjustpanel.h"
 #include "pinnedwidget.h"
 #include "videolistpanel.h"
 #include "preprocesswindow.h"
@@ -806,6 +807,7 @@ void MainWindow::createMenus()
                 {"↑ / ↓", "音量增大 / 减小"}, {"C / L", "加速一档"}, {"X / J", "减速一档"},
                 {"Z", "恢复 1x 倍速"}, {"N", "在当前位置添加标签"},
                 {"A", "设置 A 点"}, {"B", "设置 B 点"},
+                {"S", "保存证据快照（帧+曲线合成 PNG）"},
                 {"P", "进入多边形模式"}, {"G", "进入辅助线模式"},
                 {"Delete", "删除选中的 ROI / 辅助线"},
                 {"右键", "删除鼠标下的 ROI / 辅助线（无需先选中）"},
@@ -820,6 +822,7 @@ void MainWindow::createMenus()
                 {"↑ / ↓", "Volume Up / Down"}, {"C / L", "Speed Up"}, {"X / J", "Slow Down"},
                 {"Z", "Reset to 1x"}, {"N", "Add Label at Current Position"},
                 {"A", "Set A Point"}, {"B", "Set B Point"},
+                {"S", "Save evidence snapshot (frame+chart PNG)"},
                 {"P", "Enter Polygon Mode"}, {"G", "Enter Guide Line Mode"},
                 {"Delete", "Delete Selected ROI / Guide Line"},
                 {"Right-click", "Delete ROI / Guide Line under cursor (no selection needed)"},
@@ -1035,6 +1038,22 @@ void MainWindow::createToolBar()
     m_placeBtn->setCheckable(true);
     m_placeBtn->setEnabled(false);
 
+    // 播放选项包（2026-08-14）：证据快照 + 画面调节面板开关
+    m_snapshotBtn = new QPushButton(lang("快照", "Snapshot"), this);
+    m_snapshotBtn->setToolTip(lang(
+        "保存证据快照：当前帧+曲线分析合成 PNG（快捷键 S）",
+        "Save evidence snapshot: frame + chart composite PNG (S)"));
+    m_snapshotBtn->setFixedHeight(32);
+    m_snapshotBtn->setStyleSheet(fusionBtnStyle);
+    m_snapshotBtn->setEnabled(false);
+
+    m_adjustBtn = new QPushButton(lang("画面调节", "Adjust"), this);
+    m_adjustBtn->setToolTip(lang("播放画面亮度/对比度调节（仅显示，不动证据）",
+                                 "Playback brightness/contrast (display only)"));
+    m_adjustBtn->setFixedHeight(32);
+    m_adjustBtn->setStyleSheet(fusionBtnStyle);
+    m_adjustBtn->setCheckable(true);
+
     // v0.5: ROI 模式按钮组（分段控件：共享圆角外框）
     const QString modeBtnStyle =
         "QPushButton {"
@@ -1131,6 +1150,9 @@ void MainWindow::createToolBar()
     toolBar->addWidget(m_editBtn);
     toolBar->addWidget(m_placeBtn);
     toolBar->addSeparator();
+    toolBar->addWidget(m_snapshotBtn);
+    toolBar->addWidget(m_adjustBtn);
+    toolBar->addSeparator();
 
     m_timeLabel = new QLabel("00:00 / 00:00", this);
     m_timeLabel->setStyleSheet(timeLabelStyle);
@@ -1157,6 +1179,12 @@ void MainWindow::createToolBar()
     for (auto *btn : toolBar->findChildren<QPushButton*>()) {
         btn->setFocusPolicy(Qt::NoFocus);
     }
+
+    // 播放画面调节面板（2026-08-14）：dock 常驻模式，默认隐藏，
+    // 工具栏「画面调节」按钮调出后一直开着直到手动关闭。
+    m_adjustPanel = new PlaybackAdjustPanel(this);
+    addDockWidget(Qt::RightDockWidgetArea, m_adjustPanel);
+    m_adjustPanel->hide();
 }
 
 /// @brief 连接所有信号槽：引擎→UI更新/按钮→槽/截图同步
@@ -1332,6 +1360,28 @@ void MainWindow::setupConnections()
     connect(m_captureBtn, &QPushButton::clicked, this, [this]() {
         m_videoWidget->grabFrameSnapshot();
     });
+    // 证据快照 + 画面调节面板（2026-08-14）
+    connect(m_snapshotBtn, &QPushButton::clicked,
+            this, &MainWindow::onSnapshotQuick);
+    connect(m_adjustBtn, &QPushButton::toggled, this, [this](bool on) {
+        if (m_adjustPanel)
+            m_adjustPanel->setVisible(on);
+    });
+    if (m_adjustPanel) {
+        connect(m_adjustPanel, &PlaybackAdjustPanel::adjustChanged, this,
+                [this](int b, int c) {
+                    // VideoWidget 内部会从保留的原始帧重建显示帧，
+                    // 暂停态拖滑杆同样实时预览。
+                    m_videoWidget->setDisplayAdjust(b, c);
+                });
+        connect(m_adjustPanel, &QDockWidget::visibilityChanged, this,
+                [this](bool vis) {
+                    if (m_adjustBtn) {
+                        QSignalBlocker blk(m_adjustBtn);
+                        m_adjustBtn->setChecked(vis);
+                    }
+                });
+    }
     connect(m_videoWidget, &VideoWidget::frameSnapshotReady, this, [this](const QImage &img) {
         m_snapshotOverlay->setSnapshot(img);
         m_editBtn->setEnabled(true);
@@ -1487,6 +1537,12 @@ void MainWindow::setupConnections()
                 m_audioAnalysisBtn->setEnabled(false);
                 m_setTimeBtn->setEnabled(false);
                 m_captureBtn->setEnabled(false);
+                if (m_snapshotBtn)
+                    m_snapshotBtn->setEnabled(false);
+                if (m_adjustPanel) {   // 清空列表：调节回默认，面板状态保留
+                    m_adjustPanel->setValues(0, 0);
+                    m_videoWidget->setDisplayAdjust(0, 0);
+                }
 
                 setWindowTitle(windowTitleWithCase(
                     lang("追光者 Lumen Arc v1.3.1", "Lumen Arc v1.3.1")));
@@ -2050,7 +2106,9 @@ void MainWindow::openVideoFile(const QString &filePath)
             m_guideLineModel->lines(),
             m_chartPanel->chartGuideLinesData(),
             m_regionModel->roiIds(),
-            m_polygonModel->roiIds()
+            m_polygonModel->roiIds(),
+            m_adjustPanel ? m_adjustPanel->brightness() : 0,
+            m_adjustPanel ? m_adjustPanel->contrast() : 0
         );
     }
 
@@ -2139,6 +2197,14 @@ void MainWindow::openVideoFile(const QString &filePath)
                 m_placeBtn->setEnabled(true);
             }
 
+            // 恢复播放画面调节（逐视频记忆）
+            if (m_adjustPanel) {
+                m_adjustPanel->setValues(savedState.displayBrightness,
+                                         savedState.displayContrast);
+                m_videoWidget->setDisplayAdjust(savedState.displayBrightness,
+                                                savedState.displayContrast);
+            }
+
             if (m_spectrogramEnhanced && savedState.snapshot.hasAudio())
                 m_spectrogramEnhanced->setSpectrogramData(savedState.snapshot.audio);
 
@@ -2150,6 +2216,8 @@ void MainWindow::openVideoFile(const QString &filePath)
             m_audioAnalysisBtn->setEnabled(true);
             m_setTimeBtn->setEnabled(true);
             m_captureBtn->setEnabled(true);
+            if (m_snapshotBtn)
+                m_snapshotBtn->setEnabled(true);
 
             onPlay();
             return;
@@ -2172,6 +2240,11 @@ void MainWindow::openVideoFile(const QString &filePath)
         m_chartPanel->clearAB();
         m_pinnedRect = QRect();
         m_snapshotFusion = SnapshotFusionData();
+        // 无状态视频：画面调节回默认（防跨视频泄漏）
+        if (m_adjustPanel) {
+            m_adjustPanel->setValues(0, 0);
+            m_videoWidget->setDisplayAdjust(0, 0);
+        }
         if (m_snapshotOverlay)
             m_snapshotOverlay->clearSnapshot();
         if (m_videoWidget)
@@ -2185,6 +2258,8 @@ void MainWindow::openVideoFile(const QString &filePath)
         m_audioAnalysisBtn->setEnabled(true);  // v0.3
         m_setTimeBtn->setEnabled(true);
         m_captureBtn->setEnabled(true);
+        if (m_snapshotBtn)
+            m_snapshotBtn->setEnabled(true);
 
         // Check for cached .vla file alongside the video
         // v1.3.0 路径分流：入案视频缓存 = 案件 videos/V###.vla；未入案照旧源旁
@@ -3501,6 +3576,9 @@ bool MainWindow::eventFilter(QObject *watched, QEvent *event)
             }
             return true;
         }
+        case Qt::Key_S:
+            onSnapshotQuick();   // 证据快照（2026-08-14）
+            return true;
         case Qt::Key_J:
             adjustSpeed(-1.0f);
             return true;
@@ -3550,6 +3628,132 @@ bool MainWindow::eventFilter(QObject *watched, QEvent *event)
     }
 
     return QMainWindow::eventFilter(watched, event);
+}
+
+void MainWindow::onSnapshotQuick()
+{
+    const QImage frame = m_videoWidget->currentFrame();   // 已含画面调节（所见即所得）
+    if (frame.isNull()) {
+        showOperationStatus(lang("当前无画面，无法快照", "No frame to snapshot"));
+        return;
+    }
+    const qint64 posMs = m_videoEngine ? m_videoEngine->position() : 0;
+
+    // ---- 时间码：校时后用北京时间；否则相对时间 ----
+    QString timeText, fileTimeTag;
+    if (m_calibration.dateKnown) {
+        const QDateTime dt =
+            QDateTime::fromMSecsSinceEpoch(m_calibration.beijingMsOf(posMs));
+        timeText = dt.toString(QStringLiteral("yyyy-MM-dd HH:mm:ss"));
+        fileTimeTag = dt.toString(QStringLiteral("yyyyMMdd_HHmmss"));
+    } else {
+        qint64 ms = posMs + m_calibration.offsetMs;
+        if (ms < 0) ms = 0;
+        const int s = int(ms / 1000);
+        timeText = QStringLiteral("%1:%2:%3")
+            .arg(s / 3600, 2, 10, QChar('0')).arg((s % 3600) / 60, 2, 10, QChar('0'))
+            .arg(s % 60, 2, 10, QChar('0'));
+        fileTimeTag = QStringLiteral("t%1-%2-%3")
+            .arg(s / 3600, 2, 10, QChar('0')).arg((s % 3600) / 60, 2, 10, QChar('0'))
+            .arg(s % 60, 2, 10, QChar('0'));
+    }
+
+    // ---- 当前帧标签（±1s 内最近者；ChartLabel 存流内时间）----
+    QString labelText;
+    {
+        qint64 best = LLONG_MAX;
+        for (const auto &l : m_chartPanel->labels()) {
+            const qint64 d = qAbs(l.timeMs - posMs);
+            if (d < best) { best = d; labelText = l.text; }
+        }
+        if (best > 1000)
+            labelText.clear();
+    }
+
+    // ---- 视频部分：OSD 烧录（标签 + 时间码，黑底阴影保证可读）----
+    QImage videoPart = frame.convertToFormat(QImage::Format_ARGB32);
+    {
+        QPainter p(&videoPart);
+        p.setRenderHint(QPainter::Antialiasing);
+        const int fs = qBound(14, videoPart.height() / 40, 40);
+        p.setFont(fontSans(fs, QFont::Bold));
+        const int pad = fs;
+        int y = videoPart.height() - pad;
+        const QString line2 = (m_calibration.dateKnown
+            ? lang("北京时间 ", "Beijing ") : lang("相对时刻 ", "Stream ")) + timeText;
+        const QStringList lines = labelText.isEmpty()
+            ? QStringList{line2} : QStringList{labelText, line2};
+        for (int i = lines.size() - 1; i >= 0; --i) {
+            const QString &txt = lines[i];
+            const QColor fg = (i == 0 && !labelText.isEmpty())
+                ? QColor(Theme::Accent) : Qt::white;
+            p.setPen(QColor(0, 0, 0, 200));
+            p.drawText(QRect(pad + 2, y - fs * 13 / 10 + 2,
+                             videoPart.width() - pad * 2, fs * 13 / 10),
+                       Qt::AlignLeft | Qt::AlignVCenter, txt);
+            p.setPen(fg);
+            p.drawText(QRect(pad, y - fs * 13 / 10,
+                             videoPart.width() - pad * 2, fs * 13 / 10),
+                       Qt::AlignLeft | Qt::AlignVCenter, txt);
+            y -= fs * 3 / 2;
+        }
+        p.end();
+    }
+
+    // ---- 曲线分析区（有分析数据才合成）----
+    QImage chartImg;
+    const AnalysisSnapshot snap = m_timelineModel->snapshot();
+    if (!snap.isEmpty() || snap.hasAudio()) {
+        chartImg = m_chartPanel->grab().toImage()
+            .scaledToWidth(videoPart.width(), Qt::SmoothTransformation);
+    }
+
+    QImage out(videoPart.width(),
+               videoPart.height() + (chartImg.isNull() ? 0 : chartImg.height()),
+               QImage::Format_ARGB32);
+    out.fill(Qt::black);
+    {
+        QPainter p(&out);
+        p.drawImage(0, 0, videoPart);
+        if (!chartImg.isNull())
+            p.drawImage(0, videoPart.height(), chartImg);
+        p.end();
+    }
+
+    // ---- 保存：案件 snapshots/ 优先；无案件则视频同目录 snapshots/ ----
+    const QString base = QFileInfo(m_currentVideoPath).completeBaseName();
+    QString dir;
+    const bool inCase = m_caseManager && m_caseManager->isOpen();
+    if (inCase)
+        dir = m_caseManager->caseDir() + QStringLiteral("/snapshots");
+    else if (!m_currentVideoPath.isEmpty())
+        dir = QFileInfo(m_currentVideoPath).absolutePath()
+              + QStringLiteral("/snapshots");
+    else
+        dir = QDir::homePath() + QStringLiteral("/LumenArc_Snapshots");
+    if (!QDir().mkpath(dir)) {
+        showOperationStatus(lang("快照目录创建失败：%1", "Cannot create snapshot dir: %1")
+                                .arg(dir));
+        return;
+    }
+    QString path;
+    for (int i = 0; ; ++i) {
+        const QString name = i == 0
+            ? base + QStringLiteral("_") + fileTimeTag + QStringLiteral(".png")
+            : base + QStringLiteral("_") + fileTimeTag
+              + QStringLiteral("_%1.png").arg(i + 1);
+        path = dir + QLatin1Char('/') + name;
+        if (!QFile::exists(path))
+            break;
+    }
+    if (!out.save(path, "PNG")) {
+        showOperationStatus(lang("快照保存失败：%1", "Snapshot save failed: %1")
+                                .arg(path));
+        return;
+    }
+    if (inCase && m_caseDock)
+        m_caseDock->refreshTree();   // 案件快照组即时可见（dock 扫描目录驱动）
+    showOperationStatus(lang("快照已保存：%1", "Snapshot saved: %1").arg(path));
 }
 
 void MainWindow::onVideoSelected(int index)

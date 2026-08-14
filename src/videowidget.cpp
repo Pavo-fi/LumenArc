@@ -1329,10 +1329,59 @@ void VideoWidget::setGuideLineModel(GuideLineModel *model)
     m_overlay->setGuideLineModel(model);
 }
 
+void VideoWidget::setDisplayAdjust(int brightness, int contrast)
+{
+    // 与 applyBrightnessContrast（i18n.h，截图叠加/放大镜共用）同一视觉公式，
+    // 预计算为 256 级 LUT：out = clamp(cf*(in + b*2 - 128) + 128)
+    if (brightness == 0 && contrast == 0) {
+        m_displayLut.clear();   // 恒等：零开销直通
+    } else {
+        const double cf = (259.0 * (contrast + 255)) / (255.0 * (259 - contrast));
+        QByteArray lut(256, 0);
+        for (int v = 0; v < 256; ++v)
+            lut[v] = static_cast<char>(
+                qBound(0, int(cf * (v + brightness * 2 - 128) + 128), 255));
+        m_displayLut = lut;
+    }
+    rebuildAdjustedFrame();     // 暂停态拖滑杆也实时预览
+}
+
+void VideoWidget::rebuildAdjustedFrame()
+{
+    if (m_rawFrameImage.isNull())
+        return;
+    if (m_displayLut.isEmpty()) {
+        m_frameImage = m_rawFrameImage;   // COW 浅拷贝，零像素开销
+    } else {
+        const QImage &src = m_rawFrameImage;
+        QImage out = src.format() == QImage::Format_ARGB32
+            ? src.copy() : src.convertToFormat(QImage::Format_ARGB32);
+        const auto *lut = reinterpret_cast<const uchar *>(m_displayLut.constData());
+        const int h = out.height(), w = out.width();
+        for (int y = 0; y < h; ++y) {
+            QRgb *line = reinterpret_cast<QRgb *>(out.scanLine(y));
+            for (int x = 0; x < w; ++x) {
+                const QRgb px = line[x];
+                line[x] = qRgba(lut[qRed(px)], lut[qGreen(px)], lut[qBlue(px)],
+                                qAlpha(px));
+            }
+        }
+        m_frameImage = out;
+    }
+    update();
+    if (m_overlay)
+        m_overlay->update();
+}
+
 void VideoWidget::onFrameReady(const QImage &image)
 {
-    // No deep copy: QImage is implicitly shared and m_frameImage is only read afterwards.
-    m_frameImage = image;
+    m_rawFrameImage = image;    // COW 浅拷贝；引擎发出后不再改
+    if (m_displayLut.isEmpty()) {
+        // No deep copy: QImage is implicitly shared and m_frameImage is only read afterwards.
+        m_frameImage = image;
+    } else {
+        rebuildAdjustedFrame();
+    }
     if (m_engine)
         m_engine->ackFrame();   // 归还配额（引擎有界化丢帧）
     updateOverlayGeometry();
@@ -1344,6 +1393,7 @@ void VideoWidget::onFrameReady(const QImage &image)
 void VideoWidget::clearFrame()
 {
     m_frameImage = QImage();
+    m_rawFrameImage = QImage();
     setLoading(false);   // 停旋转动画 + 清标志（清空列表后回到初始空状态）
     update();
     if (m_overlay)

@@ -68,6 +68,7 @@ set(SOURCES
     src/chartpanel.cpp
     src/magnifierwidget.cpp
     src/snapshotoverlay.cpp
+    src/playbackadjustpanel.cpp
     src/pinnedwidget.cpp
     src/i18n.cpp
     src/aboutdialog.cpp
@@ -116,6 +117,7 @@ set(HEADERS
     src/chartpanel.h
     src/magnifierwidget.h
     src/snapshotoverlay.h
+    src/playbackadjustpanel.h
     src/pinnedwidget.h
     src/i18n.h
     src/aboutdialog.h

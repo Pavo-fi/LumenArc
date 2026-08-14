@@ -71,6 +71,9 @@ private slots:
     void onAnalyze();
     /// @brief 启动音频分析流程（独立于亮度分析）
     void onAudioAnalysis();
+    /// 证据快照（2026-08-14）：视频当前帧（所见即所得含画面调节）+
+    /// 曲线分析区合成 PNG，OSD 烧录标签/时间码，入案件 snapshots/。
+    void onSnapshotQuick();
     void onClearRegions();
     void onClearData();
     void onExportCsv();
@@ -227,6 +230,9 @@ protected:
     QPushButton *m_captureBtn = nullptr;
     QPushButton *m_editBtn = nullptr;
     QPushButton *m_placeBtn = nullptr;
+    QPushButton *m_snapshotBtn = nullptr;    ///< 证据快照（视频+曲线合成 PNG）
+    QPushButton *m_adjustBtn = nullptr;      ///< 画面调节面板开关
+    class PlaybackAdjustPanel *m_adjustPanel = nullptr;
     QPushButton *m_speedBtn = nullptr;
     float m_currentSpeed = 1.0f;
 

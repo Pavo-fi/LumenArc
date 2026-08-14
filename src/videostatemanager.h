@@ -28,6 +28,8 @@ struct VideoState {
     qint64 abPointA = -1;
     qint64 abPointB = -1;
     bool abLoop = false;
+    int displayBrightness = 0;   ///< 播放画面调节（2026-08-14，逐视频记忆）
+    int displayContrast = 0;
     
     bool hasData() const {
         return !snapshot.isEmpty() || !regions.isEmpty() || !polygons.isEmpty() || snapshot.hasAudio()
@@ -58,7 +60,9 @@ public:
                    const QVector<GuideLine> &guideLines = {},
                    const QVector<ChartGuideData> &chartGuideLines = {},
                    const QVector<int> &regionRoiIds = {},
-                   const QVector<int> &polygonRoiIds = {});
+                   const QVector<int> &polygonRoiIds = {},
+                   int displayBrightness = 0,
+                   int displayContrast = 0);
 
     bool restoreState(const QString &videoPath, VideoState &state) const;
     bool hasState(const QString &videoPath) const;

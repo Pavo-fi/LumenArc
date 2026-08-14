@@ -204,6 +204,13 @@ public:
     void grabFrameSnapshot();
     const QImage& currentFrame() const { return m_frameImage; }
 
+    /// 播放画面调节（2026-08-14 播放选项包）：亮度/对比度作用于显示链路，
+    /// 预计算 256 级 LUT，onFrameReady 显示前查表；参数为 0 时零开销。
+    /// 仅影响显示与截图快照（所见即所得）；分析/ROI/语谱仍走原始帧。
+    /// 暂停时拖动滑杆也实时预览（从保留的原始帧重算显示帧）。
+    void setDisplayAdjust(int brightness, int contrast);
+    bool displayAdjustActive() const { return !m_displayLut.isEmpty(); }
+
 signals:
     void frameSnapshotReady(const QImage &image);
     void timestampRoiConfirmed(const QRectF &normalized);
@@ -236,4 +243,9 @@ private:
     int m_snapshotOpacity = 0;
     int m_cachedBrightness = INT_MIN;
     int m_cachedContrast = -999;
+
+    // 播放画面调节 LUT（空 = 恒等/关闭）
+    QByteArray m_displayLut;
+    QImage m_rawFrameImage;      ///< 未调节的原始帧（调节参数变化时重建显示帧）
+    void rebuildAdjustedFrame(); ///< 按当前 LUT 从原始帧重建 m_frameImage
 };
