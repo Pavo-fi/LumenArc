@@ -10,6 +10,7 @@
  */
 #include "magnifierwidget.h"
 #include "videowidget.h"
+#include "displayadjust.h"
 #include "domain/region_model.h"
 #include "domain/polygon_model.h"
 #include "domain/guide_line_model.h"
@@ -43,6 +44,8 @@ public:
     /// 显示旋转档位（旋转在裁剪之后、显示之前应用）
     void setDisplayRotation(int degrees) { m_displayRotation = degrees; }
     int displayRotation() const { return m_displayRotation; }
+    /// 画面调节 LUT（空表 = 恒等；在旋转之后应用，与主画面同一张表）
+    void setDisplayLut(const QByteArray &lut) { m_displayLut = lut; }
 
 protected:
     void paintEvent(QPaintEvent *event) override;
@@ -65,6 +68,7 @@ private:
     int m_cachedBrightness = INT_MIN;
     int m_cachedContrast = INT_MIN;
     int m_displayRotation = 0;   ///< 显示旋转档位（0/90/180/270 顺时针）
+    QByteArray m_displayLut;     ///< 画面调节 LUT（空 = 恒等）
 };
 
 MagnifierWidget::ContentWidget::ContentWidget(MagnifierWidget *owner)
@@ -92,10 +96,11 @@ void MagnifierWidget::ContentWidget::setPolygonModel(PolygonModel *model)
 
 void MagnifierWidget::ContentWidget::onFrameReady(const QImage &frame)
 {
-    // 裁剪图（原视频系）→ 显示前旋转（放大视图随主画面一起转）
-    m_frameImage = (m_displayRotation != 0)
+    // 裁剪图（原视频系）→ 旋转 → 画面调节 LUT（与主画面同一显示链）
+    QImage img = (m_displayRotation != 0)
         ? frame.transformed(QTransform().rotate(m_displayRotation))
         : frame;
+    m_frameImage = applyDisplayLut(img, m_displayLut);
     updateOverlayGeometry();
     update();
     if (m_overlay)
@@ -278,6 +283,15 @@ void MagnifierWidget::setDisplayRotation(int degrees)
     // 旋转），并按同一链路重裁截图叠加（含 m_snapshotOriginal 已置位但
     // content 无快照的边界分支），源区域/光标/overlay 坐标全部不动。
     recalcSourceRect();
+}
+
+void MagnifierWidget::setDisplayAdjust(const DisplayAdjust &adj)
+{
+    if (m_content)
+        m_content->setDisplayLut(adj.buildLut());
+    // 立即用最近一帧重裁刷新（暂停/停止时也实时预览，与主画面一致）
+    if (!m_lastFullFrame.isNull())
+        onFrameReady(m_lastFullFrame);
 }
 
 void MagnifierWidget::onInternalOverlayWheelZoom(int delta, QPoint videoPos)

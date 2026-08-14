@@ -11,6 +11,9 @@
 #include <cstdio>
 #include "timesettingsdialog.h"
 #include "videowidget.h"
+#include "magnifierwidget.h"
+#include "displayadjust.h"
+#include "i18n.h"
 #include "app/calibration_service.h"
 #include "domain/region_model.h"
 #include "domain/polygon_model.h"
@@ -360,6 +363,84 @@ static bool runRotationScenario()
     return g_failures == 0;
 }
 
+// ================= 画面调节 LUT 数学 + 放大镜生效验证 =================
+static bool runDisplayAdjustScenario()
+{
+    // ---- LUT 数学（DisplayAdjust::buildLut）----
+    {
+        DisplayAdjust id;
+        CHECK(id.isIdentity() && id.buildLut().isEmpty(),
+              "lut: identity -> empty lut (zero cost)");
+
+        // 反色
+        DisplayAdjust inv; inv.invert = true;
+        const QByteArray il = inv.buildLut();
+        CHECK((uchar)il[10] == 245 && (uchar)il[200] == 55, "lut: invert");
+
+        // 伽马 200%：中间调提升，端点不动
+        DisplayAdjust gm; gm.gammaPercent = 200;
+        const QByteArray gl = gm.buildLut();
+        const int g128 = (uchar)gl[128];   // 255*(128/255)^(1/2) ≈ 180.7 → 180
+        CHECK(g128 >= 178 && g128 <= 183, "lut: gamma 2.0 midtone lift");
+        CHECK((uchar)gl[0] == 0 && (uchar)gl[255] == 255,
+              "lut: gamma keeps endpoints");
+
+        // 色阶 64..192 拉伸
+        DisplayAdjust lv; lv.blackPoint = 64; lv.whitePoint = 192;
+        const QByteArray ll = lv.buildLut();
+        CHECK((uchar)ll[64] == 0 && (uchar)ll[192] == 255,
+              "lut: levels endpoints");
+        const int l128 = (uchar)ll[128];   // (128-64)*255/128 = 127.5 → 127
+        CHECK(l128 >= 126 && l128 <= 129, "lut: levels midpoint");
+
+        // 纯亮度/对比度：与既有 applyBrightnessContrast 逐位一致（回归兼容）
+        DisplayAdjust bc; bc.brightness = 20; bc.contrast = 30;
+        const QByteArray bl = bc.buildLut();
+        QImage px(1, 1, QImage::Format_ARGB32);
+        px.setPixel(0, 0, qRgba(100, 100, 100, 255));
+        const QRgb ref = applyBrightnessContrast(px, 20, 30).pixel(0, 0);
+        CHECK((uchar)bl[100] == (uchar)qRed(ref),
+              "lut: bc identical to legacy formula");
+    }
+
+    // ---- 放大镜像素级验证（修复：放大视图此前不吃画面调节）----
+    {
+        MagnifierWidget mag(nullptr);
+        mag.setVideoSize(400, 200);          // zoom 2.0 → 源区域 200x100 居中
+        mag.show();
+        QTest::qWait(50);
+
+        QImage gray(400, 200, QImage::Format_ARGB32);
+        gray.fill(qRgb(128, 128, 128));
+
+        auto centerGray = [&]() -> int {
+            const QImage g = mag.widget()->grab().toImage();
+            if (g.isNull()) return -1;
+            return qRed(g.convertToFormat(QImage::Format_ARGB32)
+                        .pixel(g.width() / 2, g.height() / 2));
+        };
+
+        mag.onFrameReady(gray);
+        const int base = centerGray();
+        CHECK(base >= 120 && base <= 136, "mag: identity shows raw gray 128");
+
+        DisplayAdjust adj; adj.gammaPercent = 200;   // 与 LUT 数学同一预期 ~180
+        mag.setDisplayAdjust(adj);
+        mag.onFrameReady(gray);
+        const int lifted = centerGray();
+        CHECK(lifted >= 172 && lifted <= 188,
+              qPrintable(QStringLiteral("mag: gamma applied in magnifier (got %1)")
+                             .arg(lifted)));
+
+        mag.setDisplayAdjust(DisplayAdjust());       // 复位回到 128
+        mag.onFrameReady(gray);
+        const int back = centerGray();
+        CHECK(back >= 120 && back <= 136, "mag: reset restores raw gray");
+        mag.close();
+    }
+    return g_failures == 0;
+}
+
 int main(int argc, char **argv)
 {
     QApplication app(argc, argv);
@@ -438,6 +519,7 @@ int main(int argc, char **argv)
                      });
 
     runRotationScenario();   // 场景 0：显示旋转四角度双向映射（Q1 方案 A）
+    runDisplayAdjustScenario();   // 场景 0b：画面调节 LUT + 放大镜生效验证
     runFlow(c, "onRunGo");       // 场景 1：GO 入口
     if (argc < 4)
         runFlow(c, "onRoiButton");   // 场景 2：框选按钮入口（合成片）

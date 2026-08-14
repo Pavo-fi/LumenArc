@@ -13,6 +13,7 @@
 #include <QDockWidget>
 #include <QRect>
 #include <QImage>
+#include "displayadjust.h"
 
 class OverlayWidget;
 class RegionModel;
@@ -74,6 +75,10 @@ public:
     /// 仅在 ContentWidget 显示前把裁剪图旋转；内部 overlay 由双向映射保证。
     void setDisplayRotation(int degrees);
     int displayRotation() const { return m_displayRotation; }
+
+    /// 画面调节（亮度/对比度/伽马/色阶/反色）：与主画面同一 LUT，
+    /// 作用于帧裁剪显示前（截图叠加融合参数独立，不受影响）。
+    void setDisplayAdjust(const DisplayAdjust &adj);
 
 private slots:
     void onInternalOverlayWheelZoom(int delta, QPoint videoPos);

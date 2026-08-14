@@ -22,6 +22,7 @@ class IVideoEngine;
 class RegionModel;
 class PolygonModel;
 class GuideLineModel;
+struct DisplayAdjust;
 #include "domain/guide_line.h"
 
 /**
@@ -222,11 +223,11 @@ public:
     void grabFrameSnapshot();
     const QImage& currentFrame() const { return m_frameImage; }
 
-    /// 播放画面调节（2026-08-14 播放选项包）：亮度/对比度作用于显示链路，
-    /// 预计算 256 级 LUT，onFrameReady 显示前查表；参数为 0 时零开销。
+    /// 播放画面调节（2026-08-14 播放选项包）：亮度/对比度/反色/色阶/伽马
+    /// 作用于显示链路，预计算 256 级 LUT（displayadjust.h），恒等时零开销。
     /// 仅影响显示与截图快照（所见即所得）；分析/ROI/语谱仍走原始帧。
     /// 暂停时拖动滑杆也实时预览（从保留的原始帧重算显示帧）。
-    void setDisplayAdjust(int brightness, int contrast);
+    void setDisplayAdjust(const DisplayAdjust &adj);
     bool displayAdjustActive() const { return !m_displayLut.isEmpty(); }
 
     /// 显示旋转（Q1 方案 A）：0/90/180/270 顺时针。显示链：

@@ -9,6 +9,7 @@
  * Licensed under the Apache License, Version 2.0
  */
 #include "videowidget.h"
+#include "displayadjust.h"
 #include "domain/region_model.h"
 #include "domain/polygon_model.h"
 #include "domain/guide_line_model.h"
@@ -1387,20 +1388,11 @@ void VideoWidget::setGuideLineModel(GuideLineModel *model)
     m_overlay->setGuideLineModel(model);
 }
 
-void VideoWidget::setDisplayAdjust(int brightness, int contrast)
+void VideoWidget::setDisplayAdjust(const DisplayAdjust &adj)
 {
-    // 与 applyBrightnessContrast（i18n.h，截图叠加/放大镜共用）同一视觉公式，
-    // 预计算为 256 级 LUT：out = clamp(cf*(in + b*2 - 128) + 128)
-    if (brightness == 0 && contrast == 0) {
-        m_displayLut.clear();   // 恒等：零开销直通
-    } else {
-        const double cf = (259.0 * (contrast + 255)) / (255.0 * (259 - contrast));
-        QByteArray lut(256, 0);
-        for (int v = 0; v < 256; ++v)
-            lut[v] = static_cast<char>(
-                qBound(0, int(cf * (v + brightness * 2 - 128) + 128), 255));
-        m_displayLut = lut;
-    }
+    // 与 applyBrightnessContrast（i18n.cpp，截图叠加/放大镜融合共用）同一
+    // 视觉公式，复合反色/色阶/伽马后预计算为 256 级 LUT；恒等时零开销直通。
+    m_displayLut = adj.buildLut();
     rebuildAdjustedFrame();     // 暂停态拖滑杆也实时预览
 }
 
@@ -1426,23 +1418,7 @@ void VideoWidget::rebuildAdjustedFrame()
     QImage img = m_rawFrameImage;
     if (m_displayRotation != 0)
         img = img.transformed(QTransform().rotate(m_displayRotation));
-    if (m_displayLut.isEmpty()) {
-        m_frameImage = img;   // COW 浅拷贝（旋转非零时为变换产物，均零像素开销）
-    } else {
-        QImage out = img.format() == QImage::Format_ARGB32
-            ? img.copy() : img.convertToFormat(QImage::Format_ARGB32);
-        const auto *lut = reinterpret_cast<const uchar *>(m_displayLut.constData());
-        const int h = out.height(), w = out.width();
-        for (int y = 0; y < h; ++y) {
-            QRgb *line = reinterpret_cast<QRgb *>(out.scanLine(y));
-            for (int x = 0; x < w; ++x) {
-                const QRgb px = line[x];
-                line[x] = qRgba(lut[qRed(px)], lut[qGreen(px)], lut[qBlue(px)],
-                                qAlpha(px));
-            }
-        }
-        m_frameImage = out;
-    }
+    m_frameImage = applyDisplayLut(img, m_displayLut);   // 空表 = 恒等浅拷贝
     update();
     if (m_overlay)
         m_overlay->update();

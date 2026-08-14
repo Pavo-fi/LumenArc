@@ -2216,3 +2216,58 @@ preprocess 170 / ui_chain 23 / calibration 73 全绿。
 - 旋转+LUT 单趟合并优化（性能余量，见上）；
 - 上一批待确项不变：面板滑杆手感、快照合成观感、OSD 字号比例。
 
+# ============================================================================
+# 工作记录（2026-08-14 下午，第四批）——放大镜调节修复 + 画面调节参数扩展
+# ============================================================================
+
+## 13. 放大镜不吃画面调节（用户实测发现）+ 调节参数扩展
+
+### Bug 根因
+放大镜从引擎 frameReady 直接取**原始帧**（mainwindow.cpp 转发链路），
+从未走 VideoWidget 的 LUT 显示链——主画面调亮度/对比度时放大视图保持原样。
+钉图（PinnedWidget）同类（同样吃引擎原始帧），一并修复。
+
+### 修复
+- 新增 `DisplayAdjust` 参数包 + 共享 LUT 构建器（`src/displayadjust.h/.cpp`）；
+  `applyDisplayLut` 三处共用（VideoWidget/Magnifier/Pinned），消除三份逐像素拷贝。
+- MagnifierWidget::setDisplayAdjust：ContentWidget 在**裁剪→旋转之后**查 LUT
+  （与主画面同一显示链顺序）；暂停态拖滑杆即时预览（m_lastFullFrame 重裁链）。
+- PinnedWidget::setDisplayLut：裁剪→旋转→LUT。
+- MainWindow：adjustChanged 同时下发三视图；createMagnifier/pinnedRequested/
+  状态恢复/无状态重置/清空列表全链路同步。
+- VideoState 改嵌 `DisplayAdjust display`（替代散字段），hasData 判
+  `!display.isIdentity()`；saveState 参数由 2 个 int 并为结构体。
+
+### 参数扩展（本轮一并实现；均为显示层 LUT 可折叠项，逐帧零额外开销）
+常用取证/分析画面调节调研结论（Amped FIVE / dTective / Input-Ace 同类工具）：
+| 参数 | 价值 | 本轮 |
+|---|---|---|
+| **伽马** | 夜暗监控提亮暗部不冲淡高光（火调现场断电夜间素材刚需） | ✅ 0.30~3.00 |
+| **色阶（黑点/白点）** | 烟雾/雾霾低对比拉伸（火场视频核心痛点） | ✅ 0~127 / 128~255 |
+| **反色（负片）** | 高光区域细节辨认，小众但一行可折入 LUT | ✅ 复选框 |
+| 锐化/去模糊 | 车牌/人脸增强；需卷积管线，4K CPU 成本高 | ⏸ 缓（建议 GPU 管线后做） |
+| 水平/垂直翻转 | 镜像安装相机；改动坐标映射（二面体群） | ⏸ 缓（旋转已覆盖 90% 场景） |
+| 饱和度/色相 | 亮度量化分析用处小 | ❌ 不做 |
+| 伪彩色 | 亮度→色映射；与亮度曲线语义重复 | ❌ 不做 |
+| 去隔行 | 老式隔行监控；引擎侧处理更合适 | ⏸ 缓 |
+
+LUT 流水线固定顺序：`反色 → 色阶 → 伽马 → 亮度/对比度`，恒等时零开销；
+纯亮度/对比度输出与既有 applyBrightnessContrast **逐位一致**（截尾舍入，
+有回归断言钉死）。
+
+### 验证
+- ui_chain 新增 runDisplayAdjustScenario：LUT 数学 8 项（恒等空表/反色/伽马
+  中间调提升且端点不动/色阶端点与中点/纯亮度对比度与旧公式逐位一致）+
+  放大镜像素级 3 项（均匀灰帧 128 → γ2.0 后中心像素 ~180 → 复位回 128，
+  offscreen grab() 实测）。**70 checks, 0 failures**（60→70）。
+- 全回归绿：case 239 / e2e 51 / piecewise 96 / preprocess 170 /
+  calibration 73 / ocr 21 / vla 含[bugA]；offscreen 启动 5s 无崩溃。
+
+### 排查中固化
+- edit 工具按调用事务化：同一次 call 里任一 oldText 失配 → 整笔回滚
+  （本轮 MagnifierWidget::setDisplayAdjust 声明因此丢过一次，编译期即现形）。
+- Qt6 QWidget::grab() 返回 QPixmap（需 .toImage()）。
+- 头文件中声明返回 QImage 的函数需 `class QImage;` 前置声明。
+
+### 待真机 GUI 确认
+- 放大镜/钉图内伽马与色阶观感（滑杆手感、暂停预览）；反色在真实素材上的可用性。

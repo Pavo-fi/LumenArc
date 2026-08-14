@@ -32,6 +32,8 @@ public:
     /// videoRect 仍为【原视频系】，旋转在裁剪后显示前应用。
     void setDisplayRotation(int degrees) { m_displayRotation = degrees; }
     int displayRotation() const { return m_displayRotation; }
+    /// 画面调节 LUT（空表 = 恒等；旋转之后应用，与主画面同一张表）
+    void setDisplayLut(const QByteArray &lut) { m_displayLut = lut; }
     void setPinnedImage(const QImage &fullFrame, const QRect &videoRect);
     void clear();
 
@@ -42,4 +44,5 @@ private:
     QImage m_pinnedImage;
     QSize m_videoSize;   // 源视频原生分辨率（空 = 未知）
     int m_displayRotation = 0;
+    QByteArray m_displayLut;
 };

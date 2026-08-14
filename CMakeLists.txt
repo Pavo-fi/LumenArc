@@ -70,6 +70,7 @@ set(SOURCES
     src/snapshotoverlay.cpp
     src/playbackadjustpanel.cpp
     src/pinnedwidget.cpp
+    src/displayadjust.cpp
     src/i18n.cpp
     src/aboutdialog.cpp
     src/videolistpanel.cpp
@@ -119,6 +120,7 @@ set(HEADERS
     src/snapshotoverlay.h
     src/playbackadjustpanel.h
     src/pinnedwidget.h
+    src/displayadjust.h
     src/i18n.h
     src/aboutdialog.h
     src/videolistpanel.h
@@ -355,6 +357,8 @@ add_executable(lumenarc_ui_chain_test
     tests/ui_chain_test_main.cpp
     src/timesettingsdialog.cpp
     src/videowidget.cpp
+    src/magnifierwidget.cpp
+    src/displayadjust.cpp
     src/app/calibration_service.cpp
     src/infrastructure/ivideo_engine.h
     src/infrastructure/ianalysis_engine.h

@@ -13,6 +13,7 @@
 #include <QSlider>
 #include <QLabel>
 #include <QPushButton>
+#include <QCheckBox>
 
 PlaybackAdjustPanel::PlaybackAdjustPanel(QWidget *parent)
     : QDockWidget(lang("画面调节", "Display Adjust"), parent)
@@ -29,6 +30,19 @@ PlaybackAdjustPanel::PlaybackAdjustPanel(QWidget *parent)
                            m_brightnessSlider, m_bValLabel, -50, 50));
     lay->addWidget(makeRow(lang("对比度", "Contrast"),
                            m_contrastSlider, m_cValLabel, -50, 50));
+    // 伽马：30~300（%），100 = γ1.0 不变；>100 提亮暗部/中间调（夜暗监控常用）
+    lay->addWidget(makeRow(lang("伽马", "Gamma"),
+                           m_gammaSlider, m_gValLabel, 30, 300));
+    m_gammaSlider->setValue(100);
+    // 色阶：黑点 0~127 / 白点 128~255（烟雾低对比素材的对比度拉伸）
+    lay->addWidget(makeRow(lang("黑点", "Black pt"),
+                           m_blackPointSlider, m_bpValLabel, 0, 127));
+    lay->addWidget(makeRow(lang("白点", "White pt"),
+                           m_whitePointSlider, m_wpValLabel, 128, 255));
+    m_whitePointSlider->setValue(255);
+
+    m_invertBox = new QCheckBox(lang("反色（负片）", "Invert (negative)"), body);
+    lay->addWidget(m_invertBox);
 
     // 旋转行（Q1 拍板方案 A，2026-08-14）：90° 步进循环，覆盖物随画面一起转
     {
@@ -41,7 +55,7 @@ PlaybackAdjustPanel::PlaybackAdjustPanel(QWidget *parent)
         m_rotateBtn = new QPushButton(lang("⟳ 顺时针 90°", "⟳ 90° CW"), row);
         m_rotateBtn->setFixedHeight(26);
         m_rotValLabel = new QLabel(QStringLiteral("0°"), row);
-        m_rotValLabel->setFixedWidth(30);
+        m_rotValLabel->setFixedWidth(34);
         m_rotValLabel->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
         h->addWidget(lab);
         h->addWidget(m_rotateBtn, 1);
@@ -65,18 +79,37 @@ PlaybackAdjustPanel::PlaybackAdjustPanel(QWidget *parent)
     setWidget(body);
 
     connect(m_brightnessSlider, &QSlider::valueChanged, this, [this](int v) {
-        m_brightness = v;
-        m_bValLabel->setText(QString::number(v));
-        emit adjustChanged(m_brightness, m_contrast);
+        m_adjust.brightness = v;
+        refreshLabels();
+        emitAdjust();
     });
     connect(m_contrastSlider, &QSlider::valueChanged, this, [this](int v) {
-        m_contrast = v;
-        m_cValLabel->setText(QString::number(v));
-        emit adjustChanged(m_brightness, m_contrast);
+        m_adjust.contrast = v;
+        refreshLabels();
+        emitAdjust();
+    });
+    connect(m_gammaSlider, &QSlider::valueChanged, this, [this](int v) {
+        m_adjust.gammaPercent = v;
+        refreshLabels();
+        emitAdjust();
+    });
+    connect(m_blackPointSlider, &QSlider::valueChanged, this, [this](int v) {
+        m_adjust.blackPoint = v;
+        refreshLabels();
+        emitAdjust();
+    });
+    connect(m_whitePointSlider, &QSlider::valueChanged, this, [this](int v) {
+        m_adjust.whitePoint = v;
+        refreshLabels();
+        emitAdjust();
+    });
+    connect(m_invertBox, &QCheckBox::toggled, this, [this](bool on) {
+        m_adjust.invert = on;
+        emitAdjust();
     });
     connect(m_resetBtn, &QPushButton::clicked, this, [this]() {
-        setValues(0, 0, 0);
-        emit adjustChanged(0, 0);
+        setValues(DisplayAdjust(), 0);
+        emitAdjust();
         emit rotationChanged(0);
     });
     connect(m_rotateBtn, &QPushButton::clicked, this, [this]() {
@@ -84,6 +117,7 @@ PlaybackAdjustPanel::PlaybackAdjustPanel(QWidget *parent)
         m_rotValLabel->setText(QString::number(m_rotation) + QStringLiteral("°"));
         emit rotationChanged(m_rotation);
     });
+    refreshLabels();
 }
 
 QWidget *PlaybackAdjustPanel::makeRow(const QString &label, QSlider *&slider,
@@ -98,9 +132,9 @@ QWidget *PlaybackAdjustPanel::makeRow(const QString &label, QSlider *&slider,
     lab->setFixedWidth(44);
     slider = new QSlider(Qt::Horizontal, row);
     slider->setRange(minV, maxV);
-    slider->setValue(0);
-    valLabel = new QLabel(QStringLiteral("0"), row);
-    valLabel->setFixedWidth(30);
+    slider->setValue(minV);
+    valLabel = new QLabel(row);
+    valLabel->setFixedWidth(34);
     valLabel->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
 
     h->addWidget(lab);
@@ -109,22 +143,43 @@ QWidget *PlaybackAdjustPanel::makeRow(const QString &label, QSlider *&slider,
     return row;
 }
 
-void PlaybackAdjustPanel::setValues(int brightness, int contrast, int rotation)
+void PlaybackAdjustPanel::refreshLabels()
 {
-    m_brightness = brightness;
-    m_contrast = contrast;
+    if (m_bValLabel)
+        m_bValLabel->setText(QString::number(m_adjust.brightness));
+    if (m_cValLabel)
+        m_cValLabel->setText(QString::number(m_adjust.contrast));
+    if (m_gValLabel)
+        m_gValLabel->setText(QString::number(m_adjust.gammaPercent / 100.0, 'f', 2));
+    if (m_bpValLabel)
+        m_bpValLabel->setText(QString::number(m_adjust.blackPoint));
+    if (m_wpValLabel)
+        m_wpValLabel->setText(QString::number(m_adjust.whitePoint));
+}
+
+void PlaybackAdjustPanel::emitAdjust()
+{
+    emit adjustChanged(m_adjust);
+}
+
+void PlaybackAdjustPanel::setValues(const DisplayAdjust &adj, int rotation)
+{
+    m_adjust = adj;
     int d = rotation % 360;
     if (d < 0) d += 360;
     m_rotation = ((d + 45) / 90) * 90 % 360;
+    const QSignalBlocker b1(m_brightnessSlider), b2(m_contrastSlider),
+        b3(m_gammaSlider), b4(m_blackPointSlider), b5(m_whitePointSlider),
+        b6(m_invertBox);
     if (m_brightnessSlider) {
-        QSignalBlocker b1(m_brightnessSlider), b2(m_contrastSlider);
-        m_brightnessSlider->setValue(brightness);
-        m_contrastSlider->setValue(contrast);
+        m_brightnessSlider->setValue(adj.brightness);
+        m_contrastSlider->setValue(adj.contrast);
+        m_gammaSlider->setValue(adj.gammaPercent);
+        m_blackPointSlider->setValue(adj.blackPoint);
+        m_whitePointSlider->setValue(adj.whitePoint);
+        m_invertBox->setChecked(adj.invert);
     }
-    if (m_bValLabel) {
-        m_bValLabel->setText(QString::number(brightness));
-        m_cValLabel->setText(QString::number(contrast));
-    }
+    refreshLabels();
     if (m_rotValLabel)
         m_rotValLabel->setText(QString::number(m_rotation) + QStringLiteral("°"));
 }

@@ -10,6 +10,7 @@
 #include "domain/timeline_model.h"
 #include "domain/guide_line.h"
 #include "domain/time_calibration.h"
+#include "displayadjust.h"
 
 struct VideoState {
     QString filePath;
@@ -28,15 +29,14 @@ struct VideoState {
     qint64 abPointA = -1;
     qint64 abPointB = -1;
     bool abLoop = false;
-    int displayBrightness = 0;   ///< 播放画面调节（2026-08-14，逐视频记忆）
-    int displayContrast = 0;
-    int displayRotation = 0;     ///< 显示旋转档位（0/90/180/270，Q1 方案 A）
+    DisplayAdjust display;         ///< 播放画面调节（2026-08-14，逐视频记忆）
+    int displayRotation = 0;       ///< 显示旋转档位（0/90/180/270，Q1 方案 A）
     
     bool hasData() const {
         return !snapshot.isEmpty() || !regions.isEmpty() || !polygons.isEmpty() || snapshot.hasAudio()
                || !guideLines.isEmpty() || !chartGuideLines.isEmpty() || !labels.isEmpty() || snapshotFusion.isValid()
                || abPointA >= 0 || abPointB >= 0 || calibration.isValid()
-               || displayBrightness != 0 || displayContrast != 0 || displayRotation != 0;
+               || !display.isIdentity() || displayRotation != 0;
     }
 };
 
@@ -63,8 +63,7 @@ public:
                    const QVector<ChartGuideData> &chartGuideLines = {},
                    const QVector<int> &regionRoiIds = {},
                    const QVector<int> &polygonRoiIds = {},
-                   int displayBrightness = 0,
-                   int displayContrast = 0,
+                   const DisplayAdjust &display = {},
                    int displayRotation = 0);
 
     bool restoreState(const QString &videoPath, VideoState &state) const;

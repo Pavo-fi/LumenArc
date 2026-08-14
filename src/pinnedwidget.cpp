@@ -9,6 +9,7 @@
  * Licensed under the Apache License, Version 2.0
  */
 #include "pinnedwidget.h"
+#include "displayadjust.h"
 #include <QPainter>
 #include <QResizeEvent>
 #include <QTransform>
@@ -53,6 +54,7 @@ void PinnedWidget::setPinnedImage(const QImage &fullFrame, const QRect &videoRec
     if (m_displayRotation != 0)
         m_pinnedImage = m_pinnedImage.transformed(
             QTransform().rotate(m_displayRotation));
+    m_pinnedImage = applyDisplayLut(m_pinnedImage, m_displayLut);
     int w = qMax(1, qRound(m_pinnedImage.width() * scale));
     int h = qMax(1, qRound(m_pinnedImage.height() * scale));
     if (w < 60 && h < 60) w = 60;

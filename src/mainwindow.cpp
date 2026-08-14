@@ -29,6 +29,7 @@
 #include "magnifierwidget.h"
 #include "snapshotoverlay.h"
 #include "playbackadjustpanel.h"
+#include "displayadjust.h"
 #include "pinnedwidget.h"
 #include "videolistpanel.h"
 #include "preprocesswindow.h"
@@ -1369,10 +1370,15 @@ void MainWindow::setupConnections()
     });
     if (m_adjustPanel) {
         connect(m_adjustPanel, &PlaybackAdjustPanel::adjustChanged, this,
-                [this](int b, int c) {
+                [this](const DisplayAdjust &adj) {
                     // VideoWidget 内部会从保留的原始帧重建显示帧，
-                    // 暂停态拖滑杆同样实时预览。
-                    m_videoWidget->setDisplayAdjust(b, c);
+                    // 暂停态拖滑杆同样实时预览；放大镜/钉图同一张 LUT。
+                    const QByteArray lut = adj.buildLut();
+                    m_videoWidget->setDisplayAdjust(adj);
+                    if (m_magnifier)
+                        m_magnifier->setDisplayAdjust(adj);
+                    if (m_pinned)
+                        m_pinned->setDisplayLut(lut);
                 });
         // 旋转档位（Q1 方案 A）：主画面 + 放大镜 + 钉图同步随转
         connect(m_adjustPanel, &PlaybackAdjustPanel::rotationChanged, this,
@@ -1498,8 +1504,10 @@ void MainWindow::setupConnections()
                     });
                     m_pinned->show();
                 }
-                // 钉图内容随主画面旋转（Q1 方案 A）
+                // 钉图内容随主画面旋转（Q1 方案 A）+ 同一调节 LUT
                 m_pinned->setDisplayRotation(m_videoWidget->displayRotation());
+                if (m_adjustPanel)
+                    m_pinned->setDisplayLut(m_adjustPanel->adjust().buildLut());
             });
 
     // v0.3: Video list panel connections
@@ -1556,11 +1564,15 @@ void MainWindow::setupConnections()
                 if (m_snapshotBtn)
                     m_snapshotBtn->setEnabled(false);
                 if (m_adjustPanel) {   // 清空列表：调节回默认，面板状态保留
-                    m_adjustPanel->setValues(0, 0, 0);
-                    m_videoWidget->setDisplayAdjust(0, 0);
+                    m_adjustPanel->setValues(DisplayAdjust(), 0);
+                    m_videoWidget->setDisplayAdjust(DisplayAdjust());
                     m_videoWidget->setDisplayRotation(0);
-                    if (m_pinned)
+                    if (m_magnifier)
+                        m_magnifier->setDisplayAdjust(DisplayAdjust());
+                    if (m_pinned) {
+                        m_pinned->setDisplayLut(QByteArray());
                         m_pinned->setDisplayRotation(0);
+                    }
                 }
 
                 setWindowTitle(windowTitleWithCase(
@@ -2126,8 +2138,7 @@ void MainWindow::openVideoFile(const QString &filePath)
             m_chartPanel->chartGuideLinesData(),
             m_regionModel->roiIds(),
             m_polygonModel->roiIds(),
-            m_adjustPanel ? m_adjustPanel->brightness() : 0,
-            m_adjustPanel ? m_adjustPanel->contrast() : 0,
+            m_adjustPanel ? m_adjustPanel->adjust() : DisplayAdjust(),
             m_adjustPanel ? m_adjustPanel->rotation() : 0
         );
     }
@@ -2217,18 +2228,21 @@ void MainWindow::openVideoFile(const QString &filePath)
                 m_placeBtn->setEnabled(true);
             }
 
-            // 恢复播放画面调节（逐视频记忆：亮度/对比度/旋转）
+            // 恢复播放画面调节（逐视频记忆：亮度/对比度/伽马/色阶/反色/旋转）
             if (m_adjustPanel) {
-                m_adjustPanel->setValues(savedState.displayBrightness,
-                                         savedState.displayContrast,
+                m_adjustPanel->setValues(savedState.display,
                                          savedState.displayRotation);
-                m_videoWidget->setDisplayAdjust(savedState.displayBrightness,
-                                                savedState.displayContrast);
+                const QByteArray lut = savedState.display.buildLut();
+                m_videoWidget->setDisplayAdjust(savedState.display);
                 m_videoWidget->setDisplayRotation(savedState.displayRotation);
-                if (m_magnifier)
+                if (m_magnifier) {
+                    m_magnifier->setDisplayAdjust(savedState.display);
                     m_magnifier->setDisplayRotation(savedState.displayRotation);
-                if (m_pinned)
+                }
+                if (m_pinned) {
+                    m_pinned->setDisplayLut(lut);
                     m_pinned->setDisplayRotation(savedState.displayRotation);
+                }
             }
 
             if (m_spectrogramEnhanced && savedState.snapshot.hasAudio())
@@ -2268,9 +2282,13 @@ void MainWindow::openVideoFile(const QString &filePath)
         m_snapshotFusion = SnapshotFusionData();
         // 无状态视频：画面调节回默认（防跨视频泄漏）
         if (m_adjustPanel) {
-            m_adjustPanel->setValues(0, 0, 0);
-            m_videoWidget->setDisplayAdjust(0, 0);
+            m_adjustPanel->setValues(DisplayAdjust(), 0);
+            m_videoWidget->setDisplayAdjust(DisplayAdjust());
             m_videoWidget->setDisplayRotation(0);
+            if (m_magnifier)
+                m_magnifier->setDisplayAdjust(DisplayAdjust());
+            if (m_pinned)
+                m_pinned->setDisplayLut(QByteArray());
         }
         if (m_snapshotOverlay)
             m_snapshotOverlay->clearSnapshot();
@@ -2842,8 +2860,10 @@ void MainWindow::createMagnifier()
     m_magnifier->setPolygonModel(m_polygonModel);
     m_magnifier->setGuideLineModel(m_guideLineModel);
 
-    // 旋转档位同步（Q1 方案 A：放大视图随主画面一起转）
+    // 旋转档位 + 画面调节同步（Q1 方案 A：放大视图随主画面一起转/调）
     m_magnifier->setDisplayRotation(m_videoWidget->displayRotation());
+    if (m_adjustPanel)
+        m_magnifier->setDisplayAdjust(m_adjustPanel->adjust());
 
     // Sync current ROI mode to magnifier overlay
     if (m_magnifier->overlay()) {
