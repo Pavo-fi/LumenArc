@@ -5,7 +5,7 @@
 
 ## 表头（每次写完 HANDOVER 与 WORK_HISTORY 后必须同步更新本表头——规则 R2）
 
-- **当前 HEAD**：`f9b9bc4`（2026-08-14 §16 快照 v2 离屏重渲染）
+- **当前 HEAD**：`c0a7b0e`（2026-08-14 §17 快照 v2 两连修）
 - **构建**：`cmd //c "build_tmp\build_target.bat ALL"`；测试：`QT_QPA_PLATFORM=offscreen`
   + PATH 含 `C:\code\Qt\6.8.0\msvc2022_64\bin`
 - **全回归基线**：case 239 / case_e2e 51 / piecewise 96 / preprocess 170 /
