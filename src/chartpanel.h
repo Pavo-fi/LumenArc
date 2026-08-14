@@ -61,6 +61,12 @@ public:
     void setAutoYRange(bool enabled);
     bool autoYRange() const { return m_yAxisAutoRange; }
 
+    /// 离屏矢量重渲染（2026-08-14 §14 快照全面化）：把图表按目标尺寸重新布局
+    /// 并用 CPU 矢量绘制（不经 widget grab——dock 内 resize+grab 实测不可靠，
+    /// 曲线/坐标出不来）。曲线/标签/光标/辅助线全部随新布局重排，清晰不糊。
+    /// 返回目标尺寸图像（BgPanel 底）；无图表场景时返回空图。
+    QImage renderToImage(const QSize &targetSize);
+
     QVector<ChartLabel> labels() const { return m_labels; }
     void setLabels(const QVector<ChartLabel> &l) { m_labels = l; updateLabelItems(); }
     /// 当前可见折线数（有数据的亮度曲线 + 音量曲线）——标签文字自动隐藏判定用

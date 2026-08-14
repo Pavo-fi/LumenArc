@@ -3692,23 +3692,6 @@ bool MainWindow::eventFilter(QObject *watched, QEvent *event)
     return QMainWindow::eventFilter(watched, event);
 }
 
-/// @brief 面板足高重渲染抓取（§14 快照全面化：治「曲线被压缩」。
-/// 临时 resize 到视频全宽 + 至少 minHeight 高，原生重渲染后抓取并还原。
-/// resize 同步派发 QEvent::Resize，图表/GL 场景即时适配；还原交给布局。
-static QImage grabPanelFullHeight(QWidget *panel, int width, int minHeight)
-{
-    if (!panel || width <= 0)
-        return QImage();
-    panel->setUpdatesEnabled(false);
-    const QSize old = panel->size();
-    panel->resize(width, qMax(old.height(), minHeight));
-    QImage img = panel->grab().toImage();
-    panel->resize(old);
-    panel->setUpdatesEnabled(true);
-    panel->update();
-    return img;
-}
-
 void MainWindow::onSnapshotQuick()
 {
     const QImage frame = m_videoWidget->currentFrame();   // 已含画面调节+旋转（所见即所得）
@@ -3810,63 +3793,93 @@ void MainWindow::onSnapshotQuick()
         p.end();
     }
 
-    // ---- 分析数据区（有分析数据才合成）：足高重渲染，曲线不糊不扁 ----
+    // ---- 分析数据区（§14 v2：离屏重渲染——图表走 CPU 矢量重绘，语谱图走
+    // CPU 光栅化，均不动屏幕 widget；dock 内 resize+grab 实测曲线丢失/GL 错位）----
     const AnalysisSnapshot snap = m_timelineModel->snapshot();
     QImage chartImg, specImg, magImg;
-    if (!snap.isEmpty() || snap.hasAudio()) {
-        chartImg = grabPanelFullHeight(m_chartPanel, videoPart.width(), 380);
-    }
-    if (snap.hasAudio() && m_spectrogramEnhanced) {
-        specImg = grabPanelFullHeight(m_spectrogramEnhanced, videoPart.width(), 320);
-    }
-    // ---- 放大镜段：原生裁剪图高度归一 ~320px，右侧黑边烧录来源标注 ----
-    QString magCaption;
+    QString magCaption, magSub;
+    if (!snap.isEmpty() || snap.hasAudio())
+        chartImg = m_chartPanel->renderToImage(QSize(videoPart.width(), 420));
+    if (snap.hasAudio() && m_spectrogramEnhanced)
+        specImg = m_spectrogramEnhanced->renderHeatmapImage(
+            QSize(videoPart.width(), 300));
     if (m_magnifier) {
         const QImage raw = m_magnifier->currentMagnifiedImage();
         if (!raw.isNull()) {
-            const int magH = 320;
-            QImage scaled = raw.scaledToHeight(magH, Qt::SmoothTransformation);
-            if (scaled.width() > videoPart.width())   // 极端宽高比兜底：按宽适配
-                scaled = raw.scaledToWidth(videoPart.width(), Qt::SmoothTransformation);
-            magImg = scaled;
+            magImg = raw.scaledToHeight(320, Qt::SmoothTransformation);
             const QRect src = m_magnifier->currentSourceRect();
-            magCaption = lang("源区域 (%1, %2) %3×%4 · %5×",
-                              "Source (%1, %2) %3×%4 · %5×")
-                .arg(src.x()).arg(src.y()).arg(src.width()).arg(src.height())
-                .arg(m_magnifier->zoomLevel(), 0, 'f', 1);
+            magCaption = lang("源区域 (%1, %2) · %3 × %4", "Source (%1, %2) · %3 × %4")
+                .arg(src.x()).arg(src.y()).arg(src.width()).arg(src.height());
+            magSub = lang("倍率 %1× · 时刻 %2", "Zoom %1× · At %2")
+                .arg(m_magnifier->zoomLevel(), 0, 'f', 1).arg(timeText);
         }
     }
 
-    // ---- 竖向全宽堆叠（§14 Q2）：视频 / 曲线 / 语谱图 / 放大镜，黑底无留白 ----
-    const int outH = videoPart.height()
-        + (chartImg.isNull() ? 0 : chartImg.height())
-        + (specImg.isNull() ? 0 : specImg.height())
-        + (magImg.isNull() ? 0 : magImg.height());
+    // ---- 竖向全宽堆叠 + 分段标题条（视频 / 曲线 / 语谱图 / 放大镜）----
+    struct Section {
+        QString title;
+        QImage img;
+        QString caption;   // 非空 = 放大镜段（图左文右）
+        QString sub;
+    };
+    QVector<Section> sections;
+    if (!chartImg.isNull())
+        sections << Section{lang("亮度 / 音量曲线", "Luminance / Volume"),
+                            chartImg, {}, {}};
+    if (!specImg.isNull())
+        sections << Section{lang("语谱图", "Spectrogram"), specImg, {}, {}};
+    if (!magImg.isNull())
+        sections << Section{lang("放大镜视图", "Magnifier"), magImg,
+                            magCaption, magSub};
+
+    const int titleH = 34, divH = 2;
+    int outH = videoPart.height();
+    for (const auto &s : sections)
+        outH += divH + titleH + s.img.height();
     QImage out(videoPart.width(), outH, QImage::Format_ARGB32);
     out.fill(Qt::black);
     {
         QPainter p(&out);
+        p.setRenderHint(QPainter::Antialiasing);
+        const int W = out.width();
         int yy = 0;
         p.drawImage(0, yy, videoPart);
         yy += videoPart.height();
-        if (!chartImg.isNull()) {
-            p.drawImage(0, yy, chartImg);
-            yy += chartImg.height();
-        }
-        if (!specImg.isNull()) {
-            p.drawImage(0, yy, specImg);
-            yy += specImg.height();
-        }
-        if (!magImg.isNull()) {
-            p.drawImage(0, yy, magImg);
-            // 右侧黑边来源标注（放不下则省略）
-            const int textX = magImg.width() + 16;
-            if (textX + 80 < out.width()) {
-                p.setPen(QColor(Theme::Accent));
-                p.setFont(fontSans(qBound(12, out.width() / 100, 20), QFont::Bold));
-                p.drawText(QRect(textX, yy, out.width() - textX - 16, magImg.height()),
-                           Qt::AlignLeft | Qt::AlignVCenter, magCaption);
+        for (const auto &s : sections) {
+            // 分隔线
+            p.fillRect(0, yy, W, divH, QColor(0x2A, 0x2A, 0x2A));
+            yy += divH;
+            // 标题条：Accent 竖条 + 次级色标题
+            p.fillRect(14, yy + (titleH - 16) / 2, 4, 16, QColor(Theme::Accent));
+            p.setPen(QColor(Theme::TextSecond));
+            p.setFont(fontSans(15, QFont::Bold));
+            p.drawText(QRect(30, yy, W - 30, titleH),
+                       Qt::AlignLeft | Qt::AlignVCenter, s.title);
+            yy += titleH;
+            if (s.caption.isEmpty()) {
+                p.drawImage(0, yy, s.img);
+            } else {
+                // 放大镜段：裁剪图 + 金色描边 + 右侧信息块（垂直居中两行）
+                p.drawImage(0, yy, s.img);
+                p.setPen(QPen(QColor(Theme::Accent), 2));
+                p.drawRect(1, yy + 1, s.img.width() - 2, s.img.height() - 2);
+                const int tx = s.img.width() + 32;
+                if (tx + 120 < W) {
+                    const int lineH = 34;
+                    const int blockH = lineH * 2;
+                    int ty = yy + (s.img.height() - blockH) / 2;
+                    p.setPen(QColor(Theme::TextPrimary));
+                    p.setFont(fontSans(20, QFont::Bold));
+                    p.drawText(QRect(tx, ty, W - tx - 24, lineH),
+                               Qt::AlignLeft | Qt::AlignVCenter, s.caption);
+                    ty += lineH;
+                    p.setPen(QColor(Theme::Accent));
+                    p.setFont(fontSans(18, QFont::Normal));
+                    p.drawText(QRect(tx, ty, W - tx - 24, lineH),
+                               Qt::AlignLeft | Qt::AlignVCenter, s.sub);
+                }
             }
+            yy += s.img.height();
         }
         p.end();
     }

@@ -11,6 +11,8 @@
 #include <QDir>
 #include <QtCharts/QLineSeries>
 #include "chartpanel.h"
+#include "spectrogrampanel_enhanced.h"
+#include "theme.h"
 #include "domain/region_model.h"
 #include "domain/polygon_model.h"
 #include "domain/timeline_model.h"
@@ -257,6 +259,126 @@ int main(int argc, char **argv)
                 x2, (long long)durA, ok2 ? "PASS" : "FAIL <<<");
         if (!ok1 || !ok2)
             ++fail;
+    }
+
+    // ---- §14v2 快照离屏渲染（dock 内 resize+grab 不可靠的替代路径）----
+    // ChartPanel::renderToImage：CPU 矢量重绘到目标尺寸；屏幕 widget 尺寸不动。
+    {
+        TimelineModel tm;
+        ChartPanel chart;
+        RegionModel rm2;
+        chart.setRegionModel(&rm2);
+        chart.setTimelineModel(&tm);
+        chart.resize(800, 300);
+        chart.show();
+
+        QVector<qint64> ts{0, 30000, 60000, 90000, 120000};
+        QVector<QVector<qreal>> vals{{10, 80, 200, 60, 150}};
+        QVector<DataEntry> entries{DataEntry{DataEntry::Rect, 7}};
+        AudioData audio;
+        audio.timeResolutionMs = 1000.0;
+        audio.volume.resize(120);
+        for (int i = 0; i < 120; ++i)
+            audio.volume[i] = (i % 30) / 29.0;
+        tm.setData(ts, vals, entries, audio);
+        chart.setDuration(120000);
+        app.processEvents();
+
+        // QChart::resize 必须同步重排 plotArea（renderToImage 依赖此机制）
+        const qreal paBefore = chart.chart()->plotArea().width();
+        chart.chart()->resize(QSizeF(2560, 420));
+        const qreal paWide = chart.chart()->plotArea().width();
+        chart.chart()->resize(QSizeF(800, 300));
+        const bool layoutSync = paWide > 1800 && paBefore < 900;
+        fprintf(stderr, "[snaprender] plotArea sync relayout: %.0f -> %.0f => %s\n",
+                paBefore, paWide, layoutSync ? "PASS" : "FAIL <<<");
+        if (!layoutSync) ++fail;
+
+        const QSize onScreen = chart.size();
+        const QImage img = chart.renderToImage(QSize(2560, 420));
+        const bool sizeOk = (img.size() == QSize(2560, 420));
+        const bool restored = (chart.size() == onScreen);
+        fprintf(stderr, "[snaprender] chart renderToImage size=%dx%d restored=%d => %s\n",
+                img.width(), img.height(), restored ? 1 : 0,
+                (sizeOk && restored) ? "PASS" : "FAIL <<<");
+        if (!sizeOk || !restored) ++fail;
+
+        // 全宽内容断言：曲线/文字应铺满 2560 宽（若布局没切换，右侧为空）
+        const QColor bg(Theme::BgPanel);
+        auto nonBg = [&](const QImage &im, int x0, int x1, int y0, int y1) {
+            int n = 0;
+            for (int y = y0; y < y1; y += 2)
+                for (int x = x0; x < x1; x += 2) {
+                    const QRgb px = im.pixel(x, y);
+                    if (qAbs(qRed(px) - bg.red()) + qAbs(qGreen(px) - bg.green())
+                        + qAbs(qBlue(px) - bg.blue()) > 24)
+                        ++n;
+                }
+            return n;
+        };
+        const int left = nonBg(img, 0, 640, 40, 400);
+        const int right = nonBg(img, 1920, 2560, 40, 400);
+        const bool spread = (left > 5 && right > 5);
+        fprintf(stderr, "[snaprender] chart content spread L=%d R=%d => %s\n",
+                left, right, spread ? "PASS" : "FAIL <<<");
+        if (!spread) ++fail;
+    }
+
+    // SpectrogramPanelEnhanced::renderHeatmapImage：纯 CPU 光栅化（不经 GL）。
+    {
+        SpectrogramPanelEnhanced spec;
+        AudioData audio;
+        audio.sampleRate = 8000;
+        audio.timeResolutionMs = 32.0;
+        const int bins = 64, frames = 200;
+        audio.spectrogram.resize(bins);
+        for (int b = 0; b < bins; ++b) {
+            audio.spectrogram[b].resize(frames);
+            for (int f = 0; f < frames; ++f)
+                // 频率越高能量越大（顶行亮、底行黑），时间维恒定
+                audio.spectrogram[b][f] = -5.0 + 10.0 * b / (bins - 1);
+        }
+        audio.specMin = -5.0;
+        audio.specMax = 5.0;
+        spec.setSpectrogramData(audio);
+        spec.setCursorTime(qint64(200 * 32 / 2));   // 中点光标
+
+        const QImage img = spec.renderHeatmapImage(QSize(1000, 120));
+        const bool sizeOk = (img.size() == QSize(1000, 120));
+        fprintf(stderr, "[snaprender] spec renderHeatmapImage size=%dx%d => %s\n",
+                img.width(), img.height(), sizeOk ? "PASS" : "FAIL <<<");
+        if (!sizeOk) ++fail;
+
+        if (sizeOk) {
+            auto rowMean = [&](int y0, int y1) {
+                double s = 0; int n = 0;
+                for (int y = y0; y < y1; ++y)
+                    for (int x = 0; x < 1000; x += 4) {
+                        const QRgb px = img.pixel(x, y);
+                        s += qRed(px) + qGreen(px) + qBlue(px); ++n;
+                    }
+                return s / n;
+            };
+            const double top = rowMean(0, 20);       // 高频 = 亮
+            const double bottom = rowMean(100, 120); // 低频 = 暗（thermal LUT 黑端）
+            const bool orient = top > bottom * 2.0 + 10;
+            fprintf(stderr, "[snaprender] spec freq orientation top=%.1f bottom=%.1f => %s\n",
+                    top, bottom, orient ? "PASS" : "FAIL <<<");
+            if (!orient) ++fail;
+
+            // 时间光标：中点列应有橙色虚线像素（#FF981C）
+            int cursorHits = 0;
+            for (int y = 0; y < 120; ++y) {
+                const QRgb px = img.pixel(500, y);
+                if (qRed(px) > 200 && qGreen(px) > 100 && qGreen(px) < 210
+                    && qBlue(px) < 80)
+                    ++cursorHits;
+            }
+            const bool cursorOk = cursorHits >= 10;
+            fprintf(stderr, "[snaprender] spec cursor line hits=%d => %s\n",
+                    cursorHits, cursorOk ? "PASS" : "FAIL <<<");
+            if (!cursorOk) ++fail;
+        }
     }
 
     qInfo() << (fail == 0 ? "ALL PASS" : "FAILURES:") << (fail == 0 ? "" : QString::number(fail));

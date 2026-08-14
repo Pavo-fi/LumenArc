@@ -40,6 +40,12 @@ public:
     void setNoiseFloor(qreal value);
     bool isDraggingCursor() const { return m_draggingCursor; }
 
+    /// 离屏 CPU 光栅化渲染（2026-08-14 §14 快照全面化）：与 GPU 着色器同一
+    /// 归一化 + 同一颜色 LUT + 同一视窗/频率轴设置，任意目标尺寸全幅输出，
+    /// 不经 GL（QOpenGLWidget 的 grab 只能拿屏幕当前尺寸且尺寸错位）。
+    /// 含橙色时间光标（与 paintGL 同款）。无语谱数据返回空图。
+    QImage renderHeatmapImage(const QSize &targetSize);
+
 public slots:
     void onXAxisRangeChanged(qreal xMin, qreal xMax);
     void setCursorTime(qint64 timeMs);

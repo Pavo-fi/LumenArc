@@ -325,7 +325,7 @@ void OverlayWidget::drawMagnifierIndicator(QPainter &painter, const QRect &rect,
         painter.drawLine(r, b, r - arm, b);          // 右下横
         painter.drawLine(r, b, r, b - arm);          // 右下纵
     };
-    brackets(QPoint(w, w), QColor(0, 0, 0, 160), 1);   // 衬影（亮底可读）
+    brackets(QPoint(w, w), QColor(0, 0, 0, 160), w);   // 衬影（亮底可读，随主线同宽）
     brackets(QPoint(0, 0), accent, w);                 // 主体
 
     // 倍率徽章：深底金字「2.0×」，贴框外右上角；上方无空间则改框内左上

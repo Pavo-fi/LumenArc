@@ -300,6 +300,7 @@ target_link_libraries(lumenarc_preprocess_integration PRIVATE
 add_executable(lumenarc_vla_test
     tests/vla_load_test_main.cpp
     src/chartpanel.cpp
+    src/spectrogrampanel_enhanced.cpp   # §14v2：renderHeatmapImage 离屏渲染测试
     src/i18n.cpp
     src/domain/region_model.cpp
     src/domain/polygon_model.cpp
@@ -316,6 +317,8 @@ target_link_libraries(lumenarc_vla_test PRIVATE
     Qt6::Gui
     Qt6::Widgets
     Qt6::Charts
+    Qt6::OpenGL         # SpectrogramPanelEnhanced（构造不经 GL，渲染测试纯 CPU）
+    Qt6::OpenGLWidgets
 )
 
 # --- Case module domain test (v1.3.0) ---

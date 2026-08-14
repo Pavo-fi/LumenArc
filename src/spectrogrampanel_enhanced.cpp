@@ -18,6 +18,7 @@
 #include <QWheelEvent>
 #include <QtMath>
 #include <QOpenGLVertexArrayObject>
+#include <cmath>
 #include <QSurfaceFormat>
 #include <QDebug>
 
@@ -366,6 +367,67 @@ void SpectrogramPanelEnhanced::uploadColorLUTTexture()
     GLenum err = glGetError();
     if (err != GL_NO_ERROR)
         qWarning() << "glTexImage2D (color LUT) error:" << err;
+}
+
+/// @brief 离屏 CPU 光栅化：与 GPU 着色器同一归一化/颜色 LUT/视窗/频率轴。
+/// 目标尺寸任意（快照全宽输出），不经 GL——grabFramebuffer 只能拿屏幕当前
+/// 尺寸且 dock 内 resize 后 FBO 错位（实测右半黑）。
+QImage SpectrogramPanelEnhanced::renderHeatmapImage(const QSize &targetSize)
+{
+    if (targetSize.isEmpty() || !m_audioData.hasSpectrogram())
+        return QImage();
+    if (m_colorLUT.isEmpty())
+        buildColorLUT();
+
+    const int nFreqBins = m_audioData.spectrogram.size();
+    const int nFrames = m_audioData.spectrogram[0].size();
+    const qreal resMs = m_audioData.safeTimeResolutionMs();
+    const qreal totalMs = resMs * nFrames;
+    const double nyquist = m_audioData.sampleRate / 2.0;
+    if (totalMs <= 0 || nyquist <= 0)
+        return QImage();
+
+    // X 视窗与屏上一致（与图表段同一条时间轴）；Y 视窗与频率轴设置同理
+    qreal x0 = m_viewXMin, x1 = m_viewXMax;
+    if (x1 <= x0) { x0 = 0; x1 = totalMs; }
+    const double y0 = m_viewYMin, y1 = m_viewYMax;
+    const bool logScale = (m_freqScale == FreqScale::Logarithmic);
+    const double logMin = std::log(qMax(1.0, y0));
+    const double logMax = std::log(qMax(1.0, y1));
+    const qreal range = qFuzzyIsNull(m_maxValue - m_minValue)
+        ? 1.0 : (m_maxValue - m_minValue);
+
+    const int W = targetSize.width(), H = targetSize.height();
+    QImage img(W, H, QImage::Format_ARGB32);
+    for (int r = 0; r < H; ++r) {
+        const double t = 1.0 - double(r) / qMax(1, H - 1);   // 顶行 = 最高频
+        const double freqFrac = logScale
+            ? std::exp(logMin + t * (logMax - logMin)) / nyquist
+            : (y0 + t * (y1 - y0)) / nyquist;
+        const int bin = qBound(0, int(freqFrac * (nFreqBins - 1) + 0.5),
+                               nFreqBins - 1);
+        const auto &bins = m_audioData.spectrogram[bin];
+        QRgb *line = reinterpret_cast<QRgb *>(img.scanLine(r));
+        for (int c = 0; c < W; ++c) {
+            const qreal ms = x0 + (qreal(c) / qMax(1, W - 1)) * (x1 - x0);
+            const int fr = qBound(0, int(ms / resMs + 0.5), nFrames - 1);
+            const qreal norm = qBound(0.0, (bins[fr] - m_minValue) / range, 1.0);
+            line[c] = m_colorLUT[qBound(0, int(norm * 255 + 0.5), 255)]
+                      | 0xFF000000;
+        }
+    }
+
+    // 时间光标（与 paintGL 同款橙色虚线）
+    if (m_cursorTimeMs >= 0 && x1 > x0) {
+        const qreal ratio = (m_cursorTimeMs - x0) / (x1 - x0);
+        if (ratio >= 0.0 && ratio <= 1.0) {
+            QPainter p(&img);
+            p.setPen(QPen(QColor(0xFF, 0x98, 0x1C), 2, Qt::DashLine));
+            const int cx = int(ratio * (W - 1));
+            p.drawLine(cx, 0, cx, H - 1);
+        }
+    }
+    return img;
 }
 
 void SpectrogramPanelEnhanced::buildColorLUT()

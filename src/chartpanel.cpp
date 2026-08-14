@@ -37,6 +37,8 @@
 #include <QToolTip>
 #include <QScreen>
 #include <QGuiApplication>
+#include <QCoreApplication>
+#include <QPainter>
 #include <algorithm>
 #include <QHBoxLayout>
 #include <QLineEdit>
@@ -436,6 +438,40 @@ void ChartPanel::setAutoYRange(bool enabled)
     } else {
         m_axisY->setRange(0, 255);
     }
+}
+
+QImage ChartPanel::renderToImage(const QSize &targetSize)
+{
+    if (targetSize.isEmpty() || !m_chart)
+        return QImage();
+    QGraphicsScene *sc = m_chart->scene();
+    if (!sc)
+        return QImage();
+
+    setUpdatesEnabled(false);
+    const QSizeF oldSize = m_chart->size();
+    // 重新布局到目标尺寸：plotAreaChanged 同步驱动时间标签/图表标签/AB 标记
+    // 重排（同线程 DirectConnection）；光标项不听该信号，手动刷新。
+    m_chart->resize(QSizeF(targetSize));
+    updateCursorPosition();
+    sc->update();   // 强制场景立即 polish/布局（离屏无事件循环兜底）
+    QCoreApplication::sendPostedEvents(m_chart, QEvent::Polish);
+
+    QImage img(targetSize, QImage::Format_ARGB32);
+    img.fill(QColor(Theme::BgPanel));
+    {
+        QPainter p(&img);
+        p.setRenderHint(QPainter::Antialiasing);
+        sc->render(&p, QRectF(0, 0, targetSize.width(), targetSize.height()),
+                   m_chart->geometry());
+        p.end();
+    }
+
+    m_chart->resize(oldSize);   // 恢复原布局（屏幕 widget 尺寸不变）
+    updateCursorPosition();
+    setUpdatesEnabled(true);
+    update();
+    return img;
 }
 
 void ChartPanel::onRegionsChanged()
