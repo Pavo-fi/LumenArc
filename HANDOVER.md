@@ -5,128 +5,27 @@
 
 ## 表头（每次写完 HANDOVER 与 WORK_HISTORY 后必须同步更新本表头——规则 R2）
 
-- **当前 HEAD**：`853165d`（2026-08-14 §14 方案拍板 docs 提交）
+- **当前 HEAD**：`855d5cf`（2026-08-14 §14 落地：放大镜标识框 + 快照全面化）
+  · docs 提交见 git log（本表头同步提交）
 - **构建**：`cmd //c "build_tmp\build_target.bat ALL"`；测试：`QT_QPA_PLATFORM=offscreen`
   + PATH 含 `C:\code\Qt\6.8.0\msvc2022_64\bin`
 - **全回归基线**：case 239 / case_e2e 51 / piecewise 96 / preprocess 170 /
-  ui_chain 70 / calibration 73 / ocr_atpositions 21 / vla 3×PASS 含 [bugA]
+  ui_chain **92** / calibration 73 / ocr_atpositions 21 / vla 5×PASS 含 [bugA]
 - **当前保留批次**（新→旧）：
-  第五批 §14（放大镜标识框 + 快照全面化方案拍板 Q1-Q5，**未开工**）·
+  第六批 §15（§14 拍板落地：放大镜标识框 + 快照全面化，`855d5cf`）·
+  第五批 §14（放大镜标识框 + 快照全面化方案拍板 Q1-Q5）·
   第四批 §13（放大镜/钉图吃调节修复 + 伽马/色阶/反色扩展，`c022d70`）·
   第三批 §12（显示旋转 90° 方案 A 落地，`eee4501`）·
-  第二批 §9-11（音频时间轴对齐 + 问题 A/B 定案加固 + 播放选项包）·
-  第一批 §0-8（项目规则 + 移交摘要 + 问题 A/B 排查）
-- **最近归档动作**：2026-08-14 第五批后整体切分——第〇~二十三章
-  （2026-07-28~08-14 上午：架构升级/引擎/前处理/校时/案件模块全史）
-  移入 WORK_HISTORY.md，原文未删改。
-- **常用参考导航**（已归档，查 WORK_HISTORY.md）：架构分层与红线 R 规则（二章）、
-  构建部署 CI（九章）、升级计划表 v1.2~v1.9（十章）、测试体系 28 项矩阵（七章）、
-  校时管线救复速览（〇章）、案件模块 M1-M3（二十三章）。
+  第二批 §9-11（音频时间轴对齐 + 问题 A/B 定案加固 + 播放选项包）
+- **最近归档动作**：2026-08-14 第六批——第一批（2026-08-13 晚移交记录
+  §0-8：项目规则 R1/R2 + 交接摘要 + 问题 A/B 排查 + 音频取证结论 +
+  技术债）移入 WORK_HISTORY.md，原文未删改。
+- **常用参考导航**（已归档，查 WORK_HISTORY.md）：项目规则 R1/R2 与问题
+  A/B 排查史（2026-08-13 晚批）、架构分层与红线 R 规则（二章）、
+  构建部署 CI（九章）、升级计划表 v1.2~v1.9（十章）、测试体系 28 项矩阵
+  （七章）、校时管线救复速览（〇章）、案件模块 M1-M3（二十三章）。
 
 ---
-
-# ============================================================================
-# 移交记录（2026-08-13 晚）——用户对近期修复结果不满意，交下一任专家接手
-# ============================================================================
-
-## 0. 项目规则（2026-08-14 用户拍板，必须遵守）
-
-**规则 R1：每次工作完成，必须自动在 HANDOVER.md 记录进度**——包括：
-做了什么、验证了什么、遗留了什么。与代码提交同步进行，不得遗漏。
-
-**规则 R2（2026-08-14 用户拍板）：HANDOVER.md 只保留最近 5 次更新**——
-超出部分依修改顺序（时间序）整体移入 WORK_HISTORY.md 存档（存档只增不改）；
-**每次写完 HANDOVER 与 WORK_HISTORY 后，同步更新两份文档的表头**（当前
-HEAD、保留批次清单、最近归档动作）。
-
-## 1. 交接摘要
-
-- 仓库 HEAD：`5adfff5`（v1.3.1 之后的 10 个修复提交，见 git log）
-- 工作区干净（仅 build_tmp/ 杂物未跟踪）
-- 构建：`cmd //c "build_tmp\build_target.bat ALL"`；测试运行：
-  `QT_QPA_PLATFORM=offscreen` + PATH 含 `C:\code\Qt\6.8.0\msvc2022_64\bin`
-- 全回归基线：case_test 239 / case_e2e 51 / piecewise 96 / preprocess 170 /
-  ui_chain 23 / calibration 73 / ocr_atpositions 21 / vla 3×PASS
-
-## 2. ⚠ 用户确认「未修复」的两个问题（最高优先，需真机复现排查）
-
-### 问题 A：来回切换视频，已生成的音频音量曲线"短一截"，重新分析才恢复
-- 用户操作：视频 A 分析音量曲线 → 切视频 B → 切回 A → 曲线短一截/不完整
-- 我已改：`src/chartpanel.cpp`（提交 5adfff5）——
-  ① 空快照分支清空隐藏 volumeSeries（原来残留旧曲线 + X 轴换新时长）
-  ② rebuild 分支去掉 return，继续填充音量
-- **用户测试后仍复现**。可能原因（需专家排查）：
-  a) 用户运行的是旧 exe（用户多次出现"看不到更新"现象，疑似未重启；
-     但本次用户明确说没修复，不能只归因于此）
-  b) 我的修复不完整：音量曲线显示路径可能不止 chartpanel（spectrogram
-     panel 的音量曲线？`src/spectrogrampanel_enhanced.cpp` 550 行有
-     volume.size 日志）——需真机 GUI 复现（offscreen 无法复现 GUI 切换）
-  c) 曲线数据源 TimelineModel/AudioData 在切换视频时未正确重置
-- **排查路径**：真机打开两个视频 → 分析 A 音频 → 切 B → 切回 A →
-  观察曲线；加 qDebug 跟踪 onDataReplaced/volumePointsForViewport；
-  确认运行 exe 路径与构建时间（19:46 后）
-
-### 问题 B：导入拼接的文件在有明确时间排序的情况下仍混乱
-- 用户测试目录：`C:\Users\MJ\Desktop\20260722广州增城\监控视频\食咔咔
-  烤肉店\2026-07-22\04`（79 个 `20260722-HHMMSS[M].mp4`）
-- 我已改：`src/app/preprocessing_coordinator.cpp` `sortFilesByNameTime`
-  （提交 f75c00f）：解析 `20260722-040007` 式时间戳稳定排序，buildList
-  OrderGroups（默认组）探测完成即生效
-- **验证过**：04 目录按文件名时间排序实测单调递增（040007M→045938）；
-  parseFilenameTimestamp M2 正则带 M 后缀测试通过（preprocess_test 170）
-- **用户测试后仍复现**。可能原因（需专家排查）：
-  a) 用户运行旧 exe（f75c00f 之前无此功能）——需确认用户运行路径
-  b) 用户走的不是默认组路径：点了「自动排序」（runAutoSort → OCR 引擎
-     不可用 → 降级 → smartSort）——smartSort 有文件名证据（parse
-     FilenameTimestamp）应该也排好，但需真机确认 OCR 降级路径实际行为
-  c) 用户在**校对页**看到的顺序 vs **拼接产物**顺序不一致（拖拽改序后
-     未重置？）
-- **排查路径**：真机导入 04 目录 → 看校对页顺序与日志「已按文件名时间戳
-  自动排序」是否出现 → 不出现则确认 exe 版本；出现但仍乱则跟踪
-  m_groups.ordered
-
-## 3. 近期已提交但用户尚未确认/或存疑的改动（按提交序）
-
-| 提交 | 内容 | 状态 |
-|---|---|---|
-| a3e3558 | v1.3.1 封版（轻量包导出 bug 修复 + e2e 自检 51/51） | 用户之前确认过拼接测试通过 |
-| 9001f8a | 转码统一 CFR + 时间戳归零 + 中间产物清理 + 统计提示 | 用户确认「测试了一个没问题」✓ |
-| c424bbf | 音频直拷（组级）+ 案件列表外部变更自动刷新 + 删除按钮 | 删除逻辑后被用户修正过 |
-| 0ae94a9 | 删除按源文件归属分级（案外只删分析结果） | 用户拍板逻辑 ✓ |
-| ed04a45 | 残留锁自动清理 + 打开案件页面内面板 | 用户后续反馈仍见旧弹窗（疑旧 exe） |
-| a9d7b79 / 1a50606 | 起始页改页面内面板 / 移除启动画面 | **用户拍板回滚**（42f192d 已恢复 splash） |
-| 42f192d | 恢复启动画面 + 欢迎面板重设计 | 用户未确认视觉效果 |
-| 2cdc77f | 外部删除自动清除列表条目（pruneMissingFiles）+ 锁文案 | 用户未确认 |
-| f75c00f | 右键删除补齐（会话/输出/报告/快照）+ 文件名排序 + 音频取证 | 排序用户确认未修复 |
-| 5adfff5 | 音量曲线短一截修复 + M 后缀排序用例 | 用户确认未修复 |
-
-## 4. 音频取证结论（已定案，勿重复调查）
-
-- 监控源音频 = `pcm_alaw` 8kHz mono（G.711，带限 ~3.4kHz）——语谱高频
-  缺失是**源固有特性**，拼接产物与源 8k+ 能量完全一致（-91dB），拼接无损
-- alaw 无法直拷入 mp4（mp4 无 alaw sample entry，muxer 拒绝）→
-  alaw→aac（保留 8k mono）是容器限制下的最小有损（维持现状）
-- 取证文件：build_tmp/aud_src.wav、aud_merged.wav、src.pcm、merged.pcm
-
-## 5. 已知技术债/待办
-
-- 锁 stale 检测用 OpenProcess（Windows-only，case_manager.cpp 含 windows.h）
-- CaseOpenPanel 欢迎面板视觉待用户确认（用户曾要求重设计，42f192d 已做）
-- 中间产物清理：拼接成功删转码段 + norm 文件；失败保留（已生效，用户
-  154619 会话目录实测已清理）
-- v1.4.0 候选：⚠错读点报告标注、报告模块、手工矩阵 A–H 真机走一遍
-  （docs/RELEASE_CHECKLIST_V1.3_CN.md，建议用真机 GUI 走，用户已多轮
-  真机测试发现多个 offscreen 覆盖不到的 UI bug）
-
-## 6. 给下一任专家的建议
-
-1. **第一件事**：在用户机器上确认用户实际运行的 exe 路径与构建时间
-   （用户多次反馈"更新没看到"，疑似运行旧构建；但也可能真没修复，
-   必须真机复现，不要想当然）
-2. 问题 A/B 都需要 GUI 真机复现（offscreen 覆盖不到）；建议在用户
-   在场时一起跑一遍，记录实际现象
-3. 每次改动后立即在本文件记录（规则 R1），并明确告知用户 exe 路径
-   与构建时间，要求用户完全退出旧进程再测
 
 # ============================================================================
 # 移交记录（2026-08-13 深夜，第二批）——问题 A 根因已修复；问题 B 定案+加固
@@ -542,3 +441,77 @@ MagnifierWidget::m_sourceRect（原视频系）所有变化汇经 recalcSourceRe
 - 不做屏幕分辨率整窗抓取（QScreen::grabWindow）——保真度低于原生分辨率
   合成，且会带入悬浮窗杂项。
 - OSD 不烧调节参数（画面已是最终效果，参数冗余）。
+
+# ============================================================================
+# 工作记录（2026-08-14 傍晚，第六批）——§14 拍板落地：放大镜标识框 + 快照全面化
+# ============================================================================
+
+## 15. §14 方案全量实施（Q1-Q5 拍板内容落地，HEAD 见本批提交）
+
+### 依据
+§14.2/14.3 施工规格逐条执行（用户已拍板，本轮直接开工）。
+
+### 已实现
+
+**A. 放大镜来源标识框（规格 14.3.A）**
+1. `MagnifierWidget::sourceRectChanged(QRect, qreal)` 新信号：
+   `recalcSourceRect()` 末尾发射（光标跟随/中键平移/旋转/切视频全路径），
+   `zoomAtPoint()` 直改 `m_sourceRect` 的旁路同样补发射；两处均仅在矩形
+   实际变化时发射（旧值比对去抖）。
+2. `OverlayWidget::setMagnifierRect(QRect, qreal)` + paintEvent 末尾绘制
+   （最上层，仅指示、零命中检测改动）：金色（Theme::Accent）四角括号
+   2px + 1px 黑色半透明衬影，框内无填充无中线；倍率徽章深底金字「2.0×」
+   贴框外右上角（上方无空间改框内左上）。
+3. MainWindow 接线：createMagnifier 连接信号 + 立即下发初始值（setVideoSize
+   的信号早于 connect）；removeMagnifier 清 `setMagnifierRect({})`——切视频
+   必走 removeMagnifier，标识框不会跨视频残留。
+4. 测试：ui_chain 新场景 runMagnifierIndicatorScenario——四角度下
+   `magnifierRectWidget()` == 手算角点锚点（经 normalized() 吸收 quirk）、
+   zoomAtPoint/updateCursorPosition 信号传播、空矩形隐藏、
+   drawMagnifierIndicator 像素级（括号臂金色/框内零遮挡/徽章在位）。
+
+**B. 证据快照全面化（规格 14.3.B）**
+1. 足高重渲染 helper `grabPanelFullHeight`：临时 resize 到视频全宽 +
+   ≥380/320px 高 → grab → 还原（resize 同步派发 Resize 事件，曲线不糊不扁）。
+   ChartPanel 条件沿用 `!snap.isEmpty() || hasAudio()`；SpectrogramPanelEnhanced
+   条件 `hasAudio()`（QOpenGLWidget grab 走 framebuffer，失败为 Null 自动跳过）。
+2. 放大镜段：`MagnifierWidget::currentMagnifiedImage()`（ContentWidget 当前
+   m_frameImage = 旋转+LUT 已应用裁剪图）高度归一 320px 等比缩放（超宽兜底
+   按宽适配），右侧黑边烧录「源区域 (x, y) w×h · N.N×」。
+3. 覆盖层烧录（Q3）：新公共静态 `OverlayWidget::burnAnnotations`——ROI 矩形/
+   多边形/辅助线按「rotateStoredToDisplay + 等比缩放」映射（与 mapFromVideo
+   同一整数式，支持 scrub 降采样帧）全分辨率画到 videoPart；模型原色 +
+   半透明填充 + R/P 序号标签，与屏上观感一致。
+4. 来源标识框烧录（Q4）：同一静态 `drawMagnifierIndicator`（屏上/快照复用），
+   线宽/字号随分辨率缩放（annoPen 1~4px、括号 2~8px、徽章 10~28px）。
+5. OSD（Q5）：现有「标签(金)+时间」保留，上方新增文件名行（白色小字
+   0.75×，黑底阴影）；标签为空时行位自动上收。
+6. 布局（Q2）：视频帧 → 曲线 → 语谱图 → 放大镜段，竖向全宽堆叠，黑底无留白。
+7. 明确不做项（§14.4）均未做：无 PiP、无整窗抓取、OSD 不烧调节参数。
+
+### 顺带重构（等价行为）
+- 旋转映射提炼公共静态：`displaySizeForRotation` / `rotateStoredToDisplay` /
+  `mapStoredPointToFrame` / `mapStoredRectToFrame`，OverlayWidget 成员函数
+  storedToDisplay/displayVideoSize 改调静态版——屏上映射与快照烧录逐位一致，
+  消除两份公式漂移风险。
+
+### 验证
+- ui_chain 70 → **92 checks, 0 failures**（新增 22 项：标识框四角度锚定/
+  信号传播/隐藏、括号绘制像素级、burnAnnotations rot0+rot90 像素级、
+  currentMagnifiedImage 尺寸/像素/旋转互换）。
+- 全回归绿：case 239 / case_e2e 51 / piecewise 96 / preprocess 170 /
+  calibration 73 / ocr_atpositions 21 / vla 5×PASS 含 [bugA]。
+- offscreen 启动 5s 无崩溃（残留进程已 powershell Stop-Process 杀净）。
+- MANUAL.md：§二新增「证据快照」小节（四段内容表 + 保存位置），
+  §九放大镜新增「来源标识框」段落。
+
+### 排查中固化（后来者勿踩）
+- 同一 normalized() quirk 再现身：映射角点在交换轴上构造锚点必须经
+  `QRect(p1,p2).normalized()` 吸收（本轮 rot90/270 锚点初版各差 1px，
+  复核系手工算术失误 + quirk 叠加；实现本身逐位正确）。
+
+### 待真机 GUI 确认（offscreen 覆盖不到）
+- 标识框观感：括号/徽章在亮底暗底素材上的可读性、跟随流畅度。
+- 快照产物：曲线足高重渲染清晰度、语谱图段（真实 GL 环境）抓取、
+  放大镜段黑边标注排版、四角度 × 有/无覆盖层 × 有/无放大镜矩阵走查。
+- 上一批待确项不变：面板滑杆手感、OSD 字号比例、4K 旋转播放性能。
