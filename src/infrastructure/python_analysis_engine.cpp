@@ -521,8 +521,15 @@ static AudioData parseAudioData(const QJsonObject &audioObj)
     audio.sampleRate = audioObj["sample_rate"].toDouble(16000);
     audio.hopLength = audioObj["hop_length"].toInt(512);
     audio.nFft = audioObj["n_fft"].toInt(1280);
-    audio.timeResolutionMs = audioObj["time_resolution_ms"].toDouble(
-        1000.0 * audio.hopLength / audio.sampleRate);
+    // 2026-08-13 取证级时间轴对齐：脚本曾把 time_resolution_ms round 到 0.1
+    // （512/24000=21.3333→21.3，0.156% 漂移 ≈ 每 10 分钟 1s，光标与听觉
+    // 对不上）。hop_length/sample_rate 为精确整数，一律重算为准；JSON 字段
+    // 仅作 hop/sr 缺失时的兜底。与 VLA2/JSON 缓存加载路径的重算保持一致
+    // （timeline_model.cpp 两处），消除"新分析漂移、重载缓存正常"的双轨。
+    if (audio.sampleRate > 0 && audio.hopLength > 0)
+        audio.timeResolutionMs = 1000.0 * audio.hopLength / audio.sampleRate;
+    else
+        audio.timeResolutionMs = audioObj["time_resolution_ms"].toDouble(32.0);
     audio.specMin = audioObj["spec_min"].toDouble(0);
     audio.specMax = audioObj["spec_max"].toDouble(0);
 

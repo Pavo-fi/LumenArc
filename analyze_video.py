@@ -519,6 +519,43 @@ def _cleanup_temp_files():
             pass
     _temp_files.clear()
 
+def probe_stream_starts(video_path, ffmpeg_path):
+    """返回 (video_start_s, audio_start_s)；探测失败返回 (None, None)。
+    2026-08-13 取证对齐：分析 WAV 的时间零点 = 音频流起点；而播放引擎的
+    时间零点 = 视频流起点（ffmpeg_video_engine m_startPtsMs）。当音频流
+    晚于视频流起始（监控导出常见，可达 ~1s），曲线会整体提前一个恒定量 ——
+    必须探测后在 WAV 头部补等量静音，使分析时间轴与播放时间轴同原点。"""
+    import json as _json
+    ffprobe = os.path.join(os.path.dirname(os.path.abspath(ffmpeg_path)),
+                           "ffprobe.exe" if os.name == "nt" else "ffprobe")
+    if not os.path.exists(ffprobe):
+        ffprobe = "ffprobe"   # PATH 兜底
+    try:
+        r = subprocess.run(
+            [ffprobe, "-v", "error", "-show_entries",
+             "stream=codec_type,start_time:format=start_time",
+             "-of", "json", video_path],
+            capture_output=True, timeout=30)
+        if r.returncode != 0:
+            return None, None
+        info = _json.loads(r.stdout.decode("utf-8", errors="replace"))
+        v_start = a_start = None
+        fmt_start = info.get("format", {}).get("start_time")
+        for s in info.get("streams", []):
+            st = s.get("start_time")
+            if st is None:
+                continue
+            if s.get("codec_type") == "video" and v_start is None:
+                v_start = float(st)
+            elif s.get("codec_type") == "audio" and a_start is None:
+                a_start = float(st)
+        if v_start is None and fmt_start is not None:
+            v_start = float(fmt_start)   # 与引擎 start_time 回退链一致
+        return v_start, a_start
+    except Exception:
+        return None, None
+
+
 def extract_audio(video_path, ffmpeg_path, sr=24000):
     """Extract audio as WAV using ffmpeg. Returns path to temp WAV file."""
     import atexit
@@ -535,8 +572,21 @@ def extract_audio(video_path, ffmpeg_path, sr=24000):
         except (OSError, ValueError):
             pass  # Some signals can't be caught
 
+    # 音频流起始偏移补齐：音频晚于视频 >20ms 时在 WAV 头部补等量静音
+    # （上限 30s 防病态元数据；音频早于视频不裁切，保留全部声音证据）
+    af_args = []
+    v_start, a_start = probe_stream_starts(video_path, ffmpeg_path)
+    if v_start is not None and a_start is not None:
+        delta_ms = (a_start - v_start) * 1000.0
+        if delta_ms > 20.0:
+            pad_ms = min(delta_ms, 30000.0)
+            af_args = ["-af", f"adelay=delays={pad_ms:.1f}:all=1"]
+            print(f"WARNING:audio stream starts {delta_ms:.0f}ms after video; "
+                  f"padding {pad_ms:.0f}ms leading silence for timeline alignment",
+                  file=sys.stderr)
+
     cmd = [ffmpeg_path, "-i", video_path, "-vn", "-ac", "1",
-           "-ar", str(sr), "-f", "wav", "-y", tmp.name]
+           "-ar", str(sr)] + af_args + ["-f", "wav", "-y", tmp.name]
     result = subprocess.run(cmd, capture_output=True, timeout=300)
     if result.returncode != 0:
         print(f"WARNING:ffmpeg extraction failed: {result.stderr.decode('utf-8', errors='replace')}", file=sys.stderr)
@@ -695,7 +745,8 @@ def analyze_audio(video_path, ffmpeg_path, sr=24000, n_fft=1920, hop_length=512,
             "sample_rate": sr,
             "hop_length": hop_length,
             "n_fft": n_fft,
-            "time_resolution_ms": round(time_res_ms, 1),
+            "time_resolution_ms": round(time_res_ms, 6),   # 全精度：曾 round(...,1)
+            # （21.3333→21.3，0.156% 漂移 ≈ 每 10 分钟 1s，光标与声音对不上）
             "spec_min": round(spec_min, 4),
             "spec_max": round(spec_max, 4)
         }
@@ -833,7 +884,7 @@ def analyze_multi_videos(video_paths, rois, ffmpeg, processes=1):
             "sample_rate": 24000,
             "hop_length": 512,
             "n_fft": 1920,
-            "time_resolution_ms": round(1000.0 * 512 / 24000, 1),
+            "time_resolution_ms": 1000.0 * 512 / 24000,   # 全精度，勿 round 到 0.1
         }
 
     return result
