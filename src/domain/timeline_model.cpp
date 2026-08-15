@@ -815,6 +815,48 @@ bool TimelineModel::saveSpecToFile(const QString &filePath, const AudioData &aud
     return true;
 }
 
+TimeCalibration TimelineModel::peekCalibrationFromVla(const QString &filePath)
+{
+    TimeCalibration cal;
+    QFile f(filePath);
+    if (!f.open(QIODevice::ReadOnly))
+        return cal;
+    const QByteArray data = f.readAll();
+    f.close();
+    if (data.isEmpty())
+        return cal;
+
+    if (data.size() >= 16 && memcmp(data.constData(), VLA2_MAGIC, 4) == 0) {
+        // VLA2：只解 META chunk（轻量，跳过谱图等重数据）
+        QMap<QByteArray, QByteArray> chunks;
+        if (!vlaUnpackAll(data, &chunks))
+            return cal;
+        const QJsonObject meta = QJsonDocument::fromJson(chunks.value("META")).object();
+        if (meta.isEmpty())
+            return cal;
+        const int version = meta["version"].toInt();
+        if (version >= 8 && meta.contains("time_calibration"))
+            return TimeCalibration::fromJson(meta["time_calibration"].toObject());
+        if (version >= 2)
+            return TimeCalibration::fromLegacyOffset(
+                static_cast<qint64>(meta["time_offset"].toDouble()));
+        return cal;
+    }
+
+    // 旧 JSON 格式（v≤7）：只读顶层校时字段
+    const QJsonDocument doc = QJsonDocument::fromJson(data);
+    if (!doc.isObject())
+        return cal;
+    const QJsonObject root = doc.object();
+    const int version = root["version"].toInt();
+    if (version >= 8 && root.contains("time_calibration"))
+        return TimeCalibration::fromJson(root["time_calibration"].toObject());
+    if (version >= 2)
+        return TimeCalibration::fromLegacyOffset(
+            static_cast<qint64>(root["time_offset"].toDouble()));
+    return cal;
+}
+
 bool TimelineModel::loadSpecFromFile(const QString &filePath, AudioData &audio)
 {
     QFile file(filePath);

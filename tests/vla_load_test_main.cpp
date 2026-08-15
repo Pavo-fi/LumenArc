@@ -186,9 +186,20 @@ int main(int argc, char **argv)
         // v7 纯矩形
         QStringLiteral("C:/Users/MJ/Desktop/20260722广州增城/监控视频/D17_20260722052140_20260722_17015190.mp4.vla"),
     };
-    // 允许命令行追加自定义 vla 路径
-    for (int i = 1; i < argc; ++i)
-        files << QString::fromLocal8Bit(argv[i]);
+    // 允许命令行追加自定义 vla 路径；--peek:<path> 只做轻量校时读取
+    for (int i = 1; i < argc; ++i) {
+        const QString arg = QString::fromLocal8Bit(argv[i]);
+        if (arg.startsWith(QStringLiteral("--peek:"))) {
+            const TimeCalibration cal = TimelineModel::peekCalibrationFromVla(arg.mid(7));
+            fprintf(stderr, "[peek] %s -> source=%d offset=%lld dateKnown=%d "
+                            "isValid=%d isEffective=%d\n",
+                    qPrintable(arg.mid(7)), int(cal.source),
+                    static_cast<long long>(cal.offsetMs), int(cal.dateKnown),
+                    int(cal.isValid()), int(cal.isEffective()));
+            continue;
+        }
+        files << arg;
+    }
 
     RoiModel rm;
     RoiModel pm;

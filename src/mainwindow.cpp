@@ -1847,6 +1847,30 @@ void MainWindow::enterCaseMode()
         lang("追光者 Lumen Arc v1.7.0", "Lumen Arc v1.7.0")));
     showOperationStatus(lang("案件已打开：%1", "Case opened: %1")
                             .arg(m_caseManager->meta().caseNo));
+    // 开案批量校时徽标校验（用户实测：旧 vla time_offset=0 误亮 ⏰ 且只在
+    // 打开视频时才刷新）——轻量读每个标了校准的视频的 vla 校时字段，
+    // 修正 case.json 里的历史误值。同步但仅限 hasCalibration 的视频
+    // （通常很少），单个 peek 只读 META/顶层字段，毫秒级。
+    {
+        const auto videos = m_caseManager->meta().videos;
+        int fixed = 0;
+        for (const auto &v : videos) {
+            if (!v.hasCalibration)
+                continue;
+            const QString vlaPath = m_caseManager->vlaPathFor(v.originalPath);
+            const TimeCalibration peek = TimelineModel::peekCalibrationFromVla(vlaPath);
+            if (!peek.isEffective()) {
+                m_caseManager->updateCalibrationBadge(v.originalPath, false, QString());
+                ++fixed;
+            }
+        }
+        if (fixed > 0) {
+            m_caseDock->refreshTree();
+            showOperationStatus(lang("已修正 %1 个视频的校时徽标（旧数据误标）",
+                                     "Fixed %1 calibration badges (stale)")
+                                    .arg(fixed));
+        }
+    }
     // 开案恢复现场（uiState.lastVideoId）：.vla 缓存探测自动加载分析数据
     if (const auto *v = m_caseManager->videoById(m_caseManager->meta().lastVideoId)) {
         if (QFile::exists(v->originalPath))

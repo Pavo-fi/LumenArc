@@ -504,3 +504,32 @@ hasCalibration=true；但 displayMsOf = streamMs+0 且日期未知 → 图表零
   ui_chain 92 / preprocess 170 / v17 28）
 - 待真机：打开原标 ⏰ 的视频 → 徽标应熄灭（除非真有校时），
   真校时视频轴显示 MM-dd HH:mm 墙钟
+
+# ============================================================================
+# 工作记录（2026-08-15，第二十批）——校时徽标批量校验（真实案件跟进）
+# ============================================================================
+
+## 29. 明景拼接视频_4时.mp4 ⏰ 徽标跟进：开案批量校验 + 轻量 peek
+
+### 实测（用户案件真实文件）
+- 源旁 vla = v6 旧 JSON 格式，`time_offset: 0`（从未校时）
+- V003.vla = VLA2，source=manual 全零空模型
+- 两者 isEffective()=false → 徽标应为熄灭
+
+### 修复补齐
+- TimelineModel::peekCalibrationFromVla()：轻量只读校时字段
+  （VLA2 只解 META chunk；旧 JSON 只读顶层字段，不碰谱图/ROI）
+- 开案时（enterCaseMode）批量校验：仅遍历 hasCalibration=true 的视频
+  （通常极少），peek 后 isEffective=false 的熄灭徽标 + 刷新证据树
+  + 状态栏提示修正数量
+- vla_test 新增 --peek:<path> 轻量验证分支
+
+### 验证
+- [peek] 明景拼接视频_4时.mp4.vla → source=0 isValid=0 isEffective=0 ✓
+- [peek] V003.vla → isEffective=0 ✓
+- 全回归绿（calibration 77 / vla 13 / case 239 / e2e 51 / ui_chain 92 /
+  piecewise 96）
+
+### 待真机
+重启后打开「广州天河测试案件」→ 状态栏提示"已修正 N 个视频的校时徽标"，
+这些视频的 ⏰ 熄灭（数据本身从未校时）；真正校时过的视频保持 ⏰。

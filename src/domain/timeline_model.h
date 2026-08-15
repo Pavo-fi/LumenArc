@@ -105,6 +105,11 @@ public:
     /// Deserialize spectrogram data from binary .vla.spec file.
     static bool loadSpecFromFile(const QString &filePath, AudioData &audio);
 
+    /// 轻量读取 vla 的校时模型（不加载谱图/ROI 等重数据）：
+    /// VLA2 只解 META chunk；旧 JSON 格式只读顶层校时字段。
+    /// 开案批量校时徽标校验用（用户实测：旧 vla time_offset=0 误亮 ⏰）。
+    static TimeCalibration peekCalibrationFromVla(const QString &filePath);
+
 signals:
     void dataReplaced();
     void dataCleared();
