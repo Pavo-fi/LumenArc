@@ -84,6 +84,7 @@ private slots:
     QString buildProbeStatsText() const;   // 结果页源素材统计（2026-08）
     void onEvidenceReady(const QVector<SortGroup> &groups);
     void onPrecheckReady(const QMap<QString, PrecheckResult> &byGroup);
+    void onOverlapDetected(const QStringList &channels);   // v1.7.0 M2
     void onFinished(const PreprocessReport &report);
     void onFailed(PreprocessError error, const QString &detail);
     void onLogLine(const QString &line);

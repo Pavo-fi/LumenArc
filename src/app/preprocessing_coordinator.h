@@ -18,6 +18,9 @@
 
 #include <QObject>
 #include <QMap>
+#include <QSet>
+#include <QPair>
+#include "domain/overlap_cut.h"
 #include <QVector>
 #include <QStringList>
 #include "domain/preprocess_task.h"
@@ -76,6 +79,8 @@ signals:
     void ocrDone(const QVector<OcrResult> &results);
     void evidenceReady(const QVector<SortGroup> &groups);
     void precheckReady(const QMap<QString, PrecheckResult> &byGroup);
+    /// v1.7.0 M2：Precheck 检测到组内时间重叠（参数=重叠组名列表）
+    void overlapDetected(const QStringList &channels);
     void finished(const PreprocessReport &report);
     void failed(PreprocessError error, const QString &detail);
     void logLine(const QString &line);
@@ -86,6 +91,8 @@ private slots:
 public slots:
     /// 后台可信时长计算回投（QThreadPool → UI 线程，functor 投递）
     void onTrustedDurationsReady(const QMap<QString, qint64> &durations);
+    /// v1.7.0 M2：用户选择是否修剪重叠段（Q-17：剪后段开头保前段完整）
+    void setTrimOverlap(bool trim);
 
 private slots:
     void onOcrFinished(const QVector<OcrResult> &results);
@@ -105,11 +112,16 @@ private:
     void runSorting();
     void runPrecheck();
     void startNextTranscode();
+    void scheduleNextTranscode();   // v1.7.0 M3：双引擎并行调度
+    QString groupOfFile(const QString &file) const;   // 调度用
     void startNextConcat();
     void finalize();
     QString allocateOutput(const QString &dir, const QString &base) const;
     qint64 durationOf(const QString &file) const;
     void writeOperationsLog(const QString &dir) const;
+    TranscodeRequest buildTranscodeRequest(const QString &file) const;  // v1.7.0
+    /// v1.7.0 M2：按剪切计划取该文件的流内保留区间（无则 0,0）
+    QPair<qint64, qint64> trimRangeFor(const QString &file) const;
 
     IAnalysisEngine *m_analysis = nullptr;      // 不持有
     bool m_skipOcrWhenAbsStart = true;
@@ -118,6 +130,7 @@ private:
     TimestampOcrEngine *m_ocrEngine;
     ConcatEngine *m_concatEngine;
     TranscodeEngine *m_transcodeEngine;
+    TranscodeEngine *m_transcodeEngine2 = nullptr;   // v1.7.0 M3：组级并行 N=2
 
     TaskPhase m_phase = TaskPhase::Idle;
     QStringList m_files;
@@ -145,6 +158,14 @@ private:
     QMap<QString, QString> m_outputs;           // 报告：输出文件
     QMap<QString, QString> m_concatOutputs;     // channel -> 拼接输出
     PreprocessReport m_report;
+
+    // v1.7.0 M3：双引擎并行状态
+    QMap<TranscodeEngine *, QString> m_engineFile;   // 引擎 -> 当前文件
+    QSet<QString> m_activeGroups;                    // 进行中文件的组
+    // v1.7.0 M2：重叠剪切
+    bool m_trimOverlap = false;                 // 用户选择修剪（默认关）
+    QVector<CutPlan> m_cutPlans;                // 剪切计划（trimOverlap 时生效）
+    QStringList m_overlapChannels;              // 检测到的重叠组（UI 提示）
 };
 
 Q_DECLARE_METATYPE(QVector<OcrResult>)

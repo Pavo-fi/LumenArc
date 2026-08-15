@@ -47,6 +47,9 @@ struct TranscodeRequest {
     // 下无需流拷贝——方案 §8 局部重编码优化在本流程不适用，记录偏差）
     qint64  trimStartMs = 0;
     qint64  trimEndMs = 0;        // <=0 = 到文件尾
+    // v1.7.0 M4：输出分辨率统一（跨相机混拼，>0 时 vf 加 scale）
+    int     outWidth = 0;
+    int     outHeight = 0;
 };
 
 struct ProcessingOptions {

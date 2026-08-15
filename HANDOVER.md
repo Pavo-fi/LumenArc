@@ -400,3 +400,44 @@ Python 引擎保留解释器存在性检查。其余 qobject_cast 核查：onAna
 - v1.6.0 GPU 显示 Stage 1（锦上添花）/ v1.7.0 前处理 v2（效率最直接）/
   v1.8.0 P1a/P1b（架构铺路）/ v1.9.0 MainWindow 拆分（架构债）/
   Python 瘦身（~60MB）/ v1.4.0 报告模块（等模板）
+
+# ============================================================================
+# 工作记录（2026-08-15，第十七批）——v1.7.0 前处理 v2 全量实施（M1-M5）
+# ============================================================================
+
+## 26. 前处理 v2：硬编/重叠剪切/并行/命名/归一（方案 Q1-Q6 全部采纳）
+
+### M1 硬件编码（等价性评审实测）
+- encoder_probe：-encoders 嗅探 + 试编码验证（320x240——64x64 低于 NVENC
+  最小分辨率 145x65 会假失败，RTX 5080 实测）+ 逐级回退 + 静态缓存
+- **等价性评审**（seg_00 20s：CRF18 vs NVENC CQ19）：SSIM 0.9979 / PSNR
+  48.1dB 达标（≥0.99 / ≥40dB）
+- **速度实测反转**：5min 1440p NVENC 23.6s vs libx264 19.5s——强 CPU 下
+  软编更快 → **默认 libx264**（v1 行为零变化），硬编 UI 可选（QSettings
+  transcodeEncoder）；证据报告动作列记录实际编码器
+- 试编码陷阱记录：h264_nvenc 64x64 报 Frame Dimension 错误但 exit 0，
+  必须 stderr 检查（loglevel error 下正常输出 stderr 应为空）
+
+### M2 重叠剪切（Q-17 已拍板）
+- domain/overlap_cut：planOverlapCuts（剪后段开头保前段完整；完全包含
+  丢弃；链式三重重叠）+ autoOutputName（通道/组名+墙钟起止，sanitize）
+- Precheck 检测组内重叠（相邻墙钟差 >2s）→ overlapDetected → 对话框
+  （修剪推荐/保留原样）→ setTrimOverlap → 剪切计划
+- TranscodeRequest.trimStart/EndMs → buildArgs 输入侧 -ss/-t（全程重编码
+  流程无需流拷贝——方案 §8 局部重编码优化不适用，偏差记录）
+
+### M3 组级并行 N=2
+- coordinator 双 TranscodeEngine 实例 + scheduleNextTranscode（同组串行
+  活动槽不重复组；sender() 识别完成引擎）+ 进度按完成计数
+
+### M4 命名/归一/OCR 分级
+- 转码产物自动命名（墙钟起止）+ allocateOutput 避让共存
+- 跨相机混拼分辨率归一：组内主导分辨率 scale（force_original_aspect_ratio）
+- OCR 全量失败降级已存在（onOcrEngineError → 无 OCR 流程）✓ 核查通过
+
+### 验证
+- v17_test 27 项全过（编码器探测/参数面三分支+scale/剪切计划/命名）
+- 全回归 11 套全绿（v17 27 / vla 13 / libav 22 / roi 23 / ui_chain 92 /
+  case 239 / e2e 51 / piecewise 96 / preprocess 170 / calibration 73 / ocr 21）
+- 版本号 1.5.0 → 1.7.0；MANUAL 前处理章节更新
+- 待真机：硬编可选下拉、重叠提示对话框、多组并行、自动命名目检

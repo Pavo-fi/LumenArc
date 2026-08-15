@@ -28,6 +28,7 @@
 #include <QThreadPool>
 #include <QStorageInfo>
 #include <QTextStream>
+#include <algorithm>
 
 namespace {
 
@@ -78,6 +79,7 @@ PreprocessingCoordinator::PreprocessingCoordinator(QObject *parent)
     , m_ocrEngine(new TimestampOcrEngine(this))
     , m_concatEngine(new ConcatEngine(this))
     , m_transcodeEngine(new TranscodeEngine(this))
+    , m_transcodeEngine2(new TranscodeEngine(this))   // v1.7.0 M3：组级并行 N=2
 {
     qRegisterMetaType<QVector<ProbeResult>>();
     qRegisterMetaType<QVector<OcrResult>>();
@@ -114,15 +116,17 @@ PreprocessingCoordinator::PreprocessingCoordinator(QObject *parent)
     connect(m_transcodeEngine, &TranscodeEngine::progress, this,
             [this](int pct, const QString &) {
                 const int total = qMax(1, m_transcodeQueue.size());
-                const int idx = m_transcodeQueue.indexOf(m_currentTranscode);
-                emit progress(50 + (idx * 40 / total) + pct * 40 / total / 100,
-                              QStringLiteral("转码 %1 (%2%)")
-                                  .arg(m_currentTranscode).arg(pct));
+                const int done = m_transcoded.size() + m_transcodeFailed.size();
+                emit progress(50 + (done * 40 / total) + pct * 40 / total / 100,
+                              QStringLiteral("转码 %1/%2 (%3%)")
+                                  .arg(done + 1).arg(total).arg(pct));
             });
-    connect(m_transcodeEngine, &TranscodeEngine::finished,
-            this, &PreprocessingCoordinator::onTranscodeOneFinished);
-    connect(m_transcodeEngine, &TranscodeEngine::failed,
-            this, &PreprocessingCoordinator::onTranscodeOneFailed);
+    for (TranscodeEngine *eng : {m_transcodeEngine, m_transcodeEngine2}) {
+        connect(eng, &TranscodeEngine::finished,
+                this, &PreprocessingCoordinator::onTranscodeOneFinished);
+        connect(eng, &TranscodeEngine::failed,
+                this, &PreprocessingCoordinator::onTranscodeOneFailed);
+    }
 
     connect(m_concatEngine, &ConcatEngine::progress, this,
             [this](int pct, const QString &) {
@@ -516,13 +520,30 @@ void PreprocessingCoordinator::confirmOrder()
 void PreprocessingCoordinator::runPrecheck()
 {
     m_prechecks.clear();
+    m_overlapChannels.clear();
     for (const auto &g : m_groups) {
         QVector<ProbeResult> ordered;
         for (const auto &e : g.ordered)
             ordered.append(m_probes.value(e.filePath));
         m_prechecks.insert(g.channel, concatPrecheck(ordered));
+        // v1.7.0 M2：组内时间重叠检测（墙钟相邻比较，容差 2s；
+        // 默认关闭修剪——检测到重叠仅提示，Q-17 拍板）
+        for (int i = 1; i < g.ordered.size(); ++i) {
+            const SortEntry &prev = g.ordered[i - 1];
+            const SortEntry &cur = g.ordered[i];
+            const qint64 prevEnd = prev.ocrEndMs > 0 ? prev.ocrEndMs : prev.endMs;
+            if (prevEnd > 0 && cur.startMs < prevEnd - 2000) {
+                if (!m_overlapChannels.contains(g.channel))
+                    m_overlapChannels.append(g.channel);
+                log(QStringLiteral("[%1] ⚠ 组 %2 检测到时间重叠：%3（%4 与 %5 重叠 %6s）")
+                        .arg(tsLog(), g.channel, cur.filePath, prev.filePath, cur.filePath)
+                        .arg((prevEnd - cur.startMs) / 1000.0, 0, 'f', 1));
+            }
+        }
     }
     emit precheckReady(m_prechecks);
+    if (!m_overlapChannels.isEmpty())
+        emit overlapDetected(m_overlapChannels);
 }
 
 // ---------------------------------------------------------------------------
@@ -659,61 +680,217 @@ void PreprocessingCoordinator::startProcessing(const ProcessingOptions &opts)
     }
 }
 
-void PreprocessingCoordinator::startNextTranscode()
+TranscodeRequest PreprocessingCoordinator::buildTranscodeRequest(
+    const QString &file) const
 {
-    const int idx = m_transcodeQueue.indexOf(m_currentTranscode) + 1;
-    if (idx >= m_transcodeQueue.size()) {
-        m_currentTranscode.clear();
-        setPhase(TaskPhase::Concat);
-        startNextConcat();
-        return;
-    }
-    m_currentTranscode = m_transcodeQueue[idx];
-    const QString base = QFileInfo(m_currentTranscode).completeBaseName()
+    const QString base = QFileInfo(file).completeBaseName()
         + QStringLiteral("_lumen");
     TranscodeRequest req;
-    req.input = m_currentTranscode;
-    req.output = allocateOutput(m_outputDir, base);
-    req.durationMs = durationOf(m_currentTranscode);
+    req.input = file;
+    // v1.7.0 M4（Q4）：自动命名 <通道>_<日期>_<起止>.mp4（墙钟可用时）；
+    // 与 allocateOutput 避让共存；通道名 sanitize 防非法文件名字符
+    {
+        const SortEntry *entry = nullptr;
+        for (const auto &g : m_groups)
+            for (const auto &e : g.ordered)
+                if (e.filePath == file) {
+                    entry = &e;
+                    break;
+                }
+        QString channel;
+        qint64 ws = 0, we = 0;
+        for (const auto &g : m_groups)
+            for (const auto &e : g.ordered)
+                if (e.filePath == file) {
+                    channel = g.channel;
+                    ws = e.startMs;
+                    we = e.ocrEndMs > 0 ? e.ocrEndMs : e.endMs;
+                    break;
+                }
+        Q_UNUSED(entry)
+        QString safe = channel;
+        safe.replace(QRegularExpression(QStringLiteral(R"([\/:*?"<>|()])")),
+                     QStringLiteral("_"));
+        const QString name = autoOutputName(safe, base, ws, we);
+        req.output = allocateOutput(m_outputDir,
+                                    QFileInfo(name).completeBaseName());
+    }
+    req.durationMs = durationOf(file);
     req.crf = m_opts.crf;
     req.encoder = m_opts.encoder;   // v1.7.0 M1：硬编可选
     // 统一 CFR（拼接前置要求，2026-08）：全局最大 avg fps，低帧率段插帧
     req.fps = m_unifiedFps;
-    // 关键帧间隔 ≈ 2 秒（按统一帧率换算；0 兜底交给引擎默认）
     if (m_unifiedFps > 0.0f && m_unifiedFps <= 240.0f)
         req.keyframeInterval = qMax(1, qRound(2.0f * m_unifiedFps));
-    // 隔行源 → 默认反交错（探测驱动，可配置关闭）
-    const ProbeResult p = m_probes.value(m_currentTranscode);
-    req.deinterlace = m_opts.deinterlace && p.fieldOrder > 1;  // 1=progressive
-        const QString ch = [&]() {
+    const ProbeResult p = m_probes.value(file);
+    req.deinterlace = m_opts.deinterlace && p.fieldOrder > 1;
+    const QString ch = [&]() {
         for (const auto &g : m_groups)
             for (const auto &e : g.ordered)
-                if (e.filePath == m_currentTranscode)
+                if (e.filePath == file)
                     return g.channel;
         return QString();
     }();
     req.copyAudio = m_groupCopyAudio.value(ch, false);
     req.audioSampleRate = p.audioSampleRate.toInt();
     req.audioChannels = p.audioChannels.toInt();
-    log(QStringLiteral("[%1] 转码开始：%2 → %3%4%5")
-            .arg(tsLog(), req.input, req.output)
-            .arg(m_unifiedFps > 0.0f
-                     ? QStringLiteral("（统一 %1fps）").arg(m_unifiedFps)
-                     : QString())
-            .arg(req.copyAudio
-                     ? QStringLiteral("，音频直拷 %1").arg(p.audioCodec)
-                     : QStringLiteral("，音频重编码 aac")));
-    m_transcodeEngine->run(req);
+    // v1.7.0 M4（Q6）：跨相机混拼分辨率归一——组内分辨率不一致时
+    // 统一到出现最多的档位（保持宽高比缩放，黑边不补）
+    {
+        QMap<QString, int> resCnt;
+        for (const auto &g : m_groups) {
+            if (g.channel != ch)
+                continue;
+            for (const auto &e : g.ordered) {
+                const ProbeResult &pp = m_probes.value(e.filePath);
+                if (pp.width > 0 && pp.height > 0)
+                    ++resCnt[QStringLiteral("%1x%2").arg(pp.width).arg(pp.height)];
+            }
+        }
+        if (resCnt.size() > 1) {
+            QString bestKey;
+            int bestCnt = 0;
+            for (auto it = resCnt.constBegin(); it != resCnt.constEnd(); ++it) {
+                if (it.value() > bestCnt) {
+                    bestCnt = it.value();
+                    bestKey = it.key();
+                }
+            }
+            const int x = bestKey.indexOf('x');
+            req.outWidth = bestKey.left(x).toInt();
+            req.outHeight = bestKey.mid(x + 1).toInt();
+        }
+    }
+    // v1.7.0 M2：重叠剪切（用户选择修剪时生效）
+    const auto tr = trimRangeFor(file);
+    if (tr.first > 0) {
+        req.trimStartMs = tr.first;
+        req.trimEndMs = tr.second;
+    }
+    return req;
+}
+
+QPair<qint64, qint64> PreprocessingCoordinator::trimRangeFor(
+    const QString &file) const
+{
+    if (!m_trimOverlap)
+        return {0, 0};
+    for (const CutPlan &p : m_cutPlans) {
+        if (p.file == file && p.trimmed && !p.dropped)
+            return {p.keepStartMs, p.keepEndMs};
+    }
+    return {0, 0};
+}
+
+void PreprocessingCoordinator::startNextTranscode()
+{
+    scheduleNextTranscode();
+}
+
+void PreprocessingCoordinator::scheduleNextTranscode()
+{
+    // v1.7.0 M3：组级并行 N=2（同组串行，组间并行）
+    const QVector<TranscodeEngine *> engines = {
+        m_transcodeEngine, m_transcodeEngine2};
+    for (TranscodeEngine *eng : engines) {
+        if (m_engineFile.contains(eng))
+            continue;
+        int pick = -1;
+        for (int i = 0; i < m_transcodeQueue.size(); ++i) {
+            const QString &f = m_transcodeQueue[i];
+            if (m_transcoded.contains(f) || m_transcodeFailed.contains(f))
+                continue;
+            const QString g = groupOfFile(f);
+            if (!m_activeGroups.contains(g)) {
+                pick = i;
+                break;
+            }
+        }
+        if (pick < 0)
+            break;
+        const QString file = m_transcodeQueue[pick];
+        const QString g = groupOfFile(file);
+        const TranscodeRequest req = buildTranscodeRequest(file);
+        m_engineFile.insert(eng, file);
+        m_activeGroups.insert(g);
+        m_actions.insert(file, QStringLiteral("转码(%1)")
+                             .arg(req.encoder.isEmpty()
+                                      ? QStringLiteral("libx264") : req.encoder));
+        log(QStringLiteral("[%1] 转码开始：%2 -> %3%4%5%6")
+                .arg(tsLog(), req.input, req.output)
+                .arg(m_unifiedFps > 0.0f
+                         ? QStringLiteral("（统一 %1fps）").arg(m_unifiedFps)
+                         : QString())
+                .arg(req.copyAudio
+                         ? QStringLiteral("，音频直拷")
+                         : QStringLiteral("，音频重编码 aac"))
+                .arg(req.trimStartMs > 0
+                         ? QStringLiteral("，重叠修剪 %1s 起")
+                               .arg(req.trimStartMs / 1000.0, 0, 'f', 1)
+                         : QString()));
+        eng->run(req);
+    }
+
+    if (m_engineFile.isEmpty()) {
+        m_currentTranscode.clear();
+        m_activeGroups.clear();
+        setPhase(TaskPhase::Concat);
+        startNextConcat();
+    }
+}
+
+void PreprocessingCoordinator::setTrimOverlap(bool trim)
+{
+    m_trimOverlap = trim;
+    m_cutPlans.clear();
+    if (!trim)
+        return;
+    // 计算剪切计划：每组按墙钟排序段 → planOverlapCuts
+    for (const auto &g : m_groups) {
+        QVector<WallSegment> segs;
+        for (const auto &e : g.ordered) {
+            WallSegment s;
+            s.file = e.filePath;
+            s.wallStartMs = e.startMs;
+            s.wallEndMs = e.ocrEndMs > 0 ? e.ocrEndMs : e.endMs;
+            s.streamMs = e.durationMs > 0 ? e.durationMs
+                        : m_probes.value(e.filePath).durationMs;
+            if (s.wallEndMs <= s.wallStartMs)
+                s.wallEndMs = s.wallStartMs + s.streamMs;
+            segs.append(s);
+        }
+        m_cutPlans += planOverlapCuts(segs);
+    }
+    const int trimmed = std::count_if(m_cutPlans.cbegin(), m_cutPlans.cend(),
+                                      [](const CutPlan &p) { return p.trimmed; });
+    log(QStringLiteral("[%1] 重叠修剪已启用：%2 段将被裁剪（Q-17：保前段完整）")
+            .arg(tsLog()).arg(trimmed));
+}
+
+QString PreprocessingCoordinator::groupOfFile(const QString &file) const
+{
+    for (const auto &g : m_groups)
+        for (const auto &e : g.ordered)
+            if (e.filePath == file)
+                return g.channel;
+    return QString();
 }
 
 void PreprocessingCoordinator::onTranscodeOneFinished(const QString &outputPath)
 {
     if (m_phase != TaskPhase::Transcoding)
         return;
+    auto *eng = qobject_cast<TranscodeEngine *>(QObject::sender());
+    const QString file = eng ? m_engineFile.value(eng) : m_currentTranscode;
     log(QStringLiteral("[%1] 转码完成：%2").arg(tsLog(), outputPath));
-    m_transcoded.insert(m_currentTranscode, outputPath);
-    m_outputs.insert(m_currentTranscode, outputPath);
-    startNextTranscode();
+    m_transcoded.insert(file, outputPath);
+    m_outputs.insert(file, outputPath);
+    if (eng)
+        m_engineFile.remove(eng);
+    m_activeGroups.clear();
+    for (const auto &f : m_engineFile)
+        m_activeGroups.insert(groupOfFile(f));
+    scheduleNextTranscode();
 }
 
 void PreprocessingCoordinator::onTranscodeOneFailed(PreprocessError error,
@@ -721,11 +898,18 @@ void PreprocessingCoordinator::onTranscodeOneFailed(PreprocessError error,
 {
     if (m_phase != TaskPhase::Transcoding)
         return;
+    auto *eng = qobject_cast<TranscodeEngine *>(QObject::sender());
+    const QString file = eng ? m_engineFile.value(eng) : m_currentTranscode;
     log(QStringLiteral("[%1] 转码失败（%2）：%3 — %4")
-            .arg(tsLog()).arg(int(error)).arg(m_currentTranscode, detail));
-    m_transcodeFailed.append(m_currentTranscode);
-    m_actions.insert(m_currentTranscode, QStringLiteral("转码失败"));
-    startNextTranscode();   // 已完成文件保留，队列继续（规范 C2 不静默）
+            .arg(tsLog()).arg(int(error)).arg(file, detail));
+    m_transcodeFailed.append(file);
+    m_actions.insert(file, QStringLiteral("转码失败"));
+    if (eng)
+        m_engineFile.remove(eng);
+    m_activeGroups.clear();
+    for (const auto &f : m_engineFile)
+        m_activeGroups.insert(groupOfFile(f));
+    scheduleNextTranscode();   // 已完成文件保留，队列继续（规范 C2 不静默）
 }
 
 qint64 PreprocessingCoordinator::durationOf(const QString &file) const

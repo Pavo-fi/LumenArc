@@ -117,6 +117,8 @@ PreprocessWindow::PreprocessWindow(IAnalysisEngine *analysis, QWidget *parent)
             this, &PreprocessWindow::onEvidenceReady);
     connect(m_coord, &PreprocessingCoordinator::precheckReady,
             this, &PreprocessWindow::onPrecheckReady);
+    connect(m_coord, &PreprocessingCoordinator::overlapDetected,
+            this, &PreprocessWindow::onOverlapDetected);
     connect(m_coord, &PreprocessingCoordinator::finished,
             this, &PreprocessWindow::onFinished);
     connect(m_coord, &PreprocessingCoordinator::failed,
@@ -1476,6 +1478,37 @@ void PreprocessWindow::onPrecheckReady(const QMap<QString, PrecheckResult> &)
         m_pendingQuickMerge = false;
         m_coord->startProcessing(m_pendingOpts);
     }
+}
+
+/// v1.7.0 M2：Precheck 检测到时间重叠 → 询问是否修剪（Q-17：剪后段开头，
+/// 默认关闭——保留原样并在报告中标注为默认语义）
+void PreprocessWindow::onOverlapDetected(const QStringList &channels)
+{
+    if (channels.isEmpty())
+        return;
+    const QString detail = channels.join(QStringLiteral("、"));
+    QMessageBox box(this);
+    box.setWindowTitle(lang("检测到时间重叠", "Time Overlap Detected"));
+    box.setText(lang(
+        QStringLiteral("组 %1 存在相邻片段时间重叠（多机同时段录制）。\n\n"
+                       "修剪：剪掉后一段的重叠开头，保留前段完整（推荐，"
+                       "消除时间线重复）。\n保留原样：不裁剪，重叠段在报告中标注。")
+            .arg(detail),
+        QStringLiteral("Group %1 has overlapping segments (simultaneous "
+                       "recordings).\n\nTrim: cut the overlapping head of the "
+                       "later segment, keep the earlier one intact (recommended).\n"
+                       "Keep as-is: no cut, overlaps are noted in the report.")
+            .arg(detail)));
+    QPushButton *trimBtn = box.addButton(
+        lang("修剪重叠（推荐）", "Trim overlaps (recommended)"),
+        QMessageBox::AcceptRole);
+    box.addButton(lang("保留原样", "Keep as-is"), QMessageBox::RejectRole);
+    box.exec();
+    const bool trim = box.clickedButton() == trimBtn;
+    m_coord->setTrimOverlap(trim);
+    m_runLog->appendPlainText(trim
+        ? QStringLiteral("已选择修剪重叠段（组：%1）").arg(detail)
+        : QStringLiteral("保留重叠段原样（组：%1）").arg(detail));
 }
 
 /// 源素材统计 + 统一帧率提示（与 coordinator::logProbeStats 同源同公式：

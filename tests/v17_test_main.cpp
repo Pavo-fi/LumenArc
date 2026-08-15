@@ -109,6 +109,17 @@ static void testBuildArgs()
     CHECK(ti >= 0 && t[ti + 1] == "30.000", "args: -t 30s");
     const int ii = t.indexOf(QStringLiteral("-i"));
     CHECK(ii >= 0 && ii > ssi, "args: -ss before -i (input-side seek)");
+
+    // 分辨率统一：vf 含 scale
+    req.trimStartMs = 0;
+    req.trimEndMs = 0;
+    req.outWidth = 1280;
+    req.outHeight = 720;
+    const QStringList s = TranscodeEngine::buildArgs(req, QStringLiteral("tmp.mp4"));
+    const int vi = s.indexOf(QStringLiteral("-vf"));
+    CHECK(vi >= 0 && s[vi + 1].contains("scale=1280:720")
+          && s[vi + 1].contains("setpts"),
+          "args: vf scale+setpts");
 }
 
 // ============================================================================

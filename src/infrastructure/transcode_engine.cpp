@@ -82,6 +82,11 @@ QStringList TranscodeEngine::buildArgs(const TranscodeRequest &req,
         // 隔行源默认 yadif（探测到 field_order≠progressive 时由调用方置位）
         vf = QStringLiteral("yadif,") + vf;
     }
+    if (req.outWidth > 0 && req.outHeight > 0) {
+        // v1.7.0 M4：跨相机混拼分辨率归一（保持宽高比，黑边不补）
+        vf = QStringLiteral("scale=%1:%2:force_original_aspect_ratio=decrease,")
+                 .arg(req.outWidth).arg(req.outHeight) + vf;
+    }
     args << QStringLiteral("-vf") << vf;
     if (req.keyframeInterval > 0) {
         // 短 GOP：拖拽 seek 只解码 ≤2s（现场反馈：默认 GOP 250 帧太长，
