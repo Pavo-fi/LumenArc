@@ -183,6 +183,16 @@ static void testCutPlans()
         const auto plans = planOverlapCuts(segs);
         CHECK(!plans[1].trimmed, "cut: touching boundary not trimmed");
     }
+    // 无墙钟段（wallStart<=0）：不产生误剪（复查修复：全 0 组假阳性）
+    {
+        QVector<WallSegment> segs = {
+            {QStringLiteral("a"), 0, 0, 100000},   // 无墙钟
+            {QStringLiteral("b"), 0, 0, 100000},
+        };
+        const auto plans = planOverlapCuts(segs);
+        CHECK(plans.size() == 2 && !plans[1].trimmed && !plans[0].trimmed,
+              "cut: zero wallclock no false trim");
+    }
 }
 
 // ============================================================================

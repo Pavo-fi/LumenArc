@@ -162,6 +162,7 @@ private:
     // v1.7.0 M3：双引擎并行状态
     QMap<TranscodeEngine *, QString> m_engineFile;   // 引擎 -> 当前文件
     QSet<QString> m_activeGroups;                    // 进行中文件的组
+    int m_lastTxPercent = 0;                         // 进度单调钳位
     // v1.7.0 M2：重叠剪切
     bool m_trimOverlap = false;                 // 用户选择修剪（默认关）
     QVector<CutPlan> m_cutPlans;                // 剪切计划（trimOverlap 时生效）

@@ -117,9 +117,14 @@ PreprocessingCoordinator::PreprocessingCoordinator(QObject *parent)
             [this](int pct, const QString &) {
                 const int total = qMax(1, m_transcodeQueue.size());
                 const int done = m_transcoded.size() + m_transcodeFailed.size();
-                emit progress(50 + (done * 40 / total) + pct * 40 / total / 100,
-                              QStringLiteral("转码 %1/%2 (%3%)")
-                                  .arg(done + 1).arg(total).arg(pct));
+                const int abs = 50 + (done * 40 / total) + pct * 40 / total / 100;
+                // 双引擎并发时完成事件交错会致绝对百分比倒退——单调钳位
+                if (abs > m_lastTxPercent) {
+                    m_lastTxPercent = abs;
+                    emit progress(abs,
+                                  QStringLiteral("转码 %1/%2 (%3%)")
+                                      .arg(done + 1).arg(total).arg(pct));
+                }
             });
     for (TranscodeEngine *eng : {m_transcodeEngine, m_transcodeEngine2}) {
         connect(eng, &TranscodeEngine::finished,
@@ -532,7 +537,9 @@ void PreprocessingCoordinator::runPrecheck()
             const SortEntry &prev = g.ordered[i - 1];
             const SortEntry &cur = g.ordered[i];
             const qint64 prevEnd = prev.ocrEndMs > 0 ? prev.ocrEndMs : prev.endMs;
-            if (prevEnd > 0 && cur.startMs < prevEnd - 2000) {
+            // 无墙钟信息的段（startMs<=0）不参与重叠判定——全 0 组会
+            // 假阳性（0 < prevEnd-2000），已按墙钟推导数据前提修复
+            if (cur.startMs > 0 && prevEnd > 0 && cur.startMs < prevEnd - 2000) {
                 if (!m_overlapChannels.contains(g.channel))
                     m_overlapChannels.append(g.channel);
                 log(QStringLiteral("[%1] ⚠ 组 %2 检测到时间重叠：%3（%4 与 %5 重叠 %6s）")
@@ -644,6 +651,7 @@ void PreprocessingCoordinator::startProcessing(const ProcessingOptions &opts)
         log(QStringLiteral("[%1] 单文件转码导出：%2").arg(tsLog(), f));
         setPhase(TaskPhase::Transcoding);
         m_currentTranscode.clear();
+        m_lastTxPercent = 50;   // 进度钳位起点（多文件路径同）
         startNextTranscode();
         return;
     }
@@ -656,7 +664,11 @@ void PreprocessingCoordinator::startProcessing(const ProcessingOptions &opts)
             ordered.append(m_probes.value(e.filePath));
         const QStringList needTx = filesNeedingTranscode(ordered);
         for (const auto &e : g.ordered) {
-            if (needTx.contains(e.filePath)) {
+            // v1.7.0 M2：修剪模式下需要裁剪的文件必须走转码（trim 在转码
+            // 阶段生效），即使原本可无损拼接
+            const bool needsTrim = m_trimOverlap
+                && trimRangeFor(e.filePath).first > 0;
+            if (needTx.contains(e.filePath) || needsTrim) {
                 if (!m_transcodeQueue.contains(e.filePath))
                     m_transcodeQueue.append(e.filePath);
                 m_actions.insert(e.filePath, QStringLiteral("转码"));
@@ -673,6 +685,7 @@ void PreprocessingCoordinator::startProcessing(const ProcessingOptions &opts)
     if (!m_transcodeQueue.isEmpty()) {
         setPhase(TaskPhase::Transcoding);
         m_currentTranscode.clear();
+        m_lastTxPercent = 50;
         startNextTranscode();
     } else {
         setPhase(TaskPhase::Concat);
@@ -711,6 +724,10 @@ TranscodeRequest PreprocessingCoordinator::buildTranscodeRequest(
         QString safe = channel;
         safe.replace(QRegularExpression(QStringLiteral(R"([\/:*?"<>|()])")),
                      QStringLiteral("_"));
+        // 默认组友好化（与拼接命名 merged 规则一致，现场反馈①）
+        if (safe == QStringLiteral("（默认组）")
+            || safe == QStringLiteral("_默认组_"))
+            safe = QStringLiteral("merged");
         const QString name = autoOutputName(safe, base, ws, we);
         req.output = allocateOutput(m_outputDir,
                                     QFileInfo(name).completeBaseName());
@@ -761,11 +778,12 @@ TranscodeRequest PreprocessingCoordinator::buildTranscodeRequest(
             req.outHeight = bestKey.mid(x + 1).toInt();
         }
     }
-    // v1.7.0 M2：重叠剪切（用户选择修剪时生效）
+    // v1.7.0 M2：重叠剪切（用户选择修剪时生效）；进度分母同步扣减修剪量
     const auto tr = trimRangeFor(file);
     if (tr.first > 0) {
         req.trimStartMs = tr.first;
         req.trimEndMs = tr.second;
+        req.durationMs = qMax<qint64>(0, req.durationMs - tr.first);
     }
     return req;
 }
@@ -813,9 +831,13 @@ void PreprocessingCoordinator::scheduleNextTranscode()
         const TranscodeRequest req = buildTranscodeRequest(file);
         m_engineFile.insert(eng, file);
         m_activeGroups.insert(g);
-        m_actions.insert(file, QStringLiteral("转码(%1)")
+        m_actions.insert(file, QStringLiteral("转码(%1)%2")
                              .arg(req.encoder.isEmpty()
-                                      ? QStringLiteral("libx264") : req.encoder));
+                                      ? QStringLiteral("libx264") : req.encoder)
+                             .arg(req.trimStartMs > 0
+                                      ? QStringLiteral(";重叠修剪%1s")
+                                            .arg(req.trimStartMs / 1000.0, 0, 'f', 1)
+                                      : QString()));
         log(QStringLiteral("[%1] 转码开始：%2 -> %3%4%5%6")
                 .arg(tsLog(), req.input, req.output)
                 .arg(m_unifiedFps > 0.0f
@@ -849,6 +871,9 @@ void PreprocessingCoordinator::setTrimOverlap(bool trim)
     for (const auto &g : m_groups) {
         QVector<WallSegment> segs;
         for (const auto &e : g.ordered) {
+            // 无墙钟段（startMs<=0）跳过——不可靠的 0 起时间会误剪
+            if (e.startMs <= 0)
+                continue;
             WallSegment s;
             s.file = e.filePath;
             s.wallStartMs = e.startMs;
@@ -863,6 +888,15 @@ void PreprocessingCoordinator::setTrimOverlap(bool trim)
     }
     const int trimmed = std::count_if(m_cutPlans.cbegin(), m_cutPlans.cend(),
                                       [](const CutPlan &p) { return p.trimmed; });
+    // 修剪后重叠已物理移除：清除组内 Overlap 警告（拼接 hasOverlap/
+    // normalizeTimestamps 不再按“有重叠”处理，报告衔接警告也同步消失）
+    for (auto &g : m_groups) {
+        g.warnings.erase(std::remove_if(g.warnings.begin(), g.warnings.end(),
+                                        [](const SortWarning &w) {
+                                            return w.type == SortWarningType::Overlap;
+                                        }),
+                         g.warnings.end());
+    }
     log(QStringLiteral("[%1] 重叠修剪已启用：%2 段将被裁剪（Q-17：保前段完整）")
             .arg(tsLog()).arg(trimmed));
 }
@@ -972,7 +1006,11 @@ void PreprocessingCoordinator::startNextConcat()
         if (m_transcodeFailed.contains(e.filePath))
             continue;
         req.orderedFiles << src;
-        const qint64 d = durationOf(e.filePath);
+        // v1.7.0 M2：重叠修剪后的段时长 = 原时长 - 修剪量（拼接 offsets
+        // 必须用实际时长，否则时间戳 gap 错位）
+        const auto tr = trimRangeFor(e.filePath);
+        const qint64 trimmed = (tr.first > 0) ? tr.first : 0;
+        const qint64 d = qMax<qint64>(0, durationOf(e.filePath) - trimmed);
         offsets.append(acc);
         acc += d;
         totalMs += d;
@@ -1178,6 +1216,9 @@ void PreprocessingCoordinator::cancel()
     m_ocrEngine->cancel();
     m_concatEngine->cancel();
     m_transcodeEngine->cancel();
+    m_transcodeEngine2->cancel();   // v1.7.0 M3：双引擎都要取消
+    m_engineFile.clear();
+    m_activeGroups.clear();
     log(QStringLiteral("[%1] 用户取消；证据保留于 %2").arg(tsLog(), m_evidenceDir));
     writeOperationsLog(m_evidenceDir);
     setPhase(TaskPhase::Cancelled);
