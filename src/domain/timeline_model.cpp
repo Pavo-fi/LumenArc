@@ -13,6 +13,8 @@
 #include <QJsonObject>
 #include <QJsonArray>
 #include <QFile>
+#include <QSaveFile>
+#include <QMutex>
 #include <QDateTime>
 #include <QBuffer>
 
@@ -140,6 +142,8 @@ AnalysisSnapshot TimelineModel::snapshot() const
 // 读写无 JSON 大数组解析。旧 JSON vla 仍可读（魔数嗅探分流）。
 // ---------------------------------------------------------------------------
 static const char VLA2_MAGIC[4] = {'V', 'L', 'A', '2'};
+/// vla/spec 写入全局串行锁（自动保存后台线程 vs 手动保存前台并发写保护）
+static QMutex g_vlaWriteMutex;
 static constexpr quint32 VLA2_VERSION = 2;
 /// .vla 语义版本上限（META version 字段；v9 = time_calibration 含分段重建）
 /// v8 = time_calibration 仿射校时；v≤7 迁移见 loadFromFile
@@ -417,12 +421,18 @@ bool TimelineModel::saveToFile(const QString &filePath,
 
     lock.unlock();
 
-    QFile file(filePath);
+    // 原子写 + 串行化（用户实测：曲线隐藏后保存关闭案件重开丢失——
+    // 分析完成自动保存（后台 QtConcurrent）与手动保存（UI 线程）并发写
+    // 同一 .vla，QFile 非原子直写互相覆盖/写坏；QSaveFile = tmp+rename
+    // 原子提交，锁保证并发写串行，读端永远拿到完整文件）
+    QMutexLocker writeLock(&g_vlaWriteMutex);
+    QSaveFile file(filePath);
     if (!file.open(QIODevice::WriteOnly))
         return false;
     file.write(fileData);
-    file.close();
-    return file.error() == QFile::NoError;
+    if (!file.commit())
+        return false;
+    return true;
 }
 
 bool TimelineModel::loadFromFile(const QString &filePath,
@@ -788,7 +798,8 @@ bool TimelineModel::saveSpecToFile(const QString &filePath, const AudioData &aud
     if (audio.spectrogram.isEmpty() || audio.spectrogram[0].isEmpty())
         return false;
 
-    QFile file(filePath);
+    QMutexLocker writeLock(&g_vlaWriteMutex);   // 与 vla 同锁：并发写串行
+    QSaveFile file(filePath);
     if (!file.open(QIODevice::WriteOnly))
         return false;
 
@@ -811,7 +822,8 @@ bool TimelineModel::saveSpecToFile(const QString &filePath, const AudioData &aud
         }
     }
 
-    file.close();
+    if (!file.commit())
+        return false;
     return true;
 }
 

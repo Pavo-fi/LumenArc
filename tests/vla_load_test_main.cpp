@@ -7,6 +7,9 @@
  *   → 事件循环跑 deferred rebuildSeries → 统计曲线数量与数据点
  */
 #include <QApplication>
+#include <QtConcurrent>
+#include <QThreadPool>
+#include <QAtomicInt>
 #include <QDebug>
 #include <QDir>
 #include <QtCharts/QLineSeries>
@@ -212,6 +215,163 @@ int main(int argc, char **argv)
     chart.resize(1200, 400);
 
     int fail = 0;
+    // ---- 并发写 vla 回归（用户实测：隐藏曲线后保存关闭案件重开丢失——）
+    // 自动保存（后台线程）与手动保存（前台）并发写同一文件互相覆盖，
+    // QSaveFile+全局锁修复后：并发写必须都完整落盘、重开可加载
+    {
+        QDir tmpDir2(QDir::tempPath() + QStringLiteral("/lumenarc_vla_conc"));
+        tmpDir2.removeRecursively();
+        QDir().mkpath(tmpDir2.path());
+        const QString vla2 = tmpDir2.path() + QStringLiteral("/conc.vla");
+        TimelineModel tmC;
+        RoiModel rmC;
+        rmC.addRegion(QRect(0, 0, 30, 30));
+        rmC.addRegion(QRect(40, 40, 50, 50));
+        {
+            QVector<qint64> ts{0, 5000, 10000};
+            QVector<QVector<qreal>> vals{{5, 50, 95}, {200, 100, 20}};
+            QVector<DataEntry> entries{{DataEntry::Rect, rmC.roiIdAt(0)},
+                                       {DataEntry::Rect, rmC.roiIdAt(1)}};
+            tmC.setData(ts, vals, entries);
+        }
+        const QVector<QRect> regsC = rmC.regions();
+        const QVector<int> idsC = rmC.roiIds();
+        const TimeCalibration calC;
+        // 8 轮并发写（模拟自动保存 vs 手动保存竞争）
+        QAtomicInt concFail{0};
+        QtConcurrent::run([&]() {
+            for (int i = 0; i < 8; ++i)
+                if (!tmC.saveToFile(vla2, regsC, calC, QRect(), {}, QRect(),
+                                    {}, {}, {}, idsC, {}))
+                    concFail.ref();
+        });
+        for (int i = 0; i < 8; ++i)
+            if (!tmC.saveToFile(vla2, regsC, calC, QRect(), {}, QRect(),
+                                {}, {}, {}, idsC, {}))
+                concFail.ref();
+        QThreadPool::globalInstance()->waitForDone(30000);
+        // 重开验证：必须可加载且数据完整（非半文件）
+        TimelineModel tmR2;
+        QVector<QRect> rr2;
+        QVector<QPolygon> pp2;
+        QVector<GuideLine> gg2;
+        QVector<int> ri2, pi2;
+        TimeCalibration calR2;
+        QRect mr2, pr2;
+        QVector<ChartLabel> ll2;
+        SnapshotFusionData ff2;
+        const bool cLoad = tmR2.loadFromFile(vla2, &rr2, &calR2, &mr2, &ll2,
+                                             &pr2, &ff2, &pp2, &gg2, &ri2, &pi2);
+        const auto snapR = tmR2.snapshot();
+        const bool cOk = cLoad && !snapR.isEmpty()
+                         && snapR.values.size() == 2
+                         && snapR.values[0].size() == 3;
+        fprintf(stderr, "[conc] concurrent writes fail=%d reload ok=%d => %s\n",
+                int(concFail.loadRelaxed()), cLoad, cOk ? "PASS" : "FAIL <<<");
+        if (!cOk || concFail.loadRelaxed() != 0) ++fail;
+        tmpDir2.removeRecursively();
+    }
+
+    // ---- 用户实测回归：两 ROI 亮度曲线 → 隐藏 → 保存 → 重开 → 曲线丢失 ----
+    {
+        QDir tmpDir(QDir::tempPath() + QStringLiteral("/lumenarc_vla_reopen"));
+        tmpDir.removeRecursively();
+        QDir().mkpath(tmpDir.path());
+        const QString vla = tmpDir.path() + QStringLiteral("/reopen.vla");
+
+        // 1) 两个 ROI + 分析数据（两曲线）
+        RoiModel rmS;
+        rmS.addRegion(QRect(10, 10, 60, 40));
+        rmS.addRegion(QRect(80, 20, 90, 60));
+        TimelineModel tmS;
+        ChartPanel chartS;
+        chartS.setRegionModel(&rmS);
+        chartS.setTimelineModel(&tmS);
+        chartS.resize(1200, 400);
+        chartS.show();
+        {
+            QVector<qint64> ts{0, 10000, 20000, 30000, 40000};
+            QVector<QVector<qreal>> vals{{10, 90, 200, 60, 150},
+                                         {220, 180, 40, 120, 80}};
+            QVector<DataEntry> entries{{DataEntry::Rect, rmS.roiIdAt(0)},
+                                       {DataEntry::Rect, rmS.roiIdAt(1)}};
+            tmS.setData(ts, vals, entries);
+        }
+        app.processEvents();
+        int series0 = 0;
+        for (auto *s : chartS.chart()->series()) {
+            if (auto *ls = qobject_cast<QLineSeries *>(s); ls && ls->count() > 0)
+                ++series0;
+        }
+        const bool twoOk = series0 == 2;
+        fprintf(stderr, "[reopen] initial curves=%d => %s\n",
+                series0, twoOk ? "PASS" : "FAIL <<<");
+        if (!twoOk) ++fail;
+
+        // 2) 隐藏第一条曲线（legend marker 语义）
+        for (auto *s : chartS.chart()->series()) {
+            if (auto *ls = qobject_cast<QLineSeries *>(s); ls && ls->count() > 0) {
+                ls->setVisible(false);
+                break;
+            }
+        }
+        app.processEvents();
+
+        // 3) 保存 .vla（模拟分析完成自动保存/手动保存）
+        const QVector<QRect> regs = rmS.regions();
+        const QVector<int> rIds = rmS.roiIds();
+        const TimeCalibration calS;
+        bool saved = tmS.saveToFile(vla, regs, calS, QRect(), {}, QRect(),
+                                    {}, {}, {}, rIds, {});
+        fprintf(stderr, "[reopen] save=%s\n", saved ? "OK" : "FAIL <<<");
+        if (!saved) ++fail;
+
+        // 4) 重开（新模型 + 加载 + 恢复）
+        RoiModel rmR;
+        RoiModel pmR;
+        TimelineModel tmR;
+        ChartPanel chartR;
+        chartR.setRegionModel(&rmR);
+        chartR.setPolygonModel(&pmR);
+        chartR.setTimelineModel(&tmR);
+        chartR.resize(1200, 400);
+        chartR.show();
+        QVector<QRect> r2;
+        QVector<QPolygon> p2;
+        QVector<GuideLine> g2;
+        QVector<int> rIds2, pIds2;
+        TimeCalibration cal2;
+        QRect mag2, pin2;
+        QVector<ChartLabel> l2;
+        SnapshotFusionData f2;
+        const bool loaded = tmR.loadFromFile(vla, &r2, &cal2, &mag2, &l2, &pin2,
+                                             &f2, &p2, &g2, &rIds2, &pIds2);
+        if (rIds2.size() == r2.size())
+            rmR.restoreRegions(r2, rIds2);
+        app.processEvents();
+        int seriesR = 0, visibleR = 0, totalS = 0;
+        for (auto *s : chartR.chart()->series()) {
+            auto *ls = qobject_cast<QLineSeries *>(s);
+            ++totalS;
+            if (ls && ls->count() > 0) {
+                ++seriesR;
+                if (ls->isVisible())
+                    ++visibleR;
+            } else {
+                fprintf(stderr, "[reopen]   series %s empty/other\n",
+                        ls ? qPrintable(ls->name()) : "?");
+            }
+        }
+        fprintf(stderr, "[reopen]   total series=%d roiCount=%d entries=%d\n",
+                totalS, rmR.regionCount(),
+                int(tmR.snapshot().dataEntries.size()));
+        const bool reopenOk = loaded && seriesR == 2 && visibleR == 2;
+        fprintf(stderr, "[reopen] loaded=%d curves=%d visible=%d => %s\n",
+                loaded, seriesR, visibleR, reopenOk ? "PASS" : "FAIL <<<");
+        if (!reopenOk) ++fail;
+        tmpDir.removeRecursively();
+    }
+
     for (const QString &f : files) {
         fprintf(stderr, "=== %s\n", qPrintable(f));
         if (!QFile::exists(f)) {

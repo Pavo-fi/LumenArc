@@ -377,6 +377,7 @@ target_link_libraries(lumenarc_vla_test PRIVATE
     Qt6::Core
     Qt6::Gui
     Qt6::Widgets
+    Qt6::Concurrent
     Qt6::Charts
     Qt6::OpenGL         # SpectrogramPanelEnhanced（构造不经 GL，渲染测试纯 CPU）
     Qt6::OpenGLWidgets
