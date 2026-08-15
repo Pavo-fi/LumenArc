@@ -676,6 +676,7 @@ void PreprocessingCoordinator::startNextTranscode()
     req.output = allocateOutput(m_outputDir, base);
     req.durationMs = durationOf(m_currentTranscode);
     req.crf = m_opts.crf;
+    req.encoder = m_opts.encoder;   // v1.7.0 M1：硬编可选
     // 统一 CFR（拼接前置要求，2026-08）：全局最大 avg fps，低帧率段插帧
     req.fps = m_unifiedFps;
     // 关键帧间隔 ≈ 2 秒（按统一帧率换算；0 兜底交给引擎默认）

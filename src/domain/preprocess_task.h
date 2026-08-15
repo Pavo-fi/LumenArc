@@ -41,6 +41,12 @@ struct TranscodeRequest {
     int     keyframeInterval = 0; // 关键帧间隔（帧数）；0=libx264 默认 250
                                   // 现场反馈：默认 GOP 太长（15fps≈17s），
                                   // 拖拽 seek 需从上一关键帧逐帧解码 → 卡死
+    // v1.7.0 M1：编码器（空=Auto 探测：NVENC→QSV→libx264）
+    QString encoder;
+    // v1.7.0 M2：重叠剪切区间（>0 生效；输入侧 -ss/-t，全程重编码流程
+    // 下无需流拷贝——方案 §8 局部重编码优化在本流程不适用，记录偏差）
+    qint64  trimStartMs = 0;
+    qint64  trimEndMs = 0;        // <=0 = 到文件尾
 };
 
 struct ProcessingOptions {
@@ -50,6 +56,7 @@ struct ProcessingOptions {
     bool    normalizeTimestamps = false;
     bool    ignoreWarnings = false;
     bool    withSha256 = true;    // 证据报告含源文件哈希（可选开关，§9.2）
+    QString encoder;              // v1.7.0 M1：空=libx264；h264_nvenc/h264_qsv
 };
 
 enum class TaskPhase {

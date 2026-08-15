@@ -9,6 +9,7 @@
  * Licensed under the Apache License, Version 2.0
  */
 #include "transcode_engine.h"
+#include "encoder_probe.h"
 #include "python_analysis_engine.h"
 #include "domain/preprocess_text.h"
 
@@ -35,16 +36,36 @@ TranscodeEngine::~TranscodeEngine()
 QStringList TranscodeEngine::buildArgs(const TranscodeRequest &req,
                                        const QString &tempOutput)
 {
+    // v1.7.0 M1：编码器选择。默认空 = libx264（等价性评审实测：本机
+    // NVENC p4 23.6s vs libx264 veryfast 19.5s（5min 1440p）——强 CPU 下
+    // 软编更快且 SSIM 0.998/PSNR 48dB 达标；硬编留作可选（现场机 CPU
+    // 弱时经 UI 显式选择 h264_nvenc/h264_qsv）
+    const QString enc = req.encoder.isEmpty()
+        ? QStringLiteral("libx264") : req.encoder;
+    encoder_probe::EncoderArgs ea = encoder_probe::encoderArgsFor(enc);
+    if (ea.encoder == QStringLiteral("libx264"))
+        ea.qualityValue = req.crf;   // 软编沿用调用方自定义 CRF（默认 18）
+
+    QStringList args;
+    // v1.7.0 M2：重叠剪切（输入侧 -ss/-t；输入 seek 后时间戳重定零，
+    // 配合 setpts=PTS-STARTPTS 输出从 0 起，拼接相位一致）
+    if (req.trimStartMs > 0)
+        args << QStringLiteral("-ss")
+             << QString::number(double(req.trimStartMs) / 1000.0, 'f', 3);
+    args << QStringLiteral("-i") << req.input;
+    if (req.trimEndMs > 0) {
+        const qint64 len = req.trimEndMs - req.trimStartMs;
+        if (len > 0)
+            args << QStringLiteral("-t")
+                 << QString::number(double(len) / 1000.0, 'f', 3);
+    }
     // 默认参数预设（§5.5.1）：分析引擎与播放内核最优路径
-    QStringList args{
-        QStringLiteral("-i"), req.input,
-        QStringLiteral("-map"), QStringLiteral("0:v:0"),
-        QStringLiteral("-map"), QStringLiteral("0:a?"),   // 无音轨不报错
-        QStringLiteral("-c:v"), QStringLiteral("libx264"),
-        QStringLiteral("-preset"), QStringLiteral("veryfast"),
-        QStringLiteral("-crf"), QString::number(req.crf),
-        QStringLiteral("-pix_fmt"), QStringLiteral("yuv420p"),
-    };
+    args << QStringLiteral("-map") << QStringLiteral("0:v:0")
+         << QStringLiteral("-map") << QStringLiteral("0:a?");   // 无音轨不报错
+    args << QStringLiteral("-c:v") << ea.encoder
+         << ea.presetFlag << ea.presetValue
+         << ea.qualityFlag << QString::number(ea.qualityValue)
+         << QStringLiteral("-pix_fmt") << QStringLiteral("yuv420p");
     // 编码线程上限 = 核心数 - 2（≥2）：转码期间主窗口播放/操作保持响应
     args << QStringLiteral("-threads")
          << QString::number(qMax(2, QThread::idealThreadCount() - 2));

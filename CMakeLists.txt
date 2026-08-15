@@ -81,6 +81,7 @@ set(SOURCES
     src/domain/roi_model.cpp
     src/domain/guide_line_model.cpp
     src/domain/timeline_model.cpp
+    src/domain/overlap_cut.cpp
     src/domain/filename_timestamp.cpp
     src/domain/smart_sorter.cpp
     src/domain/concat_precheck.cpp
@@ -100,6 +101,7 @@ set(SOURCES
     src/infrastructure/ffmpeg_video_engine.cpp
     src/infrastructure/python_analysis_engine.cpp
     src/infrastructure/libav_analysis_engine.cpp
+    src/infrastructure/encoder_probe.cpp
     src/infrastructure/media_probe_engine.cpp
     src/infrastructure/timestamp_ocr_engine.cpp
     src/infrastructure/concat_engine.cpp
@@ -159,6 +161,7 @@ set(HEADERS
     src/infrastructure/ffmpeg_video_engine.h
     src/infrastructure/python_analysis_engine.h
     src/infrastructure/libav_analysis_engine.h
+    src/infrastructure/encoder_probe.h
     src/infrastructure/media_probe_engine.h
     src/infrastructure/timestamp_ocr_engine.h
     src/infrastructure/concat_engine.h
@@ -255,6 +258,33 @@ target_link_libraries(lumenarc_libav_test PRIVATE
     ${FFMPEG_LIBRARIES}
 )
 
+# --- v1.7.0 test: encoder probe / buildArgs / overlap cut / naming ---
+add_executable(lumenarc_v17_test
+    tests/v17_test_main.cpp
+    src/infrastructure/encoder_probe.cpp
+    src/infrastructure/encoder_probe.h
+    src/infrastructure/transcode_engine.cpp
+    src/infrastructure/transcode_engine.h
+    src/infrastructure/python_analysis_engine.cpp
+    src/infrastructure/python_analysis_engine.h
+    src/infrastructure/ianalysis_engine.h
+    src/domain/overlap_cut.cpp
+    src/domain/overlap_cut.h
+    src/i18n.cpp
+    src/domain/preprocess_task.h
+    src/domain/preprocess_text.h
+)
+target_include_directories(lumenarc_v17_test PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+    ${FFMPEG_INCLUDE_DIR}
+)
+target_link_libraries(lumenarc_v17_test PRIVATE
+    Qt6::Core
+    Qt6::Gui
+    Qt6::Concurrent
+    ${FFMPEG_LIBRARIES}
+)
+
 # --- Reconstruction golden-case integration test (B3 elevator clip) ---
 add_executable(lumenarc_reconstruction_test
     tests/reconstruction_integration_main.cpp
@@ -308,12 +338,14 @@ add_executable(lumenarc_preprocess_integration
     src/infrastructure/timestamp_ocr_engine.cpp
     src/infrastructure/concat_engine.cpp
     src/infrastructure/transcode_engine.cpp
+    src/infrastructure/encoder_probe.cpp
     src/infrastructure/python_analysis_engine.cpp
     src/i18n.cpp
     src/domain/filename_timestamp.cpp
     src/domain/smart_sorter.cpp
     src/domain/concat_precheck.cpp
     src/domain/evidence_report.cpp
+    src/domain/overlap_cut.cpp
 )
 target_include_directories(lumenarc_preprocess_integration PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src

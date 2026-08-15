@@ -19,6 +19,7 @@
 #include <QVector>
 #include <QStringList>
 #include <QElapsedTimer>
+#include <QComboBox>
 #include "app/preprocessing_coordinator.h"
 #include "domain/sort_model.h"
 
@@ -182,6 +183,7 @@ private:
     QCheckBox *m_sha256Check = nullptr;
     QCheckBox *m_ignoreWarnCheck = nullptr;
     QSpinBox *m_crfSpin = nullptr;
+    QComboBox *m_encoderCombo = nullptr;   // v1.7.0 M1：编码器选择
     bool m_anyBlock = false;
 
     // ④ 执行

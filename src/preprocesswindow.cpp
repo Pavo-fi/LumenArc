@@ -33,6 +33,9 @@
 #include <QPlainTextEdit>
 #include <QLineEdit>
 #include <QSpinBox>
+#include <QComboBox>
+#include <QSettings>
+#include "infrastructure/encoder_probe.h"
 #include <QCheckBox>
 #include <QTimer>
 #include <QFont>
@@ -519,6 +522,8 @@ ProcessingOptions PreprocessWindow::collectProcessingOptions() const
     if (m_caseImportMode && m_caseManager && m_caseManager->isOpen())
         opts.outputDir = caseSessionDir();
     opts.crf = m_crfSpin ? m_crfSpin->value() : 18;
+    opts.encoder = m_encoderCombo ? m_encoderCombo->currentData().toString()
+                                  : QStringLiteral("libx264");
     opts.deinterlace = !m_deinterlaceCheck || m_deinterlaceCheck->isChecked();
     opts.normalizeTimestamps = m_normalizeCheck && m_normalizeCheck->isChecked();
     opts.ignoreWarnings = m_ignoreWarnCheck && m_ignoreWarnCheck->isChecked();
@@ -1022,11 +1027,39 @@ QWidget *PreprocessWindow::buildPageSettings()
     m_crfSpin->setValue(18);
     crfRow->addWidget(m_crfSpin);
     crfRow->addStretch(1);
+    // v1.7.0 M1：编码器选择（默认软编；硬编需探测可用，见等价性评审）
+    auto *encRow = new QHBoxLayout();
+    encRow->addWidget(new QLabel(lang("编码器（硬编需 GPU 支持，重启后生效）：",
+                                      "Encoder (HW needs GPU):"), w));
+    m_encoderCombo = new QComboBox(w);
+    m_encoderCombo->addItem(lang("libx264（软件，默认）", "libx264 (software, default)"),
+                            QStringLiteral("libx264"));
+    if (encoder_probe::availableEncoders().contains(QStringLiteral("h264_nvenc")))
+        m_encoderCombo->addItem(QStringLiteral("NVENC (NVIDIA)"),
+                                QStringLiteral("h264_nvenc"));
+    if (encoder_probe::availableEncoders().contains(QStringLiteral("h264_qsv")))
+        m_encoderCombo->addItem(QStringLiteral("QSV (Intel)"),
+                                QStringLiteral("h264_qsv"));
+    {
+        QSettings es("LumenArc", "LumenArc");
+        const QString saved = es.value("transcodeEncoder", QStringLiteral("libx264")).toString();
+        const int idx = m_encoderCombo->findData(saved);
+        if (idx >= 0)
+            m_encoderCombo->setCurrentIndex(idx);
+    }
+    connect(m_encoderCombo, &QComboBox::currentIndexChanged, this, [this](int) {
+        QSettings s("LumenArc", "LumenArc");
+        s.setValue("transcodeEncoder",
+                   m_encoderCombo->currentData().toString());
+    });
+    encRow->addWidget(m_encoderCombo);
+    encRow->addStretch(1);
     advLay->addWidget(m_normalizeCheck);
     advLay->addWidget(m_deinterlaceCheck);
     advLay->addWidget(m_sha256Check);
     advLay->addWidget(m_ignoreWarnCheck);
     advLay->addLayout(crfRow);
+    advLay->addLayout(encRow);
     m_advancedHost->setVisible(false);
     lay->addWidget(m_btnAdvanced);
     lay->addWidget(m_advancedHost);
@@ -1209,6 +1242,8 @@ void PreprocessWindow::onStartProcessing()
     if (m_caseImportMode && m_caseManager && m_caseManager->isOpen())
         opts.outputDir = caseSessionDir();
     opts.crf = m_crfSpin->value();
+    opts.encoder = m_encoderCombo ? m_encoderCombo->currentData().toString()
+                                  : QStringLiteral("libx264");
     opts.deinterlace = m_deinterlaceCheck->isChecked();
     opts.normalizeTimestamps = m_normalizeCheck->isChecked();
     opts.ignoreWarnings = m_ignoreWarnCheck->isChecked();
