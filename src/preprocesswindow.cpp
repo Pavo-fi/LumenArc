@@ -1632,7 +1632,7 @@ void PreprocessWindow::onFinished(const PreprocessReport &report)
             QString regErr;
             if (m_caseManager->addPreprocessSession(
                     m_caseSessionDir, report.reportCsvPath, outputs,
-                    sidecars, &regErr)) {
+                    sidecars, report.outputChannels, &regErr)) {
                 QString saveErr;
                 if (!m_caseManager->saveCase(&saveErr))
                     regErr = saveErr;

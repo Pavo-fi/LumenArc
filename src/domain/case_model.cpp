@@ -81,6 +81,8 @@ QJsonObject CaseVideoRef::toJson() const
         o[QStringLiteral("calibrationSummary")] = calibrationSummary;
     if (!bundledRelPath.isEmpty())
         o[QStringLiteral("bundledRelPath")] = bundledRelPath;
+    if (!cameraLabel.isEmpty())
+        o[QStringLiteral("cameraLabel")] = cameraLabel;
     return o;
 }
 
@@ -97,6 +99,7 @@ CaseVideoRef CaseVideoRef::fromJson(const QJsonObject &o)
     v.hasCalibration = o[QStringLiteral("hasCalibration")].toBool(false);
     v.calibrationSummary = o[QStringLiteral("calibrationSummary")].toString();
     v.bundledRelPath = o[QStringLiteral("bundledRelPath")].toString();
+    v.cameraLabel = o[QStringLiteral("cameraLabel")].toString();
     return v;
 }
 
@@ -353,6 +356,28 @@ CaseVideoRef *findVideo(CaseMeta &meta, const QString &id)
     for (auto &v : meta.videos)
         if (v.id == id)
             return &v;
+    return nullptr;
+}
+
+const CaseVideoRef *findRef(const CaseMeta &meta, const QString &id)
+{
+    if (const auto *v = findVideo(meta, id))
+        return v;
+    for (const auto &s : meta.preprocessSessions)
+        for (const auto &o : s.outputRefs)
+            if (o.id == id)
+                return &o;
+    return nullptr;
+}
+
+CaseVideoRef *findRef(CaseMeta &meta, const QString &id)
+{
+    if (auto *v = findVideo(meta, id))
+        return v;
+    for (auto &s : meta.preprocessSessions)
+        for (auto &o : s.outputRefs)
+            if (o.id == id)
+                return &o;
     return nullptr;
 }
 

@@ -63,6 +63,7 @@ private:
     QString hashBadge(const CaseVideoRef &v, QString *tooltip,
                       QColor *color) const;
     void relocateVideo(const QString &id);
+    void setCameraLabelFlow(const QString &id);   // v1.7.1：编号对话框流程
     void deleteVideoFile(const QString &id);   // 删除源文件+案内数据（2026-08）
     void removePreprocessSession(int si);      // 删除会话与文件（2026-08）
     void removePreprocessOutput(int si, int oi);  // 删除输出文件（2026-08）

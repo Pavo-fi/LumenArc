@@ -901,6 +901,12 @@ void PreprocessingCoordinator::setTrimOverlap(bool trim)
             .arg(tsLog()).arg(trimmed));
 }
 
+/// 输出路径归一（报告通道映射键，与 case 登记 normPath 一致）
+static QString normOutPath(const QString &p)
+{
+    return QFileInfo(p).absoluteFilePath();
+}
+
 QString PreprocessingCoordinator::groupOfFile(const QString &file) const
 {
     for (const auto &g : m_groups)
@@ -1146,11 +1152,18 @@ void PreprocessingCoordinator::finalize()
     m_report.reportCsvPath = csvPath;
     // 全部输出清单（v1.3.0 案件登记 outputRefs 用；保持与旧 outputPath 同源）
     m_report.outputPaths.clear();
-    for (auto it = m_concatOutputs.constBegin(); it != m_concatOutputs.constEnd(); ++it)
+    m_report.outputChannels.clear();
+    for (auto it = m_concatOutputs.constBegin(); it != m_concatOutputs.constEnd(); ++it) {
         m_report.outputPaths.append(it.value());
-    for (auto it = m_outputs.constBegin(); it != m_outputs.constEnd(); ++it)
+        m_report.outputChannels.insert(normOutPath(it.value()), it.key());
+    }
+    for (auto it = m_outputs.constBegin(); it != m_outputs.constEnd(); ++it) {
         if (!m_report.outputPaths.contains(it.value()))
             m_report.outputPaths.append(it.value());
+        // 转码产物通道：由源文件组归属推导（m_outputs: 源→转码输出）
+        m_report.outputChannels.insert(normOutPath(it.value()),
+                                       groupOfFile(it.key()));
+    }
     if (m_concatOutputs.isEmpty()) {
         if (!m_outputs.isEmpty()) {
             // 单文件转码导出：无拼接但有转码产物

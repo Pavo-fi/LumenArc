@@ -38,6 +38,8 @@ struct CaseVideoRef {
     bool    hasCalibration = false;     ///< 徽标缓存：已校时（真数据以 .vla 为准）
     QString calibrationSummary;         ///< 徽标文案（写 .vla 时同步刷新）
     QString bundledRelPath;     ///< 【仅完整包】包内副本 sources/V001__原名.mp4
+    QString cameraLabel;        ///< v1.7.1：摄像头编号（自定义；前处理产物
+                                ///< 登记时自动继承通道名）
 
     QJsonObject toJson() const;
     static CaseVideoRef fromJson(const QJsonObject &o);
@@ -105,5 +107,10 @@ QString allocateVideoId(CaseMeta &meta);
 /// 按 id 查找视频（无则 nullptr）。
 const CaseVideoRef *findVideo(const CaseMeta &meta, const QString &id);
 CaseVideoRef *findVideo(CaseMeta &meta, const QString &id);
+
+/// 按 id 查找（videos[] 与 preprocessSessions[].outputRefs 通用；
+/// 前处理产物 P### 与视频 V### 同待遇：哈希/徽标/编号，v1.7.1）
+const CaseVideoRef *findRef(const CaseMeta &meta, const QString &id);
+CaseVideoRef *findRef(CaseMeta &meta, const QString &id);
 
 } // namespace CaseModel

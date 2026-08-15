@@ -22,6 +22,8 @@
 #include <QFileInfo>
 #include <QLabel>
 #include <QMenu>
+#include <QInputDialog>
+#include <QLineEdit>
 #include <QMessageBox>
 #include <QProcess>
 #include <QPushButton>
@@ -180,12 +182,14 @@ void CaseDock::fillVideos(QTreeWidgetItem *group)
         // 有效路径：包内副本兜底（双击直接可播，完整包零操作）
         const QString eff = m_caseManager->effectivePathFor(v);
         const bool bundled = (eff != v.originalPath);
+        const QString cam = v.cameraLabel.isEmpty()
+            ? QString() : QStringLiteral(" 📷") + v.cameraLabel;
         const QString name = bundled
             ? QStringLiteral("📦") + QFileInfo(eff).fileName()
             : QFileInfo(v.originalPath).fileName();
         auto *it = new QTreeWidgetItem(group,
-            {QStringLiteral("%1  %2%3  %4")
-                 .arg(v.id, name, calMark, badge)});
+            {QStringLiteral("%1  %2%3%4  %5")
+                 .arg(v.id, name, calMark, cam, badge)});
         it->setData(0, kRoleKind, QStringLiteral("video"));
         it->setData(0, kRoleId, v.id);
         it->setData(0, kRolePath, eff);
@@ -222,16 +226,26 @@ void CaseDock::fillPreprocess(QTreeWidgetItem *group)
         sIt->setToolTip(0, caseDir.absoluteFilePath(p.sessionDirRelPath));
         for (int oi = 0; oi < p.outputRefs.size(); ++oi) {
             const auto &o = p.outputRefs[oi];
+            // v1.7.1：产物与视频同待遇——指纹徽标 + 摄像头编号
+            QString badgeTip;
+            QColor badgeColor;
+            const QString badge = hashBadge(o, &badgeTip, &badgeColor);
+            const QString cam = o.cameraLabel.isEmpty()
+                ? QString() : QStringLiteral(" 📷") + o.cameraLabel;
             auto *oIt = new QTreeWidgetItem(sIt,
-                {QStringLiteral("%1  %2")
-                     .arg(o.id, QFileInfo(o.originalPath).fileName())});
+                {QStringLiteral("%1  %2%3  %4")
+                     .arg(o.id, QFileInfo(o.originalPath).fileName(),
+                          cam, badge)});
             oIt->setData(0, kRoleKind, QStringLiteral("output"));
             oIt->setData(0, kRoleId, o.id);
             oIt->setData(0, kRolePath, o.originalPath);
             oIt->setData(0, kRoleIdx, si);
             oIt->setData(0, kRoleIdx2, oi);
-            oIt->setToolTip(0, o.originalPath);
-            oIt->setForeground(0, QColor(Theme::TextPrimary));
+            oIt->setToolTip(0, o.originalPath
+                + QStringLiteral("\n") + badgeTip
+                + (o.cameraLabel.isEmpty() ? QString()
+                     : QStringLiteral("\n摄像头编号：") + o.cameraLabel));
+            oIt->setForeground(0, badgeColor);
         }
         for (const QString &sc : p.sidecarRelPaths) {
             auto *cIt = new QTreeWidgetItem(sIt,
@@ -320,6 +334,29 @@ void CaseDock::showInExplorer(const QString &path) const
     QDesktopServices::openUrl(
         QUrl::fromLocalFile(QFileInfo(path).absolutePath()));
 #endif
+}
+
+/// v1.7.1：摄像头编号设置（视频/产物通用；空输入=清除编号）
+void CaseDock::setCameraLabelFlow(const QString &id)
+{
+    const auto *v = m_caseManager->videoById(id);
+    bool ok = false;
+    const QString cur = v ? v->cameraLabel : QString();
+    const QString label = QInputDialog::getText(
+        this, lang("摄像头编号", "Camera Label"),
+        lang("编号（如 CAM01 / 食咔咔4时；留空=清除）：",
+             "Label (e.g. CAM01; empty = clear):"),
+        QLineEdit::Normal, cur, &ok);
+    if (!ok)
+        return;
+    QString err;
+    if (!m_caseManager->setCameraLabel(id, label.trimmed(), &err)) {
+        QMessageBox::warning(this, lang("摄像头编号", "Camera Label"),
+                             err.isEmpty() ? QStringLiteral("failed") : err);
+        return;
+    }
+    m_caseManager->saveCase(&err);
+    refreshTree();
 }
 
 void CaseDock::relocateVideo(const QString &id)
@@ -502,6 +539,9 @@ void CaseDock::onContextMenu(const QPoint &pos)
                                        });
         copyAct->setEnabled(v && !v->sha256.isEmpty());
         menu.addSeparator();
+        // v1.7.1：摄像头编号（自定义，视频/产物同待遇）
+        menu.addAction(lang("设置摄像头编号…", "Set camera label…"), this,
+                       [this, id]() { setCameraLabelFlow(id); });
         menu.addAction(lang("在资源管理器中显示", "Show in Explorer"), this,
                        [this, path]() { showInExplorer(path); });
     } else if (kind == QLatin1String("output")) {
@@ -510,6 +550,22 @@ void CaseDock::onContextMenu(const QPoint &pos)
         });
         menu.addAction(lang("在资源管理器中显示", "Show in Explorer"), this,
                        [this, path]() { showInExplorer(path); });
+        menu.addSeparator();
+        // v1.7.1：产物与视频同待遇——指纹 + 编号
+        const auto *o = m_caseManager->videoById(id);
+        menu.addAction(lang("计算指纹", "Compute fingerprint"), this,
+                       [this, id]() {
+                           m_caseManager->queueHashFor(id);
+                           refreshTree();   // ⏳ 立即可见
+                       });
+        auto *oCopy = menu.addAction(lang("复制指纹", "Copy fingerprint"), this,
+                                     [o]() {
+                                         QApplication::clipboard()->setText(
+                                             o ? o->sha256 : QString());
+                                     });
+        oCopy->setEnabled(o && !o->sha256.isEmpty());
+        menu.addAction(lang("设置摄像头编号…", "Set camera label…"), this,
+                       [this, id]() { setCameraLabelFlow(id); });
         menu.addSeparator();
         menu.addAction(lang("删除输出文件…", "Delete output file…"), this,
                        [this, item]() {

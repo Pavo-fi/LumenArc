@@ -163,7 +163,11 @@ public:
                               const QString &reportCsvAbs,
                               const QStringList &outputPaths,
                               const QStringList &sidecarAbsPaths,
+                              const QMap<QString, QString> &outputChannels,
                               QString *error);
+
+    /// v1.7.1：设置摄像头编号（videos[] 与 outputRefs 通用，P###/V### 同待遇）
+    bool setCameraLabel(const QString &id, const QString &label, QString *error);
 
     // ---- uiState ----
     void setLastVideoId(const QString &id);

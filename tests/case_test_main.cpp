@@ -773,6 +773,7 @@ int main(int argc, char **argv)
                    session + QStringLiteral("/t01.mp4"),
                    session + QStringLiteral("/missing.mp4")},   // 缺失产物跳过
                   {session + QStringLiteral("/merged.mp4.lumencal.json")},
+                  {{session + QStringLiteral("/merged.mp4"), QStringLiteral("CAM01")}},
                   &err), "pps: addPreprocessSession");
         CHECK(cm.meta().preprocessSessions.size() == 1, "pps: 1 session");
         const auto &p = cm.meta().preprocessSessions.first();
@@ -801,8 +802,20 @@ int main(int argc, char **argv)
                   + QStringLiteral("/merged.mp4.lumencal.json")),
               "pps: original sidecar kept beside output");
 
+        // v1.7.1：摄像头编号自动继承通道名 + 自定义往返
+        {
+            const CaseVideoRef *pRef = CaseModel::findRef(
+                cm.meta(), QStringLiteral("P001"));
+            CHECK(pRef && pRef->cameraLabel == QStringLiteral("CAM01"),
+                  "pps: camera label inherited from channel");
+            QString e2;
+            CHECK(cm.setCameraLabel(QStringLiteral("P001"),
+                                    QStringLiteral("食咔咔4时"), &e2),
+                  "pps: setCameraLabel");
+        }
+
         // 案件外会话目录拒绝
-        CHECK(!cm.addPreprocessSession(root.path(), QString(), {}, {}, &err),
+        CHECK(!cm.addPreprocessSession(root.path(), QString(), {}, {}, {}, &err),
               "pps: outside-case session rejected");
 
         // 持久化
@@ -815,6 +828,10 @@ int main(int argc, char **argv)
             CHECK(cm2.meta().preprocessSessions.size() == 1
                   && cm2.meta().preprocessSessions.first().outputRefs.size() == 2,
                   "pps: session persisted across reopen");
+            const CaseVideoRef *p2 = CaseModel::findRef(
+                cm2.meta(), QStringLiteral("P001"));
+            CHECK(p2 && p2->cameraLabel == QStringLiteral("食咔咔4时"),
+                  "pps: camera label roundtrip across reopen");
             cm2.closeCase();
         }
     }

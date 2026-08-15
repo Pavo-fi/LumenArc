@@ -639,7 +639,9 @@ bool CaseManager::computeSha256(const QString &path, QString *outHex,
 
 const CaseVideoRef *CaseManager::videoById(const QString &id) const
 {
-    return m_open ? CaseModel::findVideo(m_meta, id) : nullptr;
+    // v1.7.1：findRef 覆盖 preprocessSessions[].outputRefs（P### 与 V###
+    // 同待遇：哈希回填/徽标/编号）；仅 videos[] 语义处仍用 findVideo
+    return m_open ? CaseModel::findRef(m_meta, id) : nullptr;
 }
 
 const CaseVideoRef *CaseManager::videoByPath(const QString &path) const
@@ -749,6 +751,7 @@ bool CaseManager::addPreprocessSession(const QString &sessionDirAbs,
                                        const QString &reportCsvAbs,
                                        const QStringList &outputPaths,
                                        const QStringList &sidecarAbsPaths,
+                                       const QMap<QString, QString> &outputChannels,
                                        QString *error)
 {
     if (!m_open) {
@@ -783,6 +786,8 @@ bool CaseManager::addPreprocessSession(const QString &sessionDirAbs,
         out.originalPath = fi.absoluteFilePath();
         out.sizeBytes = fi.size();
         out.mtimeMs = fi.lastModified().toMSecsSinceEpoch();
+        // v1.7.1：摄像头编号自动继承前处理通道名（自定义可后改）
+        out.cameraLabel = outputChannels.value(normPath(o));
         p.outputRefs.append(out);
     }
     // sidecar 复制归类 sessionDir/sidecars/（原件保留在输出旁，拍板§8-11）
@@ -802,7 +807,26 @@ bool CaseManager::addPreprocessSession(const QString &sessionDirAbs,
     }
     m_meta.preprocessSessions.append(p);
     setModified();
+    // v1.7.1：产物指纹与视频同待遇——登记即入闲时哈希队列
+    for (const auto &o : p.outputRefs)
+        queueVideoHash(o.id);
     return true;
+}
+
+bool CaseManager::setCameraLabel(const QString &id, const QString &label,
+                                 QString *error)
+{
+    if (!m_open) {
+        if (error) *error = QStringLiteral("没有打开的案件");
+        return false;
+    }
+    if (auto *v = CaseModel::findRef(m_meta, id)) {
+        v->cameraLabel = label;
+        setModified();
+        return true;
+    }
+    if (error) *error = QStringLiteral("未找到登记条目：%1").arg(id);
+    return false;
 }
 
 void CaseManager::setModified()
@@ -1252,7 +1276,7 @@ private:
 // ---------------------------------------------------------------------------
 void CaseManager::queueVideoHash(const QString &id)
 {
-    const auto *v = videoById(id);
+    const auto *v = CaseModel::findRef(m_meta, id);
     if (!v)
         return;
     if (!m_hashPool) {
@@ -1271,7 +1295,12 @@ void CaseManager::queueMissingHashes()
 {
     if (!m_open)
         return;
-    for (const auto &v : m_meta.videos) {
+    // v1.7.1：前处理产物（P###）与视频同待遇——一起入哈希队列
+    QVector<CaseVideoRef> refs = m_meta.videos;
+    for (const auto &s : m_meta.preprocessSessions)
+        for (const auto &o : s.outputRefs)
+            refs.append(o);
+    for (const auto &v : refs) {
         // 完整包接收端：原路径缺失时以包内副本为准（内容一致，sha 语义不变）
         const QString eff = effectivePathFor(v);
         const QFileInfo fi(eff);
@@ -1290,7 +1319,11 @@ void CaseManager::queueAllHashes()
 {
     if (!m_open)
         return;
-    for (const auto &v : m_meta.videos)
+    QVector<CaseVideoRef> refs = m_meta.videos;
+    for (const auto &s : m_meta.preprocessSessions)
+        for (const auto &o : s.outputRefs)
+            refs.append(o);
+    for (const auto &v : refs)
         if (QFileInfo::exists(v.originalPath))
             queueVideoHash(v.id);
 }
