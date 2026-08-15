@@ -252,6 +252,18 @@ static void testLegacyMigration()
     CHECK(!c.dateKnown);
     CHECK(c.rate == 1.0 && !c.rateApplied);
     CHECK(c.wallMsOf(5000) == 3605000);
+
+    // 用户实测回归：time_offset=0 的旧数据 = 未校时，不产生空模型
+    // （空模型会让案件徽标误亮 ⏰ 而图表毫无变化）
+    auto zero = TimeCalibration::fromLegacyOffset(0);
+    CHECK(zero.source == TimeCalibration::Source::None,
+          "legacy: zero offset -> None");
+    CHECK(!zero.isEffective(), "legacy: zero offset not effective");
+    CHECK(!zero.isValid(), "legacy: zero offset not valid");
+    // 空模型通用判定：source=Manual 但全零 → 不有效
+    TimeCalibration empty;
+    empty.source = TimeCalibration::Source::Manual;
+    CHECK(!empty.isEffective(), "empty manual model not effective");
 }
 
 static void testTruthOffset()

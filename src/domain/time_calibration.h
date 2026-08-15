@@ -75,6 +75,18 @@ struct TimeCalibration
     }
 
     bool   isValid() const { return source != Source::None; }
+
+    /**
+     * @brief 有效校时（徽标/摘要语义）：不止 source 非 None，还必须有实际
+     * 效果——日期已知、非零偏移、速率修正、分段重建或验证点任一。
+     * 旧 v7 数据 time_offset=0 迁移产物（source=Manual 且全零）不算。
+     */
+    bool   isEffective() const
+    {
+        return isValid()
+            && (dateKnown || offsetMs != 0 || rateApplied || truthSet
+                || piecewiseMode());
+    }
     double effectiveRate() const { return rateApplied ? rate : 1.0; }
 
     /// 全应用唯一换算入口（C3）：监控墙钟 = offset + rate×stream
@@ -143,10 +155,14 @@ struct TimeCalibration
     /// 应用拟合结果：rateApplied = rateSignificant && rateSane
     void applyFit(const FitResult &fr);
 
-    /// v7 旧格式迁移：日内秒偏移 → dateKnown=false 模型（rate=1.0）
+    /// v7 旧格式迁移：日内秒偏移 → dateKnown=false 模型（rate=1.0）。
+    /// 偏移为 0（旧数据"未校时"）→ Source::None，不产生空校时模型
+    /// （空模型会让案件徽标误亮 ⏰ 而图表毫无变化——用户实测反馈）
     static TimeCalibration fromLegacyOffset(qint64 dayOffsetMs)
     {
         TimeCalibration c;
+        if (dayOffsetMs == 0)
+            return c;   // Source::None
         c.source = Source::Manual;
         c.offsetMs = dayOffsetMs;
         c.dateKnown = false;

@@ -474,3 +474,33 @@ Python 引擎保留解释器存在性检查。其余 qobject_cast 核查：onAna
 
 ### 验证
 - v17_test 28 项（新增无墙钟不误剪断言）；全回归 11 套全绿
+
+# ============================================================================
+# 工作记录（2026-08-15，第十九批）——校时徽标与图表时间轴不一致修复
+# ============================================================================
+
+## 28. 案件 ⏰ 徽标亮但图表时间轴无校时——空校时模型根因与修复
+
+### 症状（用户实测）
+案件证据树里视频标了 ⏰（已校时），但图表时间轴仍显示流内时间，
+看起来跟没校时一样。
+
+### 根因（用真实案件 vla 解析证实）
+V003/V004.vla 的 META.time_calibration =
+`{source:"manual", offsetMs:0, rate:1, dateKnown:false, ...}`（全零空模型）。
+来源：旧 v7 格式 vla 的 `time_offset=0` 经 fromLegacyOffset 迁移时被写成
+source=Manual（0 偏移）→ isValid()=true → 案件徽标 ⏰、case.json
+hasCalibration=true；但 displayMsOf = streamMs+0 且日期未知 → 图表零变化。
+
+### 修复（三层）
+1. fromLegacyOffset(0) → Source::None（0 偏移=未校时，不产生空模型）
+2. TimeCalibration::isEffective()：source≠None 且（日期已知/非零偏移/
+   速率修正/验证点/分段重建）任一才有效——徽标/摘要/案件刷新全改用它
+3. 打开视频加载 .vla 后同步 refresh 案件徽标（旧 case.json 误亮 ⏰ 自动熄灭）
+
+### 验证
+- calibration_test 74 项（新增零偏移迁移/空模型判定断言）全过
+- 全回归绿（calibration 74 / piecewise 96 / case 239 / e2e 51 / vla 13 /
+  ui_chain 92 / preprocess 170 / v17 28）
+- 待真机：打开原标 ⏰ 的视频 → 徽标应熄灭（除非真有校时），
+  真校时视频轴显示 MM-dd HH:mm 墙钟

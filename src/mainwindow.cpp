@@ -2242,6 +2242,11 @@ void MainWindow::openVideoFile(const QString &filePath)
 
             m_calibration = savedState.calibration;
             m_chartPanel->setCalibration(m_calibration);
+            // 校时徽标以 .vla 为 SSOT：空校时模型（旧 v7 迁移 offset=0）同步
+            // 熄灭案件里误亮的 ⏰（用户实测反馈）
+            m_caseManager->updateCalibrationBadge(
+                m_currentVideoPath, m_calibration.isEffective(),
+                calibrationBadgeSummary());
             m_chartPanel->setLabels(savedState.labels);
             m_chartPanel->setChartGuideLinesData(savedState.chartGuideLines);
 
@@ -2460,7 +2465,7 @@ void MainWindow::onSaveAnalysis()
             && QFileInfo(filePath).absoluteFilePath()
                    == QFileInfo(m_caseManager->vlaPathFor(m_currentVideoPath)).absoluteFilePath()) {
             m_caseManager->updateCalibrationBadge(
-                m_currentVideoPath, m_calibration.isValid(),
+                m_currentVideoPath, m_calibration.isEffective(),
                 calibrationBadgeSummary());
         }
         QMessageBox::information(this, lang("保存", "Save"),
@@ -2594,7 +2599,7 @@ void MainWindow::saveTimestampRoi(const QString &videoPath, const QRectF &norm)
 
 QString MainWindow::calibrationBadgeSummary() const
 {
-    if (!m_calibration.isValid())
+    if (!m_calibration.isEffective())
         return QString();
     QString src;
     switch (m_calibration.source) {
@@ -3262,7 +3267,7 @@ void MainWindow::onAnalysisFinished(const AnalysisSnapshot &snapshot)
         // VLA2：频谱已内嵌于文件中，无需 .spec 伴随文件
         // 同步刷新案件校时徽标缓存（.vla 为 SSOT；案件模式空指针安全）
         m_caseManager->updateCalibrationBadge(
-            m_currentVideoPath, m_calibration.isValid(),
+            m_currentVideoPath, m_calibration.isEffective(),
             calibrationBadgeSummary());
     }
 
