@@ -2606,6 +2606,42 @@ QRectF MainWindow::savedTimestampRoi(const QString &videoPath) const
     return readTimestampRoiRegistry(videoPath);
 }
 
+/// v1.7.1：后台保存当前视频 .vla + 同步案件校时徽标。
+/// 分析完成自动保存与校时采用后共用（用户实测：校时后徽标不出现——
+/// 旧流程只在保存 .vla 时刷新徽标，校时采用未触发保存）。
+void MainWindow::saveCurrentVlaAsync()
+{
+    if (m_currentVideoPath.isEmpty()
+        || m_currentVideoPath.endsWith(".vla", Qt::CaseInsensitive))
+        return;
+    // v1.3.0 路径分流：入案视频 .vla 落案件 videos/V###.vla
+    const QString vlaPath = m_caseManager->vlaPathFor(m_currentVideoPath);
+    QDir().mkpath(QFileInfo(vlaPath).absolutePath());
+    const QRect magRect = m_magnifier ? m_magnifier->currentSourceRect() : QRect();
+    // 全部参数为值拷贝（各 model 的 getter 返回副本），后台线程安全
+    const QVector<QRect> regions = m_roiModel->regions();
+    const TimeCalibration calibration = m_calibration;
+    const QVector<ChartLabel> labels = m_chartPanel->labels();
+    const QRect pinned = m_pinnedRect;
+    const SnapshotFusionData fusion = m_snapshotFusion;
+    const QVector<QPolygon> polygons = m_roiModel->polygons();
+    const QVector<GuideLine> lines = m_guideLineModel->lines();
+    const QVector<int> regionRoiIds = m_roiModel->roiIds();
+    const QVector<int> polygonRoiIds = m_roiModel->polygonRoiIds();
+    TimelineModel *model = m_timelineModel;
+    QtConcurrent::run([model, vlaPath, regions, calibration, magRect, labels,
+                       pinned, fusion, polygons, lines,
+                       regionRoiIds, polygonRoiIds]() {
+        model->saveToFile(vlaPath, regions, calibration, magRect, labels,
+                          pinned, fusion, polygons, lines,
+                          regionRoiIds, polygonRoiIds);
+    });
+    // 同步刷新案件校时徽标缓存（.vla 为 SSOT；案件模式空指针安全）
+    m_caseManager->updateCalibrationBadge(
+        m_currentVideoPath, m_calibration.isEffective(),
+        calibrationBadgeSummary());
+}
+
 void MainWindow::saveTimestampRoi(const QString &videoPath, const QRectF &norm)
 {
     if (videoPath.isEmpty() || !norm.isValid())
@@ -2749,6 +2785,11 @@ void MainWindow::onSetStartTime()
                               .arg(cal.offsetMs / 1000.0, 0, 'f', 1);
                 }
                 showOperationStatus(msg);
+                // v1.7.1：校时采用后即落盘 .vla 并刷新案件徽标（用户实测：
+                // 校时完成后 ⏰ 不出现——旧流程只更新内存，徽标要等保存）
+                saveCurrentVlaAsync();
+                if (m_caseDock)
+                    m_caseDock->refreshTree();
             });
     dlg->show();
     dlg->raise();
@@ -3261,39 +3302,8 @@ void MainWindow::onAnalysisFinished(const AnalysisSnapshot &snapshot)
         }
     }
 
-    // Auto-save .vla cache alongside the video file（后台线程：频谱矩阵可达数百
-    // MB，min/max 双遍历 + 量化 + 写盘在 UI 线程会“程序未响应”——现场反馈）
-    if (!m_currentVideoPath.isEmpty() &&
-        !m_currentVideoPath.endsWith(".vla", Qt::CaseInsensitive)) {
-        // v1.3.0 路径分流：入案视频 .vla 落案件 videos/V###.vla
-        const QString vlaPath = m_caseManager->vlaPathFor(m_currentVideoPath);
-        // 案件 videos/ 建案时已创建；防御性确保（案件目录被移动/重开场景）
-        QDir().mkpath(QFileInfo(vlaPath).absolutePath());
-        const QRect magRect = m_magnifier ? m_magnifier->currentSourceRect() : QRect();
-        // 全部参数为值拷贝（各 model 的 getter 返回副本），后台线程安全
-        const QVector<QRect> regions = m_roiModel->regions();
-        const TimeCalibration calibration = m_calibration;
-        const QVector<ChartLabel> labels = m_chartPanel->labels();
-        const QRect pinned = m_pinnedRect;
-        const SnapshotFusionData fusion = m_snapshotFusion;
-        const QVector<QPolygon> polygons = m_roiModel->polygons();
-        const QVector<GuideLine> lines = m_guideLineModel->lines();
-        const QVector<int> regionRoiIds = m_roiModel->roiIds();
-        const QVector<int> polygonRoiIds = m_roiModel->polygonRoiIds();
-        TimelineModel *model = m_timelineModel;
-        QtConcurrent::run([model, vlaPath, regions, calibration, magRect, labels,
-                           pinned, fusion, polygons, lines,
-                           regionRoiIds, polygonRoiIds]() {
-            model->saveToFile(vlaPath, regions, calibration, magRect, labels,
-                              pinned, fusion, polygons, lines,
-                              regionRoiIds, polygonRoiIds);
-        });
-        // VLA2：频谱已内嵌于文件中，无需 .spec 伴随文件
-        // 同步刷新案件校时徽标缓存（.vla 为 SSOT；案件模式空指针安全）
-        m_caseManager->updateCalibrationBadge(
-            m_currentVideoPath, m_calibration.isEffective(),
-            calibrationBadgeSummary());
-    }
+    // Auto-save .vla cache alongside the video file（后台线程；含校时徽标刷新）
+    saveCurrentVlaAsync();
 
     QString msg;
     if (!snapshot.timestamps.isEmpty()) {

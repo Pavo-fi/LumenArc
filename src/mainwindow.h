@@ -209,6 +209,8 @@ protected:
     /// 时间戳区域持久化（按视频路径 hash，同一摄像头复用）
     QRectF savedTimestampRoi(const QString &videoPath) const;
     void saveTimestampRoi(const QString &videoPath, const QRectF &norm);
+    /// v1.7.1：后台保存当前视频 .vla + 同步案件校时徽标（分析完成/校时采用共用）
+    void saveCurrentVlaAsync();
     /// QSettings 注册表读取（独立模式路径；案件模式迁移时只读复制源）
     QRectF readTimestampRoiRegistry(const QString &videoPath) const;
     /// 校时徽标文案（写案件内 .vla 时同步刷新 CaseVideoRef 缓存）
