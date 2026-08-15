@@ -3134,20 +3134,18 @@ void MainWindow::onAudioAnalysis()
         return;
     }
 
-    auto *pyEngine = qobject_cast<PythonAnalysisEngine *>(m_analysisEngine);
-    if (!pyEngine) {
-        QMessageBox::warning(this, lang("音频分析", "Audio Analysis"),
-            lang("当前分析引擎不支持音频分析。",
-                 "The current analysis engine does not support audio analysis."));
-        return;
-    }
-    if (pyEngine->pythonExecutable().isEmpty()) {
-        pyEngine->setPythonExecutable(detectPythonPath());
+    // v1.5.0-3：startAudioAnalysis 已上移接口（libav/Python 均支持），
+    // 移除 Python 专属 guard（旧版 qobject_cast 检查已废弃）
+    if (auto *pyEngine = qobject_cast<PythonAnalysisEngine *>(m_analysisEngine)) {
+        // Python 引擎需要解释器存在（libav 引擎无需 Python）
         if (pyEngine->pythonExecutable().isEmpty()) {
-            QMessageBox::warning(this, lang("音频分析", "Audio Analysis"),
-                lang("未找到 Python 解释器。\n请安装 Python 3.8+ 并确保在 PATH 中。",
-                     "Python interpreter not found.\nPlease install Python 3.8+ and ensure it is in PATH."));
-            return;
+            pyEngine->setPythonExecutable(detectPythonPath());
+            if (pyEngine->pythonExecutable().isEmpty()) {
+                QMessageBox::warning(this, lang("音频分析", "Audio Analysis"),
+                    lang("未找到 Python 解释器。\n请安装 Python 3.8+ 并确保在 PATH 中。",
+                         "Python interpreter not found.\nPlease install Python 3.8+ and ensure it is in PATH."));
+                return;
+            }
         }
     }
 

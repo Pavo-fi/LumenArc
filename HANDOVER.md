@@ -356,3 +356,28 @@ e2e 51 / piecewise 96 / preprocess 170 / calibration 73 / ocr 21
 （40s/70,449 点）。剩余可选：Python 依赖收敛（过渡期后删 OpenCV/numpy
 ~60MB，v1.6/1.7 确认无现场回归后执行）、GPU 段（NVDEC 加速，兼容性红线
 内可选）。
+
+# ============================================================================
+# 工作记录（2026-08-15，第十五批）——真机反馈修复：音频按钮误报不支持
+# ============================================================================
+
+## 24. onAudioAnalysis Python 专属 guard 遗留（v1.5.0-3 漏改）
+
+### 症状（用户真机）
+点击音频分析按钮 → 弹窗「当前分析引擎不支持音频分析」。
+
+### 根因
+onAudioAnalysis 开头遗留 v1.5.0-3 之前的 Python 专属 guard：
+`qobject_cast<PythonAnalysisEngine*>` 失败即弹窗返回（旧版靠它拿 pyEngine
+指针调 startAudioAnalysis）。startAudioAnalysis 上移接口后，libav 引擎
+（默认）cast 失败 → 误报。第三批只改了调用点，漏删 guard。
+
+### 修复
+guard 改为条件分支：libav 引擎直接放行（无需 Python 解释器）；
+Python 引擎保留解释器存在性检查。其余 qobject_cast 核查：onAnalyze 的
+解释器检查（`if (pyEngine && ...)` 无害跳过）、降噪 Apply（libav 无降噪
+参数，静默跳过，记录在案）。
+
+### 验证
+构建零错误；libav 22 / roi_model 23 / ui_chain 92 / vla 13 / case 239 绿。
+待真机：音频按钮在 libav 引擎下正常出音量/语谱。
