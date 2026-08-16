@@ -53,6 +53,7 @@ protected:
 
 private:
     QTreeWidgetItem *m_currentHighlight = nullptr;   // v1.7.1：正在播放条目
+    QString m_currentVideoPath;                       // 高亮路径（refreshTree 重建后重刷）
 
 private slots:
     void onItemDoubleClicked(QTreeWidgetItem *item, int column);

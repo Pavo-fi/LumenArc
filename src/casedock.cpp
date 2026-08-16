@@ -305,6 +305,9 @@ void CaseDock::refreshTree()
 {
     if (!m_caseManager || !m_caseManager->isOpen())
         return;
+    // v1.7.1 闪退修复：树全量重建 → 旧高亮指针必然悬空，先置空；
+    // 重建完成后按保存的路径重新应用高亮
+    m_currentHighlight = nullptr;
     m_titleLabel->setText(QStringLiteral("📁 %1\n%2")
         .arg(m_caseManager->meta().caseNo + QStringLiteral("-")
              + m_caseManager->meta().title,
@@ -317,6 +320,9 @@ void CaseDock::refreshTree()
     fillReports(addGroup(QString()));
     fillSnapshots(addGroup(QString()));
     m_tree->expandAll();
+    // v1.7.1：重建后按保存路径重新应用播放高亮
+    if (!m_currentVideoPath.isEmpty())
+        setCurrentVideoPath(m_currentVideoPath);
 }
 
 void CaseDock::onItemDoubleClicked(QTreeWidgetItem *item, int column)
@@ -334,17 +340,22 @@ void CaseDock::onItemDoubleClicked(QTreeWidgetItem *item, int column)
 /// v1.7.1：高亮正在播放的案件条目（▶ 前缀 + 背景色 + 加粗；旧高亮恢复）
 void CaseDock::setCurrentVideoPath(const QString &videoPath)
 {
+    m_currentVideoPath = videoPath;
     const QString norm = QDir::cleanPath(QFileInfo(videoPath).absoluteFilePath());
-    // 清除旧高亮
+    // 清除旧高亮（防悬空：条目可能已被 refreshTree 删除——
+    // 用 treeWidget() 判活，仍健在才操作）
     if (m_currentHighlight) {
-        m_currentHighlight->setBackground(0, QBrush());
-        QFont f = m_currentHighlight->font(0);
-        f.setBold(false);
-        m_currentHighlight->setFont(0, f);
-        const QString t = m_currentHighlight->text(0);
-        if (t.startsWith(QStringLiteral("▶ ")))
-            m_currentHighlight->setText(0, t.mid(2));
+        QTreeWidgetItem *old = m_currentHighlight;
         m_currentHighlight = nullptr;
+        if (old->treeWidget()) {   // 条目仍在树上（未随 refreshTree 删除）
+            old->setBackground(0, QBrush());
+            QFont f = old->font(0);
+            f.setBold(false);
+            old->setFont(0, f);
+            const QString t = old->text(0);
+            if (t.startsWith(QStringLiteral("▶ ")))
+                old->setText(0, t.mid(2));
+        }
     }
     if (norm.isEmpty())
         return;
