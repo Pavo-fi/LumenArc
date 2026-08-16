@@ -10,6 +10,7 @@
  */
 #include "concat_engine.h"
 #include "python_analysis_engine.h"
+#include "media_probe_engine.h"
 #include "domain/preprocess_text.h"
 
 #include <QProcess>
@@ -195,6 +196,23 @@ void ConcatEngine::onFinished(int exitCode)
                     QStringLiteral("exit %1: %2").arg(exitCode)
                         .arg(QString::fromUtf8(m_stderrBuf.right(500))));
         return;
+    }
+    // 产物有效性校验（§44 假成功兜底，2026-08-16）：ffmpeg 对 demux 中断类
+    // 错误（源文件数据损坏，如 moov 索引与 mdat 错位）也返回 exit 0，产物
+    // 可能只有几帧——时长对比兜底（C2：静默失败 = bug）。正常路径产物时长
+    // ≈ 总时长（±秒级），50% 阈值安全无误报
+    if (!m_normalizing && m_req.totalDurationMs > 0) {
+        const ProbeResult pr = MediaProbeEngine::probeOne(m_actualOutput);
+        if (!pr.ok()
+            || pr.durationMs < m_req.totalDurationMs / 2) {
+            cleanupPartial();
+            emit failed(PreprocessError::ConcatFailed,
+                        QStringLiteral("产物时长异常（%1 ms / 理论 %2 ms）："
+                                       "源文件可能数据损坏，拼接已中止（产物已清理）")
+                            .arg(pr.ok() ? pr.durationMs : -1)
+                            .arg(m_req.totalDurationMs));
+            return;
+        }
     }
     if (m_normalizing) {
         m_normFiles.append(m_actualOutput);
