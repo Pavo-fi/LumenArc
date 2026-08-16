@@ -94,11 +94,24 @@ QStringList TranscodeEngine::buildArgs(const TranscodeRequest &req,
         args << QStringLiteral("-g") << QString::number(req.keyframeInterval)
              << QStringLiteral("-keyint_min") << QString::number(req.keyframeInterval);
     }
-    // 音频：原音轨为 AAC 时直拷（保留原始数据层级，零损失——2026-08
-    // 人工反馈：统一重编码可能丢监控音频特征）；否则 aac 重编码且
-    // 保留原采样率/声道，asetpts 归零时间戳
+    // 音频（三分支）：AAC 同参直拷保留原始数据层级（2026-08 人工反馈：
+    // 统一重编码可能丢监控音频特征）；pcm 家族源（alaw/mulaw，mp4 无
+    // sample entry）→ pcm_s16le 数学无损解压——alaw 解码是确定性变换，
+    // 零信息损失，8k mono=128kbps 与 aac 128k 同体积（P-27，2026-08-16）；
+    // 其余有损源 → aac 重编码且保留原采样率/声道，asetpts 归零时间戳
     if (req.copyAudio) {
         args << QStringLiteral("-c:a") << QStringLiteral("copy");
+    } else if (req.losslessPcm) {
+        args << QStringLiteral("-af") << QStringLiteral("asetpts=PTS-STARTPTS")
+             << QStringLiteral("-c:a") << QStringLiteral("pcm_s16le");
+        if (req.audioSampleRate > 0)
+            args << QStringLiteral("-ar") << QString::number(req.audioSampleRate);
+        if (req.audioChannels > 0)
+            args << QStringLiteral("-ac") << QString::number(req.audioChannels);
+        if (req.audioSampleRate <= 0)
+            args << QStringLiteral("-ar") << QStringLiteral("48000");
+        if (req.audioChannels <= 0)
+            args << QStringLiteral("-ac") << QStringLiteral("2");
     } else {
         args << QStringLiteral("-af") << QStringLiteral("asetpts=PTS-STARTPTS")
              << QStringLiteral("-c:a") << QStringLiteral("aac")

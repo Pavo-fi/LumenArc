@@ -120,6 +120,29 @@ static void testBuildArgs()
     CHECK(vi >= 0 && s[vi + 1].contains("scale=1280:720")
           && s[vi + 1].contains("setpts"),
           "args: vf scale+setpts");
+
+    // P-27 音频无损：pcm 源 → pcm_s16le（无 -b:a），保留采样率/声道
+    req.outWidth = 0;
+    req.outHeight = 0;
+    req.losslessPcm = true;
+    req.audioSampleRate = 8000;
+    req.audioChannels = 1;
+    const QStringList p = TranscodeEngine::buildArgs(req, QStringLiteral("tmp.mp4"));
+    const int pai = p.indexOf(QStringLiteral("-c:a"));
+    CHECK(pai >= 0 && p[pai + 1] == "pcm_s16le", "args: pcm_alaw → pcm_s16le");
+    CHECK(!p.contains(QStringLiteral("-b:a")), "args: pcm 无码率参数");
+    const int ari = p.indexOf(QStringLiteral("-ar"));
+    CHECK(ari >= 0 && p[ari + 1] == "8000", "args: pcm 保留采样率 8k");
+    const int aci = p.indexOf(QStringLiteral("-ac"));
+    CHECK(aci >= 0 && p[aci + 1] == "1", "args: pcm 保留单声道");
+    CHECK(p.contains(QStringLiteral("asetpts=PTS-STARTPTS")), "args: pcm 时间戳归零");
+
+    // copyAudio 优先于 losslessPcm（互斥由调用方保证，双 true 时 copy 生效）
+    req.copyAudio = true;
+    req.losslessPcm = true;
+    const QStringList c = TranscodeEngine::buildArgs(req, QStringLiteral("tmp.mp4"));
+    const int cai = c.indexOf(QStringLiteral("-c:a"));
+    CHECK(cai >= 0 && c[cai + 1] == "copy", "args: copyAudio 优先");
 }
 
 // ============================================================================

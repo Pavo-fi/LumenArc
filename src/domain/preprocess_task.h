@@ -35,6 +35,10 @@ struct TranscodeRequest {
     bool    deinterlace = true;   // 隔行源默认 yadif（可配置）
     bool    copyAudio = false;    // 原音轨为 AAC 时直拷（探测驱动，2026-08：
                                   // 保留原始音频数据层级，避免重编码丢特征）
+    // P-27（2026-08-16）：pcm 家族源（alaw/mulaw 等，mp4 无 sample entry）
+    // → pcm_s16le 数学无损解压（alaw 8k=128kbps，与 aac 128k 同体积）；
+    // 与 copyAudio 互斥（copy 优先），仅转码路径生效
+    bool    losslessPcm = false;
     int     audioSampleRate = 0;  // 重编码时保留原采样率（0=48000）
     int     audioChannels = 0;    // 重编码时保留原声道数（0=2）
     float   fps = 0.0f;           // >0 时统一 CFR 输出该帧率（多段帧率不一

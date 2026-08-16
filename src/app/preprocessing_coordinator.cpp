@@ -611,12 +611,14 @@ void PreprocessingCoordinator::startProcessing(const ProcessingOptions &opts)
         const bool copy = uniform && first && first->audioStreams > 0
             && first->audioCodec == QLatin1String("aac");
         // 注（2026-08 取证）：监控源音频多为 pcm_alaw 8k——带限 3.4kHz
-        // 是源固有特性；alaw 无 mp4 sample entry（muxer 拒绝），只能
-        // 重编码 aac（保留 8k mono），属容器限制下的最小有损
+        // 是源固有特性；alaw 无 mp4 sample entry（muxer 拒绝）。
+        // P-27（2026-08-16）：非 AAC 源转码时按文件 codec 分流——pcm 家族
+        // → pcm_s16le 数学无损（8k mono 128kbps 与 aac 128k 同体积），
+        // 其余有损源 → aac 128k 保持现状
         m_groupCopyAudio.insert(g.channel, copy);
         if (first && !copy && first->audioStreams > 0)
             log(QStringLiteral("[%1] 组「%2」音频参数不统一或非 AAC，整组重编码"
-                               "（避免拼接丢失异参音轨）")
+                               "（避免拼接丢失异参音轨；pcm 源将无损解压）")
                     .arg(tsLog(), g.channel));
     }
     const bool anyTranscode = needTxCount > 0;
@@ -749,6 +751,10 @@ TranscodeRequest PreprocessingCoordinator::buildTranscodeRequest(
         return QString();
     }();
     req.copyAudio = m_groupCopyAudio.value(ch, false);
+    // P-27（2026-08-16）：pcm 家族源（alaw/mulaw 等）→ 无损解压 pcm_s16le；
+    // mp4 容器不收 alaw（无 sample entry），数学无损且体积与 aac 128k 相当
+    req.losslessPcm = !req.copyAudio
+        && p.audioCodec.startsWith(QLatin1String("pcm_"));
     req.audioSampleRate = p.audioSampleRate.toInt();
     req.audioChannels = p.audioChannels.toInt();
     // v1.7.0 M4（Q6）：跨相机混拼分辨率归一——组内分辨率不一致时
@@ -845,7 +851,9 @@ void PreprocessingCoordinator::scheduleNextTranscode()
                          : QString())
                 .arg(req.copyAudio
                          ? QStringLiteral("，音频直拷")
-                         : QStringLiteral("，音频重编码 aac"))
+                         : (req.losslessPcm
+                                ? QStringLiteral("，音频无损解压 pcm_s16le")
+                                : QStringLiteral("，音频重编码 aac")))
                 .arg(req.trimStartMs > 0
                          ? QStringLiteral("，重叠修剪 %1s 起")
                                .arg(req.trimStartMs / 1000.0, 0, 'f', 1)
