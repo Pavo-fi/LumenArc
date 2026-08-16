@@ -32,8 +32,7 @@ struct ChartGuideData
 {
     bool horizontal = true;   // true=水平（value 为 Y 值），false=垂直（value 为 X 时间 ms）
     qreal value = 0;
-    // 水平线默认浅蓝 #3E9BD8 70%（语谱底噪滑块同色，用户拍板 2026-08-15）
-    QColor color = QColor(62, 155, 216, 178);
+    QColor color = QColor(255, 255, 0, 180);
 };
 
 /**

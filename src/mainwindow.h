@@ -215,7 +215,6 @@ protected:
     QRectF readTimestampRoiRegistry(const QString &videoPath) const;
     /// 校时徽标文案（写案件内 .vla 时同步刷新 CaseVideoRef 缓存）
     QString calibrationBadgeSummary() const;
-    bool m_volumeWarnShown = false;   // v1.7.1：音量破 200% 提示（每会话一次）
     RoiModel *m_roiModel = nullptr;
     GuideLineModel *m_guideLineModel = nullptr;
     TimelineModel *m_timelineModel = nullptr;

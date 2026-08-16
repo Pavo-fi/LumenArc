@@ -86,9 +86,7 @@ public:
     qint64 abPointB() const { return m_abPointB; }
 
     // Chart guide lines
-    void addHorizontalGuideLine(qreal yValue,
-                                const QColor &color = QColor(62, 155, 216, 178));
-    // 浅蓝 #3E9BD8（语谱底噪滑块同色）70% 不透明度（用户拍板 2026-08-15）
+    void addHorizontalGuideLine(qreal yValue, const QColor &color = QColor(255, 255, 0, 180));
     void addVerticalGuideLine(qreal xTimeMs, const QColor &color = QColor(0, 255, 255, 180));
     void removeChartGuideLine(int index);
     void clearChartGuideLines();
