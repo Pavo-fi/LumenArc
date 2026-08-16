@@ -116,6 +116,7 @@ private:
     qint64 m_durationMs = 0;
     QRectF m_roi;                    ///< 时间戳区域（归一化 0~1，无效=未框选）
     bool m_waitingRoi = false;       ///< 等待主窗口框选结果
+    bool m_roiRetried = false;       ///< v1.7.1：框选失败后已自动全画面重试
     TimeCalibration m_working;          // 工作副本（采用候选时更新）
     TimeCalibration m_fitResult;        // 最近一次三点拟合候选
     TimeCalibration m_reconResult;      // 最近一次重建候选

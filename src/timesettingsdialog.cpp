@@ -468,6 +468,7 @@ void TimeSettingsDialog::onCancelGo()
 void TimeSettingsDialog::startGo()
 {
     m_goStage = GoStage::Quick;
+    m_roiRetried = false;   // v1.7.1：新一轮校时重置自动重试标记
     m_autoApplied = false;
     m_useBtn->setEnabled(false);
     m_useBtn->setText(lang("✅ 使用此结果", "✅ Use this result"));
@@ -769,6 +770,21 @@ void TimeSettingsDialog::onServiceFailed(const QString &videoPath,
         return;
     }
     if (m_goStage == GoStage::Ocr || m_goStage == GoStage::Recon) {
+        // v1.7.1：带框选识别失败 → 自动清框选全画面重试一次（用户实测：
+        // 拼接产物沿用旧框选记忆，位置不匹配致 ocr_all_failed；全画面
+        // 自适应搜索实测可成功识别）
+        if (m_goStage == GoStage::Ocr && m_roi.isValid() && !m_roiRetried
+            && error.contains(QStringLiteral("ocr"))) {
+            m_roiRetried = true;
+            m_roi = QRectF();
+            m_resultLabel->setText(lang(
+                "框选区域未识别到时间，已切换全画面自动识别重试…",
+                "Boxed region had no time; retrying with full-frame OCR…"));
+            setGoBusy(true, lang("识别中…", "Recognizing…"));
+            m_service->runThreePoint(m_videoPath, m_currentPosMs, m_durationMs,
+                                     m_roi);
+            return;
+        }
         m_goStage = GoStage::Failed;
         setGoBusy(false, QString());
         m_resultLabel->setText(lang(
@@ -776,6 +792,7 @@ void TimeSettingsDialog::onServiceFailed(const QString &videoPath,
             "可能原因：\n"
             "· 画面中没有时间显示，或时间不含日期（需 年月日 时分秒）\n"
             "· 时间字体/位置特殊\n"
+            "· 框选区域与时间戳位置不匹配（可重新框选）\n"
             "可尝试：第 3 步高级 → 手动输入画面时间 / 强制变速重建。",
             "Could not read on-screen time (%1).\n"
             "Possible: no timestamp, date-less format (needs yyyy-mm-dd hh:mm:ss), "
