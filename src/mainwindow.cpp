@@ -2341,10 +2341,7 @@ void MainWindow::openVideoFile(const QString &filePath)
             // v1.7.1：案件树高亮正在播放的文件
             if (m_caseDock)
                 m_caseDock->setCurrentVideoPath(m_currentVideoPath);
-            // v1.7.1：案件树高亮正在播放的文件
-        if (m_caseDock)
-            m_caseDock->setCurrentVideoPath(m_currentVideoPath);
-        onPlay();
+            onPlay();
             return;
         }
 
@@ -2470,6 +2467,9 @@ void MainWindow::openVideoFile(const QString &filePath)
             }
         }
 
+        // v1.7.1：案件树高亮正在播放的文件（无缓存/继承路径同待遇）
+        if (m_caseDock)
+            m_caseDock->setCurrentVideoPath(m_currentVideoPath);
         onPlay();
     } else {
         QMessageBox::critical(this, lang("错误", "Error"),

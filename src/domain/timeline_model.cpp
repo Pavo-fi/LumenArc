@@ -526,7 +526,7 @@ bool TimelineModel::loadFromFile(const QString &filePath,
                 audioData.volume.append(f);
             }
         }
-        // SPEC：频谱矩阵（uint16 量化，频率行主序）
+        // SPEC：频谱矩阵（uint8 量化，频率行主序）
         if (chunks.contains("SPEC")) {
             QDataStream ds(chunks.value("SPEC"));
             quint32 fb = 0, fr = 0;
@@ -535,14 +535,23 @@ bool TimelineModel::loadFromFile(const QString &filePath,
             if (fb > 8192 || fr > 10000000)
                 return false;
             const double inv = (sMax > sMin) ? ((sMax - sMin) / 255.0) : 0.0;
+            // v1.7.1 加载提速：uint8 无字节序问题，跳过 QDataStream 逐值
+            // 读取（81M 次函数调用是 57MB vla 加载 1.3s 的主因，用户实测
+            // 切换视频卡顿）——直接指针算术还原
+            const QByteArray specRaw = chunks.value("SPEC");
+            const int specHdr = 4 + 4 + 8 + 8;
+            const quint8 *q = reinterpret_cast<const quint8 *>(
+                specRaw.constData() + specHdr);
+            const qint64 qAvail = specRaw.size() - specHdr;
+            if (qAvail < qint64(fb) * fr)
+                return false;
             audioData.spectrogram.resize(int(fb));
             for (quint32 f = 0; f < fb; ++f) {
-                audioData.spectrogram[int(f)].resize(int(fr));
-                for (quint32 t = 0; t < fr; ++t) {
-                    quint8 q = 0;
-                    ds >> q;
-                    audioData.spectrogram[int(f)][int(t)] = sMin + q * inv;
-                }
+                auto &row = audioData.spectrogram[int(f)];
+                row.resize(int(fr));
+                const quint8 *src = q + qint64(f) * fr;
+                for (quint32 t = 0; t < fr; ++t)
+                    row[int(t)] = sMin + src[t] * inv;
             }
         }
     } else {

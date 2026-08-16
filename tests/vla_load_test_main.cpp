@@ -7,6 +7,7 @@
  *   → 事件循环跑 deferred rebuildSeries → 统计曲线数量与数据点
  */
 #include <QApplication>
+#include <QElapsedTimer>
 #include <QtConcurrent>
 #include <QThreadPool>
 #include <QAtomicInt>
@@ -39,8 +40,12 @@ static int testFile(ChartPanel *chart, RoiModel *rm, RoiModel *pm,
     QVector<ChartLabel> labels;
     SnapshotFusionData fusion;
 
+    QElapsedTimer tLoad;
+    tLoad.start();
     bool ok = tm->loadFromFile(path, &regions, &calibration, &magRect, &labels,
                                &pinnedRect, &fusion, &polys, &guideLines, &rIds, &pIds);
+    fprintf(stderr, "[tf] loadFromFile took %lld ms (%s)\n",
+            (long long)tLoad.elapsed(), qPrintable(QFileInfo(path).fileName()));
     if (!ok) {
         fprintf(stderr, "  loadFromFile FAILED\n");
         return -1;
