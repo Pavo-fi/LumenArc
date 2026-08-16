@@ -362,7 +362,12 @@ void CaseDock::setCameraLabelFlow(const QString &id)
                              err.isEmpty() ? QStringLiteral("failed") : err);
         return;
     }
-    m_caseManager->saveCase(&err);
+    if (!m_caseManager->saveCase(&err)) {
+        QMessageBox::warning(this, lang("摄像头编号", "Camera Label"),
+            lang("编号已设置但保存案件失败（重启后可能丢失）：\n%1",
+                 "Label set but case save failed (may lose after restart):\n%1")
+                .arg(err));
+    }
     refreshTree();
 }
 

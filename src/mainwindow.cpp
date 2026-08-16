@@ -77,6 +77,8 @@
 #include <QLineEdit>
 #include <QTextEdit>
 #include <QSlider>
+#include <QTreeWidget>
+#include <QDoubleSpinBox>
 #include <QVBoxLayout>
 #include <QHBoxLayout>
 #include <QPainter>
@@ -538,6 +540,12 @@ MainWindow::MainWindow(QWidget *parent)
 
     // ---- 案件模式接线（v1.3.0 M2 任务10）----
     m_caseDock = new CaseDock(m_caseManager, this);
+    // v1.7.1：全局快捷键不被案件树劫持（与视频列表/语谱滑块同机制——
+    // 过滤器须装在具体控件上；文本输入控件由 eventFilter 保护放行）
+    for (QWidget *w : m_caseDock->findChildren<QWidget *>()) {
+        if (qobject_cast<QTreeWidget *>(w) || qobject_cast<QPushButton *>(w))
+            w->installEventFilter(this);
+    }
     addDockWidget(Qt::LeftDockWidgetArea, m_caseDock);
     resizeDocks({m_caseDock}, {250}, Qt::Horizontal);
     m_caseDock->setVisible(false);   // 仅案件模式可见（替代视频列表）
@@ -1220,6 +1228,12 @@ void MainWindow::createToolBar()
     // 播放画面调节面板（2026-08-14）：dock 常驻模式，默认隐藏，
     // 工具栏「画面调节」按钮调出后一直开着直到手动关闭。
     m_adjustPanel = new PlaybackAdjustPanel(this);
+    // v1.7.1：画面调节面板控件不劫持全局快捷键
+    for (QWidget *w : m_adjustPanel->findChildren<QWidget *>()) {
+        if (qobject_cast<QSlider *>(w) || qobject_cast<QSpinBox *>(w)
+            || qobject_cast<QDoubleSpinBox *>(w) || qobject_cast<QPushButton *>(w))
+            w->installEventFilter(this);
+    }
     addDockWidget(Qt::RightDockWidgetArea, m_adjustPanel);
     m_adjustPanel->hide();
 }
