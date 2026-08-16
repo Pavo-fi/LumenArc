@@ -1191,7 +1191,9 @@ bool FfmpegVideoEngine::openFile(const QString &filePath)
 {
     AVDictionary *opts = nullptr;
     av_dict_set(&opts, "probesize", "50000000", 0);       // 50MB，利于无索引/伪扩展名文件
-    av_dict_set(&opts, "analyzeduration", "10000000", 0); // 10s
+    // v1.7.1：流分析限时 10s → 1s（大文件 open 的秒级开销；1s 足够
+    // 拿到 DVR/监控素材的流信息，用户实测切换视频卡顿 10 秒级）
+    av_dict_set(&opts, "analyzeduration", "1000000", 0);   // 1s
     int ret = avformat_open_input(&m_fmt, filePath.toUtf8().constData(), nullptr, &opts);
     av_dict_free(&opts);
     if (ret < 0) {

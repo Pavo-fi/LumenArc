@@ -119,4 +119,13 @@ private:
     QString m_videoPath;
     QStringList m_extraVideos;
     QVector<RoiSpec> m_rois;
+
+    // v1.7.1：videoTiming 缓存（切换视频路径上多次调用，大文件每次
+    // open+find_stream_info 是秒级开销——用户实测切换卡顿）
+    struct TimingCacheEntry {
+        VideoTiming timing;
+        qint64 sizeBytes = 0;
+        qint64 mtimeMs = 0;
+    };
+    QHash<QString, TimingCacheEntry> m_timingCache;
 };

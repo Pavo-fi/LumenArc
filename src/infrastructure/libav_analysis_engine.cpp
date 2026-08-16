@@ -23,6 +23,7 @@ extern "C" {
 
 #include <QThread>
 #include <QCoreApplication>
+#include <QFileInfo>
 #include <cmath>
 
 // ============================================================================
@@ -199,6 +200,15 @@ bool LibavAnalysisEngine::isRunning() const
 
 LibavAnalysisEngine::VideoTiming LibavAnalysisEngine::videoTiming(const QString &videoPath)
 {
+    // v1.7.1 缓存：同文件（大小/mtime 未变）直接复用（切换视频路径多次调用）
+    const QFileInfo fi(videoPath);
+    const auto it = m_timingCache.constFind(videoPath);
+    if (it != m_timingCache.constEnd()
+        && it->sizeBytes == fi.size()
+        && it->mtimeMs == fi.lastModified().toMSecsSinceEpoch()
+        && fi.size() > 0) {
+        return it->timing;
+    }
     VideoTiming timing;
     AVFormatContext *fmt = nullptr;
     AVCodecContext *dec = nullptr;
@@ -264,6 +274,13 @@ LibavAnalysisEngine::VideoTiming LibavAnalysisEngine::videoTiming(const QString 
     } else if (fmt->duration > 0) {
         timing.durationMs = static_cast<qint64>(fmt->duration / 1000);
     }
+    if (timing.fps > 0.0f && timing.durationMs > 0 && fi.size() > 0) {
+        TimingCacheEntry e;
+        e.timing = timing;
+        e.sizeBytes = fi.size();
+        e.mtimeMs = fi.lastModified().toMSecsSinceEpoch();
+        m_timingCache.insert(videoPath, e);
+    }
     return timing;
 }
 
@@ -277,6 +294,9 @@ bool LibavAnalysisEngine::openVideo(const QString &path, AVFormatContext **fmtOu
     const QByteArray pathUtf8 = path.toUtf8();
     if (avformat_open_input(&fmt, pathUtf8.constData(), nullptr, nullptr) < 0)
         return false;
+    // v1.7.1：限制流信息分析时长（默认对长文件可读数 MB 耗时秒级；
+    // 500ms 已足够拿到码率/时长/帧率元数据——用户实测切换卡顿优化）
+    fmt->max_analyze_duration = AV_TIME_BASE / 2;
     if (avformat_find_stream_info(fmt, nullptr) < 0) {
         avformat_close_input(&fmt);
         return false;

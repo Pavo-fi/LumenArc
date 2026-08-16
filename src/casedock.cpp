@@ -368,7 +368,9 @@ void CaseDock::setCurrentVideoPath(const QString &videoPath)
             continue;
         const QString p = QDir::cleanPath(
             QFileInfo(item->data(0, kRolePath).toString()).absoluteFilePath());
-        if (p != norm)
+        // v1.7.1：Windows 路径大小写不敏感——用户经不同大小写路径打开
+        // 视频时字符串比较失败致高亮不跟随
+        if (p.compare(norm, Qt::CaseInsensitive) != 0)
             continue;
         item->setBackground(0, QBrush(QColor(0x2A, 0x4A, 0x6E)));   // 蓝底
         QFont f = item->font(0);
