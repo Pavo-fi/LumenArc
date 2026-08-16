@@ -233,10 +233,12 @@ void CaseDock::fillPreprocess(QTreeWidgetItem *group)
             // 用户实测修正：手动编号后显示编号【替换】P001（P001 仅入 tooltip）
             const QString displayId = o.cameraLabel.isEmpty()
                 ? o.id : QStringLiteral("📷") + o.cameraLabel;
+            const QString calMark = o.hasCalibration
+                ? QStringLiteral(" ⏰") : QString();
             auto *oIt = new QTreeWidgetItem(sIt,
-                {QStringLiteral("%1  %2  %3")
+                {QStringLiteral("%1  %2%3  %4")
                      .arg(displayId, QFileInfo(o.originalPath).fileName(),
-                          badge)});
+                          calMark, badge)});
             oIt->setData(0, kRoleKind, QStringLiteral("output"));
             oIt->setData(0, kRoleId, o.id);
             oIt->setData(0, kRolePath, o.originalPath);
@@ -246,6 +248,9 @@ void CaseDock::fillPreprocess(QTreeWidgetItem *group)
                 + QStringLiteral("\n登记号：") + o.id
                 + (o.cameraLabel.isEmpty() ? QString()
                      : QStringLiteral("\n摄像头编号：") + o.cameraLabel)
+                + (o.hasCalibration && !o.calibrationSummary.isEmpty()
+                     ? QStringLiteral("\n校时：") + o.calibrationSummary
+                     : QString())
                 + QStringLiteral("\n") + badgeTip);
             oIt->setForeground(0, badgeColor);
         }

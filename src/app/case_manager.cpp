@@ -727,12 +727,31 @@ void CaseManager::setTimestampRoi(const QString &videoPath, const QRectF &roi)
 void CaseManager::updateCalibrationBadge(const QString &videoPath, bool has,
                                          const QString &summary)
 {
-    if (auto *v = const_cast<CaseVideoRef *>(videoByPath(videoPath))) {
-        if (v->hasCalibration != has || v->calibrationSummary != summary) {
-            v->hasCalibration = has;
-            v->calibrationSummary = summary;
-            setModified();
+    // v1.7.1：视频（videos[]）与前处理产物（outputRefs P###）同待遇——
+    // 用户实测：产物校时成功后无 ⏰ 徽标（videoByPath 只查 videos）
+    CaseVideoRef *v = nullptr;
+    const QString norm = normPath(videoPath);
+    for (auto &vv : m_meta.videos)
+        if (vv.originalPath == norm) { v = &vv; break; }
+    if (!v) {
+        for (auto &s : m_meta.preprocessSessions)
+            for (auto &o : s.outputRefs)
+                if (o.originalPath == norm) { v = &o; break; }
+    }
+    if (!v) {
+        // 包内副本兜底（同 videoByPath 语义）
+        for (auto &vv : m_meta.videos) {
+            if (!vv.bundledRelPath.isEmpty()
+                && QDir(m_caseDir).absoluteFilePath(vv.bundledRelPath) == norm) {
+                v = &vv;
+                break;
+            }
         }
+    }
+    if (v && (v->hasCalibration != has || v->calibrationSummary != summary)) {
+        v->hasCalibration = has;
+        v->calibrationSummary = summary;
+        setModified();
     }
 }
 

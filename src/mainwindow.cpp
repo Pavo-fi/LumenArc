@@ -2414,6 +2414,10 @@ void MainWindow::openVideoFile(const QString &filePath)
                     for (const GuideLine &line : loadedGuideLines)
                         m_guideLineModel->addLine(line);
                 }
+                // v1.7.1：案件内 .vla 自动加载不弹框（拍板§3-6），但补一个
+                // 非打扰状态栏提示——用户反馈“默认加载分析结果，不再弹出”
+                showOperationStatus(lang("已自动加载分析结果",
+                                         "Analysis result auto-loaded"));
             }
         }
 
