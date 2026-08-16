@@ -574,6 +574,9 @@ void CaseDock::onContextMenu(const QPoint &pos)
         menu.addAction(lang("设置摄像头编号…", "Set camera label…"), this,
                        [this, id]() { setCameraLabelFlow(id); });
         menu.addSeparator();
+        // v1.7.1：产物与视频同待遇——重定位（缺失时 ✗ → 指回新位置）
+        menu.addAction(lang("重新定位…", "Relocate…"), this,
+                       [this, id]() { relocateVideo(id); });
         menu.addAction(lang("删除输出文件…", "Delete output file…"), this,
                        [this, item]() {
                            const int si = item->data(0, kRoleIdx).toInt();

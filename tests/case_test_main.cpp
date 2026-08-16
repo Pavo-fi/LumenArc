@@ -808,6 +808,20 @@ int main(int argc, char **argv)
                 cm.meta(), QStringLiteral("P001"));
             CHECK(pRef && pRef->cameraLabel == QStringLiteral("CAM01"),
                   "pps: camera label inherited from channel");
+            // v1.7.1：产物与视频同待遇——vla 路径/入案判定/框选记忆/
+            // 校时徽标统一分流
+            const QString prodPath = session + QStringLiteral("/merged.mp4");
+            CHECK(cm.isCaseVideo(prodPath), "pps: output isCaseVideo");
+            CHECK(cm.vlaPathFor(prodPath)
+                      == prodPath + QStringLiteral(".vla"),
+                  "pps: output vla path (session dir, follows case)");
+            const QRectF roi(0.05, 0.05, 0.4, 0.1);
+            cm.setTimestampRoi(prodPath, roi);
+            CHECK(cm.timestampRoiFor(prodPath) == roi,
+                  "pps: output timestampRoi persisted");
+            cm.updateCalibrationBadge(prodPath, true, QStringLiteral("测试"));
+            CHECK(cm.calibratedVideoCount() >= 1,
+                  "pps: calibratedVideoCount includes output");
             QString e2;
             CHECK(cm.setCameraLabel(QStringLiteral("P001"),
                                     QStringLiteral("食咔咔4时"), &e2),

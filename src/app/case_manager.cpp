@@ -381,7 +381,7 @@ bool CaseManager::removeVideo(const QString &id, bool deleteData,
         emit videoRemoved(id);
         return true;
     }
-    if (error) *error = QStringLiteral("案件中没有视频 %1").arg(id);
+    if (error) *error = QStringLiteral("案件中没有该文件 %1").arg(id);
     return false;
 }
 
@@ -527,7 +527,7 @@ bool CaseManager::relocateVideo(const QString &id, const QString &newPath,
     if (sizeMismatch) *sizeMismatch = false;
     auto *v = const_cast<CaseVideoRef *>(videoById(id));
     if (!v) {
-        if (error) *error = QStringLiteral("案件中没有视频 %1").arg(id);
+        if (error) *error = QStringLiteral("案件中没有该文件 %1").arg(id);
         return false;
     }
     const QString norm = normPath(newPath);
@@ -648,10 +648,17 @@ const CaseVideoRef *CaseManager::videoByPath(const QString &path) const
 {
     if (!m_open)
         return nullptr;
+    // v1.7.1：视频（V###）与前处理产物（P###）同待遇——本函数是
+    // vlaPathFor / evidenceDirFor / timestampRoi / isCaseVideo /
+    // updateCalibrationBadge 的统一分流中枢，通用查找两表
     const QString norm = normPath(path);
     for (const auto &v : m_meta.videos)
         if (v.originalPath == norm)
             return &v;
+    for (const auto &s : m_meta.preprocessSessions)
+        for (const auto &o : s.outputRefs)
+            if (o.originalPath == norm)
+                return &o;
     // 完整包接收端：播放包内 sources/ 副本时按 bundledRelPath 命中
     const QDir caseDir(m_caseDir);
     for (const auto &v : m_meta.videos) {
@@ -682,6 +689,10 @@ int CaseManager::calibratedVideoCount() const
     for (const auto &v : m_meta.videos)
         if (v.hasCalibration)
             ++n;
+    for (const auto &s : m_meta.preprocessSessions)
+        for (const auto &o : s.outputRefs)
+            if (o.hasCalibration)
+                ++n;
     return n;
 }
 
@@ -690,8 +701,12 @@ int CaseManager::calibratedVideoCount() const
 // ---------------------------------------------------------------------------
 QString CaseManager::vlaPathFor(const QString &videoPath) const
 {
-    if (const auto *v = videoByPath(videoPath))
-        return QDir(m_caseDir).filePath(v->vlaRelPath);
+    if (const auto *v = videoByPath(videoPath)) {
+        if (!v->vlaRelPath.isEmpty())
+            return QDir(m_caseDir).filePath(v->vlaRelPath);
+        // 旧数据产物（无 vlaRelPath）：回退源旁 .vla（产物在案内 → 随案）
+        return videoPath + QStringLiteral(".vla");
+    }
     return videoPath + QStringLiteral(".vla");
 }
 
@@ -807,6 +822,10 @@ bool CaseManager::addPreprocessSession(const QString &sessionDirAbs,
         out.mtimeMs = fi.lastModified().toMSecsSinceEpoch();
         // v1.7.1：摄像头编号自动继承前处理通道名（自定义可后改）
         out.cameraLabel = outputChannels.value(normPath(o));
+        // v1.7.1：产物 vla 落会话目录内（随案移交；与视频 videos/V###.vla 同语义）
+        const QString vlaRel = caseDir.relativeFilePath(normPath(o) + QStringLiteral(".vla"));
+        if (!vlaRel.startsWith(QStringLiteral("..")) && !QDir::isAbsolutePath(vlaRel))
+            out.vlaRelPath = vlaRel;
         p.outputRefs.append(out);
     }
     // sidecar 复制归类 sessionDir/sidecars/（原件保留在输出旁，拍板§8-11）

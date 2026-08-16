@@ -722,3 +722,27 @@ B. 前处理产物校时继承后未保存、无 ⏰ 徽标 → sidecar 继承�
 
 ### 验证
 全回归绿。待真机：产物校时采用后 ⏰ 出现；打开案件视频状态栏提示。
+
+# ============================================================================
+# 工作记录（2026-08-16，第二十九批）——产物与视频待遇全面统一（系统性）
+# ============================================================================
+
+## 38. 前处理产物与视频全待遇对齐（用户要求不再逐项修补）
+
+### 核心改动：videoByPath 通用化（统一分流中枢）
+videoByPath（此前只查 videos[]）改为遍历 videos + preprocessSessions.
+outputRefs + 包内副本兜底——下列分流**一次全部**对产物生效：
+- vlaPathFor：产物 vla 落会话目录内（addPreprocessSession 登记时设
+  vlaRelPath；旧数据空值回退源旁 .vla）→ 分析结果随案移交
+- evidenceDirFor：产物校时证据 → evidence/calibration/P### ✓
+- timestampRoiFor/setTimestampRoi：产物框选记忆入 case.json（案件级）✓
+- isCaseVideo：产物=true → 打开产物不弹缓存询问（与视频一致）✓
+- updateCalibrationBadge：✓（上批已显式修，现统一）
+- calibratedVideoCount：校时计数含产物
+
+### CaseDock
+- 产物右键新增「重新定位…」（relocateVideo 已通用；缺失 ✗ 可指回新位置）
+
+### 验证
+- case_test 246 项（新增：产物 isCaseVideo/vlaPath/框选记忆/校时计数断言）
+- 全回归 11 套绿
