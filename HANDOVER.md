@@ -5,7 +5,7 @@
 
 ## 表头（每次写完 HANDOVER 与 WORK_HISTORY 后必须同步更新本表头——规则 R2）
 
-- **当前 HEAD**：`07bf924`（2026-08-16 §43；§44 文档整理+验收+P-27 音频无损待提交）
+- **当前 HEAD**：`ace2ff0`（2026-08-16 §44 文档整理+验收+P-27 音频无损）
 - **构建**：`cmd //c "build_tmp\build_target.bat ALL"`；测试：`QT_QPA_PLATFORM=offscreen`
   + PATH 含 `C:\code\Qt\6.8.0\msvc2022_64\bin`（配置：`build_tmp\reconfigure.bat`）
 - **全回归基线**（11 套）：case 248 / case_e2e 51 / piecewise 96 / preprocess 170 /
