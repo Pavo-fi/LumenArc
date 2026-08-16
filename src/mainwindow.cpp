@@ -2426,6 +2426,10 @@ void MainWindow::openVideoFile(const QString &filePath)
                 && inherited.isValid()) {
                 m_calibration = inherited;
                 m_chartPanel->setCalibration(m_calibration);
+                // v1.7.1 修复：继承的校时必须落盘 .vla 并刷新案件 ⏰ 徽标
+                // （用户实测：前处理产物继承校时后切换/重开丢失、无徽标——
+                // 旧流程只在内存，产物无分析数据时从未写 vla）
+                saveCurrentVlaAsync();
                 if (sidecarWarning.isEmpty()) {
                     showOperationStatus(
                         lang("已继承前处理校时",
@@ -3650,13 +3654,27 @@ bool MainWindow::eventFilter(QObject *watched, QEvent *event)
             return true;
         }
 
-        case Qt::Key_Up:
-            m_videoEngine->setVolume(m_videoEngine->volume() + 5);
-            showOperationStatus(QString(lang("音量 +5，现音量：%1", "Volume +5, Current: %1")).arg(m_videoEngine->volume()));
+        case Qt::Key_Up: {
+            const int cur = m_videoEngine->volume();
+            // v1.7.1：突破 200% 时给一次提示（每次会话仅一次，防重复打扰）
+            if (cur <= 200 && cur + 5 > 200 && !m_volumeWarnShown) {
+                m_volumeWarnShown = true;
+                QMessageBox::information(this, lang("音量", "Volume"),
+                    lang("音量即将超过 200%。继续增大可能造成声音失真（削波），\n"
+                         "建议仅在原始素材音量过低时使用。",
+                         "Volume will exceed 200%. Further increase may cause "
+                         "clipping distortion.\nRecommended only for very quiet "
+                         "source material."));
+            }
+            m_videoEngine->setVolume(cur + 5);   // 上限 500%
+            showOperationStatus(QString(lang("音量 +5，现音量：%1%", "Volume +5, Current: %1%"))
+                                    .arg(m_videoEngine->volume()));
             return true;
+        }
         case Qt::Key_Down:
             m_videoEngine->setVolume(m_videoEngine->volume() - 5);
-            showOperationStatus(QString(lang("音量 -5，现音量：%1", "Volume -5, Current: %1")).arg(m_videoEngine->volume()));
+            showOperationStatus(QString(lang("音量 -5，现音量：%1%", "Volume -5, Current: %1%"))
+                                    .arg(m_videoEngine->volume()));
             return true;
 
         case Qt::Key_C:

@@ -230,21 +230,23 @@ void CaseDock::fillPreprocess(QTreeWidgetItem *group)
             QString badgeTip;
             QColor badgeColor;
             const QString badge = hashBadge(o, &badgeTip, &badgeColor);
-            const QString cam = o.cameraLabel.isEmpty()
-                ? QString() : QStringLiteral(" 📷") + o.cameraLabel;
+            // 用户实测修正：手动编号后显示编号【替换】P001（P001 仅入 tooltip）
+            const QString displayId = o.cameraLabel.isEmpty()
+                ? o.id : QStringLiteral("📷") + o.cameraLabel;
             auto *oIt = new QTreeWidgetItem(sIt,
-                {QStringLiteral("%1  %2%3  %4")
-                     .arg(o.id, QFileInfo(o.originalPath).fileName(),
-                          cam, badge)});
+                {QStringLiteral("%1  %2  %3")
+                     .arg(displayId, QFileInfo(o.originalPath).fileName(),
+                          badge)});
             oIt->setData(0, kRoleKind, QStringLiteral("output"));
             oIt->setData(0, kRoleId, o.id);
             oIt->setData(0, kRolePath, o.originalPath);
             oIt->setData(0, kRoleIdx, si);
             oIt->setData(0, kRoleIdx2, oi);
             oIt->setToolTip(0, o.originalPath
-                + QStringLiteral("\n") + badgeTip
+                + QStringLiteral("\n登记号：") + o.id
                 + (o.cameraLabel.isEmpty() ? QString()
-                     : QStringLiteral("\n摄像头编号：") + o.cameraLabel));
+                     : QStringLiteral("\n摄像头编号：") + o.cameraLabel)
+                + QStringLiteral("\n") + badgeTip);
             oIt->setForeground(0, badgeColor);
         }
         for (const QString &sc : p.sidecarRelPaths) {

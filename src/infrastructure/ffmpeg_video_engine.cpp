@@ -169,9 +169,59 @@ int FfmpegVideoEngine::videoWidth() const { return m_width.load(); }
 int FfmpegVideoEngine::videoHeight() const { return m_height.load(); }
 float FfmpegVideoEngine::fps() const { return m_fps > 0.0f ? m_fps.load() : 30.0f; }
 int FfmpegVideoEngine::volume() const { return m_volume.load(); }
+/// v1.7.1：音量 >100% 的 PCM 增益（削波保护）。按 sink 实际样本格式分支。
+void FfmpegVideoEngine::applyVolumeGain(char *data, qint64 bytes, double gain)
+{
+    if (gain <= 1.0 || bytes <= 0)
+        return;
+    switch (m_outSampleFmt) {
+    case AV_SAMPLE_FMT_S16: {
+        int16_t *s = reinterpret_cast<int16_t *>(data);
+        const qint64 n = bytes / 2;
+        for (qint64 i = 0; i < n; ++i) {
+            const int v = static_cast<int>(s[i]) * gain;
+            s[i] = static_cast<int16_t>(qBound(-32768, v, 32767));
+        }
+        break;
+    }
+    case AV_SAMPLE_FMT_S32: {
+        int32_t *s = reinterpret_cast<int32_t *>(data);
+        const qint64 n = bytes / 4;
+        for (qint64 i = 0; i < n; ++i) {
+            const double v = static_cast<double>(s[i]) * gain;
+            s[i] = static_cast<int32_t>(qBound(-2147483648.0, v, 2147483647.0));
+        }
+        break;
+    }
+    case AV_SAMPLE_FMT_FLT: {
+        float *s = reinterpret_cast<float *>(data);
+        const qint64 n = bytes / 4;
+        for (qint64 i = 0; i < n; ++i) {
+            const float v = static_cast<float>(s[i] * gain);
+            s[i] = qBound(-1.0f, v, 1.0f);
+        }
+        break;
+    }
+    case AV_SAMPLE_FMT_U8: {
+        uint8_t *s = reinterpret_cast<uint8_t *>(data);
+        const qint64 n = bytes;
+        for (qint64 i = 0; i < n; ++i) {
+            const int v = static_cast<int>((static_cast<int>(s[i]) - 128) * gain) + 128;
+            s[i] = static_cast<uint8_t>(qBound(0, v, 255));
+        }
+        break;
+    }
+    default:
+        break;
+    }
+}
+
 void FfmpegVideoEngine::setVolume(int vol)
 {
-    m_volume = qBound(0, vol, 100);   // 原子量，播放面随音频包应用
+    // v1.7.1：上限 500%（>100% 部分由 PCM 增益实现，sink 硬件音量封顶 100%）
+    m_volume = qBound(0, vol, 500);
+    if (m_sink)
+        m_sink->setVolume(qMin(m_volume.load(), 100) / 100.0f);
 }
 
 // ---------------------------------------------------------------------------
@@ -247,6 +297,7 @@ bool FfmpegVideoEngine::ensureAudioOutput()
     case QAudioFormat::Float:  outFmt = AV_SAMPLE_FMT_FLT; break;
     default:                   outFmt = AV_SAMPLE_FMT_S16; break;
     }
+    m_outSampleFmt = outFmt;   // v1.7.1：PCM 增益按格式处理
     AVChannelLayout outLayout;
     av_channel_layout_default(&outLayout, m_outChannels);
     if (swr_alloc_set_opts2(&m_swr, &outLayout, outFmt, m_outSampleRate,
@@ -262,7 +313,7 @@ bool FfmpegVideoEngine::ensureAudioOutput()
     int bytesPerSec = m_outSampleRate * m_outChannels * m_outBytesPerSample;
     m_sink = new QAudioSink(device, fmt);
     m_sink->setBufferSize(bytesPerSec);              // 1s 设备缓冲
-    m_sink->setVolume(m_volume.load() / 100.0f);
+    m_sink->setVolume(qMin(m_volume.load(), 100) / 100.0f);
     // 推模式：工作线程无 Qt 事件循环，拉模式的设备回调不会被驱动
     m_sinkIo = m_sink->start();
     m_audioSinkOk = (m_sinkIo != nullptr);
@@ -334,7 +385,7 @@ void FfmpegVideoEngine::processAudioPacket(AVPacket *pkt)
         return;
     }
 
-    m_sink->setVolume(m_volume.load() / 100.0f);  // 音量原子量随包应用
+    m_sink->setVolume(qMin(m_volume.load(), 100) / 100.0f);  // 音量原子量随包应用
 
     if (avcodec_send_packet(m_adec, pkt) < 0)
         return;
@@ -385,6 +436,9 @@ void FfmpegVideoEngine::processAudioPacket(AVPacket *pkt)
 
                 const char *payloadData = out.constData() + offset;
                 qint64 payload = bytes - offset;
+                // v1.7.1：音量 >100% 的 PCM 增益（削波保护；≤100% 走 sink 音量）
+                if (m_volume.load() > 100)
+                    applyVolumeGain(out.data() + offset, payload, m_volume.load() / 100.0f);
 
                 if (scrubbing) {
                     // 片段直写：无背压等待（片段 ≤100ms），不打断追逐循环

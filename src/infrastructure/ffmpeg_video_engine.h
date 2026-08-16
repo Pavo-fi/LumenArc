@@ -34,6 +34,7 @@ struct SwrContext;
 struct AVPacket;
 struct AVFrame;
 struct AVBufferRef;
+enum AVSampleFormat : int;   // v1.7.1：PCM 增益格式分支（完整定义在 libswresample）
 class QAudioSink;
 class QIODevice;
 
@@ -242,6 +243,8 @@ private:
     void chaseCachePush(qint64 relMs, AVFrame *frame);   // 超内存预算逐出最旧
     AVFrame *chaseCacheFind(qint64 targetMs, qint64 halfFrameMs); // 取 ≥target-半帧 的最小 relMs
     void chaseCacheClear();
+    /// v1.7.1：音量 >100% 的 PCM 增益（按 sink 样本格式分支，削波保护）
+    void applyVolumeGain(char *data, qint64 bytes, double gain);
 
     // --- 音频面（仅工作线程访问，计数器为原子供诊断读取） ---
     AVCodecContext *m_adec = nullptr;
@@ -252,6 +255,8 @@ private:
     int m_outSampleRate = 0;
     int m_outChannels = 0;
     int m_outBytesPerSample = 2;    // sink 实际样本字节（Int16=2，Int64=8…）
+    // S16 = 1（FFmpeg AVSampleFormat 枚举值；头文件仅前置声明）
+    AVSampleFormat m_outSampleFmt = static_cast<AVSampleFormat>(1);
     bool m_audioMaster = false;     // 有可用音轨且 rate==1.0 时音频为主时钟
     std::atomic<qint64> m_audioBytesWritten{0};
     qint64 m_audioBaseRelMs = -1;   // 首个写入样本的 PTS（相对毫秒），-1=未锚定
