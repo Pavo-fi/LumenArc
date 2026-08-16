@@ -252,12 +252,13 @@ void PreprocessWindow::refreshCaseBanner()
                  + QStringLiteral("-") + m_caseManager->meta().title));
     // 输出目录行：导入案件 = 会话目录（横幅控路径，禁手改）；独立输出 = 恢复手选
     if (m_outputDirEdit) {
-        m_outputDirEdit->setEnabled(!m_caseImportMode);
+        // v1.7.1：案件模式也允许自选（browse 校验案内）；默认仍为会话目录
+        m_outputDirEdit->setEnabled(true);
         if (m_caseImportMode)
             m_outputDirEdit->setText(caseSessionDir());
     }
     if (m_btnBrowseOutput)
-        m_btnBrowseOutput->setEnabled(!m_caseImportMode);
+        m_btnBrowseOutput->setEnabled(true);
 }
 
 void PreprocessWindow::setStep(int idx)
@@ -1107,8 +1108,26 @@ void PreprocessWindow::onBrowseOutput()
 {
     const QString dir = QFileDialog::getExistingDirectory(
         this, lang("选择输出文件夹", "Choose output folder"), m_outputDirEdit->text());
-    if (!dir.isEmpty())
-        m_outputDirEdit->setText(dir);
+    if (dir.isEmpty())
+        return;
+    // v1.7.1：案件导入模式下允许自选输出路径，但必须位于案件目录内
+    // （成果自动登记 case.json 要求会话目录在案内，addPreprocessSession
+    // 兜底拒绝案外目录）
+    if (m_caseImportMode && m_caseManager && m_caseManager->isOpen()) {
+        const QString caseDir = m_caseManager->caseDir();
+        const QDir cd(caseDir);
+        const QString rel = cd.relativeFilePath(dir);
+        if (rel.startsWith(QStringLiteral("..")) || QDir::isAbsolutePath(rel)) {
+            QMessageBox::warning(this, lang("输出文件夹", "Output Folder"),
+                lang("案件导入模式下输出必须位于案件目录内：\n%1\n\n"
+                     "如需输出到案件外，请先切换为「独立输出」。",
+                     "Case-import mode requires output inside the case:\n%1\n\n"
+                     "Switch to “Standalone output” to write elsewhere.")
+                    .arg(caseDir));
+            return;
+        }
+    }
+    m_outputDirEdit->setText(dir);
 }
 
 void PreprocessWindow::updateSettingsPage()
