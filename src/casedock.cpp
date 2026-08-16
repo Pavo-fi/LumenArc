@@ -29,6 +29,7 @@
 #include <QPushButton>
 #include <QTimer>
 #include <QTreeWidget>
+#include <QTreeWidgetItemIterator>
 #include <QUrl>
 #include <QVBoxLayout>
 
@@ -328,6 +329,44 @@ void CaseDock::onItemDoubleClicked(QTreeWidgetItem *item, int column)
     if ((kind == QLatin1String("video") || kind == QLatin1String("output"))
         && !path.isEmpty())
         emit openVideoRequested(path);
+}
+
+/// v1.7.1：高亮正在播放的案件条目（▶ 前缀 + 背景色 + 加粗；旧高亮恢复）
+void CaseDock::setCurrentVideoPath(const QString &videoPath)
+{
+    const QString norm = QDir::cleanPath(QFileInfo(videoPath).absoluteFilePath());
+    // 清除旧高亮
+    if (m_currentHighlight) {
+        m_currentHighlight->setBackground(0, QBrush());
+        QFont f = m_currentHighlight->font(0);
+        f.setBold(false);
+        m_currentHighlight->setFont(0, f);
+        const QString t = m_currentHighlight->text(0);
+        if (t.startsWith(QStringLiteral("▶ ")))
+            m_currentHighlight->setText(0, t.mid(2));
+        m_currentHighlight = nullptr;
+    }
+    if (norm.isEmpty())
+        return;
+    // 遍历所有 video/output 条目匹配路径
+    QTreeWidgetItemIterator it(m_tree);
+    for (; *it; ++it) {
+        QTreeWidgetItem *item = *it;
+        const QString kind = item->data(0, kRoleKind).toString();
+        if (kind != QLatin1String("video") && kind != QLatin1String("output"))
+            continue;
+        const QString p = QDir::cleanPath(
+            QFileInfo(item->data(0, kRolePath).toString()).absoluteFilePath());
+        if (p != norm)
+            continue;
+        item->setBackground(0, QBrush(QColor(0x2A, 0x4A, 0x6E)));   // 蓝底
+        QFont f = item->font(0);
+        f.setBold(true);
+        item->setFont(0, f);
+        item->setText(0, QStringLiteral("▶ ") + item->text(0));
+        m_currentHighlight = item;
+        break;
+    }
 }
 
 void CaseDock::showInExplorer(const QString &path) const

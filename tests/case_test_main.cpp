@@ -832,6 +832,27 @@ int main(int argc, char **argv)
         CHECK(!cm.addPreprocessSession(root.path(), QString(), {}, {}, {}, &err),
               "pps: outside-case session rejected");
 
+        // v1.7.1：跨会话 P### 全局唯一（用户实测：第二个会话产物改编号
+        // 错误落到首个产物——会话内从 1 起编号致 P001 碰撞）
+        {
+            const QString s2 = cm.caseDir() + QStringLiteral("/preprocess/20260816_200000");
+            QDir().mkpath(s2);
+            const QString out2 = s2 + QStringLiteral("/merged2.mp4");
+            mkFile(out2, "x");
+            CHECK(cm.addPreprocessSession(s2, QString(), {out2}, {}, {}, &err),
+                  "pps: second session");
+            const CaseVideoRef *first = CaseModel::findRef(
+                cm.meta(), QStringLiteral("P001"));
+            const CaseVideoRef *second = nullptr;
+            for (const auto &s : cm.meta().preprocessSessions)
+                for (const auto &o : s.outputRefs)
+                    if (o.originalPath == out2)
+                        second = &o;
+            CHECK(second && second->id != first->id
+                  && second->id != QStringLiteral("P001"),
+                  "pps: global unique P id across sessions");
+        }
+
         // 持久化
         CHECK(cm.saveCase(&err), "pps: saveCase");
         cm.closeCase();
@@ -839,9 +860,9 @@ int main(int argc, char **argv)
             CaseManager cm2;
             CHECK(cm2.openCase(QDir(root.path()).filePath(
                       "20260813-前处理-a-前处理"), &err), "pps: reopen");
-            CHECK(cm2.meta().preprocessSessions.size() == 1
+            CHECK(cm2.meta().preprocessSessions.size() == 2
                   && cm2.meta().preprocessSessions.first().outputRefs.size() == 2,
-                  "pps: session persisted across reopen");
+                  "pps: sessions persisted across reopen");
             const CaseVideoRef *p2 = CaseModel::findRef(
                 cm2.meta(), QStringLiteral("P001"));
             CHECK(p2 && p2->cameraLabel == QStringLiteral("食咔咔4时"),

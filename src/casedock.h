@@ -38,6 +38,10 @@ public:
     /// 全量重建证据树（caseOpened/videoAdded/哈希完成/校验报告后调用）
     void refreshTree();
 
+    /// v1.7.1：高亮正在播放的案件条目（视频/产物按 originalPath 匹配；
+    /// 空路径清除高亮）
+    void setCurrentVideoPath(const QString &videoPath);
+
 signals:
     /// 双击视频/前处理输出 → MainWindow openVideoFile
     void openVideoRequested(const QString &path);
@@ -46,6 +50,9 @@ signals:
 
 protected:
     void closeEvent(QCloseEvent *event) override;
+
+private:
+    QTreeWidgetItem *m_currentHighlight = nullptr;   // v1.7.1：正在播放条目
 
 private slots:
     void onItemDoubleClicked(QTreeWidgetItem *item, int column);

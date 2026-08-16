@@ -2338,7 +2338,13 @@ void MainWindow::openVideoFile(const QString &filePath)
             if (m_snapshotBtn)
                 m_snapshotBtn->setEnabled(true);
 
-            onPlay();
+            // v1.7.1：案件树高亮正在播放的文件
+            if (m_caseDock)
+                m_caseDock->setCurrentVideoPath(m_currentVideoPath);
+            // v1.7.1：案件树高亮正在播放的文件
+        if (m_caseDock)
+            m_caseDock->setCurrentVideoPath(m_currentVideoPath);
+        onPlay();
             return;
         }
 

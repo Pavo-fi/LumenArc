@@ -166,6 +166,24 @@ bool CaseManager::openCase(const QString &dir, QString *error,
     m_meta = meta;
     m_open = true;
     m_dirty = false;
+    // v1.7.1 迁移：历史数据跨会话 P### 重复 ID 重排为全局唯一
+    // （用户实测：给后一个会话产物改编号，错误地落到首个产物）
+    {
+        int seq = 1;
+        bool renamed = false;
+        for (auto &s : m_meta.preprocessSessions) {
+            for (auto &o : s.outputRefs) {
+                const QString want = QStringLiteral("P%1")
+                    .arg(seq++, 3, 10, QLatin1Char('0'));
+                if (o.id != want) {
+                    o.id = want;
+                    renamed = true;
+                }
+            }
+        }
+        if (renamed)
+            m_dirty = true;   // 迁移后随下次保存落盘
+    }
     m_hashAbort.store(false);   // 复位取消标志（上次关案可能置位）
     pushRecent(m_caseDir);
     emit caseOpened(m_caseDir);
@@ -809,8 +827,13 @@ bool CaseManager::addPreprocessSession(const QString &sessionDirAbs,
             && !QDir::isAbsolutePath(relCsv))
             p.reportCsvRelPath = relCsv;
     }
-    // 输出引用制登记（P### 会话内编号；size/mtime 入册，sha256 待 manifest）
+    // 输出引用制登记（P### 全局唯一编号——用户实测：会话内从 1 起导致
+    // 跨会话 P001 碰撞，改编号/指纹/重定位全错位到首个产物）
     int outSeq = 1;
+    for (const auto &s : m_meta.preprocessSessions)
+        for (const auto &o : s.outputRefs)
+            if (o.id.startsWith(QLatin1Char('P')))
+                outSeq = qMax(outSeq, o.id.mid(1).toInt() + 1);
     for (const QString &o : outputPaths) {
         const QFileInfo fi(normPath(o));
         if (!fi.exists() || !fi.isFile())
