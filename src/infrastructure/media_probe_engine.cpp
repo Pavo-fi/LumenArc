@@ -240,11 +240,16 @@ ProbeResult MediaProbeEngine::probeOne(const QString &path)
 
     // 首视频包（PTS 相对换算 + 关键帧标志）+ 关键帧间隔采样：
     // GO 智能路由依据——MP4 也可能关键帧稀疏（>2.5s），同样需要转码重排
-    // （现场反馈：原 MP4 关键帧不行时拖拽不流畅）。读包上限 600 防呆。
+    // （现场反馈：原 MP4 关键帧不行时拖拽不流畅）。
+    // §46（2026-08-17）：采样窗口 600 包 ≈9s（含音频包）→ 12.5s GOP 的文件
+    // 只采到 1 个关键帧 → kf=0 误判"合格 MP4"（明景拼接视频单文件 GO 被跳过）。
+    // 修：上限 6000 包 + 采样 40s + 4 个关键帧即止；仍不足且非短片 → 保守转码
     AVPacket *pkt = av_packet_alloc();
     QVector<qint64> keyPts;
     int vPkts = 0;
-    for (int i = 0; i < 600 && av_read_frame(fmt, pkt) >= 0; ++i) {
+    constexpr int kMaxProbePkts = 6000;
+    constexpr qint64 kSampleWindowMs = 40000;
+    for (int i = 0; i < kMaxProbePkts && av_read_frame(fmt, pkt) >= 0; ++i) {
         if (pkt->stream_index != vIdx) {
             av_packet_unref(pkt);
             continue;
@@ -259,7 +264,7 @@ ProbeResult MediaProbeEngine::probeOne(const QString &path)
         if (pkt->flags & AV_PKT_FLAG_KEY)
             keyPts.append(rel);
         av_packet_unref(pkt);
-        if (keyPts.size() >= 5)
+        if (keyPts.size() >= 4 || rel > kSampleWindowMs)
             break;
     }
     av_packet_free(&pkt);
@@ -287,6 +292,11 @@ ProbeResult MediaProbeEngine::probeOne(const QString &path)
     r.durationMs = fmtDurMs > 0 ? fmtDurMs : stDurMs;
     if (r.durationMs <= 0)
         r.durationDubious = true;
+    // §46 兜底：未算出有效间隔（<2 关键帧或间隔异常）且非短片——kf=0 不再
+    // 被当作"合格 MP4"放行，保守标记需转码（拖拽体验优先）
+    if ((keyPts.size() < 2 || r.keyframeIntervalMs <= 0)
+        && vPkts > 0 && r.durationMs > 10000)
+        r.keyframeSparse = true;
     else if (fmtDurMs > 0 && stDurMs > 0
              && qAbs(fmtDurMs - stDurMs) * 20 > qMax(fmtDurMs, stDurMs))
         r.durationDubious = true;   // 偏差 > 5%
