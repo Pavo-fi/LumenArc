@@ -150,8 +150,6 @@ private:
     void onBatchRelocate();
     /// @brief 多机时间线对齐只读视图（v1.3.0 M3 任务14）
     void onMultiCamView();
-    /// @brief 自动检测系统中的 Python 解释器路径
-    QString detectPythonPath() const;
     /// @brief 用 Python 分析引擎的真实帧数/FPS 计算可信时长
     qint64 trustedDurationFor(const QString &path) const;
     void createMagnifier();

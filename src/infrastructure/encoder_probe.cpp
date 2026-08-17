@@ -3,7 +3,7 @@
  * @brief 编码器探测与选择实现（v1.7.0 M1）
  */
 #include "encoder_probe.h"
-#include "python_analysis_engine.h"
+#include "tool_paths.h"
 
 #include <QProcess>
 #include <QMutex>
@@ -21,7 +21,7 @@ QStringList availableEncoders()
     if (g_cachedValid)
         return g_cached;
 
-    const QString ffmpeg = PythonAnalysisEngine::findFfmpegPath();
+    const QString ffmpeg = ToolPaths::findFfmpegPath();
     QProcess proc;
     proc.start(ffmpeg, {QStringLiteral("-hide_banner"), QStringLiteral("-encoders")});
     QStringList found;
@@ -61,7 +61,7 @@ QStringList availableEncoders()
 
 bool probeEncoderWorks(const QString &encoderName)
 {
-    const QString ffmpeg = PythonAnalysisEngine::findFfmpegPath();
+    const QString ffmpeg = ToolPaths::findFfmpegPath();
     QProcess proc;
     // 1 帧 testsrc → null：验证编码器可初始化和完成一帧编码。
     // 注意尺寸 ≥320x240：NVENC H.264 最小分辨率 145x65，64x64 会

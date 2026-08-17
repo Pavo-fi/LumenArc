@@ -102,7 +102,7 @@ set(SOURCES
     src/app/analysis_task_service.cpp
     src/timesettingsdialog.cpp
     src/infrastructure/ffmpeg_video_engine.cpp
-    src/infrastructure/python_analysis_engine.cpp
+    src/infrastructure/tool_paths.cpp
     src/infrastructure/integrity_checker.cpp
     src/infrastructure/libav_analysis_engine.cpp
     src/infrastructure/encoder_probe.cpp
@@ -165,7 +165,7 @@ set(HEADERS
     src/infrastructure/ivideo_engine.h
     src/infrastructure/ianalysis_engine.h
     src/infrastructure/ffmpeg_video_engine.h
-    src/infrastructure/python_analysis_engine.h
+    src/infrastructure/tool_paths.h
     src/infrastructure/libav_analysis_engine.h
     src/infrastructure/encoder_probe.h
     src/infrastructure/media_probe_engine.h
@@ -293,9 +293,9 @@ add_executable(lumenarc_v17_test
     src/infrastructure/encoder_probe.h
     src/infrastructure/transcode_engine.cpp
     src/infrastructure/transcode_engine.h
-    src/infrastructure/python_analysis_engine.cpp
+    src/infrastructure/tool_paths.cpp
     src/infrastructure/integrity_checker.cpp
-    src/infrastructure/python_analysis_engine.h
+    src/infrastructure/tool_paths.h
     src/infrastructure/ianalysis_engine.h
     src/domain/overlap_cut.cpp
     src/domain/overlap_cut.h
@@ -321,7 +321,7 @@ add_executable(lumenarc_reconstruction_test
     src/infrastructure/ianalysis_engine.h
     src/infrastructure/media_probe_engine.cpp
     src/infrastructure/timestamp_ocr_engine.cpp
-    src/infrastructure/python_analysis_engine.cpp
+    src/infrastructure/tool_paths.cpp
     src/infrastructure/integrity_checker.cpp
     src/i18n.cpp
     src/domain/time_calibration.cpp
@@ -335,7 +335,7 @@ target_include_directories(lumenarc_reconstruction_test PRIVATE
 target_link_libraries(lumenarc_reconstruction_test PRIVATE
     Qt6::Core
     Qt6::Gui
-    Qt6::Concurrent   # python_analysis_engine.cpp 后台解析
+    Qt6::Concurrent   # timestamp_ocr_engine 后台解析（tool_paths）
     ${FFMPEG_LIBRARIES}
 )
 
@@ -344,7 +344,7 @@ add_executable(lumenarc_ocr_atpositions_test
     tests/ocr_atpositions_test_main.cpp
     src/infrastructure/ianalysis_engine.h
     src/infrastructure/timestamp_ocr_engine.cpp
-    src/infrastructure/python_analysis_engine.cpp
+    src/infrastructure/tool_paths.cpp
     src/infrastructure/integrity_checker.cpp
     src/i18n.cpp
     src/domain/time_calibration.cpp
@@ -357,7 +357,7 @@ target_include_directories(lumenarc_ocr_atpositions_test PRIVATE
 target_link_libraries(lumenarc_ocr_atpositions_test PRIVATE
     Qt6::Core
     Qt6::Gui
-    Qt6::Concurrent   # python_analysis_engine.cpp 后台解析
+    Qt6::Concurrent   # timestamp_ocr_engine 后台解析（tool_paths）
     ${FFMPEG_LIBRARIES}
 )
 
@@ -370,7 +370,7 @@ add_executable(lumenarc_preprocess_integration
     src/infrastructure/concat_engine.cpp
     src/infrastructure/transcode_engine.cpp
     src/infrastructure/encoder_probe.cpp
-    src/infrastructure/python_analysis_engine.cpp
+    src/infrastructure/tool_paths.cpp
     src/infrastructure/integrity_checker.cpp
     src/i18n.cpp
     src/domain/filename_timestamp.cpp
@@ -387,7 +387,7 @@ target_include_directories(lumenarc_preprocess_integration PRIVATE
 target_link_libraries(lumenarc_preprocess_integration PRIVATE
     Qt6::Core
     Qt6::Gui
-    Qt6::Concurrent   # python_analysis_engine.cpp 后台解析
+    Qt6::Concurrent   # timestamp_ocr_engine 后台解析（tool_paths）
     ${FFMPEG_LIBRARIES}
 )
 
@@ -461,7 +461,7 @@ add_executable(lumenarc_ui_chain_test
     src/infrastructure/ivideo_engine.h
     src/infrastructure/ianalysis_engine.h
     src/infrastructure/timestamp_ocr_engine.cpp
-    src/infrastructure/python_analysis_engine.cpp
+    src/infrastructure/tool_paths.cpp
     src/infrastructure/integrity_checker.cpp
     src/infrastructure/media_probe_engine.cpp
     src/i18n.cpp
@@ -479,7 +479,7 @@ target_link_libraries(lumenarc_ui_chain_test PRIVATE
     Qt6::Gui
     Qt6::Widgets
     Qt6::Test       # QTest 鼠标事件注入
-    Qt6::Concurrent   # python_analysis_engine.cpp 后台解析
+    Qt6::Concurrent   # timestamp_ocr_engine 后台解析（tool_paths）
     ${FFMPEG_LIBRARIES}
 )
 
@@ -570,14 +570,6 @@ if(WIN32)
         endif()
     endif()
 
-    # Copy Python analysis script
-    add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "${CMAKE_CURRENT_SOURCE_DIR}/analyze_video.py"
-            "$<TARGET_FILE_DIR:${PROJECT_NAME}>"
-        COMMENT "Copying analyze_video.py..."
-    )
-
     # Copy preprocess OCR script
     add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
@@ -660,14 +652,6 @@ if(APPLE)
         )
     endif()
 
-
-    # Copy Python analysis script
-    add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "${CMAKE_CURRENT_SOURCE_DIR}/analyze_video.py"
-            "$<TARGET_FILE_DIR:${PROJECT_NAME}>/../MacOS/"
-        COMMENT "Copying analyze_video.py..."
-    )
 
     # Copy preprocess OCR script
     add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD

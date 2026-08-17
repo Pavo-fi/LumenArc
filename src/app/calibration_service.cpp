@@ -11,7 +11,7 @@
 #include "calibration_service.h"
 #include "infrastructure/ianalysis_engine.h"
 #include "infrastructure/media_probe_engine.h"
-#include "infrastructure/python_analysis_engine.h"
+#include "infrastructure/tool_paths.h"
 #include "infrastructure/timestamp_ocr_engine.h"
 #include "domain/probe_result.h"
 
@@ -539,7 +539,7 @@ static QString findFfprobePath()
     const QStringList candidates = {
         appDir + QStringLiteral("/ffmpeg/ffprobe.exe"),
         appDir + QStringLiteral("/ffprobe.exe"),
-        QFileInfo(PythonAnalysisEngine::findFfmpegPath()).dir()
+        QFileInfo(ToolPaths::findFfmpegPath()).dir()
             .absoluteFilePath(QStringLiteral("ffprobe.exe")),
     };
     for (const QString &p : candidates)

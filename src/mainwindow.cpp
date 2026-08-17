@@ -18,7 +18,6 @@
 #include "infrastructure/ivideo_engine.h"
 #include "infrastructure/ianalysis_engine.h"
 #include "infrastructure/ffmpeg_video_engine.h"
-#include "infrastructure/python_analysis_engine.h"
 #include "infrastructure/libav_analysis_engine.h"
 #include "app/calibration_service.h"
 #include "app/case_manager.h"
@@ -509,21 +508,12 @@ MainWindow::MainWindow(QWidget *parent)
 
     setAcceptDrops(true);
 
-    auto *pyEngine = new PythonAnalysisEngine(this);
-    pyEngine->setPythonExecutable(detectPythonPath());
-    m_analysisEngine = pyEngine;
-
-    // v1.5.0 P3：分析引擎切换（libav 默认 / Python 回退，重启生效）。
-    // libav 引擎已通过 A/B 对拍（亮度 |Δ|≤1、volume 相关 ≥0.999、
-    // 语谱主峰 |Δ|≤0.001）；Python 保留为过渡期回退（设置项）。
-    {
-        QSettings es("LumenArc", "LumenArc");
-        if (es.value("analysisEngine", QStringLiteral("libav")).toString()
-            != QStringLiteral("python")) {
-            delete m_analysisEngine;
-            m_analysisEngine = new LibavAnalysisEngine(this);
-        }
-    }
+    // v1.8.0 P-25：Python 分析引擎退役（用户拍板 2026-08-17）——
+    // libav 引擎为唯一实现（A/B 对拍基线：亮度 |Δ|≤1、volume 相关 ≥0.999、
+    // 语谱主峰 |Δ|≤0.001，默认运行 2+ 版无回退诉求）。
+    // bundled Python/cv2/numpy/rapidocr 因 OCR（probe_timestamps.py）与
+    // 报告（P-28 python-docx）租户保留——见 DEVELOPMENT_PLAN_V1.8_CN.md §5。
+    m_analysisEngine = new LibavAnalysisEngine(this);
 
     // ---- v1.8.0 P1a：任务注册 + 状态机服务 ----
     // 注册表（R8）：前置条件闭包只捕 domain 模型，不捕 UI 控件（R1）
@@ -554,7 +544,6 @@ MainWindow::MainWindow(QWidget *parent)
     // 校时服务（v1.2.0：三点识别/absStart/sidecar 继承；产出仅预填，
     // 「采用」由 TimeSettingsDialog 决定）
     m_calibrationService = new CalibrationService(m_analysisEngine, this);
-    m_calibrationService->setPythonExecutable(detectPythonPath());
 
     // 案件管理器（v1.3.0 M2）：唯一持有打开的案件；无案件时所有分流
     // 接口（vlaPathFor/timestampRoiFor…）自动回落独立模式老行为
@@ -1300,10 +1289,9 @@ void MainWindow::setupConnections()
     // Apply button: directly connected via member variable
     connect(m_nrApplyBtn, &QPushButton::clicked, this, [this]() {
         if (m_noiseReductionStrength > 0 && !m_currentVideoPath.isEmpty()) {
-            auto *pyEngine = qobject_cast<PythonAnalysisEngine *>(m_analysisEngine);
-            if (pyEngine) {
-                pyEngine->setNoiseReduction(m_noiseReductionStrength);
-            }
+            // P-25 退役注记：降噪为 Python 引擎专属能力（谱减法），
+            // libav 引擎不支持——滑杆值自 v1.5 默认引擎起即不参与分析，
+            // 此处保留"重新分析"触发；滑杆 UI 清理登记 PENDING 待拍板
             onAudioAnalysis();
         }
     });
@@ -1727,13 +1715,6 @@ void MainWindow::setupConnections()
 /**
  * @brief 5级Python检测：内嵌→环境变量→注册表→常见路径→py.exe
  */
-QString MainWindow::detectPythonPath() const
-{
-    // Sunk into the engine (R2/R4, preprocess design §3.4); keep this wrapper
-    // to avoid touching legacy call sites.
-    return PythonAnalysisEngine::detectPythonPath();
-}
-
 qint64 MainWindow::trustedDurationFor(const QString &path) const
 {
     // R2: engine-neutral interface, no downcast (preprocess design §3.4)
@@ -3209,17 +3190,6 @@ void MainWindow::onAnalyze()
         return;
     }
 
-    // Python 引擎过渡期路径注入（P-25 退役后移除）
-    auto *pyEngine = qobject_cast<PythonAnalysisEngine *>(m_analysisEngine);
-    if (pyEngine && pyEngine->pythonExecutable().isEmpty()) {
-        pyEngine->setPythonExecutable(detectPythonPath());
-        if (pyEngine->pythonExecutable().isEmpty()) {
-            QMessageBox::warning(this, lang("亮度分析", "Luminance Analysis"),
-                lang("未找到 Python 解释器。\n请安装 Python 3.8+ 并确保在 PATH 中。",
-                     "Python interpreter not found.\nPlease install Python 3.8+ and ensure it is in PATH."));
-            return;
-        }
-    }
 
     QVector<QRect> regions = m_roiModel->regions();
     QVector<QPolygon> polygons = m_roiModel->polygons();
@@ -3252,18 +3222,6 @@ void MainWindow::onAudioAnalysis()
         return;
     }
 
-    // Python 引擎过渡期路径注入（P-25 退役后移除）
-    if (auto *pyEngine = qobject_cast<PythonAnalysisEngine *>(m_analysisEngine)) {
-        if (pyEngine->pythonExecutable().isEmpty()) {
-            pyEngine->setPythonExecutable(detectPythonPath());
-            if (pyEngine->pythonExecutable().isEmpty()) {
-                QMessageBox::warning(this, lang("音频分析", "Audio Analysis"),
-                    lang("未找到 Python 解释器。\n请安装 Python 3.8+ 并确保在 PATH 中。",
-                         "Python interpreter not found.\nPlease install Python 3.8+ and ensure it is in PATH."));
-                return;
-            }
-        }
-    }
 
     // v1.8.0 P1a：音频无前置条件（无 ROI 要求），状态机接管
     m_taskService->start(AnalysisChannels::audio(), m_currentVideoPath,

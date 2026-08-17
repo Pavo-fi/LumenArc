@@ -65,7 +65,6 @@ jobs:
         run: |
           otool -L "build/LumenArc.app/Contents/MacOS/LumenArc" | head -20
           "build/LumenArc.app/Contents/MacOS/ffmpeg/ffmpeg" -version | head -1
-          "build/LumenArc.app/Contents/MacOS/python/bin/python3" "build/LumenArc.app/Contents/MacOS/analyze_video.py" --help | head -3
 
       - name: Create DMG
         run: |

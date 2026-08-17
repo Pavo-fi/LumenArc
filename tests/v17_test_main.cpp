@@ -4,7 +4,7 @@
  */
 #include "infrastructure/encoder_probe.h"
 #include "infrastructure/transcode_engine.h"
-#include "infrastructure/python_analysis_engine.h"
+#include "infrastructure/tool_paths.h"
 #include "domain/overlap_cut.h"
 #include "domain/preprocess_task.h"
 #include <QCoreApplication>
@@ -37,7 +37,7 @@ static void testEncoderProbe()
     }
     fprintf(stderr, "[enc] available: %s\n", encs.join(", ").toUtf8().constData());
     fprintf(stderr, "[enc] ffmpeg=%s nvenc=%d qsv=%d\n",
-            PythonAnalysisEngine::findFfmpegPath().toUtf8().constData(),
+            ToolPaths::findFfmpegPath().toUtf8().constData(),
             int(encoder_probe::probeEncoderWorks(QStringLiteral("h264_nvenc"))),
             int(encoder_probe::probeEncoderWorks(QStringLiteral("h264_qsv"))));
     // 探测链首选项必须是可用编码器之一

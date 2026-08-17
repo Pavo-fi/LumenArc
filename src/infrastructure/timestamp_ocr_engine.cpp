@@ -9,7 +9,7 @@
  * Licensed under the Apache License, Version 2.0
  */
 #include "timestamp_ocr_engine.h"
-#include "python_analysis_engine.h"
+#include "tool_paths.h"
 
 #include <QProcess>
 #include <QProcessEnvironment>
@@ -60,7 +60,7 @@ void TimestampOcrEngine::setPythonExecutable(const QString &path)
 QString TimestampOcrEngine::pythonExecutable() const
 {
     return !m_pythonPath.isEmpty() ? m_pythonPath
-                                   : PythonAnalysisEngine::detectPythonPath();
+                                   : ToolPaths::detectPythonPath();
 }
 
 bool TimestampOcrEngine::available(QString *errorDetail)
@@ -116,7 +116,7 @@ void TimestampOcrEngine::run(const QStringList &paths, const QString &workDir,
         failAll(PreprocessError::OcrEngineMissing, err);
         return;
     }
-    const QString ffmpeg = PythonAnalysisEngine::findFfmpegPath();
+    const QString ffmpeg = ToolPaths::findFfmpegPath();
     if (!QFile::exists(ffmpeg) && ffmpeg == QLatin1String("ffmpeg")) {
         // PATH 兜底可用与否交给脚本报错（C2 不静默）
     }
@@ -233,7 +233,7 @@ void TimestampOcrEngine::runAtPositions(const QString &path,
         emit atPositionsFailed(err);
         return;
     }
-    const QString ffmpeg = PythonAnalysisEngine::findFfmpegPath();
+    const QString ffmpeg = ToolPaths::findFfmpegPath();
     const QString workDir = QDir::temp().absoluteFilePath(
         QStringLiteral("lumenarc_at_%1").arg(
             QDateTime::currentMSecsSinceEpoch()));

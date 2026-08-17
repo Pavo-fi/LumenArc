@@ -10,7 +10,7 @@
  *
  * 设计见 docs/PREPROCESSING_TECH_DESIGN_CN.md §5.2 / §6.2。
  * 评审 R-2：python/ffmpeg 路径不出现在接口签名中（R4），引擎内部自解析
- * （findFfmpegPath / detectPythonPath 同款，python 路径支持注入模式）。
+ * （tool_paths.h 的 ToolPaths 同款，python 路径支持注入模式）。
  * 协议同 analyze_video.py 一族（规范 P1）：stdout 单行 JSON，
  * stderr PROGRESS:/ERROR:/WARNING: 前缀行。
  */
@@ -37,7 +37,7 @@ public:
     explicit TimestampOcrEngine(QObject *parent = nullptr);
     ~TimestampOcrEngine() override;
 
-    /// python 路径注入（同 PythonAnalysisEngine 模式）；空 = 自动探测
+    /// python 路径注入（同 ToolPaths 探测模式）；空 = 自动探测
     void setPythonExecutable(const QString &path);
     QString pythonExecutable() const;
 

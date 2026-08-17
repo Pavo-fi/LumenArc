@@ -9,7 +9,7 @@
  * Licensed under the Apache License, Version 2.0
  */
 #include "concat_engine.h"
-#include "python_analysis_engine.h"
+#include "tool_paths.h"
 #include "media_probe_engine.h"
 #include "domain/preprocess_text.h"
 
@@ -84,7 +84,7 @@ bool ConcatEngine::isRunning() const
 
 void ConcatEngine::startConcat(const QStringList &files, const QString &outputPath)
 {
-    const QString ffmpeg = PythonAnalysisEngine::findFfmpegPath();
+    const QString ffmpeg = ToolPaths::findFfmpegPath();
     QStringList args;
     if (m_normalizing) {
         // 逐段归一化 remux（流拷贝，不重编码）

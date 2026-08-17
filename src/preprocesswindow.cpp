@@ -44,7 +44,7 @@
 #include <QFileDialog>
 #include <QMessageBox>
 #include <QDateTime>
-#include "infrastructure/python_analysis_engine.h"
+#include "infrastructure/tool_paths.h"
 #include "infrastructure/integrity_checker.h"
 #include <QFileInfo>
 #include <QDateTime>
@@ -1791,7 +1791,7 @@ void PreprocessWindow::runIntegrityCheck()
                                  "Integrity check running… (see result page)"));
     m_importStatus->setStyleSheet(QStringLiteral(
         "color:%1;").arg(Theme::Accent));
-    m_checker->check(m_pendingFiles, PythonAnalysisEngine::findFfmpegPath());
+    m_checker->check(m_pendingFiles, ToolPaths::findFfmpegPath());
 }
 
 void PreprocessWindow::onIntegrityFinished(

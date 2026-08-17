@@ -10,7 +10,7 @@
  */
 #include "transcode_engine.h"
 #include "encoder_probe.h"
-#include "python_analysis_engine.h"
+#include "tool_paths.h"
 #include "domain/preprocess_text.h"
 
 #include <QProcess>
@@ -151,7 +151,7 @@ void TranscodeEngine::run(const TranscodeRequest &req)
     m_stdoutBuf.clear();
     m_stderrBuf.clear();
     m_process = new QProcess(this);
-    m_process->setProgram(PythonAnalysisEngine::findFfmpegPath());
+    m_process->setProgram(ToolPaths::findFfmpegPath());
     m_process->setArguments(buildArgs(req, m_tempOutput));
     connect(m_process, &QProcess::readyReadStandardOutput,
             this, &TranscodeEngine::onProgressLine);
