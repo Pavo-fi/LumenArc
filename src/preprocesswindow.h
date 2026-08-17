@@ -39,6 +39,8 @@ class ClipTimelineWidget;
 class IAnalysisEngine;
 class CaseManager;
 
+#include "infrastructure/integrity_checker.h"
+
 class PreprocessWindow : public QMainWindow
 {
     Q_OBJECT
@@ -88,6 +90,9 @@ private slots:
     void onFinished(const PreprocessReport &report);
     void onFailed(PreprocessError error, const QString &detail);
     void onLogLine(const QString &line);
+    // §45：NAL 完整性快检（转码/拼接失败后诊断）
+    void runIntegrityCheck();
+    void onIntegrityFinished(const QVector<NalIntegrityChecker::Result> &results);
 
 protected:
     void dragEnterEvent(QDragEnterEvent *event) override;
@@ -126,6 +131,7 @@ private:
     // 案件模式（v1.3.0 M2 任务8；不持有，SSOT 在 MainWindow）
     CaseManager *m_caseManager = nullptr;
     QFrame *m_caseBanner = nullptr;
+    QWidget *m_caseModeRow = nullptr;   ///< §45：案件模式行（无案件时隐藏）
     QLabel *m_caseBannerLabel = nullptr;
     QPushButton *m_btnCaseImport = nullptr;
     QPushButton *m_btnCaseIndep = nullptr;
@@ -175,6 +181,7 @@ private:
     QPushButton *m_btnDetails = nullptr;
     QPlainTextEdit *m_precheckDetail = nullptr;
     QLineEdit *m_outputDirEdit = nullptr;
+    NalIntegrityChecker *m_checker = nullptr;   ///< §45 完整性快检（失败后按需创建）
     QLabel *m_outputNames = nullptr;
     QLabel *m_diskEstimate = nullptr;
     QPushButton *m_btnAdvanced = nullptr;

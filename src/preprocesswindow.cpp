@@ -43,6 +43,9 @@
 #include <QScrollArea>
 #include <QFileDialog>
 #include <QMessageBox>
+#include <QDateTime>
+#include "infrastructure/python_analysis_engine.h"
+#include "infrastructure/integrity_checker.h"
 #include <QFileInfo>
 #include <QDateTime>
 #include <QDateTimeEdit>
@@ -180,14 +183,19 @@ QWidget *PreprocessWindow::buildCaseBanner()
         "QFrame { background:%1; border:1px solid %2; border-radius:8px; }"
         "QLabel { border:none; background:transparent; }")
         .arg(Theme::BgCard, Theme::Accent));
-    auto *lay = new QHBoxLayout(m_caseBanner);
+    auto *lay = new QVBoxLayout(m_caseBanner);
     lay->setContentsMargins(12, 6, 12, 6);
-    m_caseBannerLabel = new QLabel(m_caseBanner);
+    lay->setSpacing(4);
+    // 行 1：案件信息 + 导入/独立模式按钮（无案件时整个模式行隐藏）
+    m_caseModeRow = new QWidget(m_caseBanner);
+    auto *rowLay = new QHBoxLayout(m_caseModeRow);
+    rowLay->setContentsMargins(0, 0, 0, 0);
+    m_caseBannerLabel = new QLabel(m_caseModeRow);
     m_caseBannerLabel->setStyleSheet(QStringLiteral(
         "font-weight:bold; color:%1;").arg(Theme::TextPrimary));
-    lay->addWidget(m_caseBannerLabel, 1);
+    rowLay->addWidget(m_caseBannerLabel, 1);
     m_btnCaseImport = new QPushButton(
-        lang("导入案件（默认路径）", "Import into case (default)"), m_caseBanner);
+        lang("导入案件（默认路径）", "Import into case (default)"), m_caseModeRow);
     m_btnCaseImport->setCheckable(true);
     m_btnCaseImport->setChecked(true);
     m_btnCaseImport->setToolTip(lang(
@@ -196,18 +204,32 @@ QWidget *PreprocessWindow::buildCaseBanner()
         "Outputs go to the case preprocess/<timestamp>/ folder and are "
         "registered into case.json; calibration sidecars are copied into sidecars/."));
     m_btnCaseIndep = new QPushButton(
-        lang("独立输出（自选）", "Independent output (custom)"), m_caseBanner);
+        lang("独立输出（自选）", "Independent output (custom)"), m_caseModeRow);
     m_btnCaseIndep->setCheckable(true);
     m_btnCaseIndep->setToolTip(lang(
-        "本次不导入案件：输出目录自选，行为与无案件时一致。",
-        "Skip the case this time: pick any output folder, same as no-case mode."));
-    lay->addWidget(m_btnCaseImport);
-    lay->addWidget(m_btnCaseIndep);
+        "本次不导入案件：输出到任意文件夹（点击后弹出目录选择），行为与无案件时一致。",
+        "Skip the case this time: output to any folder (picker opens on click), "
+        "same as no-case mode."));
+    rowLay->addWidget(m_btnCaseImport);
+    rowLay->addWidget(m_btnCaseIndep);
+    lay->addWidget(m_caseModeRow);
+    // 行 2：输出文件夹（始终可见——§45 路径选择集成到页面，替代设置页隐藏入口）
+    auto *outRow = new QHBoxLayout();
+    outRow->addWidget(new QLabel(lang("输出文件夹：", "Output folder:"), m_caseBanner));
+    m_outputDirEdit = new QLineEdit(m_caseBanner);
+    auto *btnBrowse = new QPushButton(lang("浏览…", "Browse…"), m_caseBanner);
+    m_btnBrowseOutput = btnBrowse;
+    outRow->addWidget(m_outputDirEdit, 1);
+    outRow->addWidget(btnBrowse);
+    lay->addLayout(outRow);
     connect(m_btnCaseImport, &QPushButton::clicked,
             this, [this]() { setCaseImportMode(true); });
     connect(m_btnCaseIndep, &QPushButton::clicked,
             this, [this]() { setCaseImportMode(false); });
-    m_caseBanner->setVisible(false);   // 默认隐藏（无案件）；setCaseManager 刷新
+    connect(btnBrowse, &QPushButton::clicked, this, &PreprocessWindow::onBrowseOutput);
+    connect(m_outputDirEdit, &QLineEdit::textChanged,
+            this, &PreprocessWindow::updateDiskEstimate);
+    m_caseBanner->setVisible(true);   // 始终可见；无案件时仅隐藏模式行（refreshCaseBanner）
     return m_caseBanner;
 }
 
@@ -236,15 +258,22 @@ void PreprocessWindow::setCaseImportMode(bool on)
     if (m_btnCaseImport) m_btnCaseImport->setChecked(on);
     if (m_btnCaseIndep)  m_btnCaseIndep->setChecked(!on);
     refreshCaseBanner();
+    // §45：切到自定义输出即弹出目录选择（入口直观化，取消则维持原路径）
+    if (!on)
+        onBrowseOutput();
 }
 
 void PreprocessWindow::refreshCaseBanner()
 {
     const bool caseOpen = m_caseManager && m_caseManager->isOpen();
-    if (m_caseBanner)
-        m_caseBanner->setVisible(caseOpen);
-    if (!caseOpen)
+    // §45：横幅（含输出文件夹行）始终可见；无案件时仅隐藏模式行
+    if (m_caseModeRow)
+        m_caseModeRow->setVisible(caseOpen);
+    if (!caseOpen) {
+        if (m_outputDirEdit)
+            m_outputDirEdit->setReadOnly(false);   // 无案件：路径自由填写
         return;
+    }
     m_caseBannerLabel->setText(
         lang("📁 案件模式：成果自动导入《%1》",
              "📁 Case mode: results auto-imported into “%1”")
@@ -992,14 +1021,9 @@ QWidget *PreprocessWindow::buildPageSettings()
     lay->addWidget(m_btnDetails);
     lay->addWidget(m_precheckDetail);
 
-    auto *outRow = new QHBoxLayout();
-    outRow->addWidget(new QLabel(lang("输出文件夹：", "Output folder:"), w));
-    m_outputDirEdit = new QLineEdit(w);
-    auto *btnBrowse = new QPushButton(lang("浏览…", "Browse…"), w);
-    m_btnBrowseOutput = btnBrowse;   // 案件模式下禁用（v1.3.0 M2）
-    outRow->addWidget(m_outputDirEdit, 1);
-    outRow->addWidget(btnBrowse);
-    lay->addLayout(outRow);
+    // 输出文件夹行已移至页面顶部「输出设置」横幅（§45，buildCaseBanner）
+    // —— 原设置页路径行废弃，控件创建/连接在 buildCaseBanner；此处保持
+    // 指针引用（编辑框/浏览按钮由横幅持有）
     m_outputNames = new QLabel(w);
     m_outputNames->setStyleSheet(QStringLiteral("color:%1;").arg(Theme::TextSecond));
     lay->addWidget(m_outputNames);
@@ -1081,11 +1105,8 @@ QWidget *PreprocessWindow::buildPageSettings()
 
     connect(m_btnDetails, &QPushButton::clicked, this, &PreprocessWindow::onToggleDetails);
     connect(m_btnAdvanced, &QPushButton::clicked, this, &PreprocessWindow::onToggleAdvanced);
-    connect(btnBrowse, &QPushButton::clicked, this, &PreprocessWindow::onBrowseOutput);
     connect(btnBack, &QPushButton::clicked, this, [this]() { setStep(1); });
     connect(btnStart, &QPushButton::clicked, this, &PreprocessWindow::onStartProcessing);
-    connect(m_outputDirEdit, &QLineEdit::textChanged,
-            this, &PreprocessWindow::updateDiskEstimate);
     return w;
 }
 
@@ -1729,6 +1750,119 @@ void PreprocessWindow::onFailed(PreprocessError error, const QString &detail)
     // 失败后允许回导入页重试
     m_btnBeginSort->setEnabled(!m_pendingFiles.isEmpty());
     m_btnQuickMerge->setEnabled(!m_pendingFiles.isEmpty());
+    // §45（2026-08-17）：转码/拼接失败 → 提议开启 NAL 完整性快检（默认不自动开启）
+    // 坏文件（moov/mdat 错位）会令无损拼接/转码中止，快检逐个定位并出报告
+    if (error == PreprocessError::ConcatFailed
+        || error == PreprocessError::TranscodeFailed
+        || error == PreprocessError::Timeout) {
+        auto *box = new QMessageBox(QMessageBox::Question,
+            lang("定位失败原因", "Find the cause"),
+            lang("处理失败。源文件可能存在数据损坏（moov 索引与 mdat 错位会使拼接/"
+                 "转码中止）。\n\n开启数据完整性快检将逐个检查全部输入文件（百文件约"
+                 "1-2 分钟），坏文件标红并在报告文件中列出。",
+                 "The operation failed. Source clips may be corrupted (moov/mdat "
+                 "misalignment aborts merge/transcode).\n\nRunning an integrity check "
+                 "scans every input file (~1-2 min per 100 clips) and lists the "
+                 "corrupted ones in a report."), QMessageBox::NoButton, this);
+        box->setAttribute(Qt::WA_DeleteOnClose);
+        auto *btnCheck = box->addButton(
+            lang("开启完整性快检…", "Run integrity check…"), QMessageBox::ActionRole);
+        box->addButton(QMessageBox::Close);
+        connect(btnCheck, &QPushButton::clicked,
+                this, [this]() { runIntegrityCheck(); });
+        box->open();
+    }
+}
+
+void PreprocessWindow::runIntegrityCheck()
+{
+    if (m_pendingFiles.isEmpty())
+        return;
+    if (!m_checker)
+        m_checker = new NalIntegrityChecker(this);
+    connect(m_checker, &NalIntegrityChecker::finished,
+            this, &PreprocessWindow::onIntegrityFinished, Qt::UniqueConnection);
+    connect(m_checker, &NalIntegrityChecker::failed,
+            this, [](const QString &d) {
+                QMessageBox::warning(nullptr,
+                    QStringLiteral("完整性快检"), QStringLiteral("无法运行：%1").arg(d));
+            }, Qt::UniqueConnection);
+    m_importStatus->setText(lang("完整性快检进行中…（可在结果页查看）",
+                                 "Integrity check running… (see result page)"));
+    m_importStatus->setStyleSheet(QStringLiteral(
+        "color:%1;").arg(Theme::Accent));
+    m_checker->check(m_pendingFiles, PythonAnalysisEngine::findFfmpegPath());
+}
+
+void PreprocessWindow::onIntegrityFinished(
+    const QVector<NalIntegrityChecker::Result> &results)
+{
+    QVector<NalIntegrityChecker::Result> bad;
+    for (const auto &r : results)
+        if (r.errorCount > 0)
+            bad.append(r);
+    // 文件列表状态列：坏文件标红
+    for (int i = 0; i < m_fileTable->rowCount(); ++i) {
+        auto *nameItem = m_fileTable->item(i, 0);
+        if (!nameItem)
+            continue;
+        auto *st = m_fileTable->item(i, 5);
+        if (!st)
+            continue;
+        const QString f = nameItem->data(Qt::UserRole).toString();
+        bool isBad = false;
+        for (const auto &r : bad)
+            if (r.filePath == f) { isBad = true; break; }
+        st->setText(isBad ? lang("❌ 数据损坏", "❌ corrupted")
+                          : lang("✓ 完整", "✓ ok"));
+        if (isBad)
+            st->setForeground(Qt::red);
+    }
+    // 报告落盘：输出目录（未设则素材目录）
+    QString dir = m_outputDirEdit ? m_outputDirEdit->text().trimmed() : QString();
+    if (dir.isEmpty() && !m_pendingFiles.isEmpty())
+        dir = QFileInfo(m_pendingFiles.first()).absolutePath();
+    QString reportPath;
+    if (!dir.isEmpty()) {
+        const QString fn = QStringLiteral("完整性快检报告_%1.txt")
+            .arg(QDateTime::currentDateTime().toString(
+                     QStringLiteral("yyyyMMdd_HHmmss")));
+        reportPath = dir + QLatin1Char('/') + fn;
+        QFile f(reportPath);
+        if (f.open(QIODevice::WriteOnly | QIODevice::Text)) {
+            QTextStream ts(&f);
+            ts << QStringLiteral("LumenArc 数据完整性快检报告\n")
+               << QStringLiteral("检查文件数：%1   损坏数：%2\n\n")
+                   .arg(results.size()).arg(bad.size());
+            for (const auto &r : results)
+                ts << (r.errorCount > 0
+                           ? QStringLiteral("❌ %1：%2 处 NAL 错误\n")
+                               .arg(r.filePath).arg(r.errorCount)
+                           : QStringLiteral("✓ %1\n").arg(r.filePath));
+            ts.flush();
+        }
+    }
+    // 结果汇总
+    QString html = lang("检查 %1 个文件，<b>%2 个损坏</b>。\n\n",
+                         "Checked %1 clip(s), <b>%2 corrupted</b>.\n\n")
+                       .arg(results.size()).arg(bad.size());
+    for (int i = 0; i < qMin(bad.size(), 30); ++i)
+        html += QStringLiteral("%1 (%2)\n").arg(bad[i].filePath)
+                    .arg(bad[i].errorCount);
+    if (bad.size() > 30)
+        html += QStringLiteral("…等共 %1 个\n").arg(bad.size());
+    auto *box = new QMessageBox(
+        bad.isEmpty() ? QMessageBox::Information : QMessageBox::Warning,
+        lang("完整性快检结果", "Integrity check result"), html,
+        QMessageBox::NoButton, this);
+    box->setAttribute(Qt::WA_DeleteOnClose);
+    box->addButton(QMessageBox::Close);
+    if (!reportPath.isEmpty())
+        box->setInformativeText(lang("完整报告：%1", "Full report: %1").arg(reportPath));
+    box->open();
+    m_importStatus->setText(lang("完整性快检完成：%1 个损坏",
+                                 "Integrity check done: %1 corrupted").arg(bad.size()));
+    m_importStatus->setStyleSheet(QString());
 }
 
 void PreprocessWindow::onLogLine(const QString &line)
