@@ -85,6 +85,7 @@ set(SOURCES
     src/domain/filename_timestamp.cpp
     src/domain/smart_sorter.cpp
     src/domain/concat_precheck.cpp
+    src/domain/concat_naming.cpp
     src/domain/evidence_report.cpp
     src/domain/time_calibration.cpp
     src/domain/time_piecewise.cpp
@@ -100,6 +101,7 @@ set(SOURCES
     src/timesettingsdialog.cpp
     src/infrastructure/ffmpeg_video_engine.cpp
     src/infrastructure/python_analysis_engine.cpp
+    src/infrastructure/integrity_checker.cpp
     src/infrastructure/libav_analysis_engine.cpp
     src/infrastructure/encoder_probe.cpp
     src/infrastructure/media_probe_engine.cpp
@@ -192,6 +194,7 @@ add_executable(lumenarc_preprocess_test
     src/domain/filename_timestamp.cpp
     src/domain/smart_sorter.cpp
     src/domain/concat_precheck.cpp
+    src/domain/concat_naming.cpp
     src/domain/evidence_report.cpp
 )
 target_include_directories(lumenarc_preprocess_test PRIVATE
@@ -266,6 +269,7 @@ add_executable(lumenarc_v17_test
     src/infrastructure/transcode_engine.cpp
     src/infrastructure/transcode_engine.h
     src/infrastructure/python_analysis_engine.cpp
+    src/infrastructure/integrity_checker.cpp
     src/infrastructure/python_analysis_engine.h
     src/infrastructure/ianalysis_engine.h
     src/domain/overlap_cut.cpp
@@ -293,6 +297,7 @@ add_executable(lumenarc_reconstruction_test
     src/infrastructure/media_probe_engine.cpp
     src/infrastructure/timestamp_ocr_engine.cpp
     src/infrastructure/python_analysis_engine.cpp
+    src/infrastructure/integrity_checker.cpp
     src/i18n.cpp
     src/domain/time_calibration.cpp
     src/domain/time_piecewise.cpp
@@ -315,6 +320,7 @@ add_executable(lumenarc_ocr_atpositions_test
     src/infrastructure/ianalysis_engine.h
     src/infrastructure/timestamp_ocr_engine.cpp
     src/infrastructure/python_analysis_engine.cpp
+    src/infrastructure/integrity_checker.cpp
     src/i18n.cpp
     src/domain/time_calibration.cpp
     src/domain/time_piecewise.cpp
@@ -340,10 +346,12 @@ add_executable(lumenarc_preprocess_integration
     src/infrastructure/transcode_engine.cpp
     src/infrastructure/encoder_probe.cpp
     src/infrastructure/python_analysis_engine.cpp
+    src/infrastructure/integrity_checker.cpp
     src/i18n.cpp
     src/domain/filename_timestamp.cpp
     src/domain/smart_sorter.cpp
     src/domain/concat_precheck.cpp
+    src/domain/concat_naming.cpp
     src/domain/evidence_report.cpp
     src/domain/overlap_cut.cpp
 )
@@ -429,6 +437,7 @@ add_executable(lumenarc_ui_chain_test
     src/infrastructure/ianalysis_engine.h
     src/infrastructure/timestamp_ocr_engine.cpp
     src/infrastructure/python_analysis_engine.cpp
+    src/infrastructure/integrity_checker.cpp
     src/infrastructure/media_probe_engine.cpp
     src/i18n.cpp
     src/domain/time_calibration.cpp

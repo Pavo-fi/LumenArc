@@ -17,6 +17,7 @@
 #include "infrastructure/concat_engine.h"
 #include "infrastructure/transcode_engine.h"
 #include "domain/smart_sorter.h"
+#include "domain/concat_naming.h"
 #include "domain/evidence_report.h"
 
 #include <QDateTime>
@@ -1001,15 +1002,12 @@ void PreprocessingCoordinator::startNextConcat()
 
     ConcatRequest req;
     req.workDir = m_evidenceDir;
-    QString safeChannel = m_currentConcatGroup;
-    safeChannel.replace(QRegularExpression(QStringLiteral(R"([\\/:*?"<>|()])")),
-                        QStringLiteral("_"));
-    // 默认组输出名友好化（现场反馈①：`_默认组__concat.mp4` 难辨认）
-    if (safeChannel == QStringLiteral("（默认组）")
-        || safeChannel == QStringLiteral("_默认组_"))
-        safeChannel = QStringLiteral("merged");
-    req.outputPath = allocateOutput(m_outputDir,
-                                    safeChannel + QStringLiteral("_concat"));
+    // §45 定案（2026-08-17）：拼接产物命名 LAMerged_<通道>_<首>_<尾>（默认组
+    // 无通道前缀）；替代 fixed `merged_concat` / `<通道>_concat`
+    const QString &firstFile = group->ordered.first().filePath;
+    const QString &lastFile = group->ordered.last().filePath;
+    const QString outBase = concatOutputName(group->channel, firstFile, lastFile);
+    req.outputPath = allocateOutput(m_outputDir, outBase);
     qint64 totalMs = 0;
     QVector<qint64> offsets;
     qint64 acc = 0;

@@ -22,6 +22,7 @@
 #include "domain/smart_sorter.h"
 #include "domain/preprocess_text.h"
 #include "domain/concat_precheck.h"
+#include "domain/concat_naming.h"
 #include "domain/evidence_report.h"
 #include "domain/tick_utils.h"
 #include "sortablefiletable.h"
@@ -121,6 +122,43 @@ static OcrResult makeOcr(const QString &path, qint64 wallStartMs, double conf = 
     o.conf = conf;
     o.source = wallStartMs > 0 ? OcrResult::Ocr : OcrResult::None;
     return o;
+}
+
+static void testConcatNaming()
+{
+    // §45 定案：LAMerged_<通道>_<首>_<尾>，共同后缀只留首视频
+    CHECK(concatOutputName(QString(),
+                           QStringLiteral("C:/a/000131_100.mp4"),
+                           QStringLiteral("C:/a/024556_100.mp4"))
+          == QStringLiteral("LAMerged_000131_100_024556"),
+          "naming: 默认组去共同后缀 _100");
+    CHECK(concatOutputName(QStringLiteral("CH01"),
+                           QStringLiteral("C:/a/000446_100.mp4"),
+                           QStringLiteral("C:/a/234556_100.mp4"))
+          == QStringLiteral("LAMerged_CH01_000446_100_234556"),
+          "naming: 有通道带前缀");
+    CHECK(concatOutputName(QStringLiteral("（默认组）"),
+                           QStringLiteral("C:/a/001132_100.mp4"),
+                           QStringLiteral("C:/a/235645_100.mp4"))
+          == QStringLiteral("LAMerged_001132_100_235645"),
+          "naming: 默认组别名不带通道");
+    CHECK(concatOutputName(QStringLiteral("CH02"),
+                           QStringLiteral("C:/a/abc.mp4"),
+                           QStringLiteral("C:/a/xyz.mp4"))
+          == QStringLiteral("LAMerged_CH02_abc_xyz"),
+          "naming: 无共同部分直接拼接");
+    // 共同后缀短于 2 字符不截断（防误删）
+    CHECK(concatOutputName(QString(),
+                           QStringLiteral("C:/a/part1.mp4"),
+                           QStringLiteral("C:/a/part2.mp4"))
+          == QStringLiteral("LAMerged_part1_part2"),
+          "naming: 单字符后缀不去重");
+    // 扩展名不参与
+    CHECK(concatOutputName(QStringLiteral("IPC3"),
+                           QStringLiteral("C:/b/000131_IPC3.mp4"),
+                           QStringLiteral("C:/b/024556_IPC3.mp4"))
+          == QStringLiteral("LAMerged_IPC3_000131_IPC3_024556"),
+          "naming: 通道后缀 _IPC3 在首名保留");
 }
 
 static void testSmartSorterBasic()
@@ -632,6 +670,7 @@ int main(int argc, char **argv)
     testSmartSorterConflictAdjudication();
     testTextUtils();
     testPrecheck();
+    testConcatNaming();
     testFilesNeedingTranscode();
     testEvidenceCsv();
     testSortableFileTable();
