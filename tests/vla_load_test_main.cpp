@@ -61,9 +61,9 @@ static int testFile(ChartPanel *chart, RoiModel *rm, RoiModel *pm,
     }
     fprintf(stderr, "[tf] loaded: regions=%d rIds=%lld polys=%d pIds=%lld entries=%lld ts=%lld values=%lld\n",
             regions.size(), (long long)rIds.size(), polys.size(), (long long)pIds.size(),
-            (long long)tm->snapshot().dataEntries.size(),
+            (long long)tm->snapshot().dataEntries().size(),
             (long long)tm->snapshot().timestamps.size(),
-            (long long)tm->snapshot().values.size());
+            (long long)tm->snapshot().values().size());
 
     // 模拟 restoreAnalysisState + 多边形恢复
     if (rIds.size() == regions.size())
@@ -98,7 +98,7 @@ static int testFile(ChartPanel *chart, RoiModel *rm, RoiModel *pm,
 
     // ---- VLA2 往返：新格式保存 → 清空 → 重载 → 数据与曲线比对 ----
     const QVector<qint64> oldTs = tm->snapshot().timestamps;
-    const QVector<QVector<qreal>> oldVals = tm->snapshot().values;
+    const QVector<QVector<qreal>> oldVals = tm->snapshot().values();
     QString tmp = QDir::temp().filePath("vla2_roundtrip_test.vla");
     QFile::remove(tmp);
     TimeCalibration saveCal = TimeCalibration::fromLegacyOffset(12345);
@@ -123,12 +123,12 @@ static int testFile(ChartPanel *chart, RoiModel *rm, RoiModel *pm,
         SnapshotFusionData f2;
         if (tm->loadFromFile(tmp, &r2, &cal2, &m2, &l2, &pin2, &f2, &p2, &g2, &rIds2, &pIds2)) {
             const auto snap = tm->snapshot();
-            bool dataOk = (snap.timestamps == oldTs) && (snap.values.size() == oldVals.size());
+            bool dataOk = (snap.timestamps == oldTs) && (snap.values().size() == oldVals.size());
             if (dataOk) {
                 for (int r = 0; r < oldVals.size() && dataOk; ++r) {
-                    if (snap.values[r].size() != oldVals[r].size()) { dataOk = false; break; }
+                    if (snap.values()[r].size() != oldVals[r].size()) { dataOk = false; break; }
                     for (int c = 0; c < oldVals[r].size(); ++c)
-                        if (qAbs(snap.values[r][c] - oldVals[r][c]) > 1e-3) { dataOk = false; break; }
+                        if (qAbs(snap.values()[r][c] - oldVals[r][c]) > 1e-3) { dataOk = false; break; }
                 }
             }
             // roiId 保持：VLA2 必须原样带回
@@ -164,7 +164,7 @@ static int testFile(ChartPanel *chart, RoiModel *rm, RoiModel *pm,
         TimelineModel tm3;
         bool okL = okS && tm3.loadFromFile(tmp2, nullptr, nullptr, nullptr, nullptr,
                                            nullptr, nullptr, nullptr, nullptr, nullptr, nullptr);
-        const auto a3 = tm3.snapshot().audio;
+        const auto a3 = tm3.snapshot().audioData();
         bool audioOk = okL && a3.volume.size() == 4
                        && a3.spectrogram.size() == 3 && a3.spectrogram[0].size() == 2
                        && qAbs(a3.spectrogram[2][1] - 6.6) < 5e-2   // uint16 量化容差
@@ -179,6 +179,318 @@ static int testFile(ChartPanel *chart, RoiModel *rm, RoiModel *pm,
     QFile::remove(tmp);
     return (pass && rtOk) ? 1 : 0;
 }
+
+// ===========================================================================
+// v1.8.0 P1b：.vla v10 单测（迁移链 / 通道往返 / 未知通道 opaque 保全 / 上界拒绝）
+// ===========================================================================
+static const char kV10Magic[4] = {'V', 'L', 'A', '2'};
+
+/// 解析 VLA2 文件为原始块列表（codec/rawLen/stored 原样保留）
+struct V10Chunk {
+    QByteArray tag; quint8 codec; quint32 rawLen, storedLen; QByteArray stored;
+};
+static bool v10Parse(const QByteArray &data, QVector<V10Chunk> *out)
+{
+    if (data.size() < 16 || memcmp(data.constData(), kV10Magic, 4) != 0)
+        return false;
+    QDataStream ds(data);
+    ds.skipRawData(4);
+    quint32 ver = 0, cnt = 0, flags = 0;
+    ds >> ver >> cnt >> flags;
+    if (ver != 2)
+        return false;
+    for (quint32 i = 0; i < cnt; ++i) {
+        char tag[4]; quint8 codec; char res[3]; quint32 rawLen, storedLen;
+        if (ds.readRawData(tag, 4) != 4) return false;
+        ds >> codec;
+        if (ds.readRawData(res, 3) != 3) return false;
+        ds >> rawLen >> storedLen;
+        QByteArray stored(int(storedLen), Qt::Uninitialized);
+        if (storedLen && ds.readRawData(stored.data(), int(storedLen)) != int(storedLen))
+            return false;
+        out->append({QByteArray(tag, 4), codec, rawLen, storedLen, stored});
+    }
+    return true;
+}
+
+static QByteArray v10PackRaw(const QByteArray &tag, quint8 codec, quint32 rawLen,
+                             const QByteArray &stored)
+{
+    QByteArray out;
+    QDataStream ds(&out, QIODevice::WriteOnly);
+    ds.writeRawData(tag.constData(), 4);
+    ds << codec;
+    ds.writeRawData("\0\0\0", 3);
+    ds << rawLen << quint32(stored.size());
+    out.append(stored);
+    return out;
+}
+
+static QByteArray v10Build(const QVector<V10Chunk> &chunks)
+{
+    QByteArray out;
+    QDataStream ds(&out, QIODevice::WriteOnly);
+    ds.writeRawData(kV10Magic, 4);
+    ds << quint32(2) << quint32(chunks.size()) << quint32(0);
+    for (const auto &c : chunks)
+        out.append(v10PackRaw(c.tag, c.codec, c.rawLen, c.stored));
+    return out;
+}
+
+static QByteArray v10ReadAll(const QString &path)
+{
+    QFile f(path);
+    if (!f.open(QIODevice::ReadOnly))
+        return QByteArray();
+    return f.readAll();
+}
+
+static QByteArray v10ChunkPayload(const V10Chunk &c)
+{
+    return (c.codec == 1) ? qUncompress(c.stored) : c.stored;
+}
+
+static void v10ReplaceMeta(QVector<V10Chunk> *chunks, const QJsonObject &meta)
+{
+    for (auto &c : *chunks) {
+        if (c.tag == QByteArray("META", 4)) {
+            const QByteArray payload = QJsonDocument(meta).toJson(QJsonDocument::Compact);
+            const QByteArray z = qCompress(payload, 6);
+            if (z.size() < payload.size()) {
+                c.codec = 1; c.rawLen = payload.size();
+                c.stored = z; c.storedLen = z.size();
+            } else {
+                c.codec = 0; c.rawLen = payload.size();
+                c.stored = payload; c.storedLen = payload.size();
+            }
+            return;
+        }
+    }
+}
+
+static int g_v10Checks = 0, g_v10Failures = 0;
+#define V10CHECK(cond, msg)                                                     \
+    do {                                                                        \
+        ++g_v10Checks;                                                          \
+        if (!(cond)) {                                                          \
+            ++g_v10Failures;                                                    \
+            fprintf(stderr, "FAIL: %s:%d: %s\n", __FILE__, __LINE__, msg);       \
+        }                                                                       \
+    } while (0)
+
+static int testV10RoundTripAndChain()
+{
+    QDir tmp(QDir::tempPath() + QStringLiteral("/lumenarc_vla_v10"));
+    tmp.removeRecursively();
+    QDir().mkpath(tmp.path());
+    const QString path = tmp.path() + QStringLiteral("/v10_rt.vla");
+    QFile::remove(path);
+
+    // 造数据：亮度 2 行（rect id1 + polygon id2）+ 音频（volume+spec）
+    TimelineModel m;
+    AudioData audio;
+    audio.sampleRate = 24000; audio.hopLength = 512; audio.nFft = 1280;
+    audio.timeResolutionMs = 1000.0 * 512 / 24000;
+    audio.volume = {0.1, 0.2, 0.3, 0.4};
+    audio.spectrogram = {{1.0, 2.0}, {3.0, 4.0}, {5.5, 6.6}};
+    QVector<DataEntry> entries = {{DataEntry::Rect, 1}, {DataEntry::Polygon, 2}};
+    m.setData({0, 1000, 2000}, {{1, 2, 3}, {4, 5, 6}}, entries, audio);
+    TimeCalibration cal;
+    cal.source = TimeCalibration::Source::Manual;
+    cal.offsetMs = 1784700002000LL;
+    cal.dateKnown = true;
+    const bool saved = m.saveToFile(path, {QRect(10, 10, 60, 40)},
+                                    cal, QRect(1, 2, 30, 20),
+                                    {ChartLabel{500, QStringLiteral("L1"), Qt::red}},
+                                    QRect(0, 0, 5, 5), SnapshotFusionData(),
+                                    {}, {GuideLine{QPoint(0, 0), QPoint(9, 9), Qt::blue}},
+                                    {1}, {2});
+    V10CHECK(saved, "v10: saveToFile ok");
+
+    // 文件层面：META version=10 且带 channels 清单（F5：写入代码与格式注释同步）
+    QByteArray raw = v10ReadAll(path);
+    QVector<V10Chunk> chunks;
+    V10CHECK(v10Parse(raw, &chunks), "v10: file parses");
+    const V10Chunk *metaChunk = nullptr;
+    for (const auto &c : chunks)
+        if (c.tag == QByteArray("META", 4)) metaChunk = &c;
+    V10CHECK(metaChunk, "v10: META chunk present");
+    const QJsonObject meta = QJsonDocument::fromJson(v10ChunkPayload(*metaChunk)).object();
+    V10CHECK(meta["version"].toInt() == 10, "v10: META version=10");
+    const QJsonArray chArr = meta["channels"].toArray();
+    V10CHECK(chArr.size() == 2, "v10: channels list has luminance+audio");
+    bool sawLum = false, sawAud = false;
+    for (const auto &cv : chArr) {
+        const QString kind = cv.toObject()["kind"].toString();
+        if (kind == QLatin1String("luminance")) sawLum = true;
+        if (kind == QLatin1String("audio")) sawAud = true;
+    }
+    V10CHECK(sawLum && sawAud, "v10: both channel kinds declared");
+
+    // 重载往返
+    TimelineModel m2;
+    QVector<QRect> regions; QVector<QPolygon> polys; QVector<GuideLine> gl;
+    QVector<int> rIds, pIds; TimeCalibration cal2; QRect mag, pin;
+    QVector<ChartLabel> labels; SnapshotFusionData fusion;
+    V10CHECK(m2.loadFromFile(path, &regions, &cal2, &mag, &labels, &pin, &fusion,
+                             &polys, &gl, &rIds, &pIds), "v10: reload ok");
+    const AnalysisSnapshot snap = m2.snapshot();
+    V10CHECK(snap.lumRows().size() == 2 && snap.lumRows()[0].size() == 3,
+             "v10: luminance rows roundtrip");
+    V10CHECK(snap.lumEntries().size() == 2
+             && snap.lumEntries()[0].roiId == 1
+             && snap.lumEntries()[1].type == DataEntry::Polygon,
+             "v10: dataEntries roundtrip");
+    V10CHECK(snap.audioData().volume.size() == 4
+             && qAbs(snap.audioData().volume[3] - 0.4) < 1e-4,
+             "v10: audio volume roundtrip");
+    V10CHECK(snap.audioData().spectrogram.size() == 3, "v10: spec roundtrip");
+    V10CHECK(cal2.dateKnown && cal2.offsetMs == cal.offsetMs, "v10: calibration roundtrip");
+    V10CHECK(regions.size() == 1 && rIds == QVector<int>{1}, "v10: regions+roiIds roundtrip");
+    V10CHECK(gl.size() == 1 && gl[0].end == QPoint(9, 9), "v10: guide lines roundtrip");
+
+    // ---- v9 合成文件 -> v10 加载迁移 -> 回存 v10（F2 迁移链；v7/v8 真文件见 files 循环）----
+    const QString v9Path = tmp.path() + QStringLiteral("/v9_legacy.vla");
+    {
+        QVector<V10Chunk> v9Chunks = chunks;
+        QJsonObject v9Meta = meta;
+        v9Meta["version"] = 9;
+        v9Meta.remove(QStringLiteral("channels"));   // v9 无通道清单
+        v10ReplaceMeta(&v9Chunks, v9Meta);
+        QFile f(v9Path);
+        f.open(QIODevice::WriteOnly);
+        f.write(v10Build(v9Chunks));
+        f.close();
+    }
+    TimelineModel m3;
+    QVector<QRect> r3; QVector<QPolygon> p3; QVector<GuideLine> g3; QVector<int> ri3, pi3;
+    TimeCalibration c3; QRect mg3, pn3; QVector<ChartLabel> lb3; SnapshotFusionData fs3;
+    V10CHECK(m3.loadFromFile(v9Path, &r3, &c3, &mg3, &lb3, &pn3, &fs3, &p3, &g3, &ri3, &pi3),
+             "v9->v10: legacy load (migration)");
+    V10CHECK(m3.snapshot().lumRows().size() == 2
+             && m3.snapshot().audioData().volume.size() == 4,
+             "v9->v10: channels populated from legacy blocks");
+    const QString v10Path2 = tmp.path() + QStringLiteral("/v9_resaved.vla");
+    QFile::remove(v10Path2);
+    V10CHECK(m3.saveToFile(v10Path2, r3, c3, mg3, lb3, pn3, fs3, p3, g3, ri3, pi3),
+             "v9->v10: resave as v10");
+    QByteArray raw2 = v10ReadAll(v10Path2);
+    QVector<V10Chunk> chunks2;
+    V10CHECK(v10Parse(raw2, &chunks2), "v9->v10: resaved file parses");
+    for (const auto &c : chunks2) {
+        if (c.tag == QByteArray("META", 4)) {
+            const QJsonObject m2j = QJsonDocument::fromJson(v10ChunkPayload(c)).object();
+            V10CHECK(m2j["version"].toInt() == 10, "v9->v10: resaved version=10");
+        }
+    }
+    TimelineModel m4;
+    V10CHECK(m4.loadFromFile(v10Path2, nullptr, nullptr, nullptr, nullptr, nullptr,
+                             nullptr, nullptr, nullptr, nullptr, nullptr)
+             && m4.snapshot().lumRows()[1][2] == 6.0
+             && m4.snapshot().audioData().volume.size() == 4,
+             "v9->v10: resaved roundtrip data intact");
+
+    // ---- 上界拒绝（F4）：version=11 必须明确拒载 ----
+    {
+        const QString v11Path = tmp.path() + QStringLiteral("/v11_future.vla");
+        QVector<V10Chunk> v11Chunks = chunks;
+        QJsonObject v11Meta = meta;
+        v11Meta["version"] = 11;
+        v10ReplaceMeta(&v11Chunks, v11Meta);
+        QFile f(v11Path);
+        f.open(QIODevice::WriteOnly);
+        f.write(v10Build(v11Chunks));
+        f.close();
+        TimelineModel m5;
+        V10CHECK(!m5.loadFromFile(v11Path, nullptr, nullptr, nullptr, nullptr,
+                                  nullptr, nullptr, nullptr, nullptr, nullptr, nullptr),
+                 "F4: version 11 rejected");
+    }
+
+    // ---- peekCalibrationFromVla 对 v10 可用 ----
+    const TimeCalibration pk = TimelineModel::peekCalibrationFromVla(path);
+    V10CHECK(pk.dateKnown && pk.offsetMs == cal.offsetMs, "peek: v10 calibration readable");
+
+    fprintf(stderr, "[v10] roundtrip+chain: %d checks, %d failures\n",
+            g_v10Checks, g_v10Failures);
+    return g_v10Failures;
+}
+
+static int testV10UnknownChannelPassthrough()
+{
+    QDir tmp(QDir::tempPath() + QStringLiteral("/lumenarc_vla_v10"));
+    QDir().mkpath(tmp.path());
+    const QString base = tmp.path() + QStringLiteral("/v10_rt.vla");
+    if (!QFile::exists(base)) {
+        fprintf(stderr, "[v10-opaque] SKIP (base fixture missing)\n");
+        return 0;
+    }
+
+    // 在合法 v10 文件上附加未知块 CH01（模拟更新版本写入的新通道）
+    const QString withUnknown = tmp.path() + QStringLiteral("/v10_unknown.vla");
+    {
+        QByteArray raw = v10ReadAll(base);
+        QVector<V10Chunk> chunks;
+        if (!v10Parse(raw, &chunks)) { fprintf(stderr, "[v10-opaque] parse FAIL\n"); return 1; }
+        const QByteArray mystery = QByteArray("FUTURE-CHANNEL-PAYLOAD-0123456789");
+        V10Chunk ch{QByteArray("CH01", 4), 0, quint32(mystery.size()),
+                    quint32(mystery.size()), mystery};
+        chunks.append(ch);
+        QFile f(withUnknown);
+        f.open(QIODevice::WriteOnly);
+        f.write(v10Build(chunks));
+        f.close();
+    }
+
+    // 载入：未知通道进 opaque，亮度/音频不受影响（Q2：不丢弃）
+    TimelineModel m;
+    V10CHECK(m.loadFromFile(withUnknown, nullptr, nullptr, nullptr, nullptr, nullptr,
+                            nullptr, nullptr, nullptr, nullptr, nullptr),
+             "opaque: load ok");
+    const AnalysisSnapshot s1 = m.snapshot();
+    const ChannelData *op = nullptr;
+    const auto it = s1.channels.constFind(QStringLiteral("opaque:CH01"));
+    if (it != s1.channels.constEnd() && it->kind == ChannelData::Kind::Opaque)
+        op = &(*it);
+    V10CHECK(op != nullptr, "opaque: unknown channel captured");
+    if (op) {
+        V10CHECK(op->opaquePayload == QByteArray("FUTURE-CHANNEL-PAYLOAD-0123456789"),
+                 "opaque: payload preserved");
+        V10CHECK(op->opaqueTag == QByteArray("CH01", 4), "opaque: tag preserved");
+    }
+    V10CHECK(s1.lumRows().size() == 2 && s1.audioData().volume.size() == 4,
+             "opaque: known channels unaffected");
+
+    // 回写：opaque 块字节保全（stored 原样带回）
+    const QString resaved = tmp.path() + QStringLiteral("/v10_unknown_resaved.vla");
+    QFile::remove(resaved);
+    V10CHECK(m.saveToFile(resaved, {QRect(10, 10, 60, 40)}, TimeCalibration()),
+             "opaque: resave ok");
+    QByteArray raw = v10ReadAll(resaved);
+    QVector<V10Chunk> chunks;
+    V10CHECK(v10Parse(raw, &chunks), "opaque: resaved parses");
+    const V10Chunk *found = nullptr;
+    for (const auto &c : chunks)
+        if (c.tag == QByteArray("CH01", 4)) found = &c;
+    V10CHECK(found != nullptr, "opaque: chunk written back");
+    if (found) {
+        V10CHECK(v10ChunkPayload(*found) == QByteArray("FUTURE-CHANNEL-PAYLOAD-0123456789"),
+                 "opaque: payload byte-identical after roundtrip");
+    }
+
+    // 再载入：数据仍完整
+    TimelineModel m2;
+    V10CHECK(m2.loadFromFile(resaved, nullptr, nullptr, nullptr, nullptr, nullptr,
+                             nullptr, nullptr, nullptr, nullptr, nullptr)
+             && m2.snapshot().lumRows().size() == 2
+             && m2.snapshot().channels.contains(QStringLiteral("opaque:CH01")),
+             "opaque: second roundtrip intact");
+
+    fprintf(stderr, "[v10-opaque] passthrough: %d checks, %d failures\n",
+            g_v10Checks, g_v10Failures);
+    return g_v10Failures;
+}
+
 
 int main(int argc, char **argv)
 {
@@ -208,6 +520,10 @@ int main(int argc, char **argv)
         }
         files << arg;
     }
+
+    int v10Fail = 0;
+    v10Fail += testV10RoundTripAndChain();
+    v10Fail += testV10UnknownChannelPassthrough();
 
     RoiModel rm;
     RoiModel pm;
@@ -269,8 +585,8 @@ int main(int argc, char **argv)
                                              &pr2, &ff2, &pp2, &gg2, &ri2, &pi2);
         const auto snapR = tmR2.snapshot();
         const bool cOk = cLoad && !snapR.isEmpty()
-                         && snapR.values.size() == 2
-                         && snapR.values[0].size() == 3;
+                         && snapR.values().size() == 2
+                         && snapR.values()[0].size() == 3;
         fprintf(stderr, "[conc] concurrent writes fail=%d reload ok=%d => %s\n",
                 int(concFail.loadRelaxed()), cLoad, cOk ? "PASS" : "FAIL <<<");
         if (!cOk || concFail.loadRelaxed() != 0) ++fail;
@@ -369,7 +685,7 @@ int main(int argc, char **argv)
         }
         fprintf(stderr, "[reopen]   total series=%d roiCount=%d entries=%d\n",
                 totalS, rmR.regionCount(),
-                int(tmR.snapshot().dataEntries.size()));
+                int(tmR.snapshot().dataEntries().size()));
         const bool reopenOk = loaded && seriesR == 2 && visibleR == 2;
         fprintf(stderr, "[reopen] loaded=%d curves=%d visible=%d => %s\n",
                 loaded, seriesR, visibleR, reopenOk ? "PASS" : "FAIL <<<");
@@ -592,5 +908,5 @@ int main(int argc, char **argv)
     }
 
     qInfo() << (fail == 0 ? "ALL PASS" : "FAILURES:") << (fail == 0 ? "" : QString::number(fail));
-    return fail == 0 ? 0 : 1;
+    return (fail + v10Fail + g_v10Failures) == 0 ? 0 : 1;
 }

@@ -316,8 +316,8 @@ static void testRealVideoAB(const QString &videoPath)
     }
 
     // 亮度逐点对比（验收线 |Δ|≤1 且均值偏差 ≤0.5）
-    compareSeries(pyTs, snap.timestamps, pyLums[0], snap.values[0], pySampleMs, "rect");
-    compareSeries(pyTs, snap.timestamps, pyLums[1], snap.values[1], pySampleMs, "poly");
+    compareSeries(pyTs, snap.timestamps, pyLums[0], snap.values()[0], pySampleMs, "rect");
+    compareSeries(pyTs, snap.timestamps, pyLums[1], snap.values()[1], pySampleMs, "poly");
 }
 
 /// 音频 A/B 对拍：volume 相关系数 ≥0.999；语谱 log10 域 |Δ| ≤ 0.05。
@@ -481,13 +481,13 @@ static void testAudioAB(const QString &videoPath)
         return;
     }
     fprintf(stderr, "[ab] libav audio: vol=%d spec=%dx%d\n",
-            snap.audio.volume.size(),
-            snap.audio.spectrogram.size(),
-            snap.audio.spectrogram.isEmpty() ? 0 : snap.audio.spectrogram[0].size());
+            snap.audioData().volume.size(),
+            snap.audioData().spectrogram.size(),
+            snap.audioData().spectrogram.isEmpty() ? 0 : snap.audioData().spectrogram[0].size());
     fprintf(stderr, "\n");
     fprintf(stderr, "\n");
-    compareAudio(snap.audio.volume, pyVol,
-                 snap.audio.spectrogram, pySpec);
+    compareAudio(snap.audioData().volume, pyVol,
+                 snap.audioData().spectrogram, pySpec);
 }
 
 int main(int argc, char **argv)
