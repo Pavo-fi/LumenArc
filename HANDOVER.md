@@ -5,7 +5,7 @@
 
 ## 表头（每次写完 HANDOVER 与 WORK_HISTORY 后必须同步更新本表头——规则 R2）
 
-- **当前 HEAD**：`c1aa169`（2026-08-16 §45 拼接假成功兜底 + P-27 真机验证）
+- **当前 HEAD**：`852a173`（2026-08-16 §45 补记：集成测试参数语义诊断 + 拼接假成功兜底）
 - **构建**：`cmd //c "build_tmp\build_target.bat ALL"`；测试：`QT_QPA_PLATFORM=offscreen`
   + PATH 含 `C:\code\Qt\6.8.0\msvc2022_64\bin`（配置：`build_tmp\reconfigure.bat`）
 - **全回归基线**（11 套）：case 248 / case_e2e 51 / piecewise 96 / preprocess 170 /
@@ -97,6 +97,14 @@
 ### 验证
 全回归 11 套绿。待真机：损坏素材目录重跑拼接 → 报"产物时长异常：源文件
 可能数据损坏"且不落盘坏文件；正常素材拼接不受影响。
+
+### 补记：preprocess_integration "时区问题"根因 = 传参错误（`852a173`）
+- 根因：`m0_synth_benchmark.py BASE_EPOCH=1719835200`（素材 OSD 渲染 UTC、
+  解析按本地）；harness 要求 base_epoch_s 传**素材 UTC 基准秒**，此前误传本地
+  语义秒（172980 系 1719806400）→ 整 8h 偏差 2 FAIL（与产品代码无关）
+- 修：usage 说明参数语义 + FAIL 且差值为整小时时自动 hint 正确值；
+  正确参数 1719835200 → 29 断言全绿（含 concat/transcode/P-27 分支）
+- 防再犯：跑集成测试一律从生成脚本取 BASE_EPOCH，禁止手推
 
 # ============================================================================
 # 工作记录（2026-08-16，第三十一批）——P### 跨会话 ID 碰撞 + 播放指示器
