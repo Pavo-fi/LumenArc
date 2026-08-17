@@ -106,6 +106,9 @@ int main(int argc, char **argv)
     }
     if (argc < 4) {
         fprintf(stderr, "usage: %s <clips_dir> <out_dir> <base_epoch_s>\n", argv[0]);
+        fprintf(stderr, "  base_epoch_s = 素材生成时的 UTC 基准秒（tools/m0_synth_benchmark.py\n"
+                        "  BASE_EPOCH），不是本地墙钟秒——合成素材 OSD 渲染 UTC、\n"
+                        "  解析按本地（时区偏移自动处理）；传错会出现整 8h 偏差\n");
         return 2;
     }
     const QDir clipsDir(QString::fromUtf8(argv[1]));
@@ -165,7 +168,16 @@ int main(int argc, char **argv)
                     r.filePath.toUtf8().constData(), (long long)r.wallStartMs,
                     (long long)truth, r.ocrError.toUtf8().constData());
             CHECK(r.ocrError.isEmpty());
-            CHECK(r.wallStartMs > 0 && qAbs(r.wallStartMs - truth) <= 3000);
+            const qint64 delta = r.wallStartMs - truth;
+            const bool okWall = r.wallStartMs > 0 && qAbs(delta) <= 3000;
+            CHECK(okWall);
+            // 诊断（2026-08-16 §45）：参数语义传错（本地秒 vs 素材 UTC 基准秒）
+            // 会出现整 8h 偏差——直接提示正确值，不用翻生成脚本
+                                                if (!okWall && delta % 3600000 == 0) {
+                fprintf(stderr,
+                        "  [hint] base_epoch_s 传了本地语义而非素材 UTC 基准；\n"
+                        "          正确值 = 素材生成脚本 BASE_EPOCH（本批素材 1719835200）\n");
+            }
             CHECK(QFileInfo::exists(r.firstFrameImg));   // 证据截图落盘
         }
     }
