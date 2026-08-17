@@ -36,17 +36,17 @@ P-20 2GB 尾帧 seek（已通过）· P-21 DVR 字体抽检（已通过）· P-2
 |---|---|---|---|---|
 | P-28 | v1.4.0 | 分析报告模块（DOCX：案件信息/时间基准/哈希清单/逐视频章节/签署盖章位） | 校时+案件 ✅ | ☐ 下一个主版本 |
 | P-29 | v1.6.0 | GPU 显示管线 Stage 1（QOpenGLWidget 纹理缩放，消 uiDrops）；Stage 2 已砍 | 独立 | ☐ 方案已拍板 2026-08-17（DEVELOPMENT_PLAN_V1.6_CN.md） |
-| P-30 | v1.8.0 | P1a/P1b 任务化+通道化（TaskRegistry / 通道字典 / **.vla v10**）+ Python 引擎退役 | v1.5 ✅ | ☐ 方案已拍板 2026-08-17（DEVELOPMENT_PLAN_V1.8_CN.md，含 Q5 退役） |
+| P-30 | v1.8.0 | P1a/P1b 任务化+通道化（TaskRegistry / 通道字典 / **.vla v10**）+ Python 引擎退役 | v1.5 ✅ | ✅ 2026-08-17 已实施（任务化+通道化+v10+退役全落地，待真机点检 RELEASE_CHECKLIST_V1.8） |
 | P-31 | v1.9.0 | P2 MainWindow 拆分（AnalysisController/VideoSessionManager/ProjectIO/UiState；收口 R2/R3/R5） | 前序全部 | ☐ 方案已拍板 2026-08-17（DEVELOPMENT_PLAN_V1.9_CN.md） |
 
 ## 五、技术债（有具体落点）
 
 | # | 项 | 落点 | 状态 |
 |---|---|---|---|
-| P-32 | AnalysisPhase 硬编码枚举 → 任务化状态机 | 随 P-30 | ☐ |
-| P-33 | AnalysisSnapshot 硬编码成员 → channel 化（.vla v10） | 随 P-30 | ☐ |
+| P-32 | AnalysisPhase 硬编码枚举 → 任务化状态机 | 随 P-30 | ✅ 2026-08-17 随 P-30 勾销（AnalysisTaskService 状态机替代，枚举已删） |
+| P-33 | AnalysisSnapshot 硬编码成员 → channel 化（.vla v10） | 随 P-30 | ✅ 2026-08-17 随 P-30 勾销（channels 字典 + lumRows/lumEntries/audioData API，兼容访问器已删） |
 | P-34 | 旧版 SpectrogramPanel 死代码删除（R10） | — | ✅ 2026-08-17 过期勾销：旧面板已在历史版本删除，代码库无残留（P-31 方案 §1.2 核查） |
-| P-35 | 6 处 qobject_cast<PythonAnalysisEngine*> 上移接口（R2） | 随 P-31 | ☐ |
+| P-35 | 6 处 qobject_cast<PythonAnalysisEngine*> 上移接口（R2） | 随 P-31 | ✅ 2026-08-17 提前收口（P-25 退役删引擎：cast 3 处随引擎删除归零；路径探测抽 ToolPaths） |
 | P-36 | R3 穿透封装收口 | 随 P-31 | ☐ |
 | P-37 | 视频时长 5 份副本 → UiState SSOT（R5） | 随 P-31 | ☐ |
 | P-38 | 案件锁 stale 检测 OpenProcess（Windows-only） | 随手 | ☐ |
@@ -75,6 +75,7 @@ P-20 2GB 尾帧 seek（已通过）· P-21 DVR 字体抽检（已通过）· P-2
 | P-51 | 后门对面 33 个坏源文件（20250726×31/20250727×2）需重新导出；清单已生成桌面 `后门对面_损坏文件清单.txt`，剔除后重跑拼接 | HANDOVER §46 | ✅ 2026-08-17 用户重新导出并重跑通过 |
 | P-52 | §46 三功能待真机：①剔除坏文件后重跑 → 产物名 LAMerged_规则 ②页面顶部路径行/浏览/独立输出弹框 ③坏文件触发失败 → 开启快检 → 标红+报告 | HANDOVER §46 | ✅ 2026-08-17 用户确认（命名/路径/快检全过） |
 | P-53 | 关键帧探测修复待真机：明景 1440p 文件单文件 GO → 应转码导出（2s 关键帧）→ 拖拽流畅（已修 `9488a0d`） | HANDOVER §46 补记 | ✅ 2026-08-17 用户实测"顺了很多" |
+| P-54 | 降噪滑杆 UI 清理：谱减降噪为 Python 引擎专属能力，v1.5 默认 libav 起即空操作；退役后滑杆/应用按钮存在误导，待拍板移除或改造（P-25 退役批发现） | P-25 退役批 | ☐ 待拍板 |
 
 ---
 

@@ -5,21 +5,22 @@
 
 ## 表头（每次写完 HANDOVER 与 WORK_HISTORY 后必须同步更新本表头——规则 R2）
 
-- **当前 HEAD**：`e4b104d`（2026-08-17 §46 命名/路径/快检三需求）
+- **当前 HEAD**：施工批（2026-08-17 §47 P-30 任务化/通道化/v10/P-25 退役）
 - **构建**：`cmd //c "build_tmp\build_target.bat ALL"`；测试：`QT_QPA_PLATFORM=offscreen`
   + PATH 含 `C:\code\Qt\6.8.0\msvc2022_64\bin`（配置：`build_tmp\reconfigure.bat`）
-- **全回归基线**（11 套）：case 248 / case_e2e 51 / piecewise 96 / preprocess 170 /
-  ui_chain 92 / calibration 77 / ocr_atpositions 21 / vla 13×PASS 含 [bugA][snaprender]
-  / roi_model 23 / libav 22 / v17 **34**（+6：P-27 音频 pcm 分支）
+- **全回归基线**（12 套，v1.8.0 施工批）：task_registry **41**（新增）/ case 248 /
+  case_e2e 51 / piecewise 96 / preprocess 176 / ui_chain 92 / calibration 77 /
+  roi_model 23 / vla **+54**（v10 往返/迁移链/opaque/F4）/ libav 10（A/B SKIP 退役预期）/ v17 34
 - **当前保留批次**（新→旧，R2 限 5 批）：
+  第三十八批 §47（P-30 任务化+通道化+.vla v10+P-25 退役，版本→1.8.0）·
   第三十七批 §46（命名 LAMerged / 路径集成页面 / NAL 快检，`b6ce835`+`a055a75`+`e4b104d`）·
   第三十六批 §45（拼接假成功兜底 + P-27 真机验证，`c1aa169`）·
   第三十五批 §44（文档体系整理 + 真机验收收口 + P-27 音频无损，`6e7f585`/`ace2ff0`）·
   第三十四批 §43（切换卡顿 10 秒根因：analyzeduration 10s→1s + timing 缓存
   + 高亮大小写，`66073e5`）·
-  第三十三批 §42（切换卡顿优化：vla 加载 3.1× + 高亮分支遗漏）·
-  第三十二批 §41（闪退修复：播放高亮悬空指针）
-- **最近归档动作**：2026-08-17——第三十二批（§41）移入 WORK_HISTORY.md 末尾；
+  第三十四批 §43（切换卡顿 10 秒根因：analyzeduration 10s→1s + timing 缓存
+  + 高亮大小写，`66073e5`）
+- **最近归档动作**：2026-08-17 §47 批——第三十一批（§40）、第三十三批（§42）移入 WORK_HISTORY.md 末尾；
   早前：第三十一批（§40）、第三十批（§39）、第五批（§14）至第二十九批（§38）。移入 WORK_HISTORY.md
   末尾；早前同批：第三十批（§39）、第五批（§14）至第二十九批（§38）共 25 批
   整体移入（原文未删改）。
@@ -30,6 +31,59 @@
   救复速览（〇章）、案件模块 M1-M3（二十三章）。
 - **管理文档**（2026-08-16 §44 建立）：待办唯一登记处 `docs/PENDING.md`；
   文档体系与维护规矩 `docs/DOCS_MAP.md`（规矩 D1-D8，待办必登记 PENDING）。
+# ============================================================================
+# 工作记录（2026-08-17，第三十八批）——v1.8.0 P-30 施工：任务化+通道化+.vla v10+P-25 退役
+# ============================================================================
+
+## 47. P1a/P1b/P-25 全量落地（方案 DEVELOPMENT_PLAN_V1.8_CN.md，拍板记录见其 §9）
+
+### 提交序列（T1/T3 纪律：重构与行为分开）
+
+| commit | 内容 |
+|---|---|
+| `feat: P1a 任务化 + P1b 通道化` | TaskRegistry（domain 纯数据注册表，显示名中英双串存 domain 不引 i18n）+ AnalysisTaskService（app 层状态机 Idle→Running→终态；取消竞态 gating 替代错误文案比较 C1；错误码 kErrNoVideo/Precondition/Busy/UnknownTask/Engine）+ AnalysisSnapshot channels 字典（QHash<QString,ChannelData>；lumRows/lumEntries/audioData API；timestamps 保留成员=亮度共享时间轴）+ .vla v10（META channels 清单/旧计数字段双写；LUM/VOL/SPEC 字节零改动；未知通道 opaque 字节保全 codec/stored 原样带回；kCurrentVlaVersion=10）+ MainWindow 接线（引擎信号经服务聚合，删 AnalysisPhase 枚举=P-32）+ 引擎装配切 setLuminance/setAudio |
+| `test: 任务/通道化测试` | task_registry_test 41 断言（注册/状态机全路径/取消后迟到 finished+failed 双重忽略/合并两序/前置条件/空路径）+ vla_load_test +54 断言（v10 文件级 META channels 断言/重载往返/v9→v10 迁移回存/F4 version=11 拒载/peek v10/未知通道 CH01 加载-回写-再载字节不变） |
+| `refactor: 消费点切永久 API` | chartpanel/mainwindow/测试 → lumRows()/lumEntries()/audioData()，删迁移期兼容访问器（R10，P-33 收口） |
+| `feat: P-25 Python 引擎退役` | 删 python_analysis_engine.{h,cpp}(664行)/analyze_video.py/CMake 6 处引用与 POST_BUILD 拷贝/设置菜单"分析引擎"子菜单/引擎构造 QSettings 分支；静态探测抽 ToolPaths（findFfmpegPath/detectPythonPath 原样迁移；消费方 timestamp_ocr/calibration/encoder_probe/transcode/concat/preprocesswindow/v17_test 全部改接）；mac workflow 删 analyze_video 自检行；cast 3 处随引擎删除归零（P-35 提前收口）；main.cpp 引擎构造改恒 libav |
+| `docs+chore: 版本四处` | 1.3.1→1.8.0（CMake/app.rc/About/README 运行时说明）；MANUAL 引擎说明改写；RELEASE_CHECKLIST_V1.8 新建（A-E 28 项，B4/B5 已离线自动验证） |
+
+### 关键实现决策
+
+1. **状态机取消语义**：cancel() 立即回 Idle 并发 taskCancelled；此后引擎迟到的
+   finished/failed 一律忽略（onEngineFinished 首行 `m_state != Running` 卫语句）——
+   旧版"取消后引擎报 failed('Analysis cancelled by user.') 按文案判取消"的 C1 违例
+   连根拔除；切换视频（B6 竞态）同走此门。
+2. **v10 磁盘布局（拍板 Q1）**：数据块沿用既有标签，META 加 `channels` 清单
+   （id/kind/计数，audio 带 spec_frames，opaque 带 chunk 标签+raw_length）。
+   v9 读者按 F4 拒 v10（上界互斥）；v10 读者可读 v9 并内存升 channels，保存自然落 v10。
+3. **未知通道 opaque（拍板 Q2）**：vlaUnpackAll 增 rawChunks 出参（codec/rawLen/stored
+   原样）；加载端 v10 且块标签 ∉ {META,TMS,LUM,VOL,SPEC} → `opaque:<tag>` 通道
+   （payload 语义保全 + stored 字节保全）；保存端原块回写（vlaPackRawChunk）。
+   未来新通道数据块规约：4 ASCII 标签 `CH:` 前缀预留。
+4. **合并策略迁移**：旧 onAnalysisFinished 的"亮度完成保留既有 audio / audio-only
+   合入既有亮度"改为服务内 producedChannels 逐通道覆盖（setLuminance/setAudio
+   未产出通道不动）；MainWindow 的语谱刷新改注册表驱动（producedChannels
+   contains audio → setSpectrogramData）。
+5. **P-25 退役评估落地结论**（方案 §5）：退役收益=维护面收窄（双引擎×双测试×
+   cast 债清零），**体积收益≈0**——probe_timestamps.py（cv2/numpy/rapidocr）与
+   P-28 报告（python-docx）租户保留 bundled Python；A/B 对拍测试改 SKIP（脚本
+   不再随包），libav 语义对齐注释保留。发现并登记 **P-54**：降噪滑杆为 Python
+   引擎专属谱减能力，v1.5 默认 libav 起即空操作，UI 存在误导待拍板清理。
+
+### 验证
+
+- 全回归 **12 套**绿：task_registry 41（新）/ case 248 / case_e2e 51 / piecewise 96
+  / preprocess 176 / calibration 77 / roi_model 23 / v17 34 / ui_chain 92 / vla
+  （+54 新断言）/ libav 10（A/B 部分 SKIP 为退役后预期）
+- 待真机（RELEASE_CHECKLIST_V1.8 A-E）：①音频进度 0-100 唯一可见变化确认
+  ②v9 老案件加载→重分析→保存→重开往返 ③CSV 列序冻结 ④设置菜单无引擎项
+  ⑤OCR 校时存活 ⑥回归抽查五项
+- PENDING 勾销：P-25/P-30/P-32/P-33/P-35；新增 P-54（降噪滑杆待拍板）
+
+### 版本与文档
+
+- 版本 1.3.1 → **1.8.0**（D4 四处一致）；DOCS_MAP 登记 V1.8 已实施 + 点检清单；
+  V1_ERA §1.3 对照表 v10 行与本实施一致（方案编写时已同步）。
 # ============================================================================
 
 # ============================================================================
@@ -171,48 +225,9 @@
   正确参数 1719835200 → 29 断言全绿（含 concat/transcode/P-27 分支）
 - 防再犯：跑集成测试一律从生成脚本取 BASE_EPOCH，禁止手推
 
-# ============================================================================
-# 工作记录（2026-08-16，第三十一批）——P### 跨会话 ID 碰撞 + 播放指示器
-# ============================================================================
-
-## 40. 编号赋错根因修复 + 正在播放指示器
-
-### 1. P### 跨会话 ID 碰撞（用户定位：编号总落到首个前处理文件）
-- 根因：addPreprocessSession 会话内编号从 P001 起 → 跨会话 P001 重复 →
-  findRef("P001") 永远命中首个会话首产物（改编号/指纹/重定位全错位）
-- 修：新登记全局唯一（取所有会话 max+1 继续）；开案时旧数据重复 ID
-  自动重排为全局唯一（dirty 落盘）
-
-### 2. 正在播放指示器
-- CaseDock::setCurrentVideoPath：案件树中匹配 originalPath 的条目
-  （视频/产物）加「▶ 」前缀 + 蓝底 + 加粗；切走/清空恢复原状
-- MainWindow 打开视频成功两处接线（含开案恢复现场路径）
-
-### 验证
-- case_test 248 项（新增跨会话全局唯一 ID 断言）全过；全回归 11 套绿
-- 待真机：两个会话产物改编号各归各；播放视频时案件树对应条目蓝底▶
 
 
-# 工作记录（2026-08-16，第三十三批）——切换卡顿优化 + 播放高亮修复
-# ============================================================================
 
-## 42. 视频切换卡顿（vla 加载 1.3s）+ 高亮不跟随
-
-### 卡顿定位（实测）
-- V001.vla（57MB）loadFromFile = 1346ms——切换分析过的大视频主因
-  （SPEC 81M 像素经 QDataStream 逐值读取，函数调用开销占大头）
-- 优化：SPEC uint8 无字节序问题 → 跳过大端数据流逐值读，指针算术批量
-  还原（含 qAvail 边界校验）→ **1346ms → 432ms（3.1×）**
-- 其余（57MB zlib 解压 ~300ms）保留；大 vla（100MB+）预期 ~0.8s
-
-### 高亮不跟随修复
-- 根因：接线遗漏——无缓存/继承校时分支（onPlay 处）未调
-  setCurrentVideoPath；有缓存块内重复调用
-- 修：两分支各一处（有缓存 loadCache 块 + 无缓存分支）
-
-### 验证
-全回归 11 套绿（含 vla 数据往返校验——批量解析数值一致性）。
-待真机：切换视频卡顿明显减轻；高亮随切换跟随。
 
 # ============================================================================
 # 工作记录（2026-08-16，第三十四批）——切换卡顿 10 秒级根因 + 高亮大小写

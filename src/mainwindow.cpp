@@ -778,29 +778,8 @@ void MainWindow::createMenus()
     // Settings menu
     QMenu *settingsMenu = menuBar()->addMenu(lang("设置(&S)", "&Settings"));
 
-    // 分析引擎（v1.5.0 P3：libav 默认 / Python 回退，重启生效）
-    QMenu *engineMenu = settingsMenu->addMenu(
-        lang("分析引擎（重启生效）", "Analysis Engine (restart required)"));
-    QActionGroup *engineGroup = new QActionGroup(this);
-    {
-        QSettings es("LumenArc", "LumenArc");
-        const QString cur = es.value("analysisEngine", QStringLiteral("libav")).toString();
-        auto addEngine = [&](const QString &title, const QString &key) {
-            QAction *a = engineMenu->addAction(title);
-            a->setCheckable(true);
-            engineGroup->addAction(a);
-            if (cur == key)
-                a->setChecked(true);
-            connect(a, &QAction::triggered, this, [key]() {
-                QSettings s("LumenArc", "LumenArc");
-                s.setValue("analysisEngine", key);
-            });
-        };
-        addEngine(lang("libav（原生，快）", "libav (native, fast)"),
-                  QStringLiteral("libav"));
-        addEngine(lang("Python（回退）", "Python (fallback)"),
-                  QStringLiteral("python"));
-    }
+    // v1.8.0 P-25：分析引擎切换菜单随 Python 引擎退役移除（libav 为唯一实现）；
+    // 历史设置键 analysisEngine 不再读取，QSettings 遗留值无副作用
 
     QAction *hwAction = settingsMenu->addAction(lang("硬件解码（重启生效）", "Hardware Decoding (restart required)"));
     hwAction->setCheckable(true);

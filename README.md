@@ -65,7 +65,7 @@ Release 包已内置 Python 和 ffmpeg，无需手动安装。
 | 操作系统 | Windows 10 22H2 / Windows 11 64位 | |
 | CPU | 6 核 12 线程以上（i5-12400 / Ryzen 5 5600 级） | 实测 1440p 软解 ~536fps、硬解 ~750fps（≈31 倍速）是“快拖指哪播哪”的物理基础；核心越多，拖拽追赶阶段越顺滑 |
 | 显卡 | Intel UHD 620+ / 任意近代核显或独显 | 1440p H.264 硬解零压力；GPU 只参与解码，画面绘制为 CPU 路径 |
-| 内存 | 16 GB | 长视频分析时 Python（numpy + OpenCV）峰值数百 MB，与视频缓存并行不挤 |
+| 内存 | 16 GB | 长视频分析时解码缓存 + OCR（numpy + OpenCV）峰值数百 MB，与视频缓存并行不挤 |
 | 存储 | NVMe / SATA SSD 存放素材 | 拼接长视频 seek 密集，SSD 冷 seek <1ms（机械盘 10~20ms），直接影响快拖起步手感 |
 | 显示器 | 2560×1440 或以上 | 监控素材本身为 1440p，1:1 观察 + 图表并排不吃力 |
 
@@ -139,7 +139,7 @@ Release 包已内置 Python 和 ffmpeg，无需手动安装。
 
 ## 开发与构建
 
-项目使用 Qt + CMake 构建。本地源码开发版需自行配置 Python 环境并确保 ffmpeg 在 PATH 中或在 `portable/ffmpeg` 目录下。
+项目使用 Qt + CMake 构建。本地源码开发版需自行配置 Python 环境（OCR 时间戳识别用，v1.8.0 起分析引擎为进程内 libav，分析不再依赖 Python）并确保 ffmpeg 在 PATH 中或在 `portable/ffmpeg` 目录下。
 
 ```bash
 mkdir build && cd build
