@@ -2307,8 +2307,8 @@ void MainWindow::openVideoFile(const QString &filePath)
 
             m_timelineModel->setData(
                 QVector<qint64>(savedState.snapshot.timestamps),
-                QVector<QVector<qreal>>(savedState.snapshot.values()),
-                QVector<DataEntry>(savedState.snapshot.dataEntries()),
+                QVector<QVector<qreal>>(savedState.snapshot.lumRows()),
+                QVector<DataEntry>(savedState.snapshot.lumEntries()),
                 savedState.snapshot.audioData()
             );
 

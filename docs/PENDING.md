@@ -26,7 +26,7 @@ P-20 2GB 尾帧 seek（已通过）· P-21 DVR 字体抽检（已通过）· P-2
 |---|---|---|
 | P-23 | 旋转按钮 ROI 坐标语义 + 实现 | ✅ 已完成（2026-08-16 用户确认） |
 | P-24 | v1.4.0 报告模板格式细节（Q-12） | ☐ 随 P-28 详谈 |
-| P-25 | Python 引擎回退退役 | ⏸ 用户拍板：**再留一个版本**，v1.8.0 时再评估 |
+| P-25 | Python 引擎回退退役 | ✅ 2026-08-17 用户拍板：**退役**（v1.8.0 实施，仅引擎壳；Python/cv2/numpy 因 OCR+报告租户保留，见 DEVELOPMENT_PLAN_V1.8_CN.md §5） |
 | P-26 | 报告 HTML 版 | ✅ 已砍（2026-08-16 用户拍板） |
 | P-27 | 音频无损（alaw→aac 有损整改） | ✅ **已实施+真机通过**（2026-08-16：产物 pcm_s16le 8k mono 128kb/s 无损生效；损坏源文件排查见 §45） |
 
@@ -35,9 +35,9 @@ P-20 2GB 尾帧 seek（已通过）· P-21 DVR 字体抽检（已通过）· P-2
 | # | 版本 | 内容 | 前置 | 状态 |
 |---|---|---|---|---|
 | P-28 | v1.4.0 | 分析报告模块（DOCX：案件信息/时间基准/哈希清单/逐视频章节/签署盖章位） | 校时+案件 ✅ | ☐ 下一个主版本 |
-| P-29 | v1.6.0 | GPU 显示管线 Stage 1（QOpenGLWidget 纹理缩放，消 uiDrops）；Stage 2 已砍 | 独立 | ☐ |
-| P-30 | v1.8.0 | P1a/P1b 任务化+通道化（TaskRegistry / 通道字典 / **.vla v10**）+ Python 引擎退役评估 | v1.5 ✅ | ☐ |
-| P-31 | v1.9.0 | P2 MainWindow 拆分（AnalysisController/VideoSessionManager/ProjectIO/UiState；收口 R2/R3/R5） | 前序全部 | ☐ |
+| P-29 | v1.6.0 | GPU 显示管线 Stage 1（QOpenGLWidget 纹理缩放，消 uiDrops）；Stage 2 已砍 | 独立 | ☐ 方案已拍板 2026-08-17（DEVELOPMENT_PLAN_V1.6_CN.md） |
+| P-30 | v1.8.0 | P1a/P1b 任务化+通道化（TaskRegistry / 通道字典 / **.vla v10**）+ Python 引擎退役 | v1.5 ✅ | ☐ 方案已拍板 2026-08-17（DEVELOPMENT_PLAN_V1.8_CN.md，含 Q5 退役） |
+| P-31 | v1.9.0 | P2 MainWindow 拆分（AnalysisController/VideoSessionManager/ProjectIO/UiState；收口 R2/R3/R5） | 前序全部 | ☐ 方案已拍板 2026-08-17（DEVELOPMENT_PLAN_V1.9_CN.md） |
 
 ## 五、技术债（有具体落点）
 
@@ -45,7 +45,7 @@ P-20 2GB 尾帧 seek（已通过）· P-21 DVR 字体抽检（已通过）· P-2
 |---|---|---|---|
 | P-32 | AnalysisPhase 硬编码枚举 → 任务化状态机 | 随 P-30 | ☐ |
 | P-33 | AnalysisSnapshot 硬编码成员 → channel 化（.vla v10） | 随 P-30 | ☐ |
-| P-34 | 旧版 SpectrogramPanel 死代码删除（R10） | 随 P-27 顺手做 | ☐ |
+| P-34 | 旧版 SpectrogramPanel 死代码删除（R10） | — | ✅ 2026-08-17 过期勾销：旧面板已在历史版本删除，代码库无残留（P-31 方案 §1.2 核查） |
 | P-35 | 6 处 qobject_cast<PythonAnalysisEngine*> 上移接口（R2） | 随 P-31 | ☐ |
 | P-36 | R3 穿透封装收口 | 随 P-31 | ☐ |
 | P-37 | 视频时长 5 份副本 → UiState SSOT（R5） | 随 P-31 | ☐ |

@@ -544,7 +544,7 @@ void ChartPanel::onDataReplaced()
 
     // Always rebuild when dataEntries exist to ensure series names/colors
     // match the latest data. The m_rebuilding flag prevents recursion.
-    if (!m_rebuilding && !snapshot.dataEntries().isEmpty()) {
+    if (!m_rebuilding && !snapshot.lumEntries().isEmpty()) {
         rebuildSeries();
         // 不 return：rebuildSeries 重建的空音量曲线需要继续填充，
         // 否则有亮度数据的视频切换后音量曲线为空（2026-08 修复）
@@ -920,18 +920,18 @@ void ChartPanel::rebuildSeries()
     bool hasDataEntries = false;
     if (m_timelineModel) {
         snap = m_timelineModel->snapshot();
-        hasDataEntries = !snap.dataEntries().isEmpty();
+        hasDataEntries = !snap.lumEntries().isEmpty();
     }
 
     // Build merged entries: ROI model as skeleton, dataEntries matched by roiId
-    // Each entry records the index into snapshot.values()[] for correct data mapping
+    // Each entry records the index into snapshot.lumRows()[] for correct data mapping
     m_seriesMapping.clear();
     for (int i = 0; i < rectCount; ++i) {
         int roiId = m_regionModel->roiIdAt(i);
         int dataIdx = -1;
         if (hasDataEntries) {
-            for (int j = 0; j < snap.dataEntries().size(); ++j) {
-                if (snap.dataEntries()[j].type == DataEntry::Rect && snap.dataEntries()[j].roiId == roiId) {
+            for (int j = 0; j < snap.lumEntries().size(); ++j) {
+                if (snap.lumEntries()[j].type == DataEntry::Rect && snap.lumEntries()[j].roiId == roiId) {
                     dataIdx = j;
                     break;
                 }
@@ -943,8 +943,8 @@ void ChartPanel::rebuildSeries()
         int roiId = m_polygonModel->polygonRoiIdAt(i);
         int dataIdx = -1;
         if (hasDataEntries) {
-            for (int j = 0; j < snap.dataEntries().size(); ++j) {
-                if (snap.dataEntries()[j].type == DataEntry::Polygon && snap.dataEntries()[j].roiId == roiId) {
+            for (int j = 0; j < snap.lumEntries().size(); ++j) {
+                if (snap.lumEntries()[j].type == DataEntry::Polygon && snap.lumEntries()[j].roiId == roiId) {
                     dataIdx = j;
                     break;
                 }
@@ -1391,12 +1391,12 @@ void ChartPanel::updateCursorPosition()
                     QStringList parts;
                     int rectLabel = 0, polyLabel = 0;
                     for (int i = 0; i < snap.regionCount(); ++i) {
-                        if (i >= snap.values().size() || snap.values()[i].isEmpty() || idx >= snap.values()[i].size())
+                        if (i >= snap.lumRows().size() || snap.lumRows()[i].isEmpty() || idx >= snap.lumRows()[i].size())
                             continue;
-                        qreal val = snap.values()[i][idx];
+                        qreal val = snap.lumRows()[i][idx];
                         // Use DataEntry for R/P labeling if available
-                        if (i < snap.dataEntries().size()) {
-                            if (snap.dataEntries()[i].type == DataEntry::Rect)
+                        if (i < snap.lumEntries().size()) {
+                            if (snap.lumEntries()[i].type == DataEntry::Rect)
                                 parts << QString("R%1:%2").arg(++rectLabel).arg(QString::number(val, 'f', 2));
                             else
                                 parts << QString("P%1:%2").arg(++polyLabel).arg(QString::number(val, 'f', 2));

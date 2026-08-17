@@ -18,7 +18,7 @@
 **放置纪律**：用户文档与过程记录在根目录；方案/设计/清单一律 `docs/`；
 `build_tmp/` 禁止存放任何文档（历史重复档已于 2026-08-16 清理）。
 
-## 二、文档清单（全量，18 份）
+## 二、文档清单（全量，21 份）
 
 ### T1 用户文档
 | 文档 | 用途 | 状态 |
@@ -36,6 +36,9 @@
 | docs/V1_ERA_TECH_PLAN_CN.md | v1 时代总体方案（v1.2~v1.9 + Q-1~Q-20 决策） | ⚠️ 已修正 §1.3 版本表（.vla 现 v9；v1.8 改 v10） |
 | docs/DEVELOPMENT_PLAN_V1.3_CN.md | v1.3 案件模块施工方案 | ✅ 已实施封版（v1.3.0） |
 | docs/DEVELOPMENT_PLAN_V1.7_CN.md | v1.7 前处理 v2 施工方案 | ✅ 已修正状态：已实施（dfb4f7c），Q1-Q6 回填 |
+| docs/DEVELOPMENT_PLAN_V1.6_CN.md | v1.6 GPU 显示管线 Stage 1 施工方案（P-29） | ✅ 已拍板（2026-08-17，待施工） |
+| docs/DEVELOPMENT_PLAN_V1.8_CN.md | v1.8 P1a/P1b 任务化+通道化施工方案（P-30，.vla v10 + Python 退役） | ✅ 已拍板（2026-08-17，待施工） |
+| docs/DEVELOPMENT_PLAN_V1.9_CN.md | v1.9 P2 MainWindow 拆分施工方案（P-31，四组件 + R2/R3/R5 收口） | ✅ 已拍板（2026-08-17，待施工） |
 | docs/PREPROCESSING_TECH_DESIGN_CN.md | 前处理技术设计 | ✅ 现行 |
 | docs/PREPROCESSING_UI_REDESIGN_CN.md | 前处理 UI 重设计 | ✅ 已落地（14.3） |
 | docs/RELEASE_CHECKLIST_V1.3_CN.md | v1.3 手工点检 A-H | ⚠️ 结果未填写（待真机执行，见 PENDING P-48） |

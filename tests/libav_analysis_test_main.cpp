@@ -316,8 +316,8 @@ static void testRealVideoAB(const QString &videoPath)
     }
 
     // 亮度逐点对比（验收线 |Δ|≤1 且均值偏差 ≤0.5）
-    compareSeries(pyTs, snap.timestamps, pyLums[0], snap.values()[0], pySampleMs, "rect");
-    compareSeries(pyTs, snap.timestamps, pyLums[1], snap.values()[1], pySampleMs, "poly");
+    compareSeries(pyTs, snap.timestamps, pyLums[0], snap.lumRows()[0], pySampleMs, "rect");
+    compareSeries(pyTs, snap.timestamps, pyLums[1], snap.lumRows()[1], pySampleMs, "poly");
 }
 
 /// 音频 A/B 对拍：volume 相关系数 ≥0.999；语谱 log10 域 |Δ| ≤ 0.05。

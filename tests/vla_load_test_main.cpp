@@ -61,9 +61,9 @@ static int testFile(ChartPanel *chart, RoiModel *rm, RoiModel *pm,
     }
     fprintf(stderr, "[tf] loaded: regions=%d rIds=%lld polys=%d pIds=%lld entries=%lld ts=%lld values=%lld\n",
             regions.size(), (long long)rIds.size(), polys.size(), (long long)pIds.size(),
-            (long long)tm->snapshot().dataEntries().size(),
+            (long long)tm->snapshot().lumEntries().size(),
             (long long)tm->snapshot().timestamps.size(),
-            (long long)tm->snapshot().values().size());
+            (long long)tm->snapshot().lumRows().size());
 
     // 模拟 restoreAnalysisState + 多边形恢复
     if (rIds.size() == regions.size())
@@ -98,7 +98,7 @@ static int testFile(ChartPanel *chart, RoiModel *rm, RoiModel *pm,
 
     // ---- VLA2 往返：新格式保存 → 清空 → 重载 → 数据与曲线比对 ----
     const QVector<qint64> oldTs = tm->snapshot().timestamps;
-    const QVector<QVector<qreal>> oldVals = tm->snapshot().values();
+    const QVector<QVector<qreal>> oldVals = tm->snapshot().lumRows();
     QString tmp = QDir::temp().filePath("vla2_roundtrip_test.vla");
     QFile::remove(tmp);
     TimeCalibration saveCal = TimeCalibration::fromLegacyOffset(12345);
@@ -123,12 +123,12 @@ static int testFile(ChartPanel *chart, RoiModel *rm, RoiModel *pm,
         SnapshotFusionData f2;
         if (tm->loadFromFile(tmp, &r2, &cal2, &m2, &l2, &pin2, &f2, &p2, &g2, &rIds2, &pIds2)) {
             const auto snap = tm->snapshot();
-            bool dataOk = (snap.timestamps == oldTs) && (snap.values().size() == oldVals.size());
+            bool dataOk = (snap.timestamps == oldTs) && (snap.lumRows().size() == oldVals.size());
             if (dataOk) {
                 for (int r = 0; r < oldVals.size() && dataOk; ++r) {
-                    if (snap.values()[r].size() != oldVals[r].size()) { dataOk = false; break; }
+                    if (snap.lumRows()[r].size() != oldVals[r].size()) { dataOk = false; break; }
                     for (int c = 0; c < oldVals[r].size(); ++c)
-                        if (qAbs(snap.values()[r][c] - oldVals[r][c]) > 1e-3) { dataOk = false; break; }
+                        if (qAbs(snap.lumRows()[r][c] - oldVals[r][c]) > 1e-3) { dataOk = false; break; }
                 }
             }
             // roiId 保持：VLA2 必须原样带回
@@ -585,8 +585,8 @@ int main(int argc, char **argv)
                                              &pr2, &ff2, &pp2, &gg2, &ri2, &pi2);
         const auto snapR = tmR2.snapshot();
         const bool cOk = cLoad && !snapR.isEmpty()
-                         && snapR.values().size() == 2
-                         && snapR.values()[0].size() == 3;
+                         && snapR.lumRows().size() == 2
+                         && snapR.lumRows()[0].size() == 3;
         fprintf(stderr, "[conc] concurrent writes fail=%d reload ok=%d => %s\n",
                 int(concFail.loadRelaxed()), cLoad, cOk ? "PASS" : "FAIL <<<");
         if (!cOk || concFail.loadRelaxed() != 0) ++fail;
@@ -685,7 +685,7 @@ int main(int argc, char **argv)
         }
         fprintf(stderr, "[reopen]   total series=%d roiCount=%d entries=%d\n",
                 totalS, rmR.regionCount(),
-                int(tmR.snapshot().dataEntries().size()));
+                int(tmR.snapshot().lumEntries().size()));
         const bool reopenOk = loaded && seriesR == 2 && visibleR == 2;
         fprintf(stderr, "[reopen] loaded=%d curves=%d visible=%d => %s\n",
                 loaded, seriesR, visibleR, reopenOk ? "PASS" : "FAIL <<<");

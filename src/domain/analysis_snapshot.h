@@ -266,11 +266,6 @@ struct AnalysisSnapshot
         return it == channels.constEnd() ? empty : it->audio;
     }
 
-    // ---- 迁移期兼容访问器（内部转发 channels；C5 消费点切换后删除，R10）----
-    const QVector<QVector<qreal>> &values() const { return lumRows(); }
-    const QVector<DataEntry> &dataEntries() const { return lumEntries(); }
-    const AudioData &audio() const { return audioData(); }
-
     bool isEmpty() const { return timestamps.isEmpty(); }   ///< 亮度侧空（音频自含，同旧版语义）
     bool hasAudio() const { return !audioData().isEmpty(); }
     int pointCount() const { return timestamps.size(); }
