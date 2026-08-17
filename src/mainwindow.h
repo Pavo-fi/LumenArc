@@ -16,6 +16,7 @@
 #include "domain/timeline_model.h"
 #include "domain/time_calibration.h"
 #include "videolistpanel.h"
+#include "app/project_io.h"
 #include "videostatemanager.h"
 
 class TimeSettingsDialog;
@@ -199,7 +200,7 @@ protected:
     /// v1.9.0 P-31 T2-A：视频会话（VideoStateManager 归属 + 打开决策数据面）
     class VideoSessionManager *m_sessionMgr = nullptr;
     /// v1.9.0 P-31 T1：工程读写（vla/CSV/时间戳ROI记忆/徽标文案）
-    class ProjectIO *m_projectIo = nullptr;
+    ProjectIO *m_projectIo = nullptr;
     CalibrationService *m_calibrationService = nullptr;
     /// 案件管理器（v1.3.0 M2）：.vla 路径分流/框选记忆随案 SSOT；
     /// 无打开案件或未入案视频时全部回落独立模式老路径（v1.2.2 逐点一致）
@@ -218,15 +219,10 @@ protected:
     /// 校时长任务完成的 Windows toast 通知（v1.2.2，用户最小化等待场景）
     void showTrayNotification(const QString &title, const QString &message);
     QSystemTrayIcon *m_trayIcon = nullptr;
-    /// 时间戳区域持久化（按视频路径 hash，同一摄像头复用）
-    QRectF savedTimestampRoi(const QString &videoPath) const;
-    void saveTimestampRoi(const QString &videoPath, const QRectF &norm);
     /// v1.7.1：后台保存当前视频 .vla + 同步案件校时徽标（分析完成/校时采用共用）
     void saveCurrentVlaAsync();
-    /// QSettings 注册表读取（独立模式路径；案件模式迁移时只读复制源）
-    QRectF readTimestampRoiRegistry(const QString &videoPath) const;
-    /// 校时徽标文案（写案件内 .vla 时同步刷新 CaseVideoRef 缓存）
-    QString calibrationBadgeSummary() const;
+    /// UI 侧收集 .vla 保存参数（P-31 T1：ProjectIO 请求装配）
+    ProjectIO::VlaSaveRequest collectVlaSaveRequest();
     bool m_volumeWarnShown = false;   // v1.7.1：音量破 200% 提示（每会话一次）
     RoiModel *m_roiModel = nullptr;
     GuideLineModel *m_guideLineModel = nullptr;

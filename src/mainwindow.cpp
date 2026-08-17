@@ -639,7 +639,7 @@ MainWindow::MainWindow(QWidget *parent)
     connect(m_videoWidget, &VideoWidget::timestampRoiReady,
             this, [this](const QRectF &norm) {
                 if (m_roiDialog) {
-                    saveTimestampRoi(m_currentVideoPath, norm);
+                    m_projectIo->saveTimestampRoi(m_currentVideoPath, norm);
                     m_roiDialog->stageTimestampRoi(norm);
                 }
                 m_videoWidget->endTimestampRoiSelection();
@@ -2264,7 +2264,7 @@ void MainWindow::openVideoFile(const QString &filePath)
             // 熄灭案件里误亮的 ⏰（用户实测反馈）
             m_caseManager->updateCalibrationBadge(
                 m_currentVideoPath, m_calibration.isEffective(),
-                calibrationBadgeSummary());
+                ProjectIO::calibrationBadgeSummary(m_calibration));
             m_chartPanel->setLabels(savedState.labels);
             m_chartPanel->setChartGuideLinesData(savedState.chartGuideLines);
 
@@ -2466,31 +2466,15 @@ void MainWindow::onSaveAnalysis()
         return;
     }
 
-    // v1.3.0 路径分流：入案视频默认存案件 videos/V###.vla（仍可另选路径）；
-    // 直接加载 .vla 的场景默认覆写原文件（v1.2.2 行为保持）
-    QString defaultPath = m_currentVideoPath;
-    if (defaultPath.isEmpty())
-        defaultPath = "analysis_result.vla";
-    else if (!defaultPath.endsWith(".vla", Qt::CaseInsensitive))
-        defaultPath = m_caseManager->vlaPathFor(defaultPath);
-
+    // P-31 T1：路径分流与写出归 ProjectIO（行为冻结）
+    QString defaultPath = m_projectIo->suggestSavePath(m_currentVideoPath);
     QString filePath = QFileDialog::getSaveFileName(this,
         lang("保存分析结果", "Save Analysis Result"), defaultPath,
         lang("VLA 文件 (*.vla)", "VLA Files (*.vla)"));
     if (filePath.isEmpty())
         return;
 
-    QRect magnifierRect = m_magnifier ? m_magnifier->currentSourceRect() : QRect();
-    if (m_timelineModel->saveToFile(filePath, m_roiModel->regions(),
-                                     m_calibration,
-                                     magnifierRect,
-                                     m_chartPanel->labels(),
-                                     m_pinnedRect,
-                                     m_snapshotFusion,
-                                     m_roiModel->polygons(),
-                                     m_guideLineModel->lines(),
-                                     m_roiModel->roiIds(),
-                                     m_roiModel->polygonRoiIds())) {
+    if (m_projectIo->saveVlaNow(filePath, collectVlaSaveRequest())) {
         // VLA2：频谱已内嵌于文件中，无需 .spec 伴随文件
         // 存入案件管理路径时同步刷新校时徽标缓存（.vla 为 SSOT）
         if (!m_currentVideoPath.isEmpty()
@@ -2498,7 +2482,7 @@ void MainWindow::onSaveAnalysis()
                    == QFileInfo(m_caseManager->vlaPathFor(m_currentVideoPath)).absoluteFilePath()) {
             m_caseManager->updateCalibrationBadge(
                 m_currentVideoPath, m_calibration.isEffective(),
-                calibrationBadgeSummary());
+                ProjectIO::calibrationBadgeSummary(m_calibration));
         }
         QMessageBox::information(this, lang("保存", "Save"),
             lang("分析结果保存成功。", "Analysis result saved successfully."));
@@ -2587,104 +2571,48 @@ void MainWindow::onLoadOverlayImage()
 // ---------------------------------------------------------------------------
 // 时间戳区域持久化（v1.2.1：按视频路径 hash，同一摄像头复用）
 // ---------------------------------------------------------------------------
-QRectF MainWindow::readTimestampRoiRegistry(const QString &videoPath) const
-{
-    QSettings s("LumenArc", "LumenArc");
-    const QByteArray key = "calibration/roi_"
-        + QCryptographicHash::hash(videoPath.toUtf8(), QCryptographicHash::Md5).toHex();
-    return s.value(QString::fromLatin1(key)).toRectF();
-}
 
-QRectF MainWindow::savedTimestampRoi(const QString &videoPath) const
-{
-    if (videoPath.isEmpty())
-        return QRectF();
-    // v1.3.0 框选记忆随案（M2 任务9）：入案视频读写 case.json
-    if (m_caseManager && m_caseManager->isCaseVideo(videoPath)) {
-        QRectF roi = m_caseManager->timestampRoiFor(videoPath);
-        if (roi.isValid())
-            return roi;
-        // 迁移：注册表旧值只读复制一次入案（注册表原值保留一版，拍板§8-12）
-        roi = readTimestampRoiRegistry(videoPath);
-        if (roi.isValid())
-            m_caseManager->setTimestampRoi(videoPath, roi);
-        return roi;
-    }
-    // 独立模式照旧 QSettings
-    return readTimestampRoiRegistry(videoPath);
-}
+
+
 
 /// v1.7.1：后台保存当前视频 .vla + 同步案件校时徽标。
 /// 分析完成自动保存与校时采用后共用（用户实测：校时后徽标不出现——
 /// 旧流程只在保存 .vla 时刷新徽标，校时采用未触发保存）。
+/// v1.7.1：后台保存当前视频 .vla + 同步案件校时徽标。
+/// v1.9.0 P-31 T1：写出与参数组装归 ProjectIO（行为冻结）。
 void MainWindow::saveCurrentVlaAsync()
 {
     if (m_currentVideoPath.isEmpty()
         || m_currentVideoPath.endsWith(".vla", Qt::CaseInsensitive))
         return;
-    // v1.3.0 路径分流：入案视频 .vla 落案件 videos/V###.vla
-    const QString vlaPath = m_caseManager->vlaPathFor(m_currentVideoPath);
-    QDir().mkpath(QFileInfo(vlaPath).absolutePath());
-    const QRect magRect = m_magnifier ? m_magnifier->currentSourceRect() : QRect();
-    // 全部参数为值拷贝（各 model 的 getter 返回副本），后台线程安全
-    const QVector<QRect> regions = m_roiModel->regions();
-    const TimeCalibration calibration = m_calibration;
-    const QVector<ChartLabel> labels = m_chartPanel->labels();
-    const QRect pinned = m_pinnedRect;
-    const SnapshotFusionData fusion = m_snapshotFusion;
-    const QVector<QPolygon> polygons = m_roiModel->polygons();
-    const QVector<GuideLine> lines = m_guideLineModel->lines();
-    const QVector<int> regionRoiIds = m_roiModel->roiIds();
-    const QVector<int> polygonRoiIds = m_roiModel->polygonRoiIds();
-    TimelineModel *model = m_timelineModel;
-    QtConcurrent::run([model, vlaPath, regions, calibration, magRect, labels,
-                       pinned, fusion, polygons, lines,
-                       regionRoiIds, polygonRoiIds]() {
-        model->saveToFile(vlaPath, regions, calibration, magRect, labels,
-                          pinned, fusion, polygons, lines,
-                          regionRoiIds, polygonRoiIds);
-    });
+    m_projectIo->saveVlaAsync(m_caseManager->vlaPathFor(m_currentVideoPath),
+                              collectVlaSaveRequest());
     // 同步刷新案件校时徽标缓存（.vla 为 SSOT；案件模式空指针安全）
     m_caseManager->updateCalibrationBadge(
         m_currentVideoPath, m_calibration.isEffective(),
-        calibrationBadgeSummary());
+        ProjectIO::calibrationBadgeSummary(m_calibration));
 }
 
-void MainWindow::saveTimestampRoi(const QString &videoPath, const QRectF &norm)
+/// UI 侧收集 .vla 保存参数（值拷贝，后台线程安全）
+ProjectIO::VlaSaveRequest MainWindow::collectVlaSaveRequest()
 {
-    if (videoPath.isEmpty() || !norm.isValid())
-        return;
-    // v1.3.0 入案视频框选记忆写 case.json（独立模式照旧 QSettings）
-    if (m_caseManager && m_caseManager->isCaseVideo(videoPath)) {
-        m_caseManager->setTimestampRoi(videoPath, norm);
-        return;
-    }
-    QSettings s("LumenArc", "LumenArc");
-    const QByteArray key = "calibration/roi_"
-        + QCryptographicHash::hash(videoPath.toUtf8(), QCryptographicHash::Md5).toHex();
-    s.setValue(QString::fromLatin1(key), norm);
+    ProjectIO::VlaSaveRequest req;
+    req.regions = m_roiModel->regions();
+    req.calibration = m_calibration;
+    req.magnifierRect = m_magnifier ? m_magnifier->currentSourceRect() : QRect();
+    req.labels = m_chartPanel->labels();
+    req.pinnedRect = m_pinnedRect;
+    req.fusion = m_snapshotFusion;
+    req.polygons = m_roiModel->polygons();
+    req.guideLines = m_guideLineModel->lines();
+    req.regionRoiIds = m_roiModel->roiIds();
+    req.polygonRoiIds = m_roiModel->polygonRoiIds();
+    return req;
 }
 
-QString MainWindow::calibrationBadgeSummary() const
-{
-    if (!m_calibration.isEffective())
-        return QString();
-    QString src;
-    switch (m_calibration.source) {
-    case TimeCalibration::Source::Manual:    src = lang("手动", "manual"); break;
-    case TimeCalibration::Source::Ocr:       src = QStringLiteral("OCR"); break;
-    case TimeCalibration::Source::AbsStart:  src = QStringLiteral("absStart"); break;
-    case TimeCalibration::Source::Inherited: src = lang("继承", "inherited"); break;
-    default: break;
-    }
-    // 例："OCR 3点, rate=1.000"；分段重建模式标注 piecewise
-    QString s = lang("%1 %2点, rate=%3", "%1 %2pts, rate=%3")
-        .arg(src).arg(m_calibration.samples.size())
-        .arg(m_calibration.effectiveRate(), 0, 'f', 3);
-    if (m_calibration.piecewiseMode())
-        s += lang("（分段重建）", " (piecewise)");
-    return s;
-}
+
+
+
 
 void MainWindow::showTrayNotification(const QString &title,
                                       const QString &message)
@@ -2741,7 +2669,7 @@ void MainWindow::onSetStartTime()
     dlg->setAttribute(Qt::WA_DeleteOnClose);
     m_calibrationDialog = dlg;
     // 恢复已保存的时间戳区域（同一摄像头自动复用）
-    const QRectF savedRoi = savedTimestampRoi(m_currentVideoPath);
+    const QRectF savedRoi = m_projectIo->savedTimestampRoi(m_currentVideoPath);
     if (savedRoi.isValid())
         dlg->setTimestampRoi(savedRoi);
     // 应用校时（与旧模态路径等价：应用后更新图表与状态栏）
@@ -2749,7 +2677,7 @@ void MainWindow::onSetStartTime()
     connect(dlg, &TimeSettingsDialog::requestTimestampRoi,
             this, [this, dlg]() {
                 // 优先用已保存的区域（同一摄像头复用）；无则给右上角默认框
-                QRectF saved = savedTimestampRoi(m_currentVideoPath);
+                QRectF saved = m_projectIo->savedTimestampRoi(m_currentVideoPath);
                 m_videoWidget->beginTimestampRoiSelection(saved);
                 m_roiDialog = dlg;
             });
@@ -3352,43 +3280,14 @@ void MainWindow::onExportCsv()
 
     QVector<QRect> regions = m_roiModel->regions();
     if (snapshot.exportToCsv(filePath, regions, m_calibration)) {
-        // Export labels to separate file
+        // Export labels to separate file（P-31 T1：写出归 ProjectIO）
         QVector<ChartLabel> labels = m_chartPanel->labels();
         if (!labels.isEmpty()) {
             QString labelsPath = filePath;
             if (labelsPath.endsWith(".csv", Qt::CaseInsensitive))
                 labelsPath.chop(4);
             labelsPath += "_labels.csv";
-
-            QFile labelsFile(labelsPath);
-            if (labelsFile.open(QIODevice::WriteOnly | QIODevice::Text)) {
-                // RFC 4180: quote fields containing comma, quote or newline
-                auto csvField = [](const QString &s) -> QString {
-                    if (s.contains(QLatin1Char(',')) || s.contains(QLatin1Char('"'))
-                        || s.contains(QLatin1Char('\n')) || s.contains(QLatin1Char('\r'))) {
-                        QString t = s;
-                        t.replace(QStringLiteral("\""), QStringLiteral("\"\""));
-                        return QStringLiteral("\"") + t + QStringLiteral("\"");
-                    }
-                    return s;
-                };
-                QTextStream out(&labelsFile);
-                out << "Time(ms),Time,Text,Color\n";
-                for (const auto &label : labels) {
-                    QString timeStr;
-                    if (m_calibration.dateKnown) {
-                        timeStr = QDateTime::fromMSecsSinceEpoch(
-                            m_calibration.beijingMsOf(label.timeMs))
-                            .toString(QStringLiteral("yyyy-MM-dd HH:mm:ss"));
-                    } else {
-                        timeStr = formatTime(label.timeMs + m_calibration.offsetMs);
-                    }
-                    out << label.timeMs << ","
-                        << timeStr << ","
-                        << csvField(label.text) << ","
-                        << label.color.name(QColor::HexArgb) << "\n";
-                }
-                labelsFile.close();
+            if (m_projectIo->exportLabelsCsv(labelsPath, labels, m_calibration)) {
                 QMessageBox::information(this, lang("导出", "Export"),
                     lang("数据导出成功。\n标签文件：",
                          "Data exported successfully.\nLabels: ") + labelsPath);
