@@ -582,13 +582,11 @@ static bool parseAnalysisBuffer(const QByteArray &buf,
         }
     }
 
-    AnalysisSnapshot snapshot;
-    snapshot.timestamps = std::move(timestamps);
-    snapshot.values = std::move(values);
-
-    // dataEntries 与存储的 ROI ID 对齐
-    const int totalRois = snapshot.values.size();
+    // dataEntries 与存储的 ROI ID 对齐（v1.8.0：通道化装配）
+    const int totalRois = values.size();
     const int rectCount = rectRoiIds.size();
+    QVector<DataEntry> entries;
+    entries.reserve(totalRois);
     for (int i = 0; i < totalRois; ++i) {
         DataEntry entry;
         if (i < rectCount) {
@@ -599,9 +597,11 @@ static bool parseAnalysisBuffer(const QByteArray &buf,
             const int pi = i - rectCount;
             entry.roiId = pi < polygonRoiIds.size() ? polygonRoiIds[pi] : -1;
         }
-        snapshot.dataEntries.append(entry);
+        entries.append(entry);
     }
-    snapshot.audio = audio;
+    AnalysisSnapshot snapshot;
+    snapshot.setLuminance(std::move(timestamps), std::move(values), std::move(entries));
+    snapshot.setAudio(std::move(audio));
     *out = snapshot;
     return true;
 }

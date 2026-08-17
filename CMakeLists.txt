@@ -98,6 +98,8 @@ set(SOURCES
     src/app/cam_timeline.cpp
     src/app/preprocessing_coordinator.cpp
     src/app/calibration_service.cpp
+    src/domain/task_registry.cpp
+    src/app/analysis_task_service.cpp
     src/timesettingsdialog.cpp
     src/infrastructure/ffmpeg_video_engine.cpp
     src/infrastructure/python_analysis_engine.cpp
@@ -119,6 +121,8 @@ endif()
 set(HEADERS
     src/mainwindow.h
     src/videowidget.h
+    src/domain/task_registry.h
+    src/app/analysis_task_service.h
     src/chartpanel.h
     src/magnifierwidget.h
     src/snapshotoverlay.h
@@ -240,6 +244,27 @@ target_include_directories(lumenarc_roi_model_test PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src
 )
 target_link_libraries(lumenarc_roi_model_test PRIVATE
+    Qt6::Core
+    Qt6::Gui
+)
+
+# --- v1.8.0 P1a/P1b：任务注册表 + 状态机 + 通道化/v10 单测 ---
+add_executable(lumenarc_task_registry_test
+    tests/task_registry_test_main.cpp
+    src/domain/task_registry.cpp
+    src/domain/task_registry.h
+    src/domain/timeline_model.cpp
+    src/domain/time_calibration.cpp
+    src/domain/time_piecewise.cpp
+    src/app/analysis_task_service.cpp
+    src/app/analysis_task_service.h
+    src/infrastructure/ianalysis_engine.h
+    src/i18n.cpp
+)
+target_include_directories(lumenarc_task_registry_test PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+)
+target_link_libraries(lumenarc_task_registry_test PRIVATE
     Qt6::Core
     Qt6::Gui
 )

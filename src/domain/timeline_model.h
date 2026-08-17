@@ -54,6 +54,9 @@ public:
     void setData(QVector<qint64> timestamps, QVector<QVector<qreal>> values,
                  QVector<DataEntry> dataEntries, const AudioData &audio = AudioData());
 
+    /// 整体替换（v1.8.0：合并策略/恢复现场用；QHash 隐式共享廉价）
+    void setSnapshot(const AnalysisSnapshot &snapshot);
+
     void clearData();
 
     /// Clear only luminance data (timestamps + values), preserve audio data.
@@ -117,4 +120,6 @@ signals:
 private:
     mutable QReadWriteLock m_lock;
     AnalysisSnapshot m_snapshot;
+    /// 亮度行删除（锁内调用；行删空时清共享时间轴，同旧版行为）
+    void removeLuminanceRowLocked(int index);
 };

@@ -53,7 +53,8 @@ public:
     explicit MainWindow(QWidget *parent = nullptr);
     ~MainWindow();
 
-    enum AnalysisPhase { None, Luminance, Audio };
+    // v1.8.0 P1a：AnalysisPhase 硬编码两阶段枚举已删（PENDING P-32 勾销）——
+    // 分析流程状态由 AnalysisTaskService 状态机持有（R7/R8），MainWindow 仅响应任务信号
 
 private slots:
     /// @brief 打开文件对话框并加载视频
@@ -89,10 +90,12 @@ private slots:
     void onMagnifierWheelZoom(int delta, QPoint videoPos);
     void removeMagnifier();
 
-    // Analysis engine callbacks
-    void onAnalysisProgress(int analyzed, int total, qreal percent);
-    void onAnalysisFinished(const AnalysisSnapshot &snapshot);
-    void onAnalysisFailed(const QString &error);
+    // Analysis task service callbacks（v1.8.0 P1a：UI 中性信号，取代引擎直连）
+    void onTaskStarted(const QString &taskId);
+    void onTaskProgress(const QString &taskId, qreal percent, const QString &detail);
+    void onTaskFinished(const QString &taskId, const AnalysisSnapshot &snapshot);
+    void onTaskFailed(const QString &taskId, const QString &code, const QString &detail);
+    void onTaskCancelled(const QString &taskId);
 
     // Multi-video
     void onVideoSelected(int index);
@@ -188,6 +191,7 @@ protected:
     SnapshotOverlay *m_snapshotOverlay = nullptr;
     IVideoEngine *m_videoEngine = nullptr;
     IAnalysisEngine *m_analysisEngine = nullptr;
+    class AnalysisTaskService *m_taskService = nullptr;   ///< v1.8.0 P1a：任务状态机（持引擎信号聚合）
     CalibrationService *m_calibrationService = nullptr;
     /// 案件管理器（v1.3.0 M2）：.vla 路径分流/框选记忆随案 SSOT；
     /// 无打开案件或未入案视频时全部回落独立模式老路径（v1.2.2 逐点一致）
@@ -294,5 +298,4 @@ protected:
     VideoListPanel *m_videoListPanel = nullptr;
     SpectrogramPanelEnhanced *m_spectrogramEnhanced = nullptr;
     VideoStateManager *m_stateManager = nullptr;
-    AnalysisPhase m_analysisPhase = None;       // 当前分析阶段（进度条分离）
 };

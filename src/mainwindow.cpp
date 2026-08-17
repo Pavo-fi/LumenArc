@@ -23,6 +23,8 @@
 #include "app/calibration_service.h"
 #include "app/case_manager.h"
 #include "app/case_open_panel.h"
+#include "app/analysis_task_service.h"
+#include "domain/task_registry.h"
 #include "casedock.h"
 #include "casedialogs.h"
 #include "multicamview.h"
@@ -522,6 +524,32 @@ MainWindow::MainWindow(QWidget *parent)
             m_analysisEngine = new LibavAnalysisEngine(this);
         }
     }
+
+    // ---- v1.8.0 P1a：任务注册 + 状态机服务 ----
+    // 注册表（R8）：前置条件闭包只捕 domain 模型，不捕 UI 控件（R1）
+    {
+        auto &reg = TaskRegistry::instance();
+        AnalysisTaskDesc lum;
+        lum.taskId = AnalysisChannels::luminance();
+        lum.displayNameZh = QStringLiteral("亮度分析");
+        lum.displayNameEn = QStringLiteral("Luminance");
+        lum.preconditionError = [roiModel = m_roiModel]() -> QString {
+            if (roiModel->regionCount() == 0 && roiModel->polygonCount() == 0)
+                return lang("请先在视频上绘制至少一个 ROI 区域。",
+                            "Please draw at least one ROI on the video.");
+            return QString();
+        };
+        lum.producedChannels = {AnalysisChannels::luminance()};
+        reg.registerTask(lum);
+
+        AnalysisTaskDesc aud;
+        aud.taskId = AnalysisChannels::audio();
+        aud.displayNameZh = QStringLiteral("音频分析");
+        aud.displayNameEn = QStringLiteral("Audio");
+        aud.producedChannels = {AnalysisChannels::audio()};
+        reg.registerTask(aud);
+    }
+    m_taskService = new AnalysisTaskService(m_analysisEngine, m_timelineModel, this);
 
     // 校时服务（v1.2.0：三点识别/absStart/sidecar 继承；产出仅预填，
     // 「采用」由 TimeSettingsDialog 决定）
@@ -1289,12 +1317,18 @@ void MainWindow::setupConnections()
         m_videoEngine->seek(pos);
     });
 
-    connect(m_analysisEngine, &IAnalysisEngine::progressUpdated,
-            this, &MainWindow::onAnalysisProgress);
-    connect(m_analysisEngine, &IAnalysisEngine::analysisFinished,
-            this, &MainWindow::onAnalysisFinished);
-    connect(m_analysisEngine, &IAnalysisEngine::analysisFailed,
-            this, &MainWindow::onAnalysisFailed);
+    // v1.8.0 P1a：引擎信号由 AnalysisTaskService 聚合（状态机 gating），
+    // MainWindow 只接任务级中性信号（R1：UI 与引擎解耦）
+    connect(m_taskService, &AnalysisTaskService::taskStarted,
+            this, &MainWindow::onTaskStarted);
+    connect(m_taskService, &AnalysisTaskService::taskProgress,
+            this, &MainWindow::onTaskProgress);
+    connect(m_taskService, &AnalysisTaskService::taskFinished,
+            this, &MainWindow::onTaskFinished);
+    connect(m_taskService, &AnalysisTaskService::taskFailed,
+            this, &MainWindow::onTaskFailed);
+    connect(m_taskService, &AnalysisTaskService::taskCancelled,
+            this, &MainWindow::onTaskCancelled);
 
     // Magnifier signals from video overlay
     auto *overlay = m_videoWidget->overlay();
@@ -1639,7 +1673,7 @@ void MainWindow::setupConnections()
 
     // v0.3: Cancel button
     connect(m_cancelBtn, &QPushButton::clicked, this, [this]() {
-        m_analysisEngine->cancelAnalysis();
+        m_taskService->cancel();   // v1.8.0 P1a：经状态机取消（迟到信号 gating）
     });
 
     // v0.35: Spectrogram X-axis bidirectional sync with ChartPanel
@@ -2273,9 +2307,9 @@ void MainWindow::openVideoFile(const QString &filePath)
 
             m_timelineModel->setData(
                 QVector<qint64>(savedState.snapshot.timestamps),
-                QVector<QVector<qreal>>(savedState.snapshot.values),
-                QVector<DataEntry>(savedState.snapshot.dataEntries),
-                savedState.snapshot.audio
+                QVector<QVector<qreal>>(savedState.snapshot.values()),
+                QVector<DataEntry>(savedState.snapshot.dataEntries()),
+                savedState.snapshot.audioData()
             );
 
             m_calibration = savedState.calibration;
@@ -2325,7 +2359,7 @@ void MainWindow::openVideoFile(const QString &filePath)
             }
 
             if (m_spectrogramEnhanced && savedState.snapshot.hasAudio())
-                m_spectrogramEnhanced->setSpectrogramData(savedState.snapshot.audio);
+                m_spectrogramEnhanced->setSpectrogramData(savedState.snapshot.audioData());
 
             m_playBtn->setEnabled(true);
             m_pauseBtn->setEnabled(true);
@@ -3175,7 +3209,7 @@ void MainWindow::onAnalyze()
         return;
     }
 
-    // If python path not found, silently retry detection
+    // Python 引擎过渡期路径注入（P-25 退役后移除）
     auto *pyEngine = qobject_cast<PythonAnalysisEngine *>(m_analysisEngine);
     if (pyEngine && pyEngine->pythonExecutable().isEmpty()) {
         pyEngine->setPythonExecutable(detectPythonPath());
@@ -3203,25 +3237,11 @@ void MainWindow::onAnalyze()
     for (int i = 0; i < m_roiModel->polygonCount(); ++i)
         polygonRoiIds.append(m_roiModel->polygonRoiIdAt(i));
 
-    if (m_analysisEngine->isRunning()) {
-        QMessageBox::information(this, lang("亮度分析", "Luminance Analysis"),
-            lang("分析正在运行中。", "Analysis is already running."));
-        return;
-    }
-
-    // v0.3: Use status bar instead of modal dialog
-    m_analyzeBtn->setEnabled(false);
-    m_analyzeBtn->setText(lang("亮度分析中...", "Analyzing luminance..."));
-    m_cancelBtn->setEnabled(true);
-    m_cancelBtn->setVisible(true);
-    m_progressBar->setVisible(true);
-    m_progressBar->setValue(0);
-    m_statusLabel->setText(lang("正在准备分析...", "Preparing analysis..."));
-
-    m_analysisPhase = Luminance;
-    m_analysisEngine->startAnalysis(m_currentVideoPath, regions, polygons, {},
-                                     rectRoiIds, polygonRoiIds);
+    // v1.8.0 P1a：状态机接管（前置校验/忙检查在服务内，失败经 taskFailed 弹窗）
+    m_taskService->start(AnalysisChannels::luminance(), m_currentVideoPath,
+                         regions, polygons, rectRoiIds, polygonRoiIds);
 }
+
 
 /// @brief 启动音频分析（独立于亮度分析，无需 ROI）
 void MainWindow::onAudioAnalysis()
@@ -3232,10 +3252,8 @@ void MainWindow::onAudioAnalysis()
         return;
     }
 
-    // v1.5.0-3：startAudioAnalysis 已上移接口（libav/Python 均支持），
-    // 移除 Python 专属 guard（旧版 qobject_cast 检查已废弃）
+    // Python 引擎过渡期路径注入（P-25 退役后移除）
     if (auto *pyEngine = qobject_cast<PythonAnalysisEngine *>(m_analysisEngine)) {
-        // Python 引擎需要解释器存在（libav 引擎无需 Python）
         if (pyEngine->pythonExecutable().isEmpty()) {
             pyEngine->setPythonExecutable(detectPythonPath());
             if (pyEngine->pythonExecutable().isEmpty()) {
@@ -3247,56 +3265,48 @@ void MainWindow::onAudioAnalysis()
         }
     }
 
-    if (m_analysisEngine->isRunning()) {
-        QMessageBox::information(this, lang("音频分析", "Audio Analysis"),
-            lang("分析正在运行中。", "Analysis is already running."));
-        return;
-    }
+    // v1.8.0 P1a：音频无前置条件（无 ROI 要求），状态机接管
+    m_taskService->start(AnalysisChannels::audio(), m_currentVideoPath,
+                         {}, {}, {}, {});
+}
 
-    m_analyzeBtn->setEnabled(false);
-    m_audioAnalysisBtn->setEnabled(false);
-    m_audioAnalysisBtn->setText(lang("分析中...", "Analyzing..."));
+
+void MainWindow::onTaskStarted(const QString &taskId)
+{
+    // 按钮态复刻旧行为：亮度任务只置灰分析按钮（音频按钮点击会得到
+    // "分析正在运行中"提示）；音频任务双按钮都置灰
+    if (taskId == AnalysisChannels::audio()) {
+        m_analyzeBtn->setEnabled(false);
+        m_audioAnalysisBtn->setEnabled(false);
+        m_audioAnalysisBtn->setText(lang("分析中...", "Analyzing..."));
+        m_statusLabel->setText(lang("正在分析音频...", "Analyzing audio..."));
+    } else {
+        m_analyzeBtn->setEnabled(false);
+        m_analyzeBtn->setText(lang("亮度分析中...", "Analyzing luminance..."));
+        m_statusLabel->setText(lang("正在准备分析...", "Preparing analysis..."));
+    }
     m_cancelBtn->setEnabled(true);
     m_cancelBtn->setVisible(true);
     m_progressBar->setVisible(true);
     m_progressBar->setValue(0);
-    m_statusLabel->setText(lang("正在分析音频...", "Analyzing audio..."));
-
-    m_analysisPhase = Audio;
-    m_analysisEngine->startAudioAnalysis(m_currentVideoPath);   // R2：接口调用
 }
 
-void MainWindow::onAnalysisProgress(int analyzed, int total, qreal percent)
+void MainWindow::onTaskProgress(const QString &taskId, qreal percent, const QString &detail)
 {
-    // Use m_analysisPhase to determine progress handling (not total <= 10 heuristic)
-    if (m_analysisPhase == Audio) {
-        // Audio analysis: map to 70%-100%
-        qreal mappedPercent = 70.0 + (percent / 100.0) * 30.0;
-        m_statusLabel->setText(
-            QString(lang("音频分析阶段 %1/%2（%3%）", "Audio phase %1/%2 (%3%)"))
-                .arg(analyzed).arg(total).arg(percent, 0, 'f', 1));
-        int newPercent = qBound(0, static_cast<int>(mappedPercent), 100);
-        if (newPercent > m_progressBar->value()) {
-            m_progressBar->setValue(newPercent);
-        }
-    } else if (m_analysisPhase == Luminance) {
-        // Luminance analysis: 0%-100%（v1.1 起 analyzed/total 语义统一为采样点数）
-        m_statusLabel->setText(
-            QString(lang("分析中 %1%（%2 个采样点）", "Analyzing %1% (%2 samples)"))
-                .arg(percent, 0, 'f', 1).arg(analyzed));
-        int newPercent = qBound(0, static_cast<int>(percent), 100);
-        if (newPercent > m_progressBar->value()) {
-            m_progressBar->setValue(newPercent);
-        }
-    }
+    Q_UNUSED(taskId);
+    Q_UNUSED(percent);
+    // 统一 0~100（Q6 拍板：音频不再映射 70~100）；detail 已按任务语义格式化
+    m_statusLabel->setText(detail);
+    int newPercent = qBound(0, static_cast<int>(percent), 100);
+    if (newPercent > m_progressBar->value())
+        m_progressBar->setValue(newPercent);
 }
 
-/**
- * @brief 分析完成处理：数据填充→图表更新→频谱图更新→自动保存VLA
- */
-void MainWindow::onAnalysisFinished(const AnalysisSnapshot &snapshot)
+
+void MainWindow::onTaskFinished(const QString &taskId, const AnalysisSnapshot &snapshot)
 {
-    m_analysisPhase = None;
+    const AnalysisTaskDesc *desc = TaskRegistry::instance().find(taskId);
+
     m_analyzeBtn->setText(lang("亮度分析", "Luminance"));
     m_analyzeBtn->setEnabled(true);
     m_audioAnalysisBtn->setText(lang("音频分析", "Audio"));
@@ -3306,35 +3316,18 @@ void MainWindow::onAnalysisFinished(const AnalysisSnapshot &snapshot)
     m_progressBar->setVisible(false);
     m_statusLabel->setText(lang("分析完成", "Analysis complete"));
 
-    // --- Chart update: luminance analysis preserves existing audio ---
-    if (!snapshot.timestamps.isEmpty()) {
-        // Luminance analysis: keep existing audio if new result has none
-        AnalysisSnapshot existing = m_timelineModel->snapshot();
-        AudioData audioToUse = snapshot.hasAudio() ? snapshot.audio : existing.audio;
-        m_timelineModel->setData(QVector<qint64>(snapshot.timestamps),
-                                 QVector<QVector<qreal>>(snapshot.values),
-                                 QVector<DataEntry>(snapshot.dataEntries),
-                                 audioToUse);
-        // Update spectrogram only if new audio arrived; otherwise keep existing
-        if (snapshot.hasAudio() && m_spectrogramEnhanced) {
-            m_spectrogramEnhanced->setSpectrogramData(snapshot.audio);
-        }
-    } else if (snapshot.hasAudio()) {
-        // Audio-only: merge audio into existing snapshot
-        AnalysisSnapshot existing = m_timelineModel->snapshot();
-        existing.audio = snapshot.audio;
-        m_timelineModel->setData(existing.timestamps, existing.values, existing.audio);
-        // Update spectrogram with new audio data
-        if (m_spectrogramEnhanced) {
-            m_spectrogramEnhanced->setSpectrogramData(snapshot.audio);
-        }
+    // 展示面板路由（注册表驱动，R8）：任务产出音频通道 → 刷新语谱
+    if (desc && desc->producedChannels.contains(AnalysisChannels::audio())
+        && snapshot.hasAudio() && m_spectrogramEnhanced) {
+        m_spectrogramEnhanced->setSpectrogramData(snapshot.audioData());
     }
 
     // Auto-save .vla cache alongside the video file（后台线程；含校时徽标刷新）
     saveCurrentVlaAsync();
 
     QString msg;
-    if (!snapshot.timestamps.isEmpty()) {
+    if (desc && desc->producedChannels.contains(AnalysisChannels::luminance())
+        && !snapshot.timestamps.isEmpty()) {
         msg = lang("亮度分析完成！\n数据点数：%1\n区域数：%2",
                    "Luminance analysis complete!\nTotal points: %1\nRegions: %2")
                   .arg(snapshot.pointCount()).arg(snapshot.regionCount());
@@ -3353,9 +3346,13 @@ void MainWindow::onAnalysisFinished(const AnalysisSnapshot &snapshot)
     });
 }
 
-void MainWindow::onAnalysisFailed(const QString &error)
+
+
+void MainWindow::onTaskFailed(const QString &taskId, const QString &code, const QString &detail)
 {
-    m_analysisPhase = None;
+    const AnalysisTaskDesc *desc = TaskRegistry::instance().find(taskId);
+    const QString name = desc ? lang(desc->displayNameZh, desc->displayNameEn) : taskId;
+
     m_analyzeBtn->setText(lang("亮度分析", "Luminance"));
     m_analyzeBtn->setEnabled(true);
     m_audioAnalysisBtn->setText(lang("音频分析", "Audio"));
@@ -3365,15 +3362,33 @@ void MainWindow::onAnalysisFailed(const QString &error)
     m_progressBar->setVisible(false);
     m_statusLabel->setText(lang("分析失败", "Analysis failed"));
 
-    if (error != "Analysis cancelled by user.") {
+    // C1：按错误码分流提示形态（不再比较错误文案）
+    if (code == AnalysisTaskService::kErrEngine) {
         // Defer dialog to avoid processEvents() race condition
-        QTimer::singleShot(0, this, [this, error]() {
+        QTimer::singleShot(0, this, [this, detail]() {
             QMessageBox::critical(this, lang("分析失败", "Analysis Failed"),
-                lang("离线分析失败。\n请确保已安装 Python 和 OpenCV。\n\n",
-                     "Offline analysis failed.\nMake sure Python and OpenCV are installed.\n\n") + error);
+                lang("离线分析失败。\n\n", "Offline analysis failed.\n\n") + detail);
         });
+    } else {
+        // 前置/忙/未知任务：信息提示（行为冻结：与旧版 QMessageBox::information 一致）
+        QMessageBox::information(this, name, detail);
     }
 }
+
+void MainWindow::onTaskCancelled(const QString &taskId)
+{
+    Q_UNUSED(taskId);
+    // 取消：仅复位 UI（行为冻结：旧版对取消不弹任何窗）
+    m_analyzeBtn->setText(lang("亮度分析", "Luminance"));
+    m_analyzeBtn->setEnabled(true);
+    m_audioAnalysisBtn->setText(lang("音频分析", "Audio"));
+    m_audioAnalysisBtn->setEnabled(true);
+    m_cancelBtn->setEnabled(false);
+    m_cancelBtn->setVisible(false);
+    m_progressBar->setVisible(false);
+    m_statusLabel->setText(lang("分析已取消", "Analysis cancelled"));
+}
+
 
 void MainWindow::onClearRegions()
 {
@@ -3623,10 +3638,10 @@ void MainWindow::restoreAnalysisState(const QVector<QRect> &regions,
     }
     AnalysisSnapshot loaded = m_timelineModel->snapshot();
     qDebug() << "[restoreAnalysisState] hasAudio:" << loaded.hasAudio()
-             << "spectrogram.size:" << loaded.audio.spectrogram.size()
-             << "volume.size:" << loaded.audio.volume.size();
+             << "spectrogram.size:" << loaded.audioData().spectrogram.size()
+             << "volume.size:" << loaded.audioData().volume.size();
     if (m_spectrogramEnhanced && loaded.hasAudio())
-        m_spectrogramEnhanced->setSpectrogramData(loaded.audio);
+        m_spectrogramEnhanced->setSpectrogramData(loaded.audioData());
 }
 
 /**
@@ -4043,8 +4058,8 @@ void MainWindow::onVideoSelected(int index)
     if (index >= 0 && index < m_videoListPanel->videoCount()) {
         // B6: Cancel any running analysis before switching video to prevent
         // stale results being saved under the wrong filename.
-        if (m_analysisEngine->isRunning()) {
-            m_analysisEngine->cancelAnalysis();
+        if (m_taskService->isRunning()) {
+            m_taskService->cancel();   // B6：切换视频前取消运行中分析（迟到结果被 gating 拦截）
         }
         VideoEntry entry = m_videoListPanel->videoAt(index);
         if (!entry.filePath.isEmpty()) {

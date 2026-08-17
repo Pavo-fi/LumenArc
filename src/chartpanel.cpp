@@ -498,8 +498,8 @@ void ChartPanel::onDataReplaced()
     qDebug() << "[onDataReplaced] isEmpty:" << snapshot.isEmpty()
              << "hasAudio:" << snapshot.hasAudio()
              << "timestamps:" << snapshot.timestamps.size()
-             << "volume:" << snapshot.audio.volume.size()
-             << "spectrogram:" << snapshot.audio.spectrogram.size()
+             << "volume:" << snapshot.audioData().volume.size()
+             << "spectrogram:" << snapshot.audioData().spectrogram.size()
              << "durationMs:" << m_durationMs;
     // Need either timestamps (luminance) or audio data to proceed
     if (snapshot.isEmpty() && !snapshot.hasAudio()) {
@@ -544,7 +544,7 @@ void ChartPanel::onDataReplaced()
 
     // Always rebuild when dataEntries exist to ensure series names/colors
     // match the latest data. The m_rebuilding flag prevents recursion.
-    if (!m_rebuilding && !snapshot.dataEntries.isEmpty()) {
+    if (!m_rebuilding && !snapshot.dataEntries().isEmpty()) {
         rebuildSeries();
         // 不 return：rebuildSeries 重建的空音量曲线需要继续填充，
         // 否则有亮度数据的视频切换后音量曲线为空（2026-08 修复）
@@ -560,7 +560,7 @@ void ChartPanel::onDataReplaced()
         // m_durationMs 可能仍是上一个视频的残留值（偏小），
         // 不计入音频全长会把音量曲线截断在残留时长处（“短一截”）。
         if (snapshot.hasAudio())
-            dataMax = qMax(dataMax, qreal(snapshot.audio.durationMs()));
+            dataMax = qMax(dataMax, qreal(snapshot.audioData().durationMs()));
         qreal xMax = qMax(qreal(m_durationMs), dataMax);
         if (xMax < 1000) xMax = 1000;
         m_axisX->setRange(0, xMax);
@@ -569,7 +569,7 @@ void ChartPanel::onDataReplaced()
         m_axisX->setRange(0, xMax);
     } else if (snapshot.hasAudio()) {
         // Audio-only: set X-axis from audio duration
-        qint64 audioDur = snapshot.audio.durationMs();
+        qint64 audioDur = snapshot.audioData().durationMs();
         m_axisX->setRange(0, qMax(audioDur, qint64(1000)));
     }
 
@@ -606,7 +606,7 @@ void ChartPanel::onDataReplaced()
 
     // v0.3: Update volume series
     if (m_volumeSeries && snapshot.hasAudio()) {
-        QVector<QPointF> volPts = snapshot.audio.volumePointsForViewport(
+        QVector<QPointF> volPts = snapshot.audioData().volumePointsForViewport(
             xMin, xMax);
         // 转换为 dB 刻度: dB = 20 * log10(linear)
         qreal minDb = 0;
@@ -920,18 +920,18 @@ void ChartPanel::rebuildSeries()
     bool hasDataEntries = false;
     if (m_timelineModel) {
         snap = m_timelineModel->snapshot();
-        hasDataEntries = !snap.dataEntries.isEmpty();
+        hasDataEntries = !snap.dataEntries().isEmpty();
     }
 
     // Build merged entries: ROI model as skeleton, dataEntries matched by roiId
-    // Each entry records the index into snapshot.values[] for correct data mapping
+    // Each entry records the index into snapshot.values()[] for correct data mapping
     m_seriesMapping.clear();
     for (int i = 0; i < rectCount; ++i) {
         int roiId = m_regionModel->roiIdAt(i);
         int dataIdx = -1;
         if (hasDataEntries) {
-            for (int j = 0; j < snap.dataEntries.size(); ++j) {
-                if (snap.dataEntries[j].type == DataEntry::Rect && snap.dataEntries[j].roiId == roiId) {
+            for (int j = 0; j < snap.dataEntries().size(); ++j) {
+                if (snap.dataEntries()[j].type == DataEntry::Rect && snap.dataEntries()[j].roiId == roiId) {
                     dataIdx = j;
                     break;
                 }
@@ -943,8 +943,8 @@ void ChartPanel::rebuildSeries()
         int roiId = m_polygonModel->polygonRoiIdAt(i);
         int dataIdx = -1;
         if (hasDataEntries) {
-            for (int j = 0; j < snap.dataEntries.size(); ++j) {
-                if (snap.dataEntries[j].type == DataEntry::Polygon && snap.dataEntries[j].roiId == roiId) {
+            for (int j = 0; j < snap.dataEntries().size(); ++j) {
+                if (snap.dataEntries()[j].type == DataEntry::Polygon && snap.dataEntries()[j].roiId == roiId) {
                     dataIdx = j;
                     break;
                 }
@@ -1391,12 +1391,12 @@ void ChartPanel::updateCursorPosition()
                     QStringList parts;
                     int rectLabel = 0, polyLabel = 0;
                     for (int i = 0; i < snap.regionCount(); ++i) {
-                        if (i >= snap.values.size() || snap.values[i].isEmpty() || idx >= snap.values[i].size())
+                        if (i >= snap.values().size() || snap.values()[i].isEmpty() || idx >= snap.values()[i].size())
                             continue;
-                        qreal val = snap.values[i][idx];
+                        qreal val = snap.values()[i][idx];
                         // Use DataEntry for R/P labeling if available
-                        if (i < snap.dataEntries.size()) {
-                            if (snap.dataEntries[i].type == DataEntry::Rect)
+                        if (i < snap.dataEntries().size()) {
+                            if (snap.dataEntries()[i].type == DataEntry::Rect)
                                 parts << QString("R%1:%2").arg(++rectLabel).arg(QString::number(val, 'f', 2));
                             else
                                 parts << QString("P%1:%2").arg(++polyLabel).arg(QString::number(val, 'f', 2));
@@ -1410,9 +1410,9 @@ void ChartPanel::updateCursorPosition()
                     }
                     // Append volume in dB
                     if (snap.hasAudio()) {
-                        int volIdx = static_cast<int>(m_cursorTimeMs / snap.audio.safeTimeResolutionMs());
-                        if (volIdx >= 0 && volIdx < snap.audio.volume.size()) {
-                            qreal linear = snap.audio.volume[volIdx];
+                        int volIdx = static_cast<int>(m_cursorTimeMs / snap.audioData().safeTimeResolutionMs());
+                        if (volIdx >= 0 && volIdx < snap.audioData().volume.size()) {
+                            qreal linear = snap.audioData().volume[volIdx];
                             qreal db = (linear > 0.0001) ? 20.0 * std::log10(linear) : -80.0;
                             parts << QString("%1dB").arg(QString::number(qBound(-80.0, db, 0.0), 'f', 1));
                         }

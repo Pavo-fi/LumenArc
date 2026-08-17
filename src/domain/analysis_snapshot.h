@@ -1,9 +1,9 @@
 /**
  * @file analysis_snapshot.h
- * @brief 不可变分析结果值类型 + CSV 导出
+ * @brief 不可变分析结果值类型 + CSV 导出（v1.8.0 P1b：通道字典化）
  * @author Huang Jingyun, Liu xinghua, Huang Wenhua
- * @date 2026-05-31
- * @version 0.3
+ * @date 2026-08-17
+ * @version 1.0
  *
  * Copyright 2026 Huang Jingyun/Liu xinghua/Huang Wenhua. All rights reserved.
  * Licensed under the Apache License, Version 2.0
@@ -11,6 +11,7 @@
 #pragma once
 
 #include <QVector>
+#include <QHash>
 #include <QRect>
 #include <QPointF>
 #include <QColor>
@@ -18,6 +19,7 @@
 #include <QFile>
 #include <QTextStream>
 #include <QDateTime>
+#include <QByteArray>
 #include "time_calibration.h"
 
 struct ChartLabel
@@ -26,6 +28,14 @@ struct ChartLabel
     QString text;
     QColor color = Qt::red;
 };
+
+/// 分析通道 id 常量（v1.8.0 P1b 通道化，与 .vla v10 META channels 清单同源）
+namespace AnalysisChannels {
+/// 亮度通道（共享 snapshot.timestamps 时间轴 + ROI 行矩阵）
+inline QString luminance() { return QStringLiteral("luminance"); }
+/// 音频通道（AudioData 自含时间轴，B3）
+inline QString audio() { return QStringLiteral("audio"); }
+} // namespace AnalysisChannels
 
 /// 图表辅助线的可序列化数据（UI 层的 ChartGuideLine 含图形项指针，不入状态）
 struct ChartGuideData
@@ -160,37 +170,128 @@ struct DataEntry {
 };
 
 /**
- * @brief Immutable value-type representing the full result of a luminance analysis run.
+ * @brief 单个分析通道的数据载荷（v1.8.0 P1b 通道化，PENDING P-33）。
  *
- * All data is stored as QVector, which uses implicit sharing (copy-on-write),
+ * kind=Luminance：lumRows 与 dataEntries 一一对应，行内点与共享时间轴
+ * snapshot.timestamps 对齐（语义与旧版 values/dataEntries 成员完全一致）。
+ * kind=Audio：AudioData 自含时间轴（B3，语义不变）。
+ * kind=Opaque：本版不认识的通道（由更新版本 .vla 写入）——原始块原样
+ * 保全，回写时原样带回（拍板 Q2：取证“数据不丢”优先于 F4 的忽略）。
+ */
+struct ChannelData
+{
+    enum class Kind { Luminance, Audio, Opaque };
+    Kind kind = Kind::Opaque;
+
+    // ---- kind == Luminance ----
+    QVector<QVector<qreal>> lumRows;   ///< outer: ROI 序，inner: 时间序列
+    QVector<DataEntry> dataEntries;    ///< 与 lumRows 平行，ROI 身份
+
+    // ---- kind == Audio ----
+    AudioData audio;
+
+    // ---- kind == Opaque（未知通道 passthrough）----
+    QByteArray opaqueTag;       ///< 原始块标签（4 ASCII，如 "CH01"）
+    QByteArray opaqueStored;    ///< 原始存储字节（含压缩形态，字节保全）
+    QByteArray opaquePayload;   ///< 解压后载荷（语义保全）
+    quint8 opaqueCodec = 0;     ///< 原始 codec（0=raw, 1=zlib）
+    quint32 opaqueRawLen = 0;   ///< 原始解压后长度
+};
+
+/**
+ * @brief Immutable value-type representing the full result of an analysis run.
+ *
+ * All data is stored as QVector/QHash with implicit sharing (copy-on-write),
  * so returning this by value is cheap.
+ *
+ * v1.8.0 P1b：luminance/audio 硬编码成员 → channels 字典（PENDING P-33）。
+ * timestamps 保持成员身份 = 亮度通道的共享时间轴（历史语义：亮度分析
+ * 的时间戳；音频自含时间轴不依赖它）。
  */
 struct AnalysisSnapshot
 {
-    QVector<qint64> timestamps;
-    QVector<QVector<qreal>> values; // outer: region index, inner: time series
-    QVector<DataEntry> dataEntries; // parallel to values[], tracks ROI identity
-    AudioData audio;                // v0.3: audio analysis data
+    QVector<qint64> timestamps;                 ///< 亮度共享时间轴（流内毫秒）
+    QHash<QString, ChannelData> channels;       ///< "luminance"/"audio"/未知通道
 
-    bool isEmpty() const { return timestamps.isEmpty(); }
-    bool hasAudio() const { return !audio.isEmpty(); }
+    // ---- 写入 API（引擎结果装配 / 合并策略）----
+    void setLuminance(QVector<qint64> ts, QVector<QVector<qreal>> rows,
+                      QVector<DataEntry> entries)
+    {
+        timestamps = std::move(ts);
+        ChannelData ch;
+        ch.kind = ChannelData::Kind::Luminance;
+        ch.lumRows = std::move(rows);
+        ch.dataEntries = std::move(entries);
+        channels.insert(AnalysisChannels::luminance(), std::move(ch));
+    }
+    void setAudio(const AudioData &a)
+    {
+        ChannelData ch;
+        ch.kind = ChannelData::Kind::Audio;
+        ch.audio = a;
+        channels.insert(AnalysisChannels::audio(), std::move(ch));
+    }
+    void setAudio(AudioData &&a)
+    {
+        ChannelData ch;
+        ch.kind = ChannelData::Kind::Audio;
+        ch.audio = std::move(a);
+        channels.insert(AnalysisChannels::audio(), std::move(ch));
+    }
+    void removeLuminanceChannel()
+    {
+        channels.remove(AnalysisChannels::luminance());
+        timestamps.clear();
+    }
+    void removeAudioChannel() { channels.remove(AnalysisChannels::audio()); }
+
+    // ---- 读取 API（永久）----
+    bool hasLuminance() const { return !lumRows().isEmpty(); }
+    const QVector<QVector<qreal>> &lumRows() const
+    {
+        static const QVector<QVector<qreal>> empty;
+        const auto it = channels.constFind(AnalysisChannels::luminance());
+        return it == channels.constEnd() ? empty : it->lumRows;
+    }
+    const QVector<DataEntry> &lumEntries() const
+    {
+        static const QVector<DataEntry> empty;
+        const auto it = channels.constFind(AnalysisChannels::luminance());
+        return it == channels.constEnd() ? empty : it->dataEntries;
+    }
+    const AudioData &audioData() const
+    {
+        static const AudioData empty;
+        const auto it = channels.constFind(AnalysisChannels::audio());
+        return it == channels.constEnd() ? empty : it->audio;
+    }
+
+    // ---- 迁移期兼容访问器（内部转发 channels；C5 消费点切换后删除，R10）----
+    const QVector<QVector<qreal>> &values() const { return lumRows(); }
+    const QVector<DataEntry> &dataEntries() const { return lumEntries(); }
+    const AudioData &audio() const { return audioData(); }
+
+    bool isEmpty() const { return timestamps.isEmpty(); }   ///< 亮度侧空（音频自含，同旧版语义）
+    bool hasAudio() const { return !audioData().isEmpty(); }
     int pointCount() const { return timestamps.size(); }
-    int regionCount() const { return values.size(); }
+    int regionCount() const { return lumRows().size(); }
 
     /// Find the data index for a given ROI ID of the given type. Returns -1 if not found.
     int dataIndexOfRoiId(int roiId, DataEntry::Type type) const
     {
-        for (int i = 0; i < dataEntries.size(); ++i)
-            if (dataEntries[i].roiId == roiId && dataEntries[i].type == type)
+        const QVector<DataEntry> &entries = lumEntries();
+        for (int i = 0; i < entries.size(); ++i)
+            if (entries[i].roiId == roiId && entries[i].type == type)
                 return i;
         return -1;
     }
 
     QVector<qreal> series(int regionIndex) const
     {
-        if (regionIndex < 0 || regionIndex >= values.size())
+        const QVector<QVector<qreal>> &rows = lumRows();
+        if (regionIndex < 0 || regionIndex >= rows.size())
             return QVector<qreal>();
-        return values[regionIndex];
+        return rows[regionIndex];
     }
 
     qint64 timeAtIndex(int index) const
@@ -226,15 +327,16 @@ struct AnalysisSnapshot
                                        int maxPoints = 5000) const
     {
         QVector<QPointF> result;
-        if (regionIndex < 0 || regionIndex >= values.size())
+        const QVector<QVector<qreal>> &rows = lumRows();
+        if (regionIndex < 0 || regionIndex >= rows.size())
             return result;
 
-        const QVector<qreal> &series = values[regionIndex];
-        if (timestamps.isEmpty() || series.isEmpty())
+        const QVector<qreal> &seriesData = rows[regionIndex];
+        if (timestamps.isEmpty() || seriesData.isEmpty())
             return result;
 
         // Guard: ensure series length matches timestamps (protects against malformed data)
-        int safeSeriesSize = qMin(series.size(), timestamps.size());
+        int safeSeriesSize = qMin(seriesData.size(), timestamps.size());
 
         // Binary search for range
         int iStart = indexAtTime(tMin);
@@ -250,7 +352,7 @@ struct AnalysisSnapshot
         if (count <= maxPoints) {
             result.reserve(count);
             for (int i = iStart; i <= iEnd; ++i)
-                result.append(QPointF(static_cast<qreal>(timestamps[i]), series[i]));
+                result.append(QPointF(static_cast<qreal>(timestamps[i]), seriesData[i]));
             return result;
         }
 
@@ -268,7 +370,7 @@ struct AnalysisSnapshot
             int limit = qMin(i + bucketSize - 1, iEnd);
             for (int j = i; j <= limit; ++j) {
                 tSum += timestamps[j];
-                vSum += series[j];
+                vSum += seriesData[j];
                 ++n;
             }
             if (n > 0)
@@ -296,9 +398,11 @@ struct AnalysisSnapshot
 
         // Header: raw ms + formatted time + one column per ROI + volume
         out << "Time(ms),Time";
+        const QVector<QVector<qreal>> &rows = lumRows();
+        const QVector<DataEntry> &entries = lumEntries();
         int rectIdx = 0, polyIdx = 0;
-        for (int r = 0; r < values.size(); ++r) {
-            if (r < dataEntries.size() && dataEntries[r].type == DataEntry::Polygon) {
+        for (int r = 0; r < rows.size(); ++r) {
+            if (r < entries.size() && entries[r].type == DataEntry::Polygon) {
                 out << QString(",P%1_Brightness").arg(++polyIdx);
             } else {
                 if (rectIdx < regions.size()) {
@@ -320,14 +424,14 @@ struct AnalysisSnapshot
             qint64 ts = timestamps[i];
             out << ts;
             out << "," << formatDisplayTime(ts, calibration);
-            for (int r = 0; r < values.size(); ++r) {
-                out << "," << ((i < values[r].size()) ? values[r][i] : 0.0);
+            for (int r = 0; r < rows.size(); ++r) {
+                out << "," << ((i < rows[r].size()) ? rows[r][i] : 0.0);
             }
             if (hasAudio()) {
                 // Map timestamp to audio volume index
-                int aIdx = static_cast<int>(ts / audio.timeResolutionMs);
-                if (aIdx >= 0 && aIdx < audio.volume.size())
-                    out << "," << audio.volume[aIdx];
+                int aIdx = static_cast<int>(ts / audioData().timeResolutionMs);
+                if (aIdx >= 0 && aIdx < audioData().volume.size())
+                    out << "," << audioData().volume[aIdx];
                 else
                     out << ",";
             }

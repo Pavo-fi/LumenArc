@@ -1,9 +1,9 @@
 /**
  * @file timeline_model.cpp
- * @brief 时间序列模型实现 + .vla v3 文件读写
+ * @brief 时间序列模型实现 + .vla 文件读写（v1.8.0：通道化 + v10 格式）
  * @author Huang Jingyun, Liu xinghua, Huang Wenhua
- * @date 2026-05-31
- * @version 0.3
+ * @date 2026-08-17
+ * @version 1.0
  *
  * Copyright 2026 Huang Jingyun/Liu xinghua/Huang Wenhua. All rights reserved.
  * Licensed under the Apache License, Version 2.0
@@ -27,10 +27,11 @@ void TimelineModel::setData(QVector<qint64> timestamps, QVector<QVector<qreal>> 
                              const AudioData &audio)
 {
     QWriteLocker lock(&m_lock);
-    m_snapshot.timestamps = std::move(timestamps);
-    m_snapshot.values = std::move(values);
-    m_snapshot.dataEntries.clear();
-    m_snapshot.audio = audio;
+    m_snapshot.setLuminance(std::move(timestamps), std::move(values), {});
+    if (!audio.isEmpty())
+        m_snapshot.setAudio(audio);
+    else
+        m_snapshot.removeAudioChannel();
     lock.unlock();
     emit dataReplaced();
 }
@@ -39,10 +40,20 @@ void TimelineModel::setData(QVector<qint64> timestamps, QVector<QVector<qreal>> 
                              QVector<DataEntry> dataEntries, const AudioData &audio)
 {
     QWriteLocker lock(&m_lock);
-    m_snapshot.timestamps = std::move(timestamps);
-    m_snapshot.values = std::move(values);
-    m_snapshot.dataEntries = std::move(dataEntries);
-    m_snapshot.audio = audio;
+    m_snapshot.setLuminance(std::move(timestamps), std::move(values),
+                            std::move(dataEntries));
+    if (!audio.isEmpty())
+        m_snapshot.setAudio(audio);
+    else
+        m_snapshot.removeAudioChannel();
+    lock.unlock();
+    emit dataReplaced();
+}
+
+void TimelineModel::setSnapshot(const AnalysisSnapshot &snapshot)
+{
+    QWriteLocker lock(&m_lock);
+    m_snapshot = snapshot;   // QHash/QVector 隐式共享，廉价整体替换
     lock.unlock();
     emit dataReplaced();
 }
@@ -50,10 +61,7 @@ void TimelineModel::setData(QVector<qint64> timestamps, QVector<QVector<qreal>> 
 void TimelineModel::clearData()
 {
     QWriteLocker lock(&m_lock);
-    m_snapshot.timestamps.clear();
-    m_snapshot.values.clear();
-    m_snapshot.dataEntries.clear();
-    m_snapshot.audio = AudioData();
+    m_snapshot = AnalysisSnapshot();
     lock.unlock();
     emit dataCleared();
 }
@@ -61,10 +69,7 @@ void TimelineModel::clearData()
 void TimelineModel::clearLuminanceData()
 {
     QWriteLocker lock(&m_lock);
-    m_snapshot.timestamps.clear();
-    m_snapshot.values.clear();
-    m_snapshot.dataEntries.clear();
-    // Preserve m_snapshot.audio
+    m_snapshot.removeLuminanceChannel();   // 保留 audio（含未知通道 passthrough）
     lock.unlock();
     // Emit dataReplaced (not dataCleared) so ChartPanel can re-render with audio only
     emit dataReplaced();
@@ -73,14 +78,7 @@ void TimelineModel::clearLuminanceData()
 void TimelineModel::removeRegionData(int index)
 {
     QWriteLocker lock(&m_lock);
-    if (index >= 0 && index < m_snapshot.values.size()) {
-        m_snapshot.values.removeAt(index);
-        if (index < m_snapshot.dataEntries.size())
-            m_snapshot.dataEntries.removeAt(index);
-    }
-    if (m_snapshot.values.isEmpty()) {
-        m_snapshot.timestamps.clear();
-    }
+    removeLuminanceRowLocked(index);
     lock.unlock();
     emit dataReplaced();
 }
@@ -88,24 +86,30 @@ void TimelineModel::removeRegionData(int index)
 void TimelineModel::removeRegionDataByRoiId(int roiId, DataEntry::Type type)
 {
     QWriteLocker lock(&m_lock);
-    int idx = -1;
-    for (int i = 0; i < m_snapshot.dataEntries.size(); ++i) {
-        if (m_snapshot.dataEntries[i].roiId == roiId &&
-            m_snapshot.dataEntries[i].type == type) {
-            idx = i;
+    const QVector<DataEntry> entries = m_snapshot.lumEntries();
+    for (int i = 0; i < entries.size(); ++i) {
+        if (entries[i].roiId == roiId && entries[i].type == type) {
+            removeLuminanceRowLocked(i);
             break;
         }
     }
-    if (idx >= 0 && idx < m_snapshot.values.size()) {
-        m_snapshot.values.removeAt(idx);
-        if (idx < m_snapshot.dataEntries.size())
-            m_snapshot.dataEntries.removeAt(idx);
-    }
-    if (m_snapshot.values.isEmpty()) {
-        m_snapshot.timestamps.clear();
-    }
     lock.unlock();
     emit dataReplaced();
+}
+
+void TimelineModel::removeLuminanceRowLocked(int index)
+{
+    const auto it = m_snapshot.channels.find(AnalysisChannels::luminance());
+    if (it == m_snapshot.channels.end())
+        return;
+    if (index >= 0 && index < it->lumRows.size()) {
+        it->lumRows.removeAt(index);
+        if (index < it->dataEntries.size())
+            it->dataEntries.removeAt(index);
+    }
+    if (it->lumRows.isEmpty()) {
+        m_snapshot.timestamps.clear();
+    }
 }
 
 AnalysisSnapshot TimelineModel::snapshot() const
@@ -145,9 +149,26 @@ static const char VLA2_MAGIC[4] = {'V', 'L', 'A', '2'};
 /// vla/spec 写入全局串行锁（自动保存后台线程 vs 手动保存前台并发写保护）
 static QMutex g_vlaWriteMutex;
 static constexpr quint32 VLA2_VERSION = 2;
-/// .vla 语义版本上限（META version 字段；v9 = time_calibration 含分段重建）
-/// v8 = time_calibration 仿射校时；v≤7 迁移见 loadFromFile
-static constexpr int kCurrentVlaVersion = 9;
+/// .vla 语义版本上限（META version 字段）。
+/// v8 = time_calibration 仿射校时；v9 = time_calibration 含分段重建；
+/// v10 = 通道化（META channels 清单 + 未知通道 opaque 保全，拍板 Q1/Q2）。
+/// v≤7 迁移见 loadFromFile；F4：超上限加载拒绝
+static constexpr int kCurrentVlaVersion = 10;
+
+/// VLA2 块的原始形态（opaque 未知通道字节保全用：codec/stored 原样带回）
+struct Vla2RawChunk {
+    QByteArray tag;
+    quint8 codec = 0;
+    quint32 rawLen = 0;
+    QByteArray stored;   ///< 存储形态字节（未解压）
+};
+/// 本版认识的数据块标签（其余 → opaque passthrough）
+static bool vlaKnownDataTag(const QByteArray &tag)
+{
+    return tag == QByteArray("META", 4) || tag == QByteArray("TMS ", 4)
+        || tag == QByteArray("LUM ", 4) || tag == QByteArray("VOL ", 4)
+        || tag == QByteArray("SPEC", 4);
+}
 
 static QByteArray vlaPackChunk(const char *tag4, const QByteArray &payload)
 {
@@ -164,7 +185,8 @@ static QByteArray vlaPackChunk(const char *tag4, const QByteArray &payload)
     return out;
 }
 
-static bool vlaUnpackAll(const QByteArray &data, QMap<QByteArray, QByteArray> *chunks)
+static bool vlaUnpackAll(const QByteArray &data, QMap<QByteArray, QByteArray> *chunks,
+                         QVector<Vla2RawChunk> *rawChunks = nullptr)
 {
     if (data.size() < 16 || memcmp(data.constData(), VLA2_MAGIC, 4) != 0)
         return false;
@@ -195,8 +217,25 @@ static bool vlaUnpackAll(const QByteArray &data, QMap<QByteArray, QByteArray> *c
         if (payload.size() != int(rawLen))
             return false;
         chunks->insert(QByteArray(tag, 4), payload);
+        if (rawChunks)
+            rawChunks->append({QByteArray(tag, 4), codec, rawLen, stored});
     }
     return true;
+}
+
+/// opaque 未知通道原样回写（拍板 Q2：字节保全——codec/stored 原样带回）
+static QByteArray vlaPackRawChunk(const char *tag4, quint8 codec, quint32 rawLen,
+                                  const QByteArray &stored)
+{
+    QByteArray out;
+    QDataStream ds(&out, QIODevice::WriteOnly);
+    ds.writeRawData(tag4, 4);
+    ds << codec;
+    ds.writeRawData("\0\0\0", 3);   // reserved
+    ds << rawLen;
+    ds << quint32(stored.size());
+    out.append(stored);
+    return out;
 }
 
 bool TimelineModel::saveToFile(const QString &filePath,
@@ -217,10 +256,12 @@ bool TimelineModel::saveToFile(const QString &filePath,
         return false;
 
     QJsonObject root;
-    root["version"] = 9;
+    root["version"] = 10;
     root["analyzed_at"] = QDateTime::currentDateTime().toString(Qt::ISODate);
-    // v9：time_calibration 含分段重建（piecewise）；v8 及以下旧文件可读（迁移），
-    // v9 不再写 time_offset（Q-19 严格升版）
+    // v10（P1b 通道化，拍板 Q1）：META 新增 channels 清单（id/kind/计数）；
+    // TMS/LUM/VOL/SPEC 数据块字节格式零改动（v9 读者按 F4 拒绝 v10，
+    // 旧计数字段 double-write 仅防半升级读者误判，下版可议去留）。
+    // v9：time_calibration 含分段重建；v8 及以下旧文件可读（迁移）
     if (calibration.isValid())
         root["time_calibration"] = calibration.toJson();
 
@@ -324,28 +365,65 @@ bool TimelineModel::saveToFile(const QString &filePath,
         root["snapshot_fusion"] = snapObj;
     }
 
-    // Audio metadata（音量/频谱在 VOL/SPEC 二进制块中）
-    if (!m_snapshot.audio.isEmpty()) {
+    // Audio metadata（音量/频谱在 VOL/SPEC 二进制块中；v10 亦入 channels 清单）
+    const AudioData &audioOut = m_snapshot.audioData();
+    if (!audioOut.isEmpty()) {
         QJsonObject audioObj;
-        audioObj["sample_rate"] = m_snapshot.audio.sampleRate;
-        audioObj["hop_length"] = m_snapshot.audio.hopLength;
-        audioObj["n_fft"] = m_snapshot.audio.nFft;
+        audioObj["sample_rate"] = audioOut.sampleRate;
+        audioObj["hop_length"] = audioOut.hopLength;
+        audioObj["n_fft"] = audioOut.nFft;
         root["audio"] = audioObj;
     }
 
     root["point_count"] = m_snapshot.pointCount();
     root["region_count"] = m_snapshot.regionCount();
 
-    // v6: DataEntry metadata (ROI type + ID mapping)
-    if (!m_snapshot.dataEntries.isEmpty()) {
+    // v6: DataEntry metadata (ROI type + ID mapping；v10 double-write 亮度通道条目)
+    if (!m_snapshot.lumEntries().isEmpty()) {
         QJsonArray entriesArray;
-        for (const DataEntry &entry : m_snapshot.dataEntries) {
+        for (const DataEntry &entry : m_snapshot.lumEntries()) {
             QJsonObject eObj;
             eObj["type"] = (entry.type == DataEntry::Rect) ? "rect" : "polygon";
             eObj["roi_id"] = entry.roiId;
             entriesArray.append(eObj);
         }
         root["data_entries"] = entriesArray;
+    }
+
+    // v10：通道清单（未来读者的路由表；未知通道含 chunk 标签可定位原始块）
+    {
+        QJsonArray channelsArray;
+        for (auto it = m_snapshot.channels.constBegin();
+             it != m_snapshot.channels.constEnd(); ++it) {
+            const ChannelData &ch = it.value();
+            QJsonObject cObj;
+            cObj["id"] = it.key();
+            switch (ch.kind) {
+            case ChannelData::Kind::Luminance:
+                cObj["kind"] = "luminance";
+                cObj["point_count"] = m_snapshot.pointCount();
+                cObj["region_count"] = m_snapshot.regionCount();
+                break;
+            case ChannelData::Kind::Audio:
+                cObj["kind"] = "audio";
+                cObj["sample_rate"] = audioOut.sampleRate;
+                cObj["hop_length"] = audioOut.hopLength;
+                cObj["n_fft"] = audioOut.nFft;
+                cObj["volume_count"] = static_cast<double>(audioOut.volume.size());
+                if (audioOut.hasSpectrogram()) {
+                    cObj["spec_freq_bins"] = audioOut.spectrogram.size();
+                    cObj["spec_frames"] = audioOut.spectrogram[0].size();
+                }
+                break;
+            case ChannelData::Kind::Opaque:
+                cObj["kind"] = "opaque";
+                cObj["chunk"] = QString::fromLatin1(ch.opaqueTag);
+                cObj["raw_length"] = static_cast<double>(ch.opaqueRawLen);
+                break;
+            }
+            channelsArray.append(cObj);
+        }
+        root["channels"] = channelsArray;
     }
 
     // ---- 组装 VLA2 二进制块 ----
@@ -362,32 +440,33 @@ bool TimelineModel::saveToFile(const QString &filePath,
     }
     chunks.append({"TMS ", tms});
 
-    // LUM：亮度矩阵（float32，按 ROI 行主序）
+    // LUM：亮度矩阵（float32，按 ROI 行主序；v10 从 luminance 通道取）
     QByteArray lum;
     {
         QDataStream ds(&lum, QIODevice::WriteOnly);
-        ds << quint32(m_snapshot.values.size());
+        const QVector<QVector<qreal>> &lumRows = m_snapshot.lumRows();
+        ds << quint32(lumRows.size());
         ds << quint64(m_snapshot.timestamps.size());
         ds.setFloatingPointPrecision(QDataStream::SinglePrecision);
-        for (const auto &row : m_snapshot.values)
+        for (const auto &row : lumRows)
             for (qreal v : row)
                 ds << float(v);
     }
     chunks.append({"LUM ", lum});
 
     // VOL：音量（float32）
-    if (!m_snapshot.audio.volume.isEmpty()) {
+    if (!audioOut.volume.isEmpty()) {
         QByteArray vol;
         QDataStream ds(&vol, QIODevice::WriteOnly);
-        ds << quint64(m_snapshot.audio.volume.size());
+        ds << quint64(audioOut.volume.size());
         ds.setFloatingPointPrecision(QDataStream::SinglePrecision);
-        for (qreal v : m_snapshot.audio.volume)
+        for (qreal v : audioOut.volume)
             ds << float(v);
         chunks.append({"VOL ", vol});
     }
 
-    // SPEC：频谱矩阵（uint16 量化到 [min,max]，频率行主序 freq×frames）
-    const auto &spec = m_snapshot.audio.spectrogram;
+    // SPEC：频谱矩阵（uint8 量化到 [min,max]，频率行主序 freq×frames）
+    const auto &spec = audioOut.spectrogram;
     if (!spec.isEmpty() && !spec[0].isEmpty()) {
         double sMin = std::numeric_limits<double>::max();
         double sMax = std::numeric_limits<double>::lowest();
@@ -412,12 +491,26 @@ bool TimelineModel::saveToFile(const QString &filePath,
 
     QByteArray fileData;
     {
+        // +1 每 opaque 通道（字节保全回写，拍板 Q2；luminance/audio 已在 chunks）
+        quint32 opaqueCount = 0;
+        for (auto it = m_snapshot.channels.constBegin();
+             it != m_snapshot.channels.constEnd(); ++it)
+            if (it->kind == ChannelData::Kind::Opaque)
+                ++opaqueCount;
         QDataStream ds(&fileData, QIODevice::WriteOnly);
         ds.writeRawData(VLA2_MAGIC, 4);
-        ds << quint32(VLA2_VERSION) << quint32(chunks.size()) << quint32(0);
+        ds << quint32(VLA2_VERSION) << quint32(chunks.size()) + opaqueCount << quint32(0);
     }
     for (const auto &c : chunks)
         fileData.append(vlaPackChunk(c.first.constData(), c.second));
+    // opaque 未知通道：原样带回（stored 字节不变，未来版本读者可无损复原）
+    for (auto it = m_snapshot.channels.constBegin();
+         it != m_snapshot.channels.constEnd(); ++it) {
+        if (it->kind != ChannelData::Kind::Opaque)
+            continue;
+        fileData.append(vlaPackRawChunk(it->opaqueTag.constData(), it->opaqueCodec,
+                                        it->opaqueRawLen, it->opaqueStored));
+    }
 
     lock.unlock();
 
@@ -460,12 +553,13 @@ bool TimelineModel::loadFromFile(const QString &filePath,
     QVector<QVector<qreal>> values;
     AudioData audioData;
     bool isVla2 = false;
+    QVector<Vla2RawChunk> rawChunks;   // opaque 未知通道字节保全（拍板 Q2）
+    QMap<QByteArray, QByteArray> chunks;
 
     if (data.startsWith(QByteArray(VLA2_MAGIC, 4))) {
         // ===== VLA2 二进制容器 =====
         isVla2 = true;
-        QMap<QByteArray, QByteArray> chunks;
-        if (!vlaUnpackAll(data, &chunks))
+        if (!vlaUnpackAll(data, &chunks, &rawChunks))
             return false;
         QJsonParseError perr;
         QJsonDocument metaDoc = QJsonDocument::fromJson(chunks.value("META"), &perr);
@@ -794,11 +888,50 @@ bool TimelineModel::loadFromFile(const QString &filePath,
             polygonRoiIds->clear();
     }
 
-    if (!dataEntries.isEmpty()) {
-        setData(std::move(timestamps), std::move(values), std::move(dataEntries), audioData);
-    } else {
-        setData(std::move(timestamps), std::move(values), audioData);
+
+    // ---- 装配 AnalysisSnapshot（v1.8.0：全部版本统一走 channels；不再经 setData
+    //      逐字段覆盖——避免残留旧数据/旧 opaque 通道泄漏进新装载，R5 语义）----
+    AnalysisSnapshot loaded;
+    if (!timestamps.isEmpty() || !values.isEmpty())
+        loaded.setLuminance(std::move(timestamps), std::move(values),
+                            std::move(dataEntries));
+    if (!audioData.isEmpty())
+        loaded.setAudio(std::move(audioData));
+
+    // ---- v10 opaque 未知通道保全（拍板 Q2）：
+    //      ① META channels 里声明的 opaque 通道 → 按 chunk 标签取原始块；
+    //      ② 未声明但存在的未知块 → 同样保全（防更老/更新写法的遗漏）。
+    //      本版不解析其内容，回写原样带回（字节保全：codec/stored 原样）。
+    if (isVla2 && version == 10) {
+        auto appendOpaque = [&](const QByteArray &tag) {
+            if (tag.isEmpty() || vlaKnownDataTag(tag))
+                return;
+            for (const Vla2RawChunk &rc : rawChunks) {
+                if (rc.tag != tag)
+                    continue;
+                ChannelData ch;
+                ch.kind = ChannelData::Kind::Opaque;
+                ch.opaqueTag = rc.tag;
+                ch.opaqueCodec = rc.codec;
+                ch.opaqueRawLen = rc.rawLen;
+                ch.opaqueStored = rc.stored;
+                ch.opaquePayload = chunks.value(tag);
+                loaded.channels.insert(QStringLiteral("opaque:")
+                                       + QString::fromLatin1(rc.tag), std::move(ch));
+            }
+        };
+        const QJsonArray channelsArr = root.contains("channels")
+                                           ? root["channels"].toArray() : QJsonArray();
+        for (const auto &cv : channelsArr) {
+            const QJsonObject cObj = cv.toObject();
+            if (cObj["kind"].toString() == QLatin1String("opaque"))
+                appendOpaque(cObj["chunk"].toString().toLatin1());
+        }
+        for (const Vla2RawChunk &rc : rawChunks)
+            appendOpaque(rc.tag);
     }
+
+    setSnapshot(loaded);
     return true;
 }
 

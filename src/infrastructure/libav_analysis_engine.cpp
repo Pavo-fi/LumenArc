@@ -619,14 +619,15 @@ void LibavAnalysisEngine::runLuminanceTask()
     }
 
     AnalysisSnapshot snap;
-    snap.timestamps = mergedTs;
-    snap.values = mergedLums;
+    QVector<DataEntry> entries;
+    entries.reserve(m_rois.size());
     for (int k = 0; k < m_rois.size(); ++k) {
         DataEntry e;
         e.roiId = m_rois[k].roiId;
         e.type = (m_rois[k].kind == RoiSpec::Rect) ? DataEntry::Rect : DataEntry::Polygon;
-        snap.dataEntries.append(e);
+        entries.append(e);
     }
+    snap.setLuminance(std::move(mergedTs), std::move(mergedLums), std::move(entries));
     emit analysisFinished(snap);
 }
 
@@ -871,7 +872,7 @@ void LibavAnalysisEngine::runAudioTask()
         return;
     }
     AnalysisSnapshot snap;
-    snap.audio = audio;
+    snap.setAudio(std::move(audio));
     emit analysisFinished(snap);
 }
 
