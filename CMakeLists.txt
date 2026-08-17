@@ -98,6 +98,10 @@ set(SOURCES
     src/app/cam_timeline.cpp
     src/app/preprocessing_coordinator.cpp
     src/app/calibration_service.cpp
+    src/app/analysis_controller.cpp
+    src/app/project_io.cpp
+    src/app/uistate.cpp
+    src/app/video_session_manager.cpp
     src/domain/task_registry.cpp
     src/app/analysis_task_service.cpp
     src/timesettingsdialog.cpp
@@ -123,6 +127,10 @@ set(HEADERS
     src/videowidget.h
     src/domain/task_registry.h
     src/app/analysis_task_service.h
+    src/app/analysis_controller.h
+    src/app/project_io.h
+    src/app/uistate.h
+    src/app/video_session_manager.h
     src/chartpanel.h
     src/magnifierwidget.h
     src/snapshotoverlay.h
@@ -247,6 +255,40 @@ target_link_libraries(lumenarc_roi_model_test PRIVATE
     Qt6::Core
     Qt6::Gui
 )
+
+# --- v1.9.0 P-31 T0：MainWindow 无头分支测试（openVideoFile 安全网 + 新组件单测）---
+set(MW_TEST_SOURCES ${SOURCES})
+list(REMOVE_ITEM MW_TEST_SOURCES src/main.cpp src/app.rc)
+add_executable(lumenarc_mw_test
+    tests/mw_test_main.cpp
+    ${MW_TEST_SOURCES}
+    ${HEADERS}
+)
+target_include_directories(lumenarc_mw_test PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+    ${FFMPEG_INCLUDE_DIR}
+)
+target_link_libraries(lumenarc_mw_test PRIVATE
+    Qt6::Core
+    Qt6::Gui
+    Qt6::Widgets
+    Qt6::Charts
+    Qt6::Multimedia
+    Qt6::Concurrent
+    Qt6::OpenGL
+    Qt6::OpenGLWidgets
+    ${FFMPEG_LIBRARIES}
+)
+if(WIN32)
+    set(_qoff2 "${Qt6_DIR}/../../../plugins/platforms/qoffscreen.dll")
+    if(EXISTS "${_qoff2}")
+        add_custom_command(TARGET lumenarc_mw_test POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E make_directory
+                "$<TARGET_FILE_DIR:lumenarc_mw_test>/platforms"
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different "${_qoff2}"
+                "$<TARGET_FILE_DIR:lumenarc_mw_test>/platforms/")
+    endif()
+endif()
 
 # --- v1.8.0 P1a/P1b：任务注册表 + 状态机 + 通道化/v10 单测 ---
 add_executable(lumenarc_task_registry_test

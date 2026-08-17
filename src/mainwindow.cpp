@@ -23,6 +23,10 @@
 #include "app/case_manager.h"
 #include "app/case_open_panel.h"
 #include "app/analysis_task_service.h"
+#include "app/analysis_controller.h"
+#include "app/uistate.h"
+#include "app/project_io.h"
+#include "app/video_session_manager.h"
 #include "domain/task_registry.h"
 #include "casedock.h"
 #include "casedialogs.h"
@@ -106,13 +110,13 @@ MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent)
 {
     loadLanguage();
-    setWindowTitle(lang("追光者 Lumen Arc v1.7.0", "Lumen Arc v1.7.0") + buildStamp());
+    setWindowTitle(lang("追光者 Lumen Arc v1.8.0", "Lumen Arc v1.8.0") + buildStamp());
     resize(1280, 720);
 
     m_roiModel = new RoiModel(this);   // 统一 ROI 模型（矩形+多边形，v1.5.0 Q-18）
     m_guideLineModel = new GuideLineModel(this);
     m_timelineModel = new TimelineModel(this);
-    m_stateManager = new VideoStateManager(this);
+    m_sessionMgr = new VideoSessionManager(this);
 
     // 播放引擎：自研 FFmpeg 内核（硬解设置经 QSettings 持久化）
     {
@@ -515,31 +519,15 @@ MainWindow::MainWindow(QWidget *parent)
     // 报告（P-28 python-docx）租户保留——见 DEVELOPMENT_PLAN_V1.8_CN.md §5。
     m_analysisEngine = new LibavAnalysisEngine(this);
 
-    // ---- v1.8.0 P1a：任务注册 + 状态机服务 ----
-    // 注册表（R8）：前置条件闭包只捕 domain 模型，不捕 UI 控件（R1）
-    {
-        auto &reg = TaskRegistry::instance();
-        AnalysisTaskDesc lum;
-        lum.taskId = AnalysisChannels::luminance();
-        lum.displayNameZh = QStringLiteral("亮度分析");
-        lum.displayNameEn = QStringLiteral("Luminance");
-        lum.preconditionError = [roiModel = m_roiModel]() -> QString {
-            if (roiModel->regionCount() == 0 && roiModel->polygonCount() == 0)
-                return lang("请先在视频上绘制至少一个 ROI 区域。",
-                            "Please draw at least one ROI on the video.");
-            return QString();
-        };
-        lum.producedChannels = {AnalysisChannels::luminance()};
-        reg.registerTask(lum);
-
-        AnalysisTaskDesc aud;
-        aud.taskId = AnalysisChannels::audio();
-        aud.displayNameZh = QStringLiteral("音频分析");
-        aud.displayNameEn = QStringLiteral("Audio");
-        aud.producedChannels = {AnalysisChannels::audio()};
-        reg.registerTask(aud);
-    }
-    m_taskService = new AnalysisTaskService(m_analysisEngine, m_timelineModel, this);
+    // v1.9.0 P-31 T3：引擎 + 任务注册 + 服务装配归 AnalysisController
+    m_analysisController = new AnalysisController(m_roiModel, m_timelineModel, this);
+    m_analysisEngine = m_analysisController->engine();          // 非持有别名
+    m_taskService = m_analysisController->taskService();        // 非持有别名
+    // v1.9.0 P-31 T4：时长 SSOT（图表/列表/时间标签派生刷新入口）
+    m_uiState = new UiState(this);
+    connect(m_uiState, &UiState::effectiveDurationChanged, this, [this](qint64) {
+        updateTimeDisplay();
+    });
 
     // 校时服务（v1.2.0：三点识别/absStart/sidecar 继承；产出仅预填，
     // 「采用」由 TimeSettingsDialog 决定）
@@ -548,6 +536,8 @@ MainWindow::MainWindow(QWidget *parent)
     // 案件管理器（v1.3.0 M2）：唯一持有打开的案件；无案件时所有分流
     // 接口（vlaPathFor/timestampRoiFor…）自动回落独立模式老行为
     m_caseManager = new CaseManager(this);
+    // v1.9.0 P-31 T1：工程读写服务（vla/CSV/时间戳ROI/徽标）
+    m_projectIo = new ProjectIO(m_caseManager, m_timelineModel, this);
     // 校时证据帧目录分流（M2 任务8）：入案→案件 evidence/calibration/V###；
     // 未入案/无案件→CaseManager 内部回落老路径 LumenArc_Calibration
     m_calibrationService->setEvidenceDirResolver(
@@ -610,8 +600,8 @@ MainWindow::MainWindow(QWidget *parent)
     connect(m_caseManager, &CaseManager::videoRelocated, this,
             [this](const QString &, const QString &oldPath,
                    const QString &newPath) {
-                if (m_stateManager)
-                    m_stateManager->migrateKey(oldPath, newPath);
+                if (m_sessionMgr)
+                    m_sessionMgr->migrateKey(oldPath, newPath);
                 if (QDir::cleanPath(m_currentVideoPath)
                     == QDir::cleanPath(oldPath))
                     m_currentVideoPath = newPath;
@@ -1574,8 +1564,7 @@ void MainWindow::setupConnections()
                                           // （仅 stop() 时空格快捷键仍可继续播放——现场反馈）
                 removeMagnifier();
                 m_currentVideoPath.clear();
-                m_trustedDurationMs = 0;
-                m_currentDurationMs = 0;
+                m_uiState->beginVideo(0);
 
                 m_roiModel->clearRegions();
                 m_roiModel->clearPolygons();
@@ -2176,7 +2165,7 @@ void MainWindow::openVideoFile(const QString &filePath)
 
         // Do NOT overwrite m_currentVideoPath with the .vla path: it is an
         // analysis file, not a playable video, and it keys VideoStateManager.
-        setWindowTitle(windowTitleWithCase("Lumen Arc v1.7.0 - [Loaded: " +
+        setWindowTitle(windowTitleWithCase("Lumen Arc v1.8.0 - [Loaded: " +
                            QFileInfo(filePath).fileName() + "]"));
         } else {
             QMessageBox::critical(this, lang("错误", "Error"),
@@ -2186,35 +2175,32 @@ void MainWindow::openVideoFile(const QString &filePath)
         return;
     }
 
-    // Save current video state before switching
-    if (!m_currentVideoPath.isEmpty() && m_stateManager) {
-        QRect magRect = m_magnifier ? m_magnifier->currentSourceRect() : QRect();
-        m_stateManager->saveState(
-            m_currentVideoPath,
-            m_timelineModel->snapshot(),
-            m_roiModel->regions(),
-            m_calibration,
-            magRect,
-            m_chartPanel->labels(),
-            m_pinnedRect,
-            m_snapshotFusion,
-            m_chartPanel->abPointA(),
-            m_chartPanel->abPointB(),
-            m_chartPanel->isABLoop(),
-            m_roiModel->polygons(),
-            m_guideLineModel->lines(),
-            m_chartPanel->chartGuideLinesData(),
-            m_roiModel->roiIds(),
-            m_roiModel->polygonRoiIds(),
-            m_adjustPanel ? m_adjustPanel->adjust() : DisplayAdjust(),
-            m_adjustPanel ? m_adjustPanel->rotation() : 0
-        );
+    // Save current video state before switching（P-31 T2-A：装配归会话管理器）
+    if (!m_currentVideoPath.isEmpty()) {
+        VideoState cur;
+        cur.snapshot = m_timelineModel->snapshot();
+        cur.regions = m_roiModel->regions();
+        cur.regionRoiIds = m_roiModel->roiIds();
+        cur.polygons = m_roiModel->polygons();
+        cur.polygonRoiIds = m_roiModel->polygonRoiIds();
+        cur.guideLines = m_guideLineModel->lines();
+        cur.chartGuideLines = m_chartPanel->chartGuideLinesData();
+        cur.calibration = m_calibration;
+        cur.magnifierRect = m_magnifier ? m_magnifier->currentSourceRect() : QRect();
+        cur.labels = m_chartPanel->labels();
+        cur.pinnedRect = m_pinnedRect;
+        cur.snapshotFusion = m_snapshotFusion;
+        cur.abPointA = m_chartPanel->abPointA();
+        cur.abPointB = m_chartPanel->abPointB();
+        cur.abLoop = m_chartPanel->isABLoop();
+        cur.display = m_adjustPanel ? m_adjustPanel->adjust() : DisplayAdjust();
+        cur.displayRotation = m_adjustPanel ? m_adjustPanel->rotation() : 0;
+        m_sessionMgr->saveCurrentState(m_currentVideoPath, cur);
     }
 
     removeMagnifier();
     m_currentVideoPath = filePath;
-    m_trustedDurationMs = trustedDurationFor(filePath);
-    m_currentDurationMs = 0;  // 等待 durationChanged 校准
+    m_uiState->beginVideo(trustedDurationFor(filePath));   // 等待 durationChanged 校准
     // 案件现场跟踪（v1.3.0 M2：开案恢复 lastVideoId 的数据源）
     if (const auto *cv = m_caseManager->videoByPath(filePath))
         m_caseManager->setLastVideoId(cv->id);
@@ -2243,7 +2229,7 @@ void MainWindow::openVideoFile(const QString &filePath)
         }
         // Check if we have a saved state for this video (memory state takes priority)
         VideoState savedState;
-        if (m_stateManager->restoreState(filePath, savedState)) {
+        if (m_sessionMgr->stateManager()->restoreState(filePath, savedState)) {
             // 带 roiId 恢复：保持与分析数据 dataEntries 的 roi_id 对齐
             if (savedState.regionRoiIds.size() == savedState.regions.size())
                 m_roiModel->restoreRegions(savedState.regions, savedState.regionRoiIds);
@@ -2562,7 +2548,7 @@ void MainWindow::onLoadAnalysis()
                 m_guideLineModel->addLine(line);
 
             // Do NOT overwrite m_currentVideoPath with the .vla path (see openVideoFile).
-        setWindowTitle(windowTitleWithCase("Lumen Arc v1.7.0 - [Loaded: " +
+        setWindowTitle(windowTitleWithCase("Lumen Arc v1.8.0 - [Loaded: " +
                        QFileInfo(filePath).fileName() + "]"));
         QMessageBox::information(this, lang("已加载", "Loaded"),
             lang("分析结果加载成功。", "Analysis result loaded successfully."));
@@ -2750,7 +2736,7 @@ void MainWindow::onSetStartTime()
                                         &sidecarWarning);
     auto *dlg = new TimeSettingsDialog(
         m_currentVideoPath, curPos,
-        m_currentDurationMs > 0 ? m_currentDurationMs : m_trustedDurationMs,
+        m_uiState->effectiveDurationMs(),
         m_calibration, sidecarWarning, m_calibrationService, this);
     dlg->setAttribute(Qt::WA_DeleteOnClose);
     m_calibrationDialog = dlg;
@@ -2963,7 +2949,7 @@ void MainWindow::applySpeed(float speed)
 void MainWindow::updatePlaybackButtons()
 {
     bool playing = (m_videoEngine->state() == PlaybackState::Playing);
-    bool hasMedia = (m_currentDurationMs > 0) || m_videoEngine->duration() > 0;
+    bool hasMedia = (m_uiState->effectiveDurationMs() > 0) || m_videoEngine->duration() > 0;
     m_playBtn->setEnabled(!playing && hasMedia);
     m_pauseBtn->setEnabled(playing);
     m_stopBtn->setEnabled(playing || m_videoEngine->state() == PlaybackState::Paused);
@@ -3424,12 +3410,9 @@ void MainWindow::onExportCsv()
 
 void MainWindow::onDurationChanged(qint64 durationMs)
 {
-    // VLC 可能读取到容器里异常大的时长（如监控文件拼接导致）。
-    // 用 Python 分析引擎按真实帧数算出的时长作为上限校准。
-    qint64 effectiveDur = durationMs;
-    if (m_trustedDurationMs > 0 && durationMs > m_trustedDurationMs)
-        effectiveDur = m_trustedDurationMs;
-    m_currentDurationMs = effectiveDur;
+    // P-31 T4：时长校准单点（UiState：可信值为上限钳制，消五副本 R5/P-37）
+    m_uiState->ingestEngineDuration(durationMs);
+    const qint64 effectiveDur = m_uiState->effectiveDurationMs();
 
     m_chartPanel->setDuration(effectiveDur);
 
@@ -3518,8 +3501,9 @@ void MainWindow::onSeekFromChart(qint64 timeMs)
 void MainWindow::updateTimeDisplay()
 {
     qint64 pos = m_videoEngine ? m_videoEngine->position() : 0;
-    qint64 dur = (m_currentDurationMs > 0) ? m_currentDurationMs
-                                            : (m_videoEngine ? m_videoEngine->duration() : 0);
+    qint64 dur = m_uiState->effectiveDurationMs();
+    if (dur <= 0 && m_videoEngine)
+        dur = m_videoEngine->duration();
     m_timeLabel->setText(QString("%1 / %2").arg(formatTime(pos)).arg(formatTime(dur)));
 }
 

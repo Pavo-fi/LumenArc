@@ -57,6 +57,8 @@ public:
     // 分析流程状态由 AnalysisTaskService 状态机持有（R7/R8），MainWindow 仅响应任务信号
 
 private slots:
+    /// @brief 打开视频文件主流程（P-31 起入 slots 区：QMetaObject 测试通道）
+    void openVideoFile(const QString &path);
     /// @brief 打开文件对话框并加载视频
     void onOpenFile();
     /// @brief 临时打开视频（不入案，v1.3.0 M2 任务7）
@@ -114,7 +116,6 @@ private:
     void setupConnections();
     void updateTimeDisplay();
     QString formatTime(qint64 ms) const;
-    void openVideoFile(const QString &path);
     /// @brief 打开视频对话框公共流程（admitToCase=false 为临时打开不入案）
     void openVideosInteractive(bool admitToCase);
     /// @brief 视频入案登记（v1.3.0 M2 任务7）：重复跳过/源旁 .vla 询问导入
@@ -188,8 +189,17 @@ protected:
     ChartPanel *m_chartPanel = nullptr;
     SnapshotOverlay *m_snapshotOverlay = nullptr;
     IVideoEngine *m_videoEngine = nullptr;
+    /// v1.9.0 P-31 T3：引擎/任务服务生命周期归 AnalysisController；
+    /// 以下两指针为非持有别名（接线面最小化，调用点零改动）
+    class AnalysisController *m_analysisController = nullptr;
     IAnalysisEngine *m_analysisEngine = nullptr;
-    class AnalysisTaskService *m_taskService = nullptr;   ///< v1.8.0 P1a：任务状态机（持引擎信号聚合）
+    class AnalysisTaskService *m_taskService = nullptr;
+    /// v1.9.0 P-31 T4：视频时长 SSOT（消 m_trusted/m_current 两副本，P-37）
+    class UiState *m_uiState = nullptr;
+    /// v1.9.0 P-31 T2-A：视频会话（VideoStateManager 归属 + 打开决策数据面）
+    class VideoSessionManager *m_sessionMgr = nullptr;
+    /// v1.9.0 P-31 T1：工程读写（vla/CSV/时间戳ROI记忆/徽标文案）
+    class ProjectIO *m_projectIo = nullptr;
     CalibrationService *m_calibrationService = nullptr;
     /// 案件管理器（v1.3.0 M2）：.vla 路径分流/框选记忆随案 SSOT；
     /// 无打开案件或未入案视频时全部回落独立模式老路径（v1.2.2 逐点一致）
@@ -241,8 +251,6 @@ protected:
     float m_currentSpeed = 1.0f;
 
     QString m_currentVideoPath;
-    qint64 m_trustedDurationMs = 0;   // 由 Python 分析引擎算出的真实时长
-    qint64 m_currentDurationMs = 0;   // 校准后用于 UI 的权威时长
     QTimer *m_seekThrottleTimer = nullptr;  // 拖拽 seek 节流（50ms leading+trailing）
     qint64 m_pendingSeekMs = -1;
     qint64 m_lastIssuedSeekMs = -1;
@@ -295,5 +303,5 @@ protected:
     // v0.3: Multi-video and audio visualization
     VideoListPanel *m_videoListPanel = nullptr;
     SpectrogramPanelEnhanced *m_spectrogramEnhanced = nullptr;
-    VideoStateManager *m_stateManager = nullptr;
+
 };
