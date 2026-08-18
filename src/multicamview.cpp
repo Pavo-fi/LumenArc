@@ -1,9 +1,9 @@
 /**
  * @file multicamview.cpp
- * @brief 多机时间线对齐只读视图实现
+ * @brief 多机时间线条实现（P-57：游标 + 拖动 seek；原只读对话框已删）
  * @author Huang Jingyun, Liu xinghua, Huang Wenhua
  * @date 2026-08-13
- * @version 1.0
+ * @version 1.1
  *
  * Copyright 2026 Huang Jingyun/Liu xinghua/Huang Wenhua. All rights reserved.
  * Licensed under the Apache License, Version 2.0
@@ -12,14 +12,10 @@
 
 #include <QDateTime>
 #include <QHelpEvent>
-#include <QLabel>
 #include <QMouseEvent>
 #include <QPainter>
-#include <QPushButton>
 #include <QToolTip>
-#include <QVBoxLayout>
 
-#include "app/case_manager.h"
 #include "i18n.h"
 #include "theme.h"
 
@@ -54,6 +50,21 @@ void MultiCamViewWidget::setLanes(const QVector<CamLane> &lanes,
     update();
 }
 
+void MultiCamViewWidget::setCursorMs(qint64 wallMs)
+{
+    if (m_cursorMs == wallMs)
+        return;
+    m_cursorMs = wallMs;
+    update();
+}
+
+qint64 MultiCamViewWidget::xToWall(int x) const
+{
+    const qint64 w = m_layoutT0 + static_cast<qint64>(
+        (x - kLabelW) * m_layoutMsPerPx);
+    return qMax<qint64>(w, m_layoutT0);
+}
+
 QString MultiCamViewWidget::fmtSpan(qint64 ms)
 {
     const qint64 s = qAbs(ms) / 1000;
@@ -84,6 +95,8 @@ void MultiCamViewWidget::rebuildLayout()
     }
     const qint64 span = qMax<qint64>(t1 - t0, 1);
     const double msPerPx = double(span) / double(availW);
+    m_layoutT0 = t0;                // P-57：xToWall 反解用
+    m_layoutMsPerPx = msPerPx;
 
     // --- 机位块（行内块位=墙钟、宽∝时长，画法同 ClipTimelineWidget） ---
     for (int i = 0; i < m_lanes.size(); ++i) {
@@ -229,6 +242,28 @@ void MultiCamViewWidget::paintEvent(QPaintEvent *)
         p.drawText(QRect(tk.first - 48, tickY + 4, 96, kTickLabelH),
                    Qt::AlignHCenter | Qt::AlignTop, tk.second);
     }
+
+    // 共享墙钟游标（P-57 模式A）：跨行竖线 + 顶部时刻标签
+    if (m_cursorMs >= 0 && m_layoutMsPerPx > 0) {
+        const int cx = kLabelW + int((m_cursorMs - m_layoutT0) / m_layoutMsPerPx);
+        if (cx >= kLabelW && cx <= width() - kMarginR) {
+            p.setPen(QPen(QColor(Theme::Accent), 2));
+            p.drawLine(cx, kTopMargin - 2, cx, tickY + 2);
+            const QString t = QDateTime::fromMSecsSinceEpoch(m_cursorMs, Qt::LocalTime)
+                                  .toString(QStringLiteral("MM-dd HH:mm:ss"));
+            QFont cf = p.font();
+            cf.setPixelSize(11);
+            cf.setBold(true);
+            p.setFont(cf);
+            const int tw = p.fontMetrics().horizontalAdvance(t) + 10;
+            const int lx = qBound(kLabelW, cx - tw / 2, width() - kMarginR - tw);
+            p.setPen(Qt::NoPen);
+            p.setBrush(QColor(Theme::Accent));
+            p.drawRoundedRect(QRect(lx, kTopMargin - 2 - 18, tw, 16), 3, 3);
+            p.setPen(QColor(Theme::AccentOnDark));
+            p.drawText(QRect(lx, kTopMargin - 2 - 18, tw, 16), Qt::AlignCenter, t);
+        }
+    }
 }
 
 QString MultiCamViewWidget::laneTooltip(int i) const
@@ -268,10 +303,44 @@ void MultiCamViewWidget::mouseDoubleClickEvent(QMouseEvent *event)
 {
     for (const auto &pr : m_rects)
         if (pr.second.contains(event->pos())) {
-            emit laneActivated(pr.first);   // 只读：仅供主窗打开该路
+            emit laneActivated(pr.first);   // 回单路分析（U-6）
             return;
         }
     QWidget::mouseDoubleClickEvent(event);
+}
+
+void MultiCamViewWidget::mousePressEvent(QMouseEvent *event)
+{
+    // 游标拖动（P-57 U-4 实时追逐）：仅在条图区（标签列右侧）起效
+    if (event->button() == Qt::LeftButton && event->pos().x() >= kLabelW
+        && !m_lanes.isEmpty()) {
+        m_scrubbing = true;
+        emit scrubPreview(xToWall(event->pos().x()));
+        event->accept();
+        return;
+    }
+    QWidget::mousePressEvent(event);
+}
+
+void MultiCamViewWidget::mouseMoveEvent(QMouseEvent *event)
+{
+    if (m_scrubbing) {
+        emit scrubPreview(xToWall(event->pos().x()));
+        event->accept();
+        return;
+    }
+    QWidget::mouseMoveEvent(event);
+}
+
+void MultiCamViewWidget::mouseReleaseEvent(QMouseEvent *event)
+{
+    if (m_scrubbing && event->button() == Qt::LeftButton) {
+        m_scrubbing = false;
+        emit seekCommit(xToWall(event->pos().x()));
+        event->accept();
+        return;
+    }
+    QWidget::mouseReleaseEvent(event);
 }
 
 void MultiCamViewWidget::resizeEvent(QResizeEvent *event)
@@ -279,65 +348,4 @@ void MultiCamViewWidget::resizeEvent(QResizeEvent *event)
     QWidget::resizeEvent(event);
     rebuildLayout();
     update();
-}
-
-// ---------------------------------------------------------------------------
-// MultiCamDialog
-// ---------------------------------------------------------------------------
-MultiCamDialog::MultiCamDialog(const CaseManager *cm, QWidget *parent)
-    : QDialog(parent)
-{
-    setWindowTitle(lang("多机时间线对齐（只读）",
-                        "Multi-camera Timeline Alignment (read-only)"));
-    setMinimumSize(820, 320);
-    auto *lay = new QVBoxLayout(this);
-
-    const auto lanes = buildCamLanes(cm->caseDir(), cm->meta().videos);
-    // 未校时清单（徽标缓存口径，视图条目以 .vla 实读为准）
-    QStringList uncal;
-    for (const auto &v : cm->meta().videos)
-        if (!v.hasCalibration)
-            uncal << v.id;
-
-    auto *view = new MultiCamViewWidget(this);
-    view->setLanes(lanes);
-    lay->addWidget(view, 1);
-    connect(view, &MultiCamViewWidget::laneActivated,
-            this, &MultiCamDialog::openVideoRequested);
-
-    auto *legend = new QLabel(
-        lang("块 = 该机位已分析时段的墙钟覆盖 · 红 = ≥2 机位同时覆盖（重叠）· "
-             "灰纹 = 无机位覆盖（缺口）· 双击块打开该路",
-             "Block = wall-clock coverage of analyzed span · red = ≥2 cameras "
-             "overlap · hatch = no coverage (gap) · double-click to open"),
-        this);
-    legend->setWordWrap(true);
-    legend->setStyleSheet(QStringLiteral("color:%1;").arg(Theme::TextSecond));
-    lay->addWidget(legend);
-
-    if (lanes.size() < 2) {
-        auto *hint = new QLabel(
-            lang("⚠ 已校时机位不足 2 路，对齐视图仅供单路预览；"
-                 "校时第二路后可查看重叠/缺口。",
-                 "⚠ Fewer than 2 calibrated cameras; overlap/gap analysis "
-                 "needs a second calibrated video."),
-            this);
-        hint->setWordWrap(true);
-        hint->setStyleSheet(QStringLiteral("color:%1;").arg(Theme::Accent));
-        lay->addWidget(hint);
-    }
-    if (!uncal.isEmpty()) {
-        auto *u = new QLabel(
-            lang("未校时（不参与对齐）：%1",
-                 "Not calibrated (excluded): %1").arg(uncal.join("、")), this);
-        u->setStyleSheet(QStringLiteral("color:%1;").arg(Theme::TextMuted));
-        lay->addWidget(u);
-    }
-
-    auto *btnClose = new QPushButton(lang("关闭", "Close"), this);
-    auto *row = new QHBoxLayout();
-    row->addStretch(1);
-    row->addWidget(btnClose);
-    lay->addLayout(row);
-    connect(btnClose, &QPushButton::clicked, this, &QDialog::accept);
 }

@@ -103,6 +103,13 @@ public:
     /// UI 已消费一帧（有界化 frameReady 队列配额归还）
     void ackFrame() override { --m_framesInFlight; }
 
+    /// 预览降清档（P-57 多机性能治理）：lowres 低分辨率解码，下次 load 生效；
+    /// 仅软解路径应用（硬解与 lowres 互斥，硬解路本来负载就低）
+    void setPreviewLowres(int level) override { m_previewLowres = qBound(0, level, 2); }
+    int previewLowres() const override { return m_previewLowres; }
+    /// 实测 GOP 长度（P-57 纠偏阈值联动；工作线程写/UI 线程读 → atomic）
+    qint64 learnedGopMs() const override { return m_gopLearnMs.load(); }
+
 private:
     enum class Command { None, Play, Pause, Stop, Seek };
 
@@ -185,6 +192,7 @@ private:
     std::atomic<bool> m_hwActive{false};    // 已确认收到硬解帧
     std::atomic<int> m_hwAdapterIndex{-1};  // -1=自动（偏好独显）
     QString m_hwAdapterName;                // 当前实际使用的适配器名
+    int m_previewLowres = 0;                // 预览降清档（0=全分辨率，load 时应用）
     qint64 m_discardBeforeRelMs = -1; // seek 后丢弃早于该相对 PTS 的帧
     qint64 m_demuxTargetRelMs = -1;   // 本次 seek 的 demux 目标（用于 margin 自适应）
     qint64 m_seekMarginMs = 2500;     // 无索引容器 seek 前移量（按实测误差自适应）
@@ -233,7 +241,7 @@ private:
     qint64 m_hopGapMs = 0;                  // 上一跳显时目标-关键帧间距（≈GOP 长）
     qint64 m_lastChaseWallMs = 0;           // 上次实测追赶墙钟耗时（跳显自适应依据）
     qint64 m_chaseStartElapsed = -1;        // 本次追赶墙钟计时起点（-1=无）
-    qint64 m_gopLearnMs = 0;                // 实测 GOP 长度（reseek 落点间距，跳显判定用）
+    std::atomic<qint64> m_gopLearnMs{0};      // 实测 GOP 长度（reseek 落点间距，跳显判定 + P-57 纠偏阈值用）
 
     // --- 拖拽滚动帧缓存：追赶解码的副产品帧（软解路径）保留在环形缓存，
     //     目标落在缓存内直接显示（后退微调/抖动 0ms，免 seek 免重解码）。

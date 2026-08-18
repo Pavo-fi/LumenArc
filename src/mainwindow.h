@@ -20,6 +20,7 @@
 #include "videostatemanager.h"
 
 class TimeSettingsDialog;
+class MultiCamPlaybackWindow;
 class QSystemTrayIcon;
 
 class VideoWidget;
@@ -152,6 +153,7 @@ private:
     void onBatchRelocate();
     /// @brief 多机时间线对齐只读视图（v1.3.0 M3 任务14）
     void onMultiCamView();
+    void onMultiCamStandalone();   ///< 文件菜单：独立 2 路对比播放（P-57 U-1）
     /// @brief 用 Python 分析引擎的真实帧数/FPS 计算可信时长
     qint64 trustedDurationFor(const QString &path) const;
     void createMagnifier();
@@ -212,7 +214,8 @@ protected:
     QAction *m_casePropsAction = nullptr;    ///< 菜单「案件属性」
     QAction *m_exportCaseAction = nullptr;   ///< 菜单「导出移交包」(M3)
     QAction *m_batchRelocateAction = nullptr; ///< 菜单「批量重新定位」(M3)
-    QAction *m_multiCamAction = nullptr;      ///< 菜单「多机时间线」(M3)
+    QAction *m_multiCamAction = nullptr;      ///< 菜单「多机同步播放」(M3/P-57)
+    QPointer<MultiCamPlaybackWindow> m_multiCamWin;  ///< 非模态多机播放窗口（P-57）
     TimeCalibration m_calibration;   // 当前视频校时 SSOT（.vla v8 持久化）
     QPointer<TimeSettingsDialog> m_calibrationDialog;  // 非模态校时窗口（v1.2.1）
     QPointer<TimeSettingsDialog> m_roiDialog;          // 框选中的校时窗口

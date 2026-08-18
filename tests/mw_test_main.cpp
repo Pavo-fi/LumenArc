@@ -16,6 +16,10 @@
 #include "domain/timeline_model.h"
 #include "app/case_manager.h"
 #include "domain/time_calibration.h"
+#include "multicamplaybackwindow.h"
+#include "camtilewidget.h"
+#include "multicamview.h"
+#include "infrastructure/ivideo_engine.h"
 #include "i18n.h"
 #include <QApplication>
 #include <QTimer>
@@ -23,6 +27,7 @@
 #include <QMessageBox>
 #include <QDir>
 #include <QFile>
+#include <QWheelEvent>
 #include <cstdio>
 
 static int g_checks = 0;
@@ -260,6 +265,146 @@ static void testLumaFullChain(QApplication &app)
     QFile::remove(vla);
 }
 
+// ---------------------------------------------------------------------------
+// P-57 多机同步播放 UI 链（方案 §5）：开窗→临时进两路→播→对齐→切听→
+// 瓦片放大镜（滚轮/中键）→双击回单路→合并条拖动→关窗，全程无崩溃
+// ---------------------------------------------------------------------------
+class McFakeEngine : public IVideoEngine
+{
+    Q_OBJECT
+public:
+    explicit McFakeEngine(QObject *parent = nullptr) : IVideoEngine(parent) {}
+    qint64 pos = 0;
+    int vol = -1;
+    bool playing = false;
+
+    bool load(const QString &) override
+    {
+        QTimer::singleShot(0, this, [this]() {
+            emit durationChanged(60000);
+            emit stateChanged(PlaybackState::Stopped);
+            QImage img(64, 64, QImage::Format_RGB32);
+            img.fill(QColor(40, 60, 90));
+            emit frameReady(img);   // 瓦片放大镜需要非空帧
+        });
+        return true;
+    }
+    void play() override { playing = true; }
+    void pause() override { playing = false; }
+    void stop() override { playing = false; }
+    void unload() override {}
+    void seek(qint64 t) override { pos = t; }
+    qint64 position() const override { return pos; }
+    qint64 duration() const override { return 60000; }
+    PlaybackState state() const override
+    { return playing ? PlaybackState::Playing : PlaybackState::Paused; }
+    int videoWidth() const override { return 64; }
+    int videoHeight() const override { return 64; }
+    float fps() const override { return 25.0f; }
+    int volume() const override { return vol; }
+    void setVolume(int v) override { vol = v; }
+    void setRate(float) override {}
+    float rate() const override { return 1.0f; }
+};
+
+static void testMultiCamWindow(QApplication &app)
+{
+    QVector<McFakeEngine *> engines;
+    QString openedPath;
+    auto *win = new MultiCamPlaybackWindow(nullptr);
+    win->setEngineFactory([&](QObject *p) -> IVideoEngine * {
+        auto *e = new McFakeEngine(p);
+        engines.append(e);
+        return e;
+    });
+    win->onOpenVideo = [&](const QString &p) { openedPath = p; };
+    win->openStandalone();   // 独立模式：2 路临时槽位（U-1）
+    win->resize(1000, 700);
+    win->show();
+    pump(app);
+
+    // 临时进两路（测试通道：pickVideoForSlot 绕过文件对话框）
+    win->pickVideoForSlot(0, "/fake/a.mp4");
+    pump(app, 200);
+    win->pickVideoForSlot(1, "/fake/b.mp4");
+    pump(app, 300);
+    // 每次选路全量重载：活引擎 = 最后两个（旧引擎已 deleteLater）；
+    // 装配序 = 1 路（首槽）+ 2 路（第二槽）共 3 引擎
+    CHECK(engines.size() >= 3, "mc: engines created across reloads");
+    McFakeEngine *e0 = engines[engines.size() - 2];
+    McFakeEngine *e1 = engines[engines.size() - 1];
+
+    // 播 → 暂停（全路联动）
+    QMetaObject::invokeMethod(win, "onTogglePlay");
+    pump(app, 300);
+    CHECK(e0->playing && e1->playing, "mc: both lanes playing");
+    QMetaObject::invokeMethod(win, "onTogglePlay");
+    pump(app, 100);
+
+    // 对齐会话：进入→确认（双零位 offset=0，路径贯通即断言）
+    QMetaObject::invokeMethod(win, "onEnterAlign");
+    QMetaObject::invokeMethod(win, "onConfirmAlign");
+
+    // 瓦片交互
+    const auto tiles = win->findChildren<CamTileWidget *>();
+    CHECK(tiles.size() >= 2, "mc: tiles built");
+    if (tiles.size() >= 2) {
+        // 单击切听（U-2）
+        QTest::mouseClick(tiles[1], Qt::LeftButton, {},
+                          tiles[1]->rect().center());
+        pump(app, 50);
+        CHECK(e1->vol == 100 && e0->vol == 0, "mc: click switches audible");
+
+        // 放大镜：滚轮以指针为中心缩放（N-7）
+        const QPoint c = tiles[0]->rect().center();
+        QWheelEvent we(QPointF(c), QPointF(tiles[0]->mapToGlobal(c)),
+                       QPoint(0, 0), QPoint(0, 120), Qt::NoButton,
+                       Qt::NoModifier, Qt::NoScrollPhase, false);
+        QApplication::sendEvent(tiles[0], &we);
+        CHECK(tiles[0]->zoom() > 1.0, "mc: wheel zooms in");
+        // 中键拖拽平移
+        QTest::mousePress(tiles[0], Qt::MiddleButton, {}, c);
+        QTest::mouseMove(tiles[0], c + QPoint(10, 8));
+        QTest::mouseRelease(tiles[0], Qt::MiddleButton, {}, c + QPoint(10, 8));
+        CHECK(tiles[0]->zoom() > 1.0, "mc: middle-drag pans (zoom kept)");
+        // 双击回单路（U-6）
+        QTest::mouseDClick(tiles[0], Qt::LeftButton, {}, c);
+        pump(app, 50);
+        CHECK(openedPath == "/fake/a.mp4", "mc: dblclick opens lane in main window");
+    }
+
+    // 合并时间线条（模式A 画笔/游标/拖动信号，widget 级）
+    {
+        MultiCamViewWidget bar;
+        bar.resize(800, 220);
+        CamLane a, b;
+        a.videoId = "A"; a.fileName = "a";
+        a.wallStartMs = 100000; a.wallEndMs = 160000; a.streamDurationMs = 60000;
+        b.videoId = "B"; b.fileName = "b";
+        b.wallStartMs = 150000; b.wallEndMs = 210000; b.streamDurationMs = 60000;
+        bar.setLanes({a, b});
+        bar.show();
+        bar.setCursorMs(155000);
+        int scrubHits = 0, commits = 0;
+        QObject::connect(&bar, &MultiCamViewWidget::scrubPreview,
+                         [&](qint64) { ++scrubHits; });
+        QObject::connect(&bar, &MultiCamViewWidget::seekCommit,
+                         [&](qint64) { ++commits; });
+        const QPoint inside(400, 60);   // 条图区（标签列右侧）
+        QTest::mousePress(&bar, Qt::LeftButton, {}, inside);
+        QTest::mouseMove(&bar, inside + QPoint(40, 0));
+        QTest::mouseRelease(&bar, Qt::LeftButton, {}, inside + QPoint(40, 0));
+        CHECK(scrubHits >= 2, "mc: merged bar scrub preview fired");
+        CHECK(commits == 1, "mc: merged bar seek commit on release");
+        bar.close();
+    }
+
+    win->close();
+    delete win;
+    pump(app, 200);   // deleteLater 引擎回收（关窗 closeAll 路径）
+    CHECK(true, "mc: full chain no crash");
+}
+
 int main(int argc, char **argv)
 {
     QApplication app(argc, argv);
@@ -269,8 +414,11 @@ int main(int argc, char **argv)
     testProjectIo();
     testSessionPlan();
     testMainWindowBranches(app);
+    testMultiCamWindow(app);
     testLumaFullChain(app);
 
     fprintf(stderr, "mw_test: %d checks, %d failures\n", g_checks, g_failures);
     return g_failures == 0 ? 0 : 1;
 }
+
+#include "mw_test_main.moc"

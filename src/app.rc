@@ -17,12 +17,12 @@ BEGIN
         BEGIN
             VALUE "CompanyName",      "Fire Tech Center"
             VALUE "FileDescription",  "Lumen Arc - Fire Investigation Video Analyzer"
-            VALUE "FileVersion",      "1.9.0.0"
+            VALUE "FileVersion",      "1.10.0.0"
             VALUE "InternalName",     "LumenArc"
             VALUE "LegalCopyright",   "Copyright 2026 Huang Jingyun/Liu xinghua/Huang Wenhua"
             VALUE "OriginalFilename", "LumenArc.exe"
             VALUE "ProductName",      "Lumen Arc"
-            VALUE "ProductVersion",   "1.9.0.0"
+            VALUE "ProductVersion",   "1.10.0.0"
         END
     END
     BLOCK "VarFileInfo"

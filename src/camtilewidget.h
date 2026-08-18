@@ -1,0 +1,78 @@
+/**
+ * @file camtilewidget.h
+ * @brief 多机同步播放瓦片（ui 层，P-57 N-7）：帧显示 + OSD + 独立放大镜
+ * @author Huang Jingyun, Liu xinghua, Huang Wenhua
+ * @date 2026-08-18
+ * @version 1.0
+ *
+ * Copyright 2026 Huang Jingyun/Liu xinghua/Huang Wenhua. All rights reserved.
+ * Licensed under the Apache License, Version 2.0
+ *
+ * 设计来源：docs/MULTICAM_PLAYBACK_TECH_DESIGN_CN.md §3.5/§3.6。
+ * 轻量自绘控件（不复用 VideoWidget——ROI/快照叠加是多路场景的状态负担）。
+ * 放大镜 = 渲染侧裁剪（对已到位解码帧取源矩形放大绘制），引擎零改动：
+ * 滚轮以指针为中心缩放（1x~8x），中键拖拽平移，缩回 1x 自动复位居中。
+ */
+#pragma once
+
+#include <QWidget>
+#include <QImage>
+#include <QPointF>
+
+class IVideoEngine;
+
+class CamTileWidget : public QWidget
+{
+    Q_OBJECT
+public:
+    explicit CamTileWidget(QWidget *parent = nullptr);
+
+    /// 接引擎 frameReady（消费后 ackFrame 归还有界配额，契约同 VideoWidget）
+    void setEngine(IVideoEngine *engine);
+    void clearFrame();
+
+    // ---- OSD（文本由窗口按服务时钟喂入，本控件不持业务状态）----
+    void setLaneName(const QString &name) { m_name = name; update(); }
+    void setOsdLines(const QString &line1, const QString &line2);
+    void setOsdVisible(bool on);            ///< U-5 可选开关
+    void setAudible(bool on);               ///< 🔊 角标
+    void setTemporaryBadge(bool on);        ///< “临时对齐（未校时）”角标
+    void setLowresBadge(bool on);           ///< “预览降清档”角标（§4 档②）
+    /// 缺口/失败占位（非清空帧——保留最后帧下压暗纹提示）
+    void setPlaceholder(const QString &text);   ///< 空串 = 取消占位
+
+    qreal zoom() const { return m_zoom; }
+
+signals:
+    void clicked();          ///< 单击：切听该路（U-2）
+    void openRequested();    ///< 双击：回单路分析（U-6）
+
+protected:
+    void paintEvent(QPaintEvent *event) override;
+    void wheelEvent(QWheelEvent *event) override;
+    void mousePressEvent(QMouseEvent *event) override;
+    void mouseMoveEvent(QMouseEvent *event) override;
+    void mouseReleaseEvent(QMouseEvent *event) override;
+    void mouseDoubleClickEvent(QMouseEvent *event) override;
+
+private:
+    QRectF frameFitRect() const;      ///< 帧在控件内的适配矩形（等比）
+    void clampCenter();
+
+    IVideoEngine *m_engine = nullptr;
+    QImage m_frame;
+
+    QString m_name;
+    QString m_osd1, m_osd2;
+    bool m_osdVisible = true;
+    bool m_audible = false;
+    bool m_tempBadge = false;
+    bool m_lowresBadge = false;
+    QString m_placeholder;
+
+    // 放大镜状态（归一化源坐标：center ∈ [0,1]²，zoom ≥1）
+    qreal m_zoom = 1.0;
+    QPointF m_center{0.5, 0.5};
+    bool m_panning = false;
+    QPoint m_panLast;
+};

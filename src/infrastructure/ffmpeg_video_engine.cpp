@@ -644,7 +644,7 @@ void FfmpegVideoEngine::diagScrubDisplay(const char *site, qint64 relMs, qint64 
     audioDiag(QStringLiteral("scrub display[%1]: rel=%2 target=%3 err=%4 gopLearn=%5 "
               "chaseWall=%6 hopArmed=%7 vel=%8 round=%9ms")
               .arg(QString::fromLatin1(site)).arg(relMs).arg(target).arg(target - relMs)
-              .arg(m_gopLearnMs).arg(m_lastChaseWallMs).arg(m_hopFirstFrame ? 1 : 0)
+              .arg(m_gopLearnMs.load()).arg(m_lastChaseWallMs).arg(m_hopFirstFrame ? 1 : 0)
               .arg(m_scrubVel, 0, 'f', 0).arg(roundMs));
 }
 
@@ -696,14 +696,14 @@ bool FfmpegVideoEngine::scrubChaseMainFrame()
     // 解码追赶（慢解码 + 长 GOP = 秒级墙钟停顿，是拖拽跳跃卡顿的物理根源）。
     // 快解码器（如 D17 1440p 软解 ~3000fps，10s GOP 追赶仅 ~80ms）不跳显，
     // 保持精确追赶——按实测墙钟自适应，不按文件类型一刀切
-    const qint64 gopEst = m_gopLearnMs > 0 ? m_gopLearnMs : 20000;
+    const qint64 gopEst = m_gopLearnMs.load() > 0 ? m_gopLearnMs.load() : 20000;
     // 跳显判定（双通道，都用 reseek 落点实测的 GOP m_gopLearnMs，避免被
     // 直追期的 m_lastCatchupMs 噪声污染）：
     // ① sparseGop——超长 GOP 且追赶墙钟慢（>120ms）：跳显阈值 3s
     // ② denseVelHop——密 GOP（≤2s）+ 快拖超实测解码吞吐（~31×）：跳显阈值 300ms，
     //    误差 ≤1 GOP 在快拖中不可见；长 GOP 快解码文件（D17 10s GOP 追赶仅 ~80ms）
     //    不进此通道，保持精确追赶
-    const bool sparseGop = m_gopLearnMs > 6000 && m_lastChaseWallMs > 120;
+    const bool sparseGop = m_gopLearnMs.load() > 6000 && m_lastChaseWallMs > 120;
     // 快拖跳显：目标速度超实测解码吞吐（~31×）时布防——但跳显与否最终由
     // 显示点的实测误差决定（m_gopLearnMs 是“目标在 GOP 内的偏移”而非 GOP
     // 长度，不能用于判定；误差 >2s 说明 GOP 其实很长，放弃跳显让精确追赶兜底）
@@ -872,7 +872,7 @@ bool FfmpegVideoEngine::scrubChaseMainFrame()
                         m_gopLearnMs = seekT - relMs;
                     // 首帧实测追赶长度：>4s 且还在硬解 → 切多线程软解重 seek。
                     // 硬解短追赶低延迟，软解长追赶高吞吐，一次额外 seek ≪ 长追赶节省
-                    if (dec == m_vdec && m_gopLearnMs > 4000 && !m_hopFirstFrame
+                    if (dec == m_vdec && m_gopLearnMs.load() > 4000 && !m_hopFirstFrame
                         && ensureScrubDecoder()) {
                         av_frame_unref(frame);
                         av_packet_unref(pkt);
@@ -976,7 +976,7 @@ bool FfmpegVideoEngine::scrubChaseMainFrame()
                             // GOP 未知时的硬解长追赶非最优路径，一次性慢样本会
                             // 把 sparseGop 锁死在布防态；长 GOP 只记录软解追赶耗时
                             const qint64 wall = m_monotonic.elapsed() - m_chaseStartElapsed;
-                            if (m_gopLearnMs > 0 && (dec == m_scDec || m_gopLearnMs <= 4000))
+                            if (m_gopLearnMs.load() > 0 && (dec == m_scDec || m_gopLearnMs.load() <= 4000))
                                 m_lastChaseWallMs = m_lastChaseWallMs > 0
                                                     ? (m_lastChaseWallMs + wall) / 2 : wall;
                             m_chaseStartElapsed = -1;
@@ -1270,6 +1270,10 @@ bool FfmpegVideoEngine::openFile(const QString &filePath)
         m_vdec->thread_count = 1;
     } else {
         m_vdec->thread_count = 0; // 软解自动多线程
+        // P-57 预览降清档：lowres 低分辨率解码（与硬解互斥，仅软解应用；
+        // 仅预览降清，不碰源数据）
+        if (m_previewLowres > 0)
+            m_vdec->lowres = m_previewLowres;
     }
 
     if (avcodec_open2(m_vdec, codec, nullptr) < 0) {

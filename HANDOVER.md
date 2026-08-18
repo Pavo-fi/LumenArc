@@ -5,21 +5,22 @@
 
 ## 表头（每次写完 HANDOVER 与 WORK_HISTORY 后必须同步更新本表头——规则 R2）
 
-- **当前 HEAD**：施工批（2026-08-18 §51 P-55 勾销+音量曲线 70%+调研草案 P-57/P-58；版本 v1.9.0）
+- **当前 HEAD**：施工批（2026-08-18 §52 P-57 多机同步播放施工落地；版本 v1.10.0）
 - **构建**：`cmd //c "build_tmp\build_target.bat ALL"`；测试：`QT_QPA_PLATFORM=offscreen`
   + PATH 含 `C:\code\Qt\6.8.0\msvc2022_64\bin`（配置：`build_tmp\reconfigure.bat`）
-- **全回归基线**（13 套，v1.9.0 施工批）：mw 26（LUMENARC_REPRO_VIDEO 门控 +1）/ task_registry 41 / case 248 /
-  case_e2e 51 / piecewise 96 / preprocess 176 / ui_chain 92 / calibration 77 /
-  roi_model 23 / vla +54 / libav **25**（+P-55 回归）/ v17 34
+- **全回归基线**（13 套，v1.10.0 施工批）：mw **36**（+P-57 UI 链 10，LUMENARC_REPRO_VIDEO
+  门控 +1）/ task_registry 41 / case 248 / case_e2e 51 / piecewise 96 / preprocess 176 /
+  ui_chain 92 / calibration 77 / roi_model 23 / vla 54 / libav 25 / v17 34 /
+  **sync 78（P-57 新套件）**
 - **当前保留批次**（新→旧，R2 限 5 批）：
+  第四十三批 §52（P-57 多机同步播放施工落地，版本→1.10.0）·
   第四十二批 §51（P-55 勾销 + 音量曲线 70% + 调研草案 P-57/P-58）·
   第四十一批 §50（P-55 闪退根除：音轨前导吃满探测窗→pix_fmt NONE→sws 断言；按帧属性惰性建表）·
   第四十批 §49（亮度分析闪退排查，P-55 待复现信息）·
-  第三十九批 §48（P-31 拆分四组件+R3/R5 收口，版本→1.9.0）·
-  第三十八批 §47（P-30 任务化+通道化+.vla v10+P-25 退役，版本→1.8.0）
-- **最近归档动作**：2026-08-18 §51 批——第三十七批（§46）移入 WORK_HISTORY.md 末尾；
-  早前：第三十五批（§44，§49 批）、第三十一批（§40）、第三十批（§39）、
-  第五批（§14）至第二十九批（§38）共 25 批整体移入（原文未删改）。
+  第三十九批 §48（P-31 拆分四组件+R3/R5 收口，版本→1.9.0）
+- **最近归档动作**：2026-08-18 §52 批——第三十八批（§47）移入 WORK_HISTORY.md 末尾；
+  早前：第三十七批（§46，§51 批）、第三十五批（§44，§49 批）、第三十一批（§40）、
+  第三十批（§39）、第五批（§14）至第二十九批（§38）共 25 批整体移入（原文未删改）。
 - **常用参考导航**（已归档，查 WORK_HISTORY.md）：显示旋转 90° 方案 A
   （第三批 §12）、音频时间轴对齐与问题 A/B 定案（深夜批）、项目规则 R1/R2
   （08-13 晚批）、架构分层与红线 R 规则（二章）、构建部署 CI（九章）、
@@ -27,6 +28,79 @@
   救复速览（〇章）、案件模块 M1-M3（二十三章）。
 - **管理文档**（2026-08-16 §44 建立）：待办唯一登记处 `docs/PENDING.md`；
   文档体系与维护规矩 `docs/DOCS_MAP.md`（规矩 D1-D8，待办必登记 PENDING）。
+# ============================================================================
+# 工作记录（2026-08-18，第四十三批）——P-57 多机同步播放【施工落地】（v1.10.0）
+# ============================================================================
+
+## 52. P-57 施工：方案 v0.3（已拍板）→ M1-M4 全量落地
+
+### 落地清单（对拍板项逐条）
+
+- **Q1/Q2 入口形态**：独立大窗口 `MultiCamPlaybackWindow`（非模态单例，关窗
+  closeAll 释放全部引擎）；案件菜单「多机时间线（只读）」升级为「多机同步播放」
+  （≥1 路已校时可开）；文件菜单新增「多机对比播放（2 路）」独立模式（U-1 放行）。
+- **架构**（方案 §3）：domain `sync_model.h` 纯函数（墙钟↔流内仿射/临时偏移/
+  覆盖判定/模式判定/纠偏决策）→ app `MultiCamSyncService`（R7 状态机
+  Idle→Loading→Ready→Playing/Paused→Ended；墙钟主时钟=QElapsedTimer×rate；
+  100ms 节拍；R4 引擎工厂注入，服务不识具体引擎）→ ui 瓦片 `CamTileWidget`
+  （轻量自绘，不复用 VideoWidget）。
+- **模式判定**：全校时 2-4 路 → 模式A 合并时间线（MultiCamViewWidget 升 v1.1：
+  游标竖线+时刻签/按下拖动 scrubPreview 实时追逐/松手 seekCommit；块位改按
+  **真实时长**——原 CamLane 块位=已分析时长的数据缺口由引擎 durationChanged
+  回报填实，方案 §2 盘点缺口补齐）；恰 1 路已校时/独立模式 → 模式B 分开进度条。
+- **U-4 实时追逐**：拖游标 = beginScrub/scrubTo/endScrub（复用引擎 setScrubMode/
+  setScrubTarget demux 级追赶，主窗拖拽同手感）。
+- **U-2 音频切听**：单路主听音其余静音，单击瓦片即切（🔊 角标）；对齐会话期
+  同样即点即切（以声定点）。
+- **Q4/U-1 临时进**：2 路界面槽位选视频（会话级偏移 tempOffsetMs，**不落盘不
+  写案**，取证红线）；「对齐…」会话=暂停+两路进度条独立拖动→「确认对齐」以
+  参考路当前墙钟-临时路流内位置立等偏移；取消回原偏移；瓦片「临时对齐」角标。
+- **N-7 瓦片放大镜**：滚轮以指针为中心 1x~8x 连续缩放+中键拖拽平移+缩回 1x
+  自动复位；渲染侧裁剪（drawImage 源矩形），引擎零改动。
+- **U-5/U-6**：OSD 窗口级开关（默认开）；双击瓦片/双击合并条块 → onOpenVideo
+  回主窗单路分析（多机窗不关）。
+- **U-3 性能三级治理**：evaluatePerformance（load 收口一次性判定+防抖不频繁
+  切档）——①硬解路（hardwareAdapterName 非空）不计入软解负载 ②软解总吞吐
+  >150Mpx/s → 最重路 lowres=1 预览降清重载（ffmpeg_video_engine openFile 软解
+  分支应用 m_previewLowres；仅预览降清不碰源数据；瓦片「预览降清档」角标）
+  ③>2×阈 → 状态条提示不强制。
+
+### 施工中发现并修复（本批实测触发）
+
+1. **加载收口计数死锁**：onLaneDuration 以「durationMs 首知」为收口条件，路数据
+   预设时长时永不收口（sync_test 首轮 23 失败实锤）→ 改以 durationChanged 为
+   准信、m_loadAccounted 防重（lowres 重载再报不误计）。
+2. **瓦片帧通道漏接**：rebuildTiles 未调 setEngine → 画面不上屏（mw_test UI 链
+   放大镜断言暴露）→ 接线修复；空槽位/换路全量重载自动重接。
+3. **R-1 对抗补强**：运行期引擎暴毙（非 Loading 态回 Idle，如 lowres 重载失败）
+   → 标死该路+上报+占位，不拖垮全局；setLaneOffsetMs 重算内容区间与
+   finishLoading 同口径（跳过坏路）。
+4. **R-2 落地**：IVideoEngine 新增 learnedGopMs（引擎 m_gopLearnMs 原子化跨线程
+   暴露）；纠偏阈值 GOP 联动——>4s GOP 路放宽 500ms（120ms 严阈值留短 GOP 路），
+   配合「持续增长才纠」防抖兜住长 GOP seek 风暴。
+
+### 测试（方案 §5 全项）
+
+- **sync_test 新套件 78 断言**：纯函数（映射/模式/纠偏决策）+ 服务级假引擎对抗
+  （加载收口/播放联动/缺口驻停复出/切听/纠偏实发/临时偏移重映射/加载失败/
+  **性能治理两案**（双 4K 软解触档+硬解路免降）/**GOP 阈值两案**（短 400ms 内
+  必纠/长 400ms 不纠）/**运行期暴毙**）。
+- **mw_test +10（36）**：P-57 UI 链——独立模式开窗→临时进两路→播停→对齐会话
+  →单击切听→滚轮缩放/中键平移→双击回单路→合并条拖动 scrub/commit→关窗回收。
+- 全回归 13 套绿（计数见表头）。
+
+### 待真机点检（PENDING P-57 ◐）
+
+①4 路 1080p 30min 漂移（纠偏后 ≤100ms）②2 路 1440p 明景素材硬解流畅度
+③放大镜各档位表现（含 lowres 路放大降清提示）④临时进对齐实操（以声定点）。
+
+### 版本与文档
+
+- 版本 1.9.0 → **1.10.0**（四处一致：CMake/app.rc/About/主窗标题×3）。
+- MANUAL「多机时间线对齐视图（只读）」改写为「多机同步播放」（两模式/临时进/
+  放大镜/性能治理/取证红线）；README 案件管理行同步。
+- PENDING P-57 改 ◐ 待真机；DOCS_MAP 与方案头状态同步「已施工」。
+
 # ============================================================================
 # 工作记录（2026-08-18，第四十二批）——P-55 真机勾销 + 音量曲线 70% + 两调研草案
 # ============================================================================
@@ -229,57 +303,3 @@ P-55 已标✅待真机点检。
   C1 虚高钳制 / E1-E3 轴联动
 
 # ============================================================================
-# 工作记录（2026-08-17，第三十八批）——v1.8.0 P-30 施工：任务化+通道化+.vla v10+P-25 退役
-# ============================================================================
-
-## 47. P1a/P1b/P-25 全量落地（方案 DEVELOPMENT_PLAN_V1.8_CN.md，拍板记录见其 §9）
-
-### 提交序列（T1/T3 纪律：重构与行为分开）
-
-| commit | 内容 |
-|---|---|
-| `feat: P1a 任务化 + P1b 通道化` | TaskRegistry（domain 纯数据注册表，显示名中英双串存 domain 不引 i18n）+ AnalysisTaskService（app 层状态机 Idle→Running→终态；取消竞态 gating 替代错误文案比较 C1；错误码 kErrNoVideo/Precondition/Busy/UnknownTask/Engine）+ AnalysisSnapshot channels 字典（QHash<QString,ChannelData>；lumRows/lumEntries/audioData API；timestamps 保留成员=亮度共享时间轴）+ .vla v10（META channels 清单/旧计数字段双写；LUM/VOL/SPEC 字节零改动；未知通道 opaque 字节保全 codec/stored 原样带回；kCurrentVlaVersion=10）+ MainWindow 接线（引擎信号经服务聚合，删 AnalysisPhase 枚举=P-32）+ 引擎装配切 setLuminance/setAudio |
-| `test: 任务/通道化测试` | task_registry_test 41 断言（注册/状态机全路径/取消后迟到 finished+failed 双重忽略/合并两序/前置条件/空路径）+ vla_load_test +54 断言（v10 文件级 META channels 断言/重载往返/v9→v10 迁移回存/F4 version=11 拒载/peek v10/未知通道 CH01 加载-回写-再载字节不变） |
-| `refactor: 消费点切永久 API` | chartpanel/mainwindow/测试 → lumRows()/lumEntries()/audioData()，删迁移期兼容访问器（R10，P-33 收口） |
-| `feat: P-25 Python 引擎退役` | 删 python_analysis_engine.{h,cpp}(664行)/analyze_video.py/CMake 6 处引用与 POST_BUILD 拷贝/设置菜单"分析引擎"子菜单/引擎构造 QSettings 分支；静态探测抽 ToolPaths（findFfmpegPath/detectPythonPath 原样迁移；消费方 timestamp_ocr/calibration/encoder_probe/transcode/concat/preprocesswindow/v17_test 全部改接）；mac workflow 删 analyze_video 自检行；cast 3 处随引擎删除归零（P-35 提前收口）；main.cpp 引擎构造改恒 libav |
-| `docs+chore: 版本四处` | 1.3.1→1.8.0（CMake/app.rc/About/README 运行时说明）；MANUAL 引擎说明改写；RELEASE_CHECKLIST_V1.8 新建（A-E 28 项，B4/B5 已离线自动验证） |
-
-### 关键实现决策
-
-1. **状态机取消语义**：cancel() 立即回 Idle 并发 taskCancelled；此后引擎迟到的
-   finished/failed 一律忽略（onEngineFinished 首行 `m_state != Running` 卫语句）——
-   旧版"取消后引擎报 failed('Analysis cancelled by user.') 按文案判取消"的 C1 违例
-   连根拔除；切换视频（B6 竞态）同走此门。
-2. **v10 磁盘布局（拍板 Q1）**：数据块沿用既有标签，META 加 `channels` 清单
-   （id/kind/计数，audio 带 spec_frames，opaque 带 chunk 标签+raw_length）。
-   v9 读者按 F4 拒 v10（上界互斥）；v10 读者可读 v9 并内存升 channels，保存自然落 v10。
-3. **未知通道 opaque（拍板 Q2）**：vlaUnpackAll 增 rawChunks 出参（codec/rawLen/stored
-   原样）；加载端 v10 且块标签 ∉ {META,TMS,LUM,VOL,SPEC} → `opaque:<tag>` 通道
-   （payload 语义保全 + stored 字节保全）；保存端原块回写（vlaPackRawChunk）。
-   未来新通道数据块规约：4 ASCII 标签 `CH:` 前缀预留。
-4. **合并策略迁移**：旧 onAnalysisFinished 的"亮度完成保留既有 audio / audio-only
-   合入既有亮度"改为服务内 producedChannels 逐通道覆盖（setLuminance/setAudio
-   未产出通道不动）；MainWindow 的语谱刷新改注册表驱动（producedChannels
-   contains audio → setSpectrogramData）。
-5. **P-25 退役评估落地结论**（方案 §5）：退役收益=维护面收窄（双引擎×双测试×
-   cast 债清零），**体积收益≈0**——probe_timestamps.py（cv2/numpy/rapidocr）与
-   P-28 报告（python-docx）租户保留 bundled Python；A/B 对拍测试改 SKIP（脚本
-   不再随包），libav 语义对齐注释保留。发现并登记 **P-54**：降噪滑杆为 Python
-   引擎专属谱减能力，v1.5 默认 libav 起即空操作，UI 存在误导待拍板清理。
-
-### 验证
-
-- 全回归 **12 套**绿：task_registry 41（新）/ case 248 / case_e2e 51 / piecewise 96
-  / preprocess 176 / calibration 77 / roi_model 23 / v17 34 / ui_chain 92 / vla
-  （+54 新断言）/ libav 10（A/B 部分 SKIP 为退役后预期）
-- 待真机（RELEASE_CHECKLIST_V1.8 A-E）：①音频进度 0-100 唯一可见变化确认
-  ②v9 老案件加载→重分析→保存→重开往返 ③CSV 列序冻结 ④设置菜单无引擎项
-  ⑤OCR 校时存活 ⑥回归抽查五项
-- PENDING 勾销：P-25/P-30/P-32/P-33/P-35；新增 P-54（降噪滑杆待拍板）
-
-### 版本与文档
-
-- 版本 1.3.1 → **1.8.0**（D4 四处一致）；DOCS_MAP 登记 V1.8 已实施 + 点检清单；
-  V1_ERA §1.3 对照表 v10 行与本实施一致（方案编写时已同步）。
-# ============================================================================
-

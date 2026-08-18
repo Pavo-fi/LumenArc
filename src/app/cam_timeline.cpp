@@ -15,6 +15,7 @@
 #include <QFile>
 #include <QFileInfo>
 
+#include "case_manager.h"
 #include "domain/timeline_model.h"
 #include "domain/time_calibration.h"
 
@@ -52,6 +53,43 @@ QVector<CamLane> buildCamLanes(const QString &caseDir,
     std::sort(out.begin(), out.end(),
               [](const CamLane &a, const CamLane &b) {
                   return a.wallStartMs < b.wallStartMs;
+              });
+    return out;
+}
+
+QVector<SyncLaneData> buildSyncLanesFromCase(const CaseManager &cm)
+{
+    QVector<SyncLaneData> out;
+    const QDir dir(cm.caseDir());
+    for (const auto &v : cm.meta().videos) {
+        if (v.vlaRelPath.isEmpty())
+            continue;
+        const QString vlaPath = dir.absoluteFilePath(v.vlaRelPath);
+        if (!QFile::exists(vlaPath))
+            continue;
+        TimelineModel model;
+        TimeCalibration cal;
+        if (!model.loadFromFile(vlaPath, nullptr, &cal) || !cal.isValid())
+            continue;
+        if (!cal.isEffective())
+            continue;   // 未校时路不参与（Q4）
+        const QString path = cm.effectivePathFor(v);
+        if (path.isEmpty() || !QFile::exists(path))
+            continue;
+        SyncLaneData lane;
+        lane.id = v.id;
+        lane.path = path;
+        lane.displayName = v.cameraLabel.isEmpty()
+            ? QFileInfo(v.originalPath).fileName() : v.cameraLabel;
+        lane.calibrated = true;
+        lane.temporary = false;
+        lane.cal = cal;
+        lane.durationMs = 0;   // 真实时长由引擎加载后回报
+        out.append(lane);
+    }
+    std::sort(out.begin(), out.end(),
+              [](const SyncLaneData &a, const SyncLaneData &b) {
+                  return syncLaneWallStart(a) < syncLaneWallStart(b);
               });
     return out;
 }

@@ -68,10 +68,18 @@ public:
     /// 拖拽追逐目标（原子写入，免锁免节流）：拖拽期间 UI 高频调用；
     /// 引擎 scrub 循环围绕该目标连续解码/demux 级追赶，而非每个位置 seek+flush。
     virtual void setScrubTarget(qint64 timeMs) { Q_UNUSED(timeMs) }
+    /// 预览降清档（lowres 低分辨率解码，P-57 多机播放性能治理用；
+    /// 仅预览降清不碰源数据；下次 load 生效，默认无操作）
+    virtual void setPreviewLowres(int level) { Q_UNUSED(level) }
+    /// 当前预览降清档位（0=全分辨率）
+    virtual int previewLowres() const { return 0; }
     /// UI 已消费一帧（有界化 frameReady 队列：引擎在积压时丢帧而不是排队，VLC 式）
     virtual void ackFrame() {}
     /// 当前使用的硬解适配器名称（软解返回空串）
     virtual QString hardwareAdapterName() const { return QString(); }
+    /// 实测 GOP 长度（毫秒，reseek 落点间距学习；0=未知）。
+    /// P-57 多机纠偏阈值 GOP 联动用（方案 §8 R-2：长 GOP seek 代价高，放宽阈值）
+    virtual qint64 learnedGopMs() const { return 0; }
 
 signals:
     void frameReady(const QImage &image);

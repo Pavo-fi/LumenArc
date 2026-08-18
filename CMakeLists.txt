@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(LumenArc VERSION 1.9.0 LANGUAGES CXX)
+project(LumenArc VERSION 1.10.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -95,6 +95,8 @@ set(SOURCES
     src/app/case_open_panel.cpp
     src/casedialogs.cpp
     src/multicamview.cpp
+    src/multicamplaybackwindow.cpp
+    src/camtilewidget.cpp
     src/app/cam_timeline.cpp
     src/app/preprocessing_coordinator.cpp
     src/app/calibration_service.cpp
@@ -104,6 +106,7 @@ set(SOURCES
     src/app/video_session_manager.cpp
     src/domain/task_registry.cpp
     src/app/analysis_task_service.cpp
+    src/app/multicam_sync_service.cpp
     src/timesettingsdialog.cpp
     src/infrastructure/ffmpeg_video_engine.cpp
     src/infrastructure/tool_paths.cpp
@@ -127,6 +130,8 @@ set(HEADERS
     src/videowidget.h
     src/domain/task_registry.h
     src/app/analysis_task_service.h
+    src/app/multicam_sync_service.h
+    src/domain/sync_model.h
     src/app/analysis_controller.h
     src/app/project_io.h
     src/app/uistate.h
@@ -166,6 +171,8 @@ set(HEADERS
     src/casedock.h
     src/casedialogs.h
     src/multicamview.h
+    src/multicamplaybackwindow.h
+    src/camtilewidget.h
     src/app/cam_timeline.h
     src/app/preprocessing_coordinator.h
     src/app/calibration_service.h
@@ -308,6 +315,24 @@ target_include_directories(lumenarc_task_registry_test PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src
 )
 target_link_libraries(lumenarc_task_registry_test PRIVATE
+    Qt6::Core
+    Qt6::Gui
+)
+
+# --- P-57：多机同步播放（sync_model 纯函数 + 同步服务假引擎对抗） ---
+add_executable(lumenarc_sync_test
+    tests/sync_test_main.cpp
+    src/app/multicam_sync_service.cpp
+    src/app/multicam_sync_service.h
+    src/domain/sync_model.h
+    src/domain/time_calibration.cpp
+    src/domain/time_piecewise.cpp
+    src/infrastructure/ivideo_engine.h   # AUTOMOC：IVideoEngine 元对象（假引擎基类）
+)
+target_include_directories(lumenarc_sync_test PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+)
+target_link_libraries(lumenarc_sync_test PRIVATE
     Qt6::Core
     Qt6::Gui
 )
@@ -555,8 +580,8 @@ elseif(APPLE)
         MACOSX_BUNDLE TRUE
         MACOSX_BUNDLE_INFO_PLIST "${CMAKE_CURRENT_SOURCE_DIR}/src/Info.plist"
         MACOSX_BUNDLE_BUNDLE_NAME "LumenArc"
-        MACOSX_BUNDLE_BUNDLE_VERSION "1.9.0"
-        MACOSX_BUNDLE_SHORT_VERSION_STRING "1.9.0"
+        MACOSX_BUNDLE_BUNDLE_VERSION "1.10.0"
+        MACOSX_BUNDLE_SHORT_VERSION_STRING "1.10.0"
         MACOSX_BUNDLE_GUI_IDENTIFIER "com.firetech.lumenarc"
     )
 else()

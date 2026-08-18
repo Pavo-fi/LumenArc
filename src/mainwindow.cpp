@@ -29,7 +29,7 @@
 #include "domain/task_registry.h"
 #include "casedock.h"
 #include "casedialogs.h"
-#include "multicamview.h"
+#include "multicamplaybackwindow.h"
 #include "timesettingsdialog.h"
 #include "magnifierwidget.h"
 #include "snapshotoverlay.h"
@@ -109,7 +109,7 @@ MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent)
 {
     loadLanguage();
-    setWindowTitle(lang("追光者 Lumen Arc v1.9.0", "Lumen Arc v1.9.0") + buildStamp());
+    setWindowTitle(lang("追光者 Lumen Arc v1.10.0", "Lumen Arc v1.10.0") + buildStamp());
     resize(1280, 720);
 
     m_roiModel = new RoiModel(this);   // 统一 ROI 模型（矩形+多边形，v1.5.0 Q-18）
@@ -684,6 +684,9 @@ void MainWindow::createMenus()
     fileMenu->addAction(lang("打开视频(&O)...", "&Open Video..."), this, &MainWindow::onOpenFile, QKeySequence::Open);
     // v1.3.0 M2 任务7：临时打开（不入案）——有打开案件时与 Ctrl+O 的唯一区别
     fileMenu->addAction(lang("临时打开视频（不入案）(&T)...", "Open Video &Temporarily (no case)..."), this, &MainWindow::onOpenFileTemporary);
+    // P-57 U-1：独立模式 2 路对比播放（无案件也可用，双临时进槽位）
+    fileMenu->addAction(lang("多机对比播放（2 路）(&M)...", "&Multi-cam Compare Playback (2 lanes)..."),
+                        this, &MainWindow::onMultiCamStandalone);
 
     // v1.3.0 M2：案件菜单（新建/打开/最近/起始页/属性/根目录设置 +
     // 关闭案件 Ctrl+W = 模式出口二）
@@ -723,9 +726,9 @@ void MainWindow::createMenus()
         lang("批量重新定位(&B)...", "&Batch Relocate..."), this,
         &MainWindow::onBatchRelocate);
     m_batchRelocateAction->setEnabled(false);
-    // v1.3.0 M3 任务14：多机时间线对齐只读视图（<2 路已校时置灰）
+    // P-57：多机同步播放大窗（原只读对齐视图被取代；≥1 路已校时即可开）
     m_multiCamAction = caseMenu->addAction(
-        lang("多机时间线(&M)...", "&Multi-camera Timeline..."), this,
+        lang("多机同步播放(&M)...", "&Multi-camera Synced Playback..."), this,
         &MainWindow::onMultiCamView);
     m_multiCamAction->setEnabled(false);
     // 已校时数随案内变化（写 .vla 刷新徽标后重判）→ 菜单弹出时动态置灰
@@ -733,7 +736,7 @@ void MainWindow::createMenus()
         if (m_multiCamAction)
             m_multiCamAction->setEnabled(
                 m_caseManager->isOpen()
-                && m_caseManager->calibratedVideoCount() >= 2);
+                && m_caseManager->calibratedVideoCount() >= 1);
     });
     caseMenu->addAction(lang("案件根目录设置(&D)...", "Case &Root Folder..."),
                         this, &MainWindow::onCaseRootDir);
@@ -2102,14 +2105,56 @@ void MainWindow::onMultiCamView()
 {
     if (!m_caseManager->isOpen())
         return;
-    MultiCamDialog dlg(m_caseManager, this);
-    // 双击块打开该路（只读视图，打开不改变任何数据）
-    connect(&dlg, &MultiCamDialog::openVideoRequested, this,
-            [this](const QString &id) {
-                if (const auto *v = m_caseManager->videoById(id))
-                    openVideoFile(m_caseManager->effectivePathFor(*v));
-            });
-    dlg.exec();
+    if (m_multiCamWin) {          // 单例：已开则置顶
+        m_multiCamWin->raise();
+        m_multiCamWin->activateWindow();
+        return;
+    }
+    // 主窗正在播则先暂停（避免双路音频/资源竞争）
+    if (m_videoEngine && m_videoEngine->state() == PlaybackState::Playing)
+        m_videoEngine->pause();
+    auto *win = new MultiCamPlaybackWindow(this);
+    m_multiCamWin = win;
+    // R4：具体引擎仅在此构造并注入工厂（与主引擎同一 QSettings 硬解口径）
+    win->setEngineFactory([](QObject *parent) -> IVideoEngine * {
+        QSettings s(QStringLiteral("LumenArc"), QStringLiteral("LumenArc"));
+        auto *e = new FfmpegVideoEngine(parent);
+        e->setHardwareDecode(s.value(QStringLiteral("hwDecode"), true).toBool());
+        e->setHardwareAdapter(s.value(QStringLiteral("hwAdapter"), -1).toInt());
+        return e;
+    });
+    win->onOpenVideo = [this](const QString &path) { openVideoFile(path); };
+    if (!win->openCaseLanes(*m_caseManager)) {
+        delete win;
+        m_multiCamWin = nullptr;
+        return;
+    }
+    win->setAttribute(Qt::WA_DeleteOnClose);
+    win->show();
+}
+
+void MainWindow::onMultiCamStandalone()
+{
+    if (m_multiCamWin) {
+        m_multiCamWin->raise();
+        m_multiCamWin->activateWindow();
+        return;
+    }
+    if (m_videoEngine && m_videoEngine->state() == PlaybackState::Playing)
+        m_videoEngine->pause();
+    auto *win = new MultiCamPlaybackWindow(this);
+    m_multiCamWin = win;
+    win->setEngineFactory([](QObject *parent) -> IVideoEngine * {
+        QSettings s(QStringLiteral("LumenArc"), QStringLiteral("LumenArc"));
+        auto *e = new FfmpegVideoEngine(parent);
+        e->setHardwareDecode(s.value(QStringLiteral("hwDecode"), true).toBool());
+        e->setHardwareAdapter(s.value(QStringLiteral("hwAdapter"), -1).toInt());
+        return e;
+    });
+    win->onOpenVideo = [this](const QString &path) { openVideoFile(path); };
+    win->openStandalone();
+    win->setAttribute(Qt::WA_DeleteOnClose);
+    win->show();
 }
 
 void MainWindow::openVideoFile(const QString &filePath)
@@ -2134,7 +2179,7 @@ void MainWindow::openVideoFile(const QString &filePath)
 
         // Do NOT overwrite m_currentVideoPath with the .vla path: it is an
         // analysis file, not a playable video, and it keys VideoStateManager.
-        setWindowTitle(windowTitleWithCase("Lumen Arc v1.9.0 - [Loaded: " +
+        setWindowTitle(windowTitleWithCase("Lumen Arc v1.10.0 - [Loaded: " +
                            QFileInfo(filePath).fileName() + "]"));
         } else {
             QMessageBox::critical(this, lang("错误", "Error"),
@@ -2480,7 +2525,7 @@ void MainWindow::onLoadAnalysis()
                 m_guideLineModel->addLine(line);
 
             // Do NOT overwrite m_currentVideoPath with the .vla path (see openVideoFile).
-        setWindowTitle(windowTitleWithCase("Lumen Arc v1.9.0 - [Loaded: " +
+        setWindowTitle(windowTitleWithCase("Lumen Arc v1.10.0 - [Loaded: " +
                        QFileInfo(filePath).fileName() + "]"));
         QMessageBox::information(this, lang("已加载", "Loaded"),
             lang("分析结果加载成功。", "Analysis result loaded successfully."));

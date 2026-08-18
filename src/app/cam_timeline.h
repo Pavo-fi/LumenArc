@@ -18,6 +18,9 @@
 #include <QString>
 #include <QVector>
 #include "domain/case_model.h"
+#include "domain/sync_model.h"
+
+class CaseManager;
 
 /// 单路机位时间线条目（墙钟块位 [wallStartMs, wallEndMs]）
 struct CamLane {
@@ -33,3 +36,10 @@ struct CamLane {
 /// 返回按墙钟起点升序的条目集。
 QVector<CamLane> buildCamLanes(const QString &caseDir,
                                const QVector<CaseVideoRef> &videos);
+
+/// 装配多机同步播放路数据（P-57）：仅收**已校时**路（Q4：临时进路由
+/// 窗口层另行加入，本函数只读案内 .vla 校时 SSOT）。与 buildCamLanes
+/// 不同：不要求有分析数据（未跑亮度分析的已校时视频同样可播放），
+/// 时长字段留 0（真实时长由引擎加载后回报，R4：app 层不碰探测实现）。
+/// displayName 优先机位标签（cameraLabel），缺省文件名。按墙钟起点升序。
+QVector<SyncLaneData> buildSyncLanesFromCase(const CaseManager &cm);
