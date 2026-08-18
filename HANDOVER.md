@@ -5,22 +5,19 @@
 
 ## 表头（每次写完 HANDOVER 与 WORK_HISTORY 后必须同步更新本表头——规则 R2）
 
-- **当前 HEAD**：施工批（2026-08-17 §47 P-30 任务化/通道化/v10/P-25 退役）
+- **当前 HEAD**：施工批（2026-08-17 §48 P-31 MainWindow 拆分，版本→1.9.0）
 - **构建**：`cmd //c "build_tmp\build_target.bat ALL"`；测试：`QT_QPA_PLATFORM=offscreen`
   + PATH 含 `C:\code\Qt\6.8.0\msvc2022_64\bin`（配置：`build_tmp\reconfigure.bat`）
-- **全回归基线**（12 套，v1.8.0 施工批）：task_registry **41**（新增）/ case 248 /
+- **全回归基线**（13 套，v1.9.0 施工批）：mw **26**（新增）/ task_registry 41 / case 248 /
   case_e2e 51 / piecewise 96 / preprocess 176 / ui_chain 92 / calibration 77 /
-  roi_model 23 / vla **+54**（v10 往返/迁移链/opaque/F4）/ libav 10（A/B SKIP 退役预期）/ v17 34
+  roi_model 23 / vla +54 / libav 10 / v17 34
 - **当前保留批次**（新→旧，R2 限 5 批）：
+  第三十九批 §48（P-31 拆分四组件+R3/R5 收口，版本→1.9.0）·
   第三十八批 §47（P-30 任务化+通道化+.vla v10+P-25 退役，版本→1.8.0）·
   第三十七批 §46（命名 LAMerged / 路径集成页面 / NAL 快检，`b6ce835`+`a055a75`+`e4b104d`）·
   第三十六批 §45（拼接假成功兜底 + P-27 真机验证，`c1aa169`）·
-  第三十五批 §44（文档体系整理 + 真机验收收口 + P-27 音频无损，`6e7f585`/`ace2ff0`）·
-  第三十四批 §43（切换卡顿 10 秒根因：analyzeduration 10s→1s + timing 缓存
-  + 高亮大小写，`66073e5`）·
-  第三十四批 §43（切换卡顿 10 秒根因：analyzeduration 10s→1s + timing 缓存
-  + 高亮大小写，`66073e5`）
-- **最近归档动作**：2026-08-17 §47 批——第三十一批（§40）、第三十三批（§42）移入 WORK_HISTORY.md 末尾；
+  第三十五批 §44（文档体系整理 + 真机验收收口 + P-27 音频无损，`6e7f585`/`ace2ff0`）
+- **最近归档动作**：2026-08-17 §48 批——第三十四批（§43）移入 WORK_HISTORY.md 末尾；
   早前：第三十一批（§40）、第三十批（§39）、第五批（§14）至第二十九批（§38）。移入 WORK_HISTORY.md
   末尾；早前同批：第三十批（§39）、第五批（§14）至第二十九批（§38）共 25 批
   整体移入（原文未删改）。
@@ -31,6 +28,52 @@
   救复速览（〇章）、案件模块 M1-M3（二十三章）。
 - **管理文档**（2026-08-16 §44 建立）：待办唯一登记处 `docs/PENDING.md`；
   文档体系与维护规矩 `docs/DOCS_MAP.md`（规矩 D1-D8，待办必登记 PENDING）。
+# ============================================================================
+# 工作记录（2026-08-17，第三十九批）——v1.9.0 P-31 施工：MainWindow 拆分四组件
+# ============================================================================
+
+## 48. P2 拆分全量落地（方案 DEVELOPMENT_PLAN_V1.9_CN.md，拍板记录见其 §8）
+
+### 提交序列（T1 行为冻结纯移动纪律；每步全回归）
+
+| commit | 内容 |
+|---|---|
+| `feat: P-31 阶段1` | **AnalysisController**（引擎构造+TaskRegistry 注册+服务装配收口）/**UiState**（时长 SSOT：beginVideo/ingestEngineDuration/effectiveDuration 单点校准，删 MainWindow m_trusted/m_current 两副本——P-37 勾销）/**VideoSessionManager**（VideoStateManager 归属+OpenPlan 打开决策数据面+现场装配 saveCurrentState）/**ProjectIO** 落位 + **lumenarc_mw_test** 新测试目标（MainWindow 全源码无头链接，21 断言）；标题 v1.7.0→v1.8.0（D4 前批漏改补齐）；openVideoFile 入 private slots（QMetaObject 测试通道） |
+| `refactor: P-31 T1 ProjectIO 实装` | MainWindow 四函数体迁出（readTimestampRoiRegistry/savedTimestampRoi/saveTimestampRoi/calibrationBadgeSummary → ProjectIO 同名方法）+ saveCurrentVlaAsync 薄化（saveVlaAsync + collectVlaSaveRequest 采集器）+ onSaveAnalysis 路径分流/写出改 ProjectIO + onExportCsv 标签段整函数替换（exportLabelsCsv，三态提示逐字保留） |
+| `refactor: P-31 T2/T5` | openVideoFile 数据面拆分：planOpen 决策（内存现场探测/缓存路径/入案判定）+ .vla 直载与缓存两路装载归 ProjectIO::loadVla + **applyAnalysisArtifacts 去重**（R9：两处 30 行应用块合一）+ 内存现场引用化 + **ChartPanel::setXAxisRange** 收口 R3 实锤（全工程 axisX()->setRange 清零） |
+| `test: P-31 T2 决策面` | mw_test +5 断言（planOpen 冷开/内存现场往返/清空/键迁移）→ 26 断言 |
+| `refactor: P-31 T3 收尾` | MainWindow 删引擎直构造（仅经 AnalysisController）+ include 去 libav 具体引擎头（R4：ui 层不见引擎名） |
+| `docs+chore: §48 收口` | RELEASE_CHECKLIST_V1.9（A-F 34 项行为冻结对照）；PENDING 勾销 P-31/P-36/P-37；版本 1.9.0 四处一致；HANDOVER 归档 34 批 |
+
+### 结构成果
+
+- MainWindow 4183 → **3985 行**（净移 ~200 行 + 三处应用块去重）；openVideoFile
+  两段 30 行重复消除
+- 新组件（app 层，全部不 include Widgets，R1）：analysis_controller /
+  video_session_manager / project_io / uistate；mw_test 覆盖：UiState 校准规则、
+  ProjectIO 往返、OpenPlan 决策、openVideoFile 分支（dav/vla/失败）
+- **债项勾销**：P-31 ✅ / P-36（R3 穿透 1 处实锤收口）✅ / P-37（时长五副本 →
+  UiState 一源两派生）✅；P-35 已于 P-25 批清零；P-34 前批过期勾销——
+  **五条架构债全部收口**
+- 排除项照拍板执行：案件 UI/快照/播放传输留守 MainWindow（Q1-Q3）；范围只收时长（B2）
+
+### 遇到的坑（记录防再踩）
+
+1. **AutoUic 把 `ui_state.h` 误认为 Qt 设计器头**（`ui_*.h` 命名约定）→ UIC 报
+   "state.ui could not be found"。改名 `uistate.{h,cpp}` 解决——**app 层文件名
+   禁用 ui_ 前缀**。
+2. mw_test 链接 MainWindow 全源码需补 `${HEADERS}`（Q_OBJECT 元对象）与
+   FFMPEG_INCLUDE_DIR（ffmpeg_video_engine 直编）。
+3. 大段文本锚点脚本易脆（注释缩进/换行差异）——改行号手术 + 全函数替换；
+   中途污染时 git checkout 回滚重来，未污染提交。
+
+### 验证
+
+- 全回归 **13 套**绿（新增 mw_test 26）；每阶段提交后全量重跑
+- 待真机（RELEASE_CHECKLIST_V1.9 A-F，34 项）：全部为"与 v1.8 行为一致"的
+  对照验收（纯移动无功能变化）；重点 A2-A4 缓存三态 / B3-B4 保存链 /
+  C1 虚高钳制 / E1-E3 轴联动
+
 # ============================================================================
 # 工作记录（2026-08-17，第三十八批）——v1.8.0 P-30 施工：任务化+通道化+.vla v10+P-25 退役
 # ============================================================================
@@ -230,23 +273,4 @@
 
 
 # ============================================================================
-# 工作记录（2026-08-16，第三十四批）——切换卡顿 10 秒级根因 + 高亮大小写
-# ============================================================================
 
-## 43. 卡顿第二波优化 + 高亮大小写修复
-
-### 卡顿根因（第二波，10 秒级）
-- 播放引擎 openFile：analyzeduration=10s（find_stream_info 上限 10 秒，
-  部分大文件吃满）→ 限 1s（元数据足够，DVR 兼容保持）
-- libav 分析引擎 videoTiming：无缓存 + find_stream_info 无时限 →
-  加 TimingCache（size/mtime 键控）+ max_analyze_duration 500ms
-- 叠加前批 vla 加载 3.1× → 切换总耗时预期 1-2s 级
-
-### 高亮不跟随（第二修）
-- 根因：路径比较大小写敏感——Windows 大小写不敏感，用户以不同大小写
-  路径打开视频时匹配失败
-- 修：CaseInsensitive 比较
-
-### 验证
-全回归 11 套绿。待真机：切换大视频耗时应明显脱离 10 秒区间；
-不同大小写路径打开视频高亮也跟随。

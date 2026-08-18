@@ -36,7 +36,7 @@ AboutDialog::AboutDialog(QWidget *parent)
     layout->addSpacing(4);
 
     // Version
-    auto *versionLabel = new QLabel(lang("版本 v1.8.0", "Version v1.8.0"), this);
+    auto *versionLabel = new QLabel(lang("版本 v1.9.0", "Version v1.9.0"), this);
     versionLabel->setStyleSheet("font-size: 12px; color: " + Theme::TextSecond + ";");
     versionLabel->setAlignment(Qt::AlignCenter);
     layout->addWidget(versionLabel);
