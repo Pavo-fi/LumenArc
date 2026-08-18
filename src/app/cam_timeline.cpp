@@ -57,39 +57,44 @@ QVector<CamLane> buildCamLanes(const QString &caseDir,
     return out;
 }
 
-QVector<SyncLaneData> buildSyncLanesFromCase(const CaseManager &cm)
+QVector<CamInventoryItem> buildCamInventory(const CaseManager &cm)
 {
-    QVector<SyncLaneData> out;
+    QVector<CamInventoryItem> out;
     const QDir dir(cm.caseDir());
-    for (const auto &v : cm.meta().videos) {
-        if (v.vlaRelPath.isEmpty())
-            continue;
-        const QString vlaPath = dir.absoluteFilePath(v.vlaRelPath);
-        if (!QFile::exists(vlaPath))
-            continue;
-        TimelineModel model;
-        TimeCalibration cal;
-        if (!model.loadFromFile(vlaPath, nullptr, &cal) || !cal.isValid())
-            continue;
-        if (!cal.isEffective())
-            continue;   // 未校时路不参与（Q4）
-        const QString path = cm.effectivePathFor(v);
-        if (path.isEmpty() || !QFile::exists(path))
-            continue;
-        SyncLaneData lane;
-        lane.id = v.id;
-        lane.path = path;
-        lane.displayName = v.cameraLabel.isEmpty()
+    auto addRef = [&](const CaseVideoRef &v, bool fromPreprocess) {
+        CamInventoryItem it;
+        it.id = v.id;
+        it.fromPreprocess = fromPreprocess;
+        it.path = cm.effectivePathFor(v);
+        it.pathExists = !it.path.isEmpty() && QFile::exists(it.path);
+        it.displayName = v.cameraLabel.isEmpty()
             ? QFileInfo(v.originalPath).fileName() : v.cameraLabel;
-        lane.calibrated = true;
-        lane.temporary = false;
-        lane.cal = cal;
-        lane.durationMs = 0;   // 真实时长由引擎加载后回报
-        out.append(lane);
-    }
-    std::sort(out.begin(), out.end(),
-              [](const SyncLaneData &a, const SyncLaneData &b) {
-                  return syncLaneWallStart(a) < syncLaneWallStart(b);
-              });
+        // 校时实读案内 .vla（SSOT，R5；不看徽标缓存）。已校时路顺手填妥
+        // SyncLaneData（勾选即可入列，避免开始后二次读盘）
+        if (!v.vlaRelPath.isEmpty()) {
+            const QString vlaPath = dir.absoluteFilePath(v.vlaRelPath);
+            if (QFile::exists(vlaPath)) {
+                TimelineModel model;
+                TimeCalibration cal;
+                if (model.loadFromFile(vlaPath, nullptr, &cal)
+                    && cal.isValid() && cal.isEffective()) {
+                    it.calibrated = true;
+                    it.lane.id = v.id;
+                    it.lane.path = it.path;
+                    it.lane.displayName = it.displayName;
+                    it.lane.calibrated = true;
+                    it.lane.temporary = false;
+                    it.lane.cal = cal;
+                    it.lane.durationMs = 0;  // 真实时长由引擎加载后回报（R4）
+                }
+            }
+        }
+        out.append(it);
+    };
+    for (const auto &v : cm.meta().videos)
+        addRef(v, false);
+    for (const auto &s : cm.meta().preprocessSessions)
+        for (const auto &o : s.outputRefs)
+            addRef(o, true);
     return out;
 }

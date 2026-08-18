@@ -8,7 +8,11 @@
  * Copyright 2026 Huang Jingyun/Liu xinghua/Huang Wenhua. All rights reserved.
  * Licensed under the Apache License, Version 2.0
  *
- * 设计来源：docs/MULTICAM_PLAYBACK_TECH_DESIGN_CN.md（v0.3 已拍板）。
+ * 设计来源：docs/MULTICAM_PLAYBACK_TECH_DESIGN_CN.md（v0.3 已拍板）；
+ * P-59 流程重设（2026-08-18 用户布置）：案件模式开窗进**机位勾选面板**——
+ * 直读案件视频+前处理产物清单，逐路实读 .vla 标识已校时/未校时，用户
+ * 勾选 2-4 路后「开始同步播放」；校验引导内联（3 路以上须全校时/最多
+ * 4 路/未校时路一键去校时），未校时路 2 路场景走临时对齐（不落盘）。
  * 独立大窗口：2-4 路瓦片网格 + 模式A 合并时间线（全部已校时，共享墙钟
  * 游标实时追逐）/ 模式B 分开进度条（2 路含临时进，带时间进度条，无分析
  * 面板）+ 瓦片放大镜（滚轮/中键）+ 单路切听 + 双击回单路分析。
@@ -21,7 +25,7 @@
 #include <QString>
 #include <functional>
 #include "domain/sync_model.h"
-#include "app/cam_timeline.h"        // CamLane（模式A 条图块位）
+#include "app/cam_timeline.h"        // CamLane（模式A 条图块位）+ CamInventoryItem
 #include "app/multicam_sync_service.h"
 
 class CamTileWidget;
@@ -29,7 +33,10 @@ class MultiCamViewWidget;
 class QSlider;
 class QLabel;
 class QPushButton;
+class QCheckBox;
 class QGridLayout;
+class QVBoxLayout;
+class QStackedLayout;
 class QTimer;
 class CaseManager;
 
@@ -43,7 +50,7 @@ public:
     /// 引擎工厂（MainWindow 注入具体引擎；测试注入假引擎）
     void setEngineFactory(MultiCamSyncService::EngineFactory f);
 
-    /// 案件模式：装配已校时路（≥2 → 模式A；=1 → 模式B + 临时进槽位）
+    /// 案件模式：进机位勾选面板（P-59：清单全量+校时标识+勾选开始）
     bool openCaseLanes(const CaseManager &cm);
     /// 独立模式（无案件）：2 路空槽位，用户逐个选视频（模式B）
     void openStandalone();
@@ -70,9 +77,16 @@ private slots:
     void onEnterAlign();
     void onConfirmAlign();
     void onCancelAlign();
+    void onStartSync();       ///< 勾选面板「开始同步播放」（P-59）
+    void onBackToPicker();    ///< 工具行「重选机位」
+    void onRefreshPicker();   ///< 勾选面板「刷新清单」（校时后回来刷状态）
 
 private:
     void buildUi();
+    void buildPlayPage();
+    void buildPickerPage();
+    void refreshInventory();        ///< 重读案件清单+重建勾选行（默认勾已校时≤4）
+    void updatePickerValidation();  ///< 勾选校验 + 模式预览 + 引导文案
     void rebuildTiles();
     void rebuildTimelineArea();
     void refreshModeControls();
@@ -84,6 +98,18 @@ private:
 
     MultiCamSyncService *m_svc = nullptr;
     MultiCamSyncService::EngineFactory m_factory;
+
+    // P-59 双页栈：机位勾选面板 ↔ 播放页
+    QStackedLayout *m_stack = nullptr;
+    QWidget *m_pickerPage = nullptr;
+    QWidget *m_playPage = nullptr;
+    const CaseManager *m_case = nullptr;     ///< 案件模式（独立模式为空）
+    QVector<CamInventoryItem> m_inventory;   ///< 清单快照（勾选行一一对应）
+    QVector<QCheckBox *> m_checks;
+    QVBoxLayout *m_checkListLay = nullptr;
+    QLabel *m_pickHint = nullptr;
+    QPushButton *m_startBtn = nullptr;
+    QPushButton *m_repickBtn = nullptr;
 
     // UI 元素
     QGridLayout *m_grid = nullptr;

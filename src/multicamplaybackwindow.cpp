@@ -13,13 +13,17 @@
 #include <QDateTime>
 #include <QFileDialog>
 #include <QFileInfo>
+#include <QCheckBox>
 #include <QGridLayout>
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QPushButton>
+#include <QScrollArea>
 #include <QSlider>
+#include <QStackedLayout>
 #include <QVBoxLayout>
 #include <QCloseEvent>
+#include <algorithm>
 
 #include "app/cam_timeline.h"
 #include "app/case_manager.h"
@@ -72,15 +76,274 @@ void MultiCamPlaybackWindow::closeEvent(QCloseEvent *event)
 }
 
 // ---------------------------------------------------------------------------
-// UI 骨架
+// UI 骨架（P-59 双页栈：机位勾选面板 ↔ 播放页）
 // ---------------------------------------------------------------------------
 void MultiCamPlaybackWindow::buildUi()
 {
-    auto *root = new QVBoxLayout(this);
+    m_stack = new QStackedLayout(this);
+    m_pickerPage = new QWidget(this);
+    buildPickerPage();
+    m_stack->addWidget(m_pickerPage);
+    m_playPage = new QWidget(this);
+    buildPlayPage();
+    m_stack->addWidget(m_playPage);
+    m_stack->setCurrentWidget(m_playPage);
+}
 
-    // 工具行：播放/暂停 · 回起点 · 倍速 · OSD 开关 · 状态
+// ---- 机位勾选面板（P-59：直读案件清单 + 校时标识 + 勾选开始）----
+void MultiCamPlaybackWindow::buildPickerPage()
+{
+    auto *lay = new QVBoxLayout(m_pickerPage);
+
+    auto *title = new QLabel(lang("选择要同步播放的机位（勾选 2~4 路）",
+                                  "Pick cameras to sync-play (2-4)"),
+                             m_pickerPage);
+    QFont tf = title->font();
+    tf.setPixelSize(16);
+    tf.setBold(true);
+    title->setFont(tf);
+    lay->addWidget(title);
+
+    auto *legend = new QLabel(
+        lang("✅ 已校时＝按墙钟对齐（多机同一时刻同框）· ⚠ 未校时＝2 路时可"
+             "临时对齐（会话级不落盘）· ❌ 文件缺失不可选。清单=案件视频+前"
+             "处理产物，校时状态实时读案内分析文件。",
+             "✅ calibrated = wall-clock aligned · ⚠ uncalibrated = temporary "
+             "alignment for 2 lanes (session only) · ❌ file missing."),
+        m_pickerPage);
+    legend->setWordWrap(true);
+    legend->setStyleSheet(QStringLiteral("color:%1;").arg(Theme::TextSecond));
+    lay->addWidget(legend);
+
+    auto *scroll = new QScrollArea(m_pickerPage);
+    scroll->setWidgetResizable(true);
+    auto *host = new QWidget(scroll);
+    m_checkListLay = new QVBoxLayout(host);
+    m_checkListLay->setContentsMargins(4, 4, 4, 4);
+    m_checkListLay->setSpacing(4);
+    scroll->setWidget(host);
+    lay->addWidget(scroll, 1);
+
+    m_pickHint = new QLabel(m_pickerPage);
+    m_pickHint->setWordWrap(true);
+    m_pickHint->setStyleSheet(QStringLiteral("color:%1;").arg(Theme::Accent));
+    lay->addWidget(m_pickHint);
+
+    auto *row = new QHBoxLayout();
+    auto *refreshBtn = new QPushButton(lang("刷新清单", "Refresh"), m_pickerPage);
+    refreshBtn->setToolTip(lang("校时/前处理后在主窗完成，点此重读案件清单",
+                                "Re-read case inventory after calibrating"));
+    connect(refreshBtn, &QPushButton::clicked, this,
+            &MultiCamPlaybackWindow::onRefreshPicker);
+    row->addWidget(refreshBtn);
+    row->addStretch(1);
+    m_startBtn = new QPushButton(lang("开始同步播放 ▶", "Start sync play ▶"),
+                                 m_pickerPage);
+    m_startBtn->setEnabled(false);
+    connect(m_startBtn, &QPushButton::clicked, this,
+            &MultiCamPlaybackWindow::onStartSync);
+    row->addWidget(m_startBtn);
+    lay->addLayout(row);
+}
+
+void MultiCamPlaybackWindow::refreshInventory()
+{
+    // 清旧行
+    QLayoutItem *item;
+    while ((item = m_checkListLay->takeAt(0)) != nullptr) {
+        if (item->widget())
+            delete item->widget();
+        delete item;
+    }
+    m_checks.clear();
+    m_inventory = m_case ? buildCamInventory(*m_case)
+                         : QVector<CamInventoryItem>{};
+
+    // 两来源都有时分组小标题
+    bool hasVideo = false, hasPre = false;
+    for (const auto &it : m_inventory)
+        (it.fromPreprocess ? hasPre : hasVideo) = true;
+
+    int defaultChecked = 0;
+    bool videoHeaderDone = false, preHeaderDone = false;
+    for (int i = 0; i < m_inventory.size(); ++i) {
+        const auto &it = m_inventory[i];
+        if (hasVideo && hasPre) {
+            if (!it.fromPreprocess && !videoHeaderDone) {
+                videoHeaderDone = true;
+                auto *h = new QLabel(lang("—— 案件视频 ——", "—— Case videos ——"));
+                h->setStyleSheet(QStringLiteral("color:%1;").arg(Theme::TextMuted));
+                m_checkListLay->addWidget(h);
+            } else if (it.fromPreprocess && !preHeaderDone) {
+                preHeaderDone = true;
+                auto *h = new QLabel(lang("—— 前处理产物（拼接/转码） ——",
+                                          "—— Preprocess outputs ——"));
+                h->setStyleSheet(QStringLiteral("color:%1;").arg(Theme::TextMuted));
+                m_checkListLay->addWidget(h);
+            }
+        }
+
+        auto *rowW = new QWidget;
+        auto *row = new QHBoxLayout(rowW);
+        row->setContentsMargins(0, 0, 0, 0);
+        auto *cb = new QCheckBox(
+            QStringLiteral("%1  %2").arg(it.id, it.displayName), rowW);
+        cb->setEnabled(it.pathExists);
+        // 默认勾：已校时且在盘，最多 4 路（拍板 2-4）
+        if (it.calibrated && it.pathExists && defaultChecked < 4) {
+            cb->setChecked(true);
+            ++defaultChecked;
+        }
+        connect(cb, &QCheckBox::toggled, this,
+                &MultiCamPlaybackWindow::updatePickerValidation);
+        row->addWidget(cb, 1);
+
+        auto *status = new QLabel(rowW);
+        if (!it.pathExists) {
+            status->setText(lang("❌ 文件缺失", "❌ missing"));
+            status->setStyleSheet(QStringLiteral("color:%1;").arg(Theme::Danger));
+        } else if (it.calibrated) {
+            status->setText(lang("✅ 已校时", "✅ calibrated"));
+            status->setStyleSheet(QStringLiteral("color:%1;").arg(Theme::Success));
+        } else {
+            status->setText(lang("⚠ 未校时", "⚠ not calibrated"));
+            status->setStyleSheet(QStringLiteral("color:%1;").arg(Theme::Accent));
+        }
+        row->addWidget(status);
+
+        if (it.pathExists && !it.calibrated) {
+            auto *go = new QPushButton(lang("去校时…", "Calibrate…"), rowW);
+            go->setToolTip(lang("在主窗打开该路做时间设置（校时），完成后回来点"
+                                "「刷新清单」",
+                                "Open in main window to calibrate, then Refresh"));
+            const QString path = it.path;
+            connect(go, &QPushButton::clicked, this, [this, path]() {
+                if (onOpenVideo)
+                    onOpenVideo(path);   // 主窗打开该路（校时走既有时间设置流程）
+            });
+            row->addWidget(go);
+        }
+        m_checkListLay->addWidget(rowW);
+        m_checks.append(cb);
+    }
+    m_checkListLay->addStretch(1);
+    updatePickerValidation();
+}
+
+void MultiCamPlaybackWindow::updatePickerValidation()
+{
+    int n = 0, uncal = 0;
+    for (int i = 0; i < m_checks.size(); ++i) {
+        if (!m_checks[i]->isChecked())
+            continue;
+        ++n;
+        if (!m_inventory[i].calibrated)
+            ++uncal;
+    }
+    QString hint;
+    bool ok = false;
+    if (m_inventory.isEmpty()) {
+        hint = lang("案内暂无视频或前处理产物——请先在主窗向案件添加视频，"
+                    "或跑一次前处理（拼接/转码）。",
+                    "No video or preprocess output in case yet.");
+    } else if (n < 2) {
+        hint = lang("同步播放至少 2 路——再勾选 %1 路。",
+                    "Pick at least 2 lanes (%1 more).").arg(2 - n);
+    } else if (n > 4) {
+        hint = lang("最多 4 路同屏（当前勾了 %1 路）——请减到 4 路以内。",
+                    "At most 4 lanes (%1 checked).").arg(n);
+    } else if (n >= 3 && uncal > 0) {
+        hint = lang("3 路以上须全部已校时（对齐精度靠校时保真）：点未校时行"
+                    "「去校时…」完成后「刷新清单」，或减到 2 路走临时对齐。",
+                    "3+ lanes must all be calibrated; calibrate first or "
+                    "reduce to 2 lanes for temporary alignment.");
+    } else if (uncal == 0) {
+        ok = true;
+        hint = lang("%1 路全部已校时 → 合并时间线模式：同一墙钟时刻各机位"
+                    "同框，拖游标全路同步走带。",
+                    "%1 calibrated lanes → merged wall-clock timeline.").arg(n);
+    } else if (uncal == 1) {
+        ok = true;
+        hint = lang("含 1 路未校时 → 分开进度条模式：先各自独立播放，点"
+                    "「对齐…」对到同一时刻后联动（会话级，不落盘）。",
+                    "1 uncalibrated lane → separate bars + temp alignment.");
+    } else {
+        ok = true;
+        hint = lang("两路均未校时 → 分开进度条模式：「对齐…」对到同一时刻后"
+                    "联动（会话级，不落盘）。",
+                    "Both uncalibrated → separate bars; align to sync.");
+    }
+    m_startBtn->setEnabled(ok);
+    m_pickHint->setText(hint);
+}
+
+void MultiCamPlaybackWindow::onStartSync()
+{
+    QVector<SyncLaneData> lanes;
+    int uncal = 0;
+    for (int i = 0; i < m_checks.size(); ++i) {
+        if (!m_checks[i]->isChecked())
+            continue;
+        const auto &it = m_inventory[i];
+        if (it.calibrated) {
+            lanes.append(it.lane);
+        } else {
+            SyncLaneData l;
+            l.id = it.id;
+            l.path = it.path;
+            l.displayName = it.displayName;
+            l.temporary = true;   // 未校时路 = 临时进（会话级对齐，不落盘）
+            ++uncal;
+            lanes.append(l);
+        }
+    }
+    if (lanes.size() < 2 || lanes.size() > 4)
+        return;   // 校验面板已把关，兕底
+    if (lanes.size() >= 3 && uncal > 0)
+        return;   // 3 路以上须全校时（与 updatePickerValidation 同口径）
+    // 已校时路按墙钟起点升序排前，临时路随后（模式B 参考路锚定确定性）
+    std::stable_sort(lanes.begin(), lanes.end(),
+                     [](const SyncLaneData &a, const SyncLaneData &b) {
+                         if (a.temporary != b.temporary)
+                             return !a.temporary;   // 校时路在前
+                         if (!a.temporary)
+                             return syncLaneWallStart(a) < syncLaneWallStart(b);
+                         return false;
+                     });
+    m_mode = (uncal == 0) ? SyncTimelineMode::Merged : SyncTimelineMode::Separate;
+    if (!m_svc->loadLanes(lanes))
+        return;
+    m_stack->setCurrentWidget(m_playPage);
+    rebuildTiles();
+    rebuildTimelineArea();
+    refreshModeControls();
+}
+
+void MultiCamPlaybackWindow::onBackToPicker()
+{
+    m_svc->closeAll();          // 释放全部引擎（C5 资源有界）
+    refreshInventory();         // 校时状态可能已变（去校时回来）
+    m_stack->setCurrentWidget(m_pickerPage);
+}
+
+void MultiCamPlaybackWindow::onRefreshPicker()
+{
+    refreshInventory();
+}
+
+// ---- 播放页（原窗口主体：工具行+瓦片网格+时间线区）----
+void MultiCamPlaybackWindow::buildPlayPage()
+{
+    auto *root = new QVBoxLayout(m_playPage);
+
+    // 工具行：重选机位 · 播放/暂停 · 回起点 · 倍速 · OSD 开关 · 状态
     auto *bar = new QHBoxLayout();
-    m_playBtn = new QPushButton(lang("▶ 播放", "▶ Play"), this);
+    m_repickBtn = new QPushButton(lang("↩ 重选机位", "↩ Lanes"), m_playPage);
+    m_repickBtn->setVisible(false);   // 仅案件模式（openCaseLanes 置可见）
+    connect(m_repickBtn, &QPushButton::clicked, this,
+            &MultiCamPlaybackWindow::onBackToPicker);
+    bar->addWidget(m_repickBtn);
+    m_playBtn = new QPushButton(lang("▶ 播放", "▶ Play"), m_playPage);
     m_playBtn->setEnabled(false);
     connect(m_playBtn, &QPushButton::clicked, this,
             &MultiCamPlaybackWindow::onTogglePlay);
@@ -152,53 +415,27 @@ void MultiCamPlaybackWindow::buildUi()
 }
 
 // ---------------------------------------------------------------------------
-// 入口装配
+// 入口装配（P-59：案件模式进机位勾选面板；独立模式直进播放页）
 // ---------------------------------------------------------------------------
 bool MultiCamPlaybackWindow::openCaseLanes(const CaseManager &cm)
 {
-    QVector<SyncLaneData> lanes = buildSyncLanesFromCase(cm);
-    if (lanes.isEmpty()) {
-        m_hintLabel->setText(lang("案内无已校时视频。请先对至少一路校时。",
-                                  "No calibrated video in case."));
-        return false;
-    }
-    if (lanes.size() >= 2) {
-        m_mode = SyncTimelineMode::Merged;   // 全部已校时 → 合并时间线
-        if (lanes.size() > 4) {
-            lanes.resize(4);   // 拍板 2-4 路：超出截断并提示（C2 不静默）
-            m_hintLabel->setText(
-                lang("已校时路超过 4 路，本窗口仅同步前 4 路。",
-                     "More than 4 calibrated cameras; only first 4 synced."));
-        }
-        if (!m_svc->loadLanes(lanes))
-            return false;
-        rebuildTiles();
-        rebuildTimelineArea();
-        refreshModeControls();
-        return true;
-    }
-    // 恰 1 路已校时 → 模式B：该校时路 + 一个临时进槽位
-    m_mode = SyncTimelineMode::Separate;
-    m_tempSlot = 1;
-    SyncLaneData temp;
-    temp.id = QStringLiteral("T1");
-    temp.temporary = true;
-    lanes.append(temp);
-    if (!m_svc->loadLanes(lanes))   // 临时路 path 空 → 引擎加载失败面，
-        return false;               // 由槽位选择后重载（见 onPickVideo）
-    rebuildTiles();
-    rebuildTimelineArea();
-    refreshModeControls();
+    m_case = &cm;
+    m_repickBtn->setVisible(true);
+    refreshInventory();                       // 清单 + 默认勾已校时路
+    m_stack->setCurrentWidget(m_pickerPage);  // 先选机位，用户点开始才装配
     return true;
 }
 
 void MultiCamPlaybackWindow::openStandalone()
 {
+    m_case = nullptr;
+    m_repickBtn->setVisible(false);
     m_mode = SyncTimelineMode::Separate;
     m_tempSlot = 0;   // 两路皆临时（先选先为参考路）
     rebuildTiles();
     rebuildTimelineArea();
     refreshModeControls();
+    m_stack->setCurrentWidget(m_playPage);
     m_hintLabel->setText(
         lang("独立模式：分别为两路选择视频后开始。",
              "Standalone: pick a video for each lane to start."));

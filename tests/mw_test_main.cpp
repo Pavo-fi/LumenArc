@@ -29,6 +29,8 @@
 #include <QFile>
 #include <QWheelEvent>
 #include <QSlider>
+#include <QCheckBox>
+#include <QPushButton>
 #include <cstdio>
 
 static int g_checks = 0;
@@ -440,6 +442,159 @@ static void testMultiCamWindow(QApplication &app)
     CHECK(true, "mc: full chain no crash");
 }
 
+// ---------------------------------------------------------------------------
+// P-59 新手调查员全流程（机位勾选面板）：建案（3 视频[2 校时 1 未校时]+1 前
+// 处理产物[校时]）→ 开窗进勾选面板（清单 4 行/默认勾 3 校时路/未校时行有
+// 「去校时」）→ 点开始 = 模式A 合并 3 路 → 重选机位 → 勾 1 校时+1 未校时
+// = 模式B → 勾 2 校时+1 未校时 = 开始钮禁用（3 路以上须全校时引导）
+// ---------------------------------------------------------------------------
+static void testMultiCamCaseFlow(QApplication &app)
+{
+    // ---- fixture：案件 + 3 视频 + 1 前处理产物（校时经真实 .vla 落盘）----
+    QDir tmp(QDir::tempPath() + "/lumenarc_p59_case");
+    tmp.removeRecursively();
+    QDir().mkpath(tmp.path());
+    QStringList vids;
+    for (int i = 1; i <= 3; ++i) {
+        const QString p = tmp.path() + QStringLiteral("/cam%1.mp4").arg(i);
+        QFile f(p);
+        f.open(QIODevice::WriteOnly);
+        f.write("fake-video-bytes");
+        f.close();
+        vids << p;
+    }
+    CaseManager cm;
+    QString err;
+    CaseMeta meta;
+    meta.caseNo = QStringLiteral("20260818-p59");
+    meta.title = QStringLiteral("勾选面板自检");
+    meta.investigator = QStringLiteral("test");
+    meta.unit = QStringLiteral("unit");
+    CHECK(cm.createCase(tmp.path(), meta, &err), "p59: createCase");
+    const QString id1 = cm.addVideo(vids[0], &err);
+    const QString id2 = cm.addVideo(vids[1], &err);
+    const QString id3 = cm.addVideo(vids[2], &err);
+    CHECK(!id1.isEmpty() && !id2.isEmpty() && !id3.isEmpty(), "p59: 3 videos");
+
+    // 校时 .vla（V001/V002；V003 未校时）：offset≠0 即 isEffective
+    auto writeCalVla = [&](const QString &id, qint64 offsetMs) {
+        const auto *v = cm.videoById(id);
+        TimeCalibration cal;
+        cal.source = TimeCalibration::Source::Manual;
+        cal.dateKnown = true;
+        cal.offsetMs = offsetMs;
+        TimelineModel m;
+        m.setData({0, 1000}, {{1.0, 2.0}}, QVector<DataEntry>{});
+        m.saveToFile(QDir(cm.caseDir()).filePath(v->vlaRelPath), {}, cal);
+    };
+    writeCalVla(id1, 1700000000000LL);
+    writeCalVla(id2, 1700000030000LL);   // B 机晚 30s 开机
+
+    // 前处理会话 + 1 个已校时产物（P001）
+    QDir().mkpath(cm.caseDir() + "/preprocess/20260818_120000");
+    const QString outPath = cm.caseDir() + "/preprocess/20260818_120000/LAMerged_x.mp4";
+    {
+        QFile f(outPath);
+        f.open(QIODevice::WriteOnly);
+        f.write("fake-merged");
+        f.close();
+    }
+    CHECK(cm.addPreprocessSession(cm.caseDir() + "/preprocess/20260818_120000",
+                                  QString(), {outPath}, {}, {}, &err),
+          "p59: preprocess session registered");
+    {
+        // 产物 .vla 落输出旁（addPreprocessSession 登记的 vlaRelPath 同径）
+        TimeCalibration cal;
+        cal.source = TimeCalibration::Source::Manual;
+        cal.dateKnown = true;
+        cal.offsetMs = 1700000010000LL;
+        TimelineModel m;
+        m.setData({0, 1000}, {{3.0, 4.0}}, QVector<DataEntry>{});
+        m.saveToFile(outPath + ".vla", {}, cal);
+    }
+
+    // ---- 开窗 → 勾选面板 ----
+    QVector<McFakeEngine *> engines;
+    auto *win = new MultiCamPlaybackWindow(nullptr);
+    win->setEngineFactory([&](QObject *p) -> IVideoEngine * {
+        auto *e = new McFakeEngine(p);
+        engines.append(e);
+        return e;
+    });
+    bool openedVideo = false;
+    win->onOpenVideo = [&](const QString &) { openedVideo = true; };
+    CHECK(win->openCaseLanes(cm), "p59: picker opens (always, 无门槛)");
+    win->resize(1000, 700);
+    win->show();
+    pump(app);
+
+    const auto checks = win->findChildren<QCheckBox *>();
+    CHECK(checks.size() == 4, "p59: inventory = 3 videos + 1 preprocess output");
+    if (checks.size() != 4) { win->close(); delete win; return; }
+    int defaultOn = 0;
+    for (auto *c : checks)
+        if (c->isChecked())
+            ++defaultOn;
+    CHECK(defaultOn == 3, "p59: 3 calibrated lanes pre-checked (V003 not)");
+    CHECK(!checks[2]->isChecked(), "p59: V003 (uncalibrated) not pre-checked");
+
+    QPushButton *startBtn = nullptr;
+    for (auto *b : win->findChildren<QPushButton *>())
+        if (b->text().contains(QStringLiteral("开始"))) { startBtn = b; break; }
+    CHECK(startBtn && startBtn->isEnabled(), "p59: start enabled at 3 calibrated");
+
+    // 「去校时」按钮只在未校时行（V003）
+    int calibrateBtns = 0;
+    for (auto *b : win->findChildren<QPushButton *>())
+        if (b->text().contains(QStringLiteral("去校时"))) ++calibrateBtns;
+    CHECK(calibrateBtns == 1, "p59: exactly one 去校时 (uncalibrated row only)");
+
+    // ---- ① 默认勾 3 校时路 → 开始 = 模式A 合并 3 路 ----
+    QMetaObject::invokeMethod(win, "onStartSync");
+    pump(app, 300);
+    CHECK(win->findChildren<CamTileWidget *>().size() == 3, "p59: merged 3 tiles");
+    CHECK(win->findChildren<MultiCamViewWidget *>().size() == 1,
+          "p59: merged timeline bar shown");
+    CHECK(engines.size() == 3, "p59: 3 engines loaded (V003 excluded)");
+
+    // ---- ② 重选机位 → 勾 1 校时 + 1 未校时 → 模式B ----
+    QMetaObject::invokeMethod(win, "onBackToPicker");
+    pump(app, 100);
+    const auto checks2 = win->findChildren<QCheckBox *>();
+    CHECK(checks2.size() == 4, "p59: picker rebuilt on repick");
+    checks2[1]->setChecked(false);   // 退勾 V002
+    checks2[3]->setChecked(false);   // 退勾 P001
+    checks2[2]->setChecked(true);    // 加勾 V003（未校时）
+    QPushButton *startBtn2 = nullptr;
+    for (auto *b : win->findChildren<QPushButton *>())
+        if (b->text().contains(QStringLiteral("开始"))) { startBtn2 = b; break; }
+    CHECK(startBtn2->isEnabled(), "p59: 2 lanes with 1 uncalibrated allowed");
+    QMetaObject::invokeMethod(win, "onStartSync");
+    pump(app, 300);
+    CHECK(win->findChildren<CamTileWidget *>().size() == 2, "p59: mode-B 2 tiles");
+    CHECK(win->findChildren<MultiCamViewWidget *>().isEmpty(),
+          "p59: mode-B no merged bar");
+    CHECK(win->findChildren<QSlider *>().size() == 2,
+          "p59: mode-B separate bars");
+
+    // ---- ③ 重选 → 勾 2 校时 + 1 未校时 = 禁止（3 路以上须全校时）----
+    QMetaObject::invokeMethod(win, "onBackToPicker");
+    pump(app, 100);
+    const auto checks3 = win->findChildren<QCheckBox *>();
+    checks3[3]->setChecked(false);   // 退勾 P001 → V001+V002 两校时
+    checks3[2]->setChecked(true);    // 加勾 V003 → 3 路含未校时
+    QPushButton *startBtn3 = nullptr;
+    for (auto *b : win->findChildren<QPushButton *>())
+        if (b->text().contains(QStringLiteral("开始"))) { startBtn3 = b; break; }
+    CHECK(!startBtn3->isEnabled(),
+          "p59: 3 lanes with uncalibrated blocked (inline guidance)");
+
+    win->close();
+    delete win;
+    pump(app, 200);
+    CHECK(true, "p59: novice flow no crash");
+}
+
 int main(int argc, char **argv)
 {
     QApplication app(argc, argv);
@@ -450,6 +605,7 @@ int main(int argc, char **argv)
     testSessionPlan();
     testMainWindowBranches(app);
     testMultiCamWindow(app);
+    testMultiCamCaseFlow(app);
     testLumaFullChain(app);
 
     fprintf(stderr, "mw_test: %d checks, %d failures\n", g_checks, g_failures);

@@ -726,17 +726,16 @@ void MainWindow::createMenus()
         lang("批量重新定位(&B)...", "&Batch Relocate..."), this,
         &MainWindow::onBatchRelocate);
     m_batchRelocateAction->setEnabled(false);
-    // P-57：多机同步播放大窗（原只读对齐视图被取代；≥1 路已校时即可开）
+    // P-57/P-59：多机同步播放大窗（机位勾选面板引导；案件开着即可进，
+    // 校时状态在面板内逐路标识——不再按校时数置灰，新手也能摸到入口）
     m_multiCamAction = caseMenu->addAction(
         lang("多机同步播放(&M)...", "&Multi-camera Synced Playback..."), this,
         &MainWindow::onMultiCamView);
     m_multiCamAction->setEnabled(false);
-    // 已校时数随案内变化（写 .vla 刷新徽标后重判）→ 菜单弹出时动态置灰
+    // 案件开着即可用（面板内引导空案/未校时场景）→ 菜单弹出时动态置灰
     connect(caseMenu, &QMenu::aboutToShow, this, [this]() {
         if (m_multiCamAction)
-            m_multiCamAction->setEnabled(
-                m_caseManager->isOpen()
-                && m_caseManager->calibratedVideoCount() >= 1);
+            m_multiCamAction->setEnabled(m_caseManager->isOpen());
     });
     caseMenu->addAction(lang("案件根目录设置(&D)...", "Case &Root Folder..."),
                         this, &MainWindow::onCaseRootDir);

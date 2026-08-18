@@ -37,9 +37,18 @@ struct CamLane {
 QVector<CamLane> buildCamLanes(const QString &caseDir,
                                const QVector<CaseVideoRef> &videos);
 
-/// 装配多机同步播放路数据（P-57）：仅收**已校时**路（Q4：临时进路由
-/// 窗口层另行加入，本函数只读案内 .vla 校时 SSOT）。与 buildCamLanes
-/// 不同：不要求有分析数据（未跑亮度分析的已校时视频同样可播放），
-/// 时长字段留 0（真实时长由引擎加载后回报，R4：app 层不碰探测实现）。
-/// displayName 优先机位标签（cameraLabel），缺省文件名。按墙钟起点升序。
-QVector<SyncLaneData> buildSyncLanesFromCase(const CaseManager &cm);
+/// 机位清单条目（P-59 机位勾选面板）：案件库存全量（视频 + 前处理产物）
+struct CamInventoryItem {
+    QString id;                   ///< V###（视频）/ P###（前处理产物）
+    QString displayName;          ///< 机位标签（cameraLabel），缺省文件名
+    QString path;                 ///< 有效绝对路径（引用制，源文件只读）
+    bool fromPreprocess = false;  ///< 前处理会话产物（拼接/转码输出）
+    bool pathExists = false;      ///< 源文件在盘（缺失路禁选）
+    bool calibrated = false;      ///< 已校时（.vla 实读 SSOT，R5——不看徽标缓存）
+    SyncLaneData lane;            ///< calibrated 时已填妥，勾选即可入列
+};
+
+/// 装配机位勾选清单（P-59）：videos[] + preprocessSessions[].outputRefs[]
+/// 全量登记（顺序：视频按入案序，随后前处理产物按会话序）；校时状态逐路
+/// 实读案内 .vla（cal.isValid && isEffective）；displayName 优先机位标签。
+QVector<CamInventoryItem> buildCamInventory(const CaseManager &cm);
