@@ -1639,9 +1639,7 @@ void MainWindow::setupConnections()
     // Spectrogram zoom → chart follows
     connect(m_spectrogramEnhanced, &SpectrogramPanelEnhanced::xAxisRangeChanged,
             this, [this](qreal xMin, qreal xMax) {
-        if (m_chartPanel && m_chartPanel->axisX()) {
-            m_chartPanel->axisX()->setRange(xMin, xMax);
-        }
+        m_chartPanel->setXAxisRange(xMin, xMax);   // P-31 T5：R3 穿透收口
     });
 
     // Spectrogram axis alignment with chart plot area
@@ -2135,33 +2133,11 @@ void MainWindow::openVideoFile(const QString &filePath)
         return;
     }
 
-    // If it's a .vla analysis result file, load it directly
+    // If it's a .vla analysis result file, load it directly（P-31 T2-A/T1：装载归 ProjectIO，应用块去重）
     if (filePath.endsWith(".vla", Qt::CaseInsensitive)) {
-    QVector<QRect> regions;
-    QVector<QPolygon> loadedPolygons;
-    QVector<GuideLine> loadedGuideLines;
-    QVector<int> loadedRegionRoiIds;
-    QVector<int> loadedPolygonRoiIds;
-    TimeCalibration calibration;
-    QRect magnifierRect;
-    QVector<ChartLabel> labels;
-    QRect pinnedRect;
-    SnapshotFusionData snapshotFusion;
-    if (m_timelineModel->loadFromFile(filePath, &regions, &calibration,
-                                       &magnifierRect, &labels, &pinnedRect,
-                                       &snapshotFusion, &loadedPolygons, &loadedGuideLines,
-                                       &loadedRegionRoiIds, &loadedPolygonRoiIds)) {
-        restoreAnalysisState(regions, calibration, labels, pinnedRect, snapshotFusion, loadedRegionRoiIds);
-        if (loadedPolygonRoiIds.size() == loadedPolygons.size())
-            m_roiModel->restorePolygons(loadedPolygons, loadedPolygonRoiIds);
-        else {
-            m_roiModel->clearPolygons();
-            for (const QPolygon &poly : loadedPolygons)
-                m_roiModel->addPolygon(poly);
-        }
-        m_guideLineModel->clearLines();
-        for (const GuideLine &line : loadedGuideLines)
-            m_guideLineModel->addLine(line);
+        ProjectIO::LoadedVla loaded;
+        if (m_projectIo->loadVla(filePath, &loaded)) {
+        applyAnalysisArtifacts(loaded);
 
         // Do NOT overwrite m_currentVideoPath with the .vla path: it is an
         // analysis file, not a playable video, and it keys VideoStateManager.
@@ -2206,6 +2182,9 @@ void MainWindow::openVideoFile(const QString &filePath)
         m_caseManager->setLastVideoId(cv->id);
 
     if (m_videoEngine->load(filePath)) {
+        // P-31 T2-A：打开决策数据面（内存现场 + 缓存路径/入案判定）
+        const VideoSessionManager::OpenPlan openPlan =
+            m_sessionMgr->planOpen(filePath, m_caseManager);
         // 同步源视频原生分辨率（时间戳框选归一化基准，v1.2.1）
         m_videoWidget->overlay()->setVideoSize(
             m_videoEngine->videoWidth(), m_videoEngine->videoHeight());
@@ -2228,8 +2207,8 @@ void MainWindow::openVideoFile(const QString &filePath)
             m_videoListPanel->addVideo(filePath, dur, fps);
         }
         // Check if we have a saved state for this video (memory state takes priority)
-        VideoState savedState;
-        if (m_sessionMgr->stateManager()->restoreState(filePath, savedState)) {
+        if (openPlan.hasMemoryState) {
+            const VideoState &savedState = openPlan.memoryState;
             // 带 roiId 恢复：保持与分析数据 dataEntries 的 roi_id 对齐
             if (savedState.regionRoiIds.size() == savedState.regions.size())
                 m_roiModel->restoreRegions(savedState.regions, savedState.regionRoiIds);
@@ -2368,49 +2347,25 @@ void MainWindow::openVideoFile(const QString &filePath)
         if (m_snapshotBtn)
             m_snapshotBtn->setEnabled(true);
 
-        // Check for cached .vla file alongside the video
-        // v1.3.0 路径分流：入案视频缓存 = 案件 videos/V###.vla；未入案照旧源旁
-        const QString vlaPath = m_caseManager->vlaPathFor(filePath);
-        if (QFile::exists(vlaPath)) {
+        // Check for cached .vla file alongside the video（P-31 T2-A：路径/入案判定来自 planOpen）
+        if (!openPlan.cacheVlaPath.isEmpty()) {
             // 入案视频：案件内 .vla 即权威缓存，直接加载不弹询问（拍板§3-6）
-            bool loadCache = m_caseManager->isCaseVideo(filePath);
+            bool loadCache = openPlan.cacheIsCaseVideo;
             if (!loadCache) {
             auto reply = QMessageBox::question(this,
                 lang("找到缓存的分析结果", "Cached Analysis Found"),
                 lang("找到此视频已保存的分析结果。\n"
                      "是否直接加载而无需重新分析？\n\n",
                      "A saved analysis result was found for this video.\n"
-                     "Would you like to load it instead of re-analyzing?\n\n") + vlaPath,
+                     "Would you like to load it instead of re-analyzing?\n\n") + openPlan.cacheVlaPath,
                 QMessageBox::Yes | QMessageBox::No, QMessageBox::Yes);
             loadCache = (reply == QMessageBox::Yes);
             }
             if (loadCache) {
-                QVector<QRect> regions;
-                QVector<QPolygon> loadedPolygons;
-                QVector<GuideLine> loadedGuideLines;
-                QVector<int> loadedRegionRoiIds;
-                QVector<int> loadedPolygonRoiIds;
-                TimeCalibration calibration;
-                QRect magnifierRect;
-                QVector<ChartLabel> labels;
-                QRect pinnedRect;
-                SnapshotFusionData snapshotFusion;
-                if (m_timelineModel->loadFromFile(vlaPath, &regions, &calibration,
-                                                    &magnifierRect, &labels, &pinnedRect,
-                                                    &snapshotFusion, &loadedPolygons, &loadedGuideLines,
-                                                    &loadedRegionRoiIds, &loadedPolygonRoiIds)) {
-                    restoreAnalysisState(regions, calibration, labels, pinnedRect, snapshotFusion, loadedRegionRoiIds);
-                    if (loadedPolygonRoiIds.size() == loadedPolygons.size())
-                        m_roiModel->restorePolygons(loadedPolygons, loadedPolygonRoiIds);
-                    else {
-                        m_roiModel->clearPolygons();
-                        for (const QPolygon &poly : loadedPolygons)
-                            m_roiModel->addPolygon(poly);
-                    }
-                    m_guideLineModel->clearLines();
-                    for (const GuideLine &line : loadedGuideLines)
-                        m_guideLineModel->addLine(line);
-                }
+                // P-31 T1：装载归 ProjectIO，应用块去重（applyAnalysisArtifacts）
+                ProjectIO::LoadedVla loaded;
+                if (m_projectIo->loadVla(openPlan.cacheVlaPath, &loaded))
+                    applyAnalysisArtifacts(loaded);
                 // v1.7.1：案件内 .vla 自动加载不弹框（拍板§3-6），但补一个
                 // 非打扰状态栏提示——用户反馈“默认加载分析结果，不再弹出”
                 showOperationStatus(lang("已自动加载分析结果",
@@ -3429,6 +3384,24 @@ void MainWindow::showOperationStatus(const QString &text)
 }
 
 /// @brief 恢复分析状态：区域/校时/标签/截图融合/音频
+/// .vla 装载结果的统一应用（R9 去重：.vla 直载/缓存两路共用；
+/// 内存现场路字段结构不同，保持独立）。行为冻结：三段代码逐字同源。
+void MainWindow::applyAnalysisArtifacts(const ProjectIO::LoadedVla &lv)
+{
+    restoreAnalysisState(lv.regions, lv.calibration, lv.labels, lv.pinnedRect,
+                         lv.fusion, lv.regionRoiIds);
+    if (lv.polygonRoiIds.size() == lv.polygons.size())
+        m_roiModel->restorePolygons(lv.polygons, lv.polygonRoiIds);
+    else {
+        m_roiModel->clearPolygons();
+        for (const QPolygon &poly : lv.polygons)
+            m_roiModel->addPolygon(poly);
+    }
+    m_guideLineModel->clearLines();
+    for (const GuideLine &line : lv.guideLines)
+        m_guideLineModel->addLine(line);
+}
+
 void MainWindow::restoreAnalysisState(const QVector<QRect> &regions,
                                        const TimeCalibration &calibration,
                                        const QVector<ChartLabel> &labels,

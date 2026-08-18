@@ -56,6 +56,8 @@ public:
     bool isDraggingCursor() const { return m_draggingCursor; }
     QRectF plotArea() const;
     QValueAxis *axisX() const { return m_axisX; }
+    /// P-31 T5（R3 收口）：外部轴范围设置入口（替代穿透 axisX()->setRange）
+    void setXAxisRange(qreal min, qreal max);
 
     /// Toggle Y-axis auto-range on/off
     void setAutoYRange(bool enabled);

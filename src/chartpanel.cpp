@@ -2207,3 +2207,10 @@ int ChartPanel::hitTestChartGuideLine(const QPoint &pos) const
     }
     return -1;
 }
+
+/// P-31 T5（R3 收口）：外部轴范围设置入口
+void ChartPanel::setXAxisRange(qreal min, qreal max)
+{
+    if (auto *ax = axisX())
+        ax->setRange(min, max);
+}

@@ -223,6 +223,8 @@ protected:
     void saveCurrentVlaAsync();
     /// UI 侧收集 .vla 保存参数（P-31 T1：ProjectIO 请求装配）
     ProjectIO::VlaSaveRequest collectVlaSaveRequest();
+    /// .vla 装载结果统一应用（R9 去重：直载/缓存两路共用）
+    void applyAnalysisArtifacts(const ProjectIO::LoadedVla &lv);
     bool m_volumeWarnShown = false;   // v1.7.1：音量破 200% 提示（每会话一次）
     RoiModel *m_roiModel = nullptr;
     GuideLineModel *m_guideLineModel = nullptr;
