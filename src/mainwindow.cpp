@@ -18,7 +18,6 @@
 #include "infrastructure/ivideo_engine.h"
 #include "infrastructure/ianalysis_engine.h"
 #include "infrastructure/ffmpeg_video_engine.h"
-#include "infrastructure/libav_analysis_engine.h"
 #include "app/calibration_service.h"
 #include "app/case_manager.h"
 #include "app/case_open_panel.h"
@@ -512,14 +511,8 @@ MainWindow::MainWindow(QWidget *parent)
 
     setAcceptDrops(true);
 
-    // v1.8.0 P-25：Python 分析引擎退役（用户拍板 2026-08-17）——
-    // libav 引擎为唯一实现（A/B 对拍基线：亮度 |Δ|≤1、volume 相关 ≥0.999、
-    // 语谱主峰 |Δ|≤0.001，默认运行 2+ 版无回退诉求）。
-    // bundled Python/cv2/numpy/rapidocr 因 OCR（probe_timestamps.py）与
-    // 报告（P-28 python-docx）租户保留——见 DEVELOPMENT_PLAN_V1.8_CN.md §5。
-    m_analysisEngine = new LibavAnalysisEngine(this);
-
     // v1.9.0 P-31 T3：引擎 + 任务注册 + 服务装配归 AnalysisController
+    // （P-25 退役后 libav 为唯一实现；A/B 对拍基线见 DEVELOPMENT_PLAN_V1.8 §5）
     m_analysisController = new AnalysisController(m_roiModel, m_timelineModel, this);
     m_analysisEngine = m_analysisController->engine();          // 非持有别名
     m_taskService = m_analysisController->taskService();        // 非持有别名
