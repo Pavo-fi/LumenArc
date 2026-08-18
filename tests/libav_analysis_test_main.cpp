@@ -6,15 +6,24 @@
  * 2. scaleRectToFrame 缩放取整语义（对齐 analyze_video.py _build_roi_masks）
  * 3. 真视频亮度冒烟 + A/B 对拍 vs Python 快速路径（Q-14 验收线：
  *    逐点 |Δ| ≤ 1 且均值偏差 ≤ 0.5）
+ * 4. P-55 回归：音轨前导素材（视频轨出 500ms 探测窗 → pix_fmt 未知）
+ *    亮度分析不崩溃且产出完整（2026-08-18）
  *
  * 用法：lumenarc_libav_test [video.mp4]
  * 默认素材 build_tmp/caltest/basic.mp4（320x240 5fps 10 帧，全帧率无抽稀）。
  */
 #include "infrastructure/libav_analysis_engine.h"
 #include "domain/analysis_snapshot.h"
+
+extern "C" {
+#include <libavformat/avformat.h>
+}
+
 #include <QCoreApplication>
 #include <QEventLoop>
 #include <QProcess>
+#include <QFile>
+#include <QFileInfo>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QJsonArray>
@@ -490,6 +499,116 @@ static void testAudioAB(const QString &videoPath)
                  snap.audioData().spectrogram, pySpec);
 }
 
+// ============================================================================
+// 4. P-55 回归：视频轨被音轨前导包挤出 500ms 探测窗口（明景拼接视频真机
+//    闪退：956ms 负时间戳 AAC priming 前导）→ codecpar pix_fmt 未知 →
+//    旧版 sws_getContext(AV_PIX_FMT_NONE) 触发 libswscale av_assert 闪退。
+//    修复后按解码帧实际属性惰性建表，必须正常完成。
+// ============================================================================
+static void testLateVideoProbeLimit()
+{
+    QString ffmpeg = qEnvironmentVariable("LUMENARC_FFMPEG");
+    if (ffmpeg.isEmpty()) {
+        // 仓库内捆绑 ffmpeg（__FILE__ = <repo>/tests/xxx.cpp → 上级即仓库根）
+        const QString root = QFileInfo(QString::fromUtf8(__FILE__))
+                                 .absolutePath() + QStringLiteral("/..");
+        const QString cand = root + QStringLiteral("/third_party/ffmpeg/bin/ffmpeg.exe");
+        if (QFile::exists(cand))
+            ffmpeg = QFileInfo(cand).canonicalFilePath();
+    }
+    if (ffmpeg.isEmpty() || !QFile::exists(ffmpeg)) {
+        fprintf(stderr, "[p55] SKIP (bundled ffmpeg not found)\n");
+        return;
+    }
+
+    // 合成等价结构素材：音轨从 0s 起、视频轨延后 1s（500ms 探测窗口内
+    // 只有音频包 → 视频 codecpar pix_fmt 未知）。小尺寸短时长保证套件速度。
+    const QString dir = QDir::tempPath() + QStringLiteral("/lumenarc_p55");
+    QDir().mkpath(dir);
+    const QString clip = dir + QStringLiteral("/latevideo.mp4");
+    QFile::remove(clip);
+    QProcess proc;
+    proc.start(ffmpeg, {QStringLiteral("-hide_banner"), QStringLiteral("-y"),
+                        QStringLiteral("-f"), QStringLiteral("lavfi"),
+                        QStringLiteral("-i"), QStringLiteral("sine=frequency=1000:sample_rate=48000"),
+                        QStringLiteral("-itsoffset"), QStringLiteral("1.0"),
+                        QStringLiteral("-f"), QStringLiteral("lavfi"),
+                        QStringLiteral("-i"), QStringLiteral("testsrc=size=640x360:rate=20"),
+                        QStringLiteral("-map"), QStringLiteral("0:a"),
+                        QStringLiteral("-map"), QStringLiteral("1:v"),
+                        QStringLiteral("-t"), QStringLiteral("6"),
+                        QStringLiteral("-c:v"), QStringLiteral("libopenh264"),
+                        QStringLiteral("-g"), QStringLiteral("50"),
+                        QStringLiteral("-c:a"), QStringLiteral("aac"),
+                        QStringLiteral("-b:a"), QStringLiteral("96k"), clip});
+    if (!proc.waitForStarted(10000) || !proc.waitForFinished(60000)
+        || proc.exitCode() != 0 || !QFile::exists(clip)) {
+        fprintf(stderr, "[p55] SKIP (synthesis failed, ffmpeg env dependent)\n");
+        return;
+    }
+
+    // 前置条件自检（信息性）：500ms 窗口下视频 pix_fmt 应为未知——
+    // 与引擎 openVideo 同一探测参数，证明素材结构复现了真机条件
+    {
+        AVFormatContext *fmt = nullptr;
+        const QByteArray u8 = clip.toUtf8();
+        if (avformat_open_input(&fmt, u8.constData(), nullptr, nullptr) == 0) {
+            fmt->max_analyze_duration = AV_TIME_BASE / 2;
+            if (avformat_find_stream_info(fmt, nullptr) >= 0) {
+                for (unsigned i = 0; i < fmt->nb_streams; ++i) {
+                    if (fmt->streams[i]->codecpar->codec_type == AVMEDIA_TYPE_VIDEO)
+                        fprintf(stderr, "[p55] probe@500ms video pix_fmt=%d "
+                                        "(NONE=-1 复现真机条件)\n",
+                                fmt->streams[i]->codecpar->format);
+                }
+            }
+            avformat_close_input(&fmt);
+        }
+    }
+
+    // 引擎完整跑（矩形+多边形各一，与真机复现条件一致）；
+    // 修复前：进程在 sws_getContext 处 abort，套件整体失败
+    LibavAnalysisEngine engine;
+    AnalysisSnapshot snap;
+    bool done = false, failed = false;
+    QEventLoop loop;
+    QObject::connect(&engine, &IAnalysisEngine::analysisFinished,
+                     &loop, [&](const AnalysisSnapshot &s) { snap = s; done = true; loop.quit(); });
+    QObject::connect(&engine, &IAnalysisEngine::analysisFailed,
+                     &loop, [&](const QString &) { failed = true; loop.quit(); });
+    QVector<QPolygon> polys;
+    polys << (QPolygon() << QPoint(20, 20) << QPoint(80, 20) << QPoint(80, 70));
+    engine.startAnalysis(clip, {QRect(10, 10, 60, 40)}, polys, {}, {1}, {2});
+    QTimer::singleShot(60000, &loop, &QEventLoop::quit);
+    loop.exec();
+
+    ++g_checks;
+    if (!done || failed || snap.isEmpty()) {
+        ++g_failures;
+        fprintf(stderr, "FAIL: p55 late-video luminance run (done=%d failed=%d pts=%d)\n",
+                done, failed, snap.pointCount());
+        return;
+    }
+    ++g_checks;
+    if (snap.lumRows().size() != 2) {
+        ++g_failures;
+        fprintf(stderr, "FAIL: p55 rows=%d != 2\n", snap.lumRows().size());
+        return;
+    }
+    // 行与时间轴对齐不变式（装配防御的下游契约）
+    ++g_checks;
+    if (snap.lumRows()[0].size() != snap.pointCount()
+        || snap.lumRows()[1].size() != snap.pointCount()) {
+        ++g_failures;
+        fprintf(stderr, "FAIL: p55 row/timeline misaligned (%d/%d vs %d)\n",
+                snap.lumRows()[0].size(), snap.lumRows()[1].size(),
+                snap.pointCount());
+        return;
+    }
+    fprintf(stderr, "[p55] late-video: %d points x 2 rows, no crash => PASS\n",
+            snap.pointCount());
+}
+
 int main(int argc, char **argv)
 {
     QCoreApplication app(argc, argv);
@@ -497,6 +616,7 @@ int main(int argc, char **argv)
     testRasterizeTriangle();
     testRasterizeDegenerate();
     testScaleRect();
+    testLateVideoProbeLimit();
 
     QString video = QStringLiteral("build_tmp/caltest/basic.mp4");
     QString audioVideo = QStringLiteral("build_tmp/caltest/audio_varied.mp4");

@@ -3,7 +3,8 @@
  * @brief 进程内 FFmpeg 分析引擎实现（v1.5.0 P3）
  * @author Huang Jingyun, Liu xinghua, Huang Wenhua
  * @date 2026-08-15
- * @version 1.0
+ * @version 1.1（2026-08-18 P-55：亮度分析按解码帧属性惰性建 sws 表，
+ *           修复长前导音轨素材探测不到 pix_fmt 触发 libswscale 断言闪退）
  *
  * Copyright 2026 Huang Jingyun/Liu xinghua/Huang Wenhua. All rights reserved.
  * Licensed under the Apache License, Version 2.0
@@ -409,48 +410,68 @@ bool LibavAnalysisEngine::analyzeLuminanceOne(const QString &path,
 
     const AVStream *st = fmt->streams[vstream];
     const double tb = (st->time_base.den > 0) ? av_q2d(st->time_base) : 0.001;
-    const int W = dec->width, H = dec->height;
-    if (W <= 0 || H <= 0) {
-        closeVideo(fmt, dec);
-        return false;
-    }
 
-    // swscale → GRAY8（BT.601 表；与 Python 快速路径 format=gray 同一转换，Q-14 方案 A）
-    SwsContext *sws = sws_getContext(W, H, dec->pix_fmt, W, H, AV_PIX_FMT_GRAY8,
-                                     SWS_BILINEAR, nullptr, nullptr, nullptr);
-    if (!sws) {
-        closeVideo(fmt, dec);
-        return false;
-    }
+    // P-55 修复（2026-08-18）：长 GOP 素材（明景拼接视频 GOP=12.5s 实测）在
+    // max_analyze_duration=500ms 探测窗口内 find_stream_info 拿不到像素格式
+    //（dec->pix_fmt == AV_PIX_FMT_NONE），直接喂 sws_getContext 会触发
+    // libswscale av_assert(desc) → 整个进程 abort 闪退。
+    // 改为与播放引擎（ffmpeg_video_engine）同一模式：首帧解码后按
+    // frame->width/height/format 惰性建表；帧属性中途变化（拼接源分辨率
+    // 切换）时重建转换表/缓冲并重做 ROI 预处理。正常素材 frame 属性与
+    // codecpar 一致——正常路径行为零变化。
+    SwsContext *sws = nullptr;
     AVFrame *gray = av_frame_alloc();
-    gray->format = AV_PIX_FMT_GRAY8;
-    gray->width = W;
-    gray->height = H;
-    if (av_frame_get_buffer(gray, 32) < 0) {
-        av_frame_free(&gray);
-        sws_freeContext(sws);
+    if (!gray) {
         closeVideo(fmt, dec);
         return false;
     }
+    int curW = 0, curH = 0, curFmt = AV_PIX_FMT_NONE;
 
-    // ROI 预处理（一次）：矩形缩放取整；多边形行 span 光栅化
+    // ROI 预处理：矩形缩放取整；多边形行 span 光栅化（随帧尺寸重建）
     struct PreparedRoi {
         RoiSpec spec;
         QRect r;                                  // rect 用
         QVector<RoiSpan> spans;                   // polygon 用
     };
     QVector<PreparedRoi> prepared;
-    prepared.reserve(rois.size());
-    for (const RoiSpec &roi : rois) {
-        PreparedRoi pr;
-        pr.spec = roi;
-        if (roi.kind == RoiSpec::Rect) {
-            pr.r = scaleRectToFrame(roi.rect, W, H, W, H);
-        } else {
-            pr.spans = rasterizePolygonSpans(roi.polygon, W, H);
+
+    // 为当前帧属性建立/重建 GRAY8 转换上下文与 ROI 预处理；失败返回 false
+    auto prepareForFrame = [&](int fw, int fh, int ffmt) -> bool {
+        if (fw <= 0 || fh <= 0 || ffmt == AV_PIX_FMT_NONE)
+            return false;
+        SwsContext *ctx = sws_getContext(fw, fh, static_cast<AVPixelFormat>(ffmt),
+                                         fw, fh, AV_PIX_FMT_GRAY8,
+                                         SWS_BILINEAR, nullptr, nullptr, nullptr);
+        if (!ctx)
+            return false;
+        sws_freeContext(sws);
+        sws = ctx;
+        av_frame_unref(gray);
+        gray->format = AV_PIX_FMT_GRAY8;
+        gray->width = fw;
+        gray->height = fh;
+        if (av_frame_get_buffer(gray, 32) < 0) {
+            sws_freeContext(sws);
+            sws = nullptr;
+            return false;
         }
-        prepared.append(pr);
-    }
+        prepared.clear();
+        prepared.reserve(rois.size());
+        for (const RoiSpec &roi : rois) {
+            PreparedRoi pr;
+            pr.spec = roi;
+            if (roi.kind == RoiSpec::Rect) {
+                pr.r = scaleRectToFrame(roi.rect, fw, fh, fw, fh);
+            } else {
+                pr.spans = rasterizePolygonSpans(roi.polygon, fw, fh);
+            }
+            prepared.append(pr);
+        }
+        curW = fw;
+        curH = fh;
+        curFmt = ffmt;
+        return true;
+    };
 
     // 时间戳：帧 PTS 相对首帧（showinfo pts_time 语义：-ss 归零等效）
     AVFrame *frame = av_frame_alloc();
@@ -474,8 +495,17 @@ bool LibavAnalysisEngine::analyzeLuminanceOne(const QString &path,
             tsMs = ++frameCount / 30.0 * 1000.0;   // PTS 全缺兜底（罕见）
         lastTs = tsMs;
 
-        // GRAY8 转换
-        sws_scale(sws, frame->data, frame->linesize, 0, H,
+        // GRAY8 转换（BT.601 表；与 Python 快速路径 format=gray 同一转换，
+        // Q-14 方案 A）。首帧/帧属性变化时惰性建表（P-55）；建表失败中止
+        // 本视频分析（首帧即失败 → outTs 空 → 上层走 analysisFailed）
+        if (frame->width != curW || frame->height != curH
+            || frame->format != curFmt) {
+            if (!prepareForFrame(frame->width, frame->height, frame->format)) {
+                av_frame_unref(frame);
+                break;
+            }
+        }
+        sws_scale(sws, frame->data, frame->linesize, 0, curH,
                   gray->data, gray->linesize);
         const uint8_t *g = gray->data[0];
         const int gls = gray->linesize[0];
