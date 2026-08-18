@@ -522,7 +522,8 @@ void ChartPanel::onDataReplaced()
         if (!m_volumeSeries) {
             m_volumeSeries = new QLineSeries();
             m_volumeSeries->setName(lang("音量", "Volume"));
-            QPen volumePen(QColor(0, 158, 115, 180));
+            // alpha=179 = 70% 不透明度（255×0.70，2026-08-18 用户拍板；原 180≈70.6%）
+            QPen volumePen(QColor(0, 158, 115, 179));
             volumePen.setWidth(1);
             m_volumeSeries->setPen(volumePen);
             if (!m_axisYVolume) {
@@ -979,7 +980,8 @@ void ChartPanel::rebuildSeries()
     // v0.3: Create volume series
     m_volumeSeries = new QLineSeries();
     m_volumeSeries->setName(lang("音量", "Volume"));
-    QPen volumePen(QColor(0, 158, 115, 180));  // Okabe-Ito bluish green
+    // alpha=179 = 70% 不透明度（255×0.70，2026-08-18 用户拍板；原 180≈70.6%）
+    QPen volumePen(QColor(0, 158, 115, 179));  // Okabe-Ito bluish green
     volumePen.setWidth(1);
     m_volumeSeries->setPen(volumePen);
 
