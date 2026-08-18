@@ -28,6 +28,7 @@
 #include <QDir>
 #include <QFile>
 #include <QWheelEvent>
+#include <QSlider>
 #include <cstdio>
 
 static int g_checks = 0;
@@ -277,6 +278,9 @@ public:
     qint64 pos = 0;
     int vol = -1;
     bool playing = false;
+    int seekCount = 0;
+    bool scrubOn = false;
+    qint64 scrubTarget = -1;
 
     bool load(const QString &) override
     {
@@ -293,7 +297,9 @@ public:
     void pause() override { playing = false; }
     void stop() override { playing = false; }
     void unload() override {}
-    void seek(qint64 t) override { pos = t; }
+    void seek(qint64 t) override { ++seekCount; pos = t; }
+    void setScrubMode(bool on) override { scrubOn = on; }
+    void setScrubTarget(qint64 t) override { scrubTarget = t; }
     qint64 position() const override { return pos; }
     qint64 duration() const override { return 60000; }
     PlaybackState state() const override
@@ -341,9 +347,38 @@ static void testMultiCamWindow(QApplication &app)
     QMetaObject::invokeMethod(win, "onTogglePlay");
     pump(app, 100);
 
-    // 对齐会话：进入→确认（双零位 offset=0，路径贯通即断言）
+    // 未对齐拖路 0 进度条：只动本路（B 不跟随不显无信号——用户反馈修复）。
+    // QSlider 鼠标语义随平台样式变（凹槽点击=步翻页不抓手柄），直发信号走接线
+    const auto bars = win->findChildren<QSlider *>();
+    CHECK(bars.size() >= 2, "mc: mode-B bars built");
+    if (bars.size() >= 2) {
+        const int e1Seeks = e1->seekCount;
+        const int e0Seeks = e0->seekCount;
+        emit bars[0]->sliderPressed();
+        bars[0]->setValue(30000);
+        emit bars[0]->sliderMoved(30000);
+        emit bars[0]->sliderReleased();
+        pump(app, 100);
+        CHECK(e0->seekCount > e0Seeks, "mc: unlinked drag seeks lane A itself");
+        CHECK(e1->seekCount == e1Seeks,
+              "mc: unlinked drag does NOT touch lane B");
+    }
+
+    // 对齐会话：进入→确认（alignTempLane 服务内建偏移，双路转联动）
     QMetaObject::invokeMethod(win, "onEnterAlign");
     QMetaObject::invokeMethod(win, "onConfirmAlign");
+
+    // 对齐后拖路 0：两路联动（B 经偏移收到追逐目标/松手 seek）
+    if (bars.size() >= 2) {
+        const int e1Seeks = e1->seekCount;
+        emit bars[0]->sliderPressed();
+        bars[0]->setValue(45000);
+        emit bars[0]->sliderMoved(45000);
+        emit bars[0]->sliderReleased();
+        pump(app, 100);
+        CHECK(e1->scrubTarget >= 0 || e1->seekCount > e1Seeks,
+              "mc: after align, drag A scrubs/seeks B too");
+    }
 
     // 瓦片交互
     const auto tiles = win->findChildren<CamTileWidget *>();

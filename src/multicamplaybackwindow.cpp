@@ -270,6 +270,10 @@ QVector<CamLane> MultiCamPlaybackWindow::currentCamLanes() const
 
 void MultiCamPlaybackWindow::rebuildTimelineArea()
 {
+    // 清旧：布局 + 全部直接子控件（进度条/名称/时间标签/合并条）一并删除，
+    // 否则换路重载后旧进度条游离叠加（占位抢交互）
+    qDeleteAll(m_timelineHost->findChildren<QWidget *>(
+        QString(), Qt::FindDirectChildrenOnly));
     delete m_timelineHost->layout();
     m_bars.clear();
     m_barLabels.clear();
@@ -338,20 +342,31 @@ void MultiCamPlaybackWindow::rebuildTimelineArea()
             m_barLabels.append(time);
 
             const int idx = i;
-            // 拖动 = 同步语义 seek（经该路映射回墙钟轴）；对齐模式下例外
+            // 拖动：已联动路 = 墙钟轴同步走带（scrub）；未对齐临时路 = 本路独立
+            // 拖拽（引擎 scrub 追逐同手感，不动别路）；对齐模式下 = 独立拖动
             connect(slider, &QSlider::sliderPressed, this, [this, idx]() {
                 if (m_aligning || idx >= m_svc->laneCount())
                     return;
-                m_svc->beginScrub();
-                m_bars[idx]->setProperty("scrub", 1);
+                if (m_svc->laneLinked(idx)) {
+                    m_svc->beginScrub();
+                    m_bars[idx]->setProperty("scrub", 1);
+                } else if (auto *e = m_svc->engineAt(idx)) {
+                    e->setScrubMode(true);
+                    m_bars[idx]->setProperty("scrub", 2);
+                }
             });
             connect(slider, &QSlider::sliderMoved, this,
                     [this, idx](int v) {
                         if (m_aligning)
-                            return;   // 对齐模式：barMovedTo 单独处理
+                            return;   // 对齐模式：valueChanged 单独处理
                         if (idx >= m_svc->laneCount())
                             return;
-                        m_svc->scrubTo(syncWallOf(m_svc->lanes()[idx], v));
+                        if (m_bars[idx]->property("scrub").toInt() == 2) {
+                            if (auto *e = m_svc->engineAt(idx))
+                                e->setScrubTarget(v);   // 独立拖拽只动本路
+                        } else {
+                            m_svc->scrubTo(syncWallOf(m_svc->lanes()[idx], v));
+                        }
                     });
             connect(slider, &QSlider::sliderReleased, this, [this, idx]() {
                 if (m_aligning) {
@@ -361,8 +376,14 @@ void MultiCamPlaybackWindow::rebuildTimelineArea()
                     }
                     return;
                 }
-                if (m_bars[idx]->property("scrub").toInt() == 1) {
-                    m_bars[idx]->setProperty("scrub", 0);
+                const int scrub = m_bars[idx]->property("scrub").toInt();
+                m_bars[idx]->setProperty("scrub", 0);
+                if (scrub == 2) {
+                    if (auto *e = m_svc->engineAt(idx)) {
+                        e->setScrubMode(false);
+                        e->seek(m_bars[idx]->value());   // 松手精确 seek
+                    }
+                } else if (scrub == 1) {
                     m_svc->endScrub();
                 }
             });
@@ -387,15 +408,26 @@ void MultiCamPlaybackWindow::refreshModeControls()
     m_alignOkBtn->setVisible(m_aligning);
     m_alignCancelBtn->setVisible(m_aligning);
     if (sep) {
+        // 操作引导按状态分三档：对齐中 / 有未对齐临时路 / 已对齐联动
+        bool hasUnlinkedTemp = false;
+        for (int i = 0; i < m_svc->laneCount(); ++i)
+            if (m_svc->lanes()[i].temporary && !m_svc->laneLinked(i))
+                hasUnlinkedTemp = true;
         m_hintLabel->setText(
             m_aligning
                 ? lang("对齐模式：分别拖动两路进度条到同一时刻（可用声音"
                        "比对，点瓦片切听），然后点「确认对齐」。",
                        "Aligning: drag both lanes to the same moment "
                        "(use audio cues, click a tile to listen), then Apply.")
-                : lang("模式B：各路口径为流内时间；临时路对齐后联动。",
-                       "Separate bars: per-lane stream time; temp lane "
-                       "syncs after alignment."));
+                : (hasUnlinkedTemp
+                   ? lang("临时路未对齐：两路各自独立，拖进度条只动本路。"
+                          "点「对齐…」把两路对到同一时刻后开始联动。",
+                          "Temp lane not aligned: lanes are independent. "
+                          "Use Align… to sync them at the same moment.")
+                   : lang("已对齐（会话级，不落盘）：拖任一路进度条两路联动；"
+                          "双击瓦片回单路分析。",
+                          "Aligned (session only): drag either bar to scrub "
+                          "both; double-click a tile to open that lane.")));
     }
 }
 
@@ -465,18 +497,11 @@ void MultiCamPlaybackWindow::onConfirmAlign()
 {
     if (!m_aligning || m_svc->laneCount() != 2)
         return;
-    auto *e0 = m_svc->engineAt(0);
-    auto *e1 = m_svc->engineAt(1);
-    if (!e0 || !e1)
-        return;
     const auto &lanes = m_svc->lanes();
     const int tempIdx = lanes[1].temporary ? 1 : 0;
-    const int refIdx = 1 - tempIdx;
-    const qint64 refPos = (refIdx == 0 ? e0 : e1)->position();
-    const qint64 tempPos = (tempIdx == 0 ? e0 : e1)->position();
-    // 参考路当前位置的墙钟 = 临时路当前位置应对齐到的墙钟
-    const qint64 offset = syncWallOf(lanes[refIdx], refPos) - tempPos;
-    m_svc->setLaneOffsetMs(tempIdx, offset);
+    // 以参考路当前墙钟为镭建立临时路偏移（服务内完成：标联动+重算区间+
+    // 时钟对齐到临时路当前画面）；独立模式双临时路时参考路一并锚定
+    m_svc->alignTempLane(tempIdx, 1 - tempIdx);
     m_aligning = false;
     refreshModeControls();
 }
@@ -522,6 +547,11 @@ void MultiCamPlaybackWindow::onCycleRate()
 void MultiCamPlaybackWindow::onBackToStart()
 {
     m_svc->seekWall(m_svc->contentStartWallMs());
+    // 未对齐临时路不进墙钟轴：各自回流内 0
+    for (int i = 0; i < m_svc->laneCount(); ++i)
+        if (!m_svc->laneLinked(i))
+            if (auto *e = m_svc->engineAt(i))
+                e->seek(0);
 }
 
 // ---------------------------------------------------------------------------
@@ -618,8 +648,10 @@ void MultiCamPlaybackWindow::onClock(qint64 wallMs)
             m_bars[i]->blockSignals(false);
             const auto &l = m_svc->lanes()[i];
             QString t = fmtStream(pos) + " / " + fmtStream(l.durationMs);
-            if (l.temporary)
+            if (l.temporary && m_svc->laneLinked(i))
                 t += QStringLiteral("  ≈%1").arg(fmtWall(syncWallOf(l, pos)));
+            else if (l.temporary)
+                t += lang("  未对齐", "  not aligned");
             m_barLabels[i]->setText(t);
         }
     }
@@ -654,9 +686,16 @@ void MultiCamPlaybackWindow::updateTilesOsd()
             continue;
         }
         if (l.temporary) {
-            tile->setOsdLines(
-                fmtStream(pos) + " / " + fmtStream(l.durationMs),
-                QStringLiteral("≈ %1").arg(fmtWall(syncWallOf(l, pos))));
+            if (m_svc->laneLinked(i)) {
+                tile->setOsdLines(
+                    fmtStream(pos) + " / " + fmtStream(l.durationMs),
+                    QStringLiteral("≈ %1").arg(fmtWall(syncWallOf(l, pos))));
+            } else {
+                // 未对齐：墙钟推算无义，明示独立状态（防误解为故障）
+                tile->setOsdLines(
+                    fmtStream(pos) + " / " + fmtStream(l.durationMs),
+                    lang("未对齐·独立播放", "not aligned · independent"));
+            }
         } else {
             tile->setOsdLines(
                 lang("墙钟 ", "Wall ") + fmtWall(syncWallOf(l, pos)),

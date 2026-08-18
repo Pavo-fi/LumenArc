@@ -56,6 +56,9 @@ bool MultiCamSyncService::loadLanes(const QVector<SyncLaneData> &lanes)
     m_engines.clear();
     m_lowres.fill(false, m_lanes.size());
     m_laneOk.fill(false, m_lanes.size());
+    m_laneLinked.clear();
+    for (const auto &l : m_lanes)
+        m_laneLinked.append(l.calibrated);   // 校时路恒入墙钟轴；临时路待对齐
     m_loadAccounted.fill(false, m_lanes.size());
     m_prevErr.fill(std::numeric_limits<qint64>::min(), m_lanes.size());
     m_lanePlaying.fill(false, m_lanes.size());
@@ -112,6 +115,7 @@ void MultiCamSyncService::closeAll()
     m_lanes.clear();
     m_lowres.clear();
     m_laneOk.clear();
+    m_laneLinked.clear();
     m_loadAccounted.clear();
     m_prevErr.clear();
     m_lanePlaying.clear();
@@ -147,18 +151,7 @@ void MultiCamSyncService::onLaneDuration(int idx, qint64 durMs)
 /// 全路加载收口：算覆盖区间 → 性能治理 → Ready 定位首帧
 void MultiCamSyncService::finishLoading()
 {
-    m_contentStart = std::numeric_limits<qint64>::max();
-    m_contentEnd = 0;
-    for (int i = 0; i < m_lanes.size(); ++i) {
-        if (!m_laneOk[i])
-            continue;   // 失败路不参与覆盖区间
-        m_contentStart = qMin(m_contentStart, syncLaneWallStart(m_lanes[i]));
-        m_contentEnd = qMax(m_contentEnd, syncLaneWallEnd(m_lanes[i]));
-    }
-    if (m_contentStart == std::numeric_limits<qint64>::max()) {
-        m_contentStart = 0;
-        m_contentEnd = 0;
-    }
+    recomputeContentRange();
     evaluatePerformance();
     applyAudible();
     rebaseClock(m_contentStart);
@@ -171,6 +164,32 @@ void MultiCamSyncService::finishLoading()
     setState(State::Ready);
     emit loadFinished();
     emit clockChanged(m_clockWallMs);
+}
+
+// ---------------------------------------------------------------------------
+// 内容区间：统一墙钟轴只含已联动路（校时路恒入，临时路对齐后入）；
+// 无联动路（独立模式双临时路未对齐）时兑底全量——各路均以流内轴播放
+// ---------------------------------------------------------------------------
+void MultiCamSyncService::recomputeContentRange()
+{
+    bool anyLinked = false;
+    for (int i = 0; i < m_lanes.size(); ++i)
+        if (m_laneLinked.value(i, false))
+            anyLinked = true;
+    m_contentStart = std::numeric_limits<qint64>::max();
+    m_contentEnd = 0;
+    for (int i = 0; i < m_lanes.size(); ++i) {
+        if (!m_laneOk.value(i, false))
+            continue;   // 失败路不参与覆盖区间
+        if (anyLinked && !m_laneLinked.value(i, false))
+            continue;   // 未对齐临时路不进墙钟轴（独立播放，对齐后并入）
+        m_contentStart = qMin(m_contentStart, syncLaneWallStart(m_lanes[i]));
+        m_contentEnd = qMax(m_contentEnd, syncLaneWallEnd(m_lanes[i]));
+    }
+    if (m_contentStart == std::numeric_limits<qint64>::max()) {
+        m_contentStart = 0;
+        m_contentEnd = 0;
+    }
 }
 
 void MultiCamSyncService::onLaneState(int idx, int st)
@@ -231,6 +250,13 @@ void MultiCamSyncService::play()
     for (int i = 0; i < m_engines.size(); ++i) {
         if (!m_engines[i] || !m_laneOk.value(i, false))
             continue;
+        if (!m_laneLinked.value(i, false)) {
+            // 未对齐临时路：独立自由播（不驻停不定位，墙钟轴未建立）
+            m_lanePlaying[i] = true;
+            m_engines[i]->setRate(m_rate);
+            m_engines[i]->play();
+            continue;
+        }
         m_lanePlaying[i] = syncLaneCovers(m_lanes[i], m_clockWallMs);
         if (m_lanePlaying[i]) {
             m_engines[i]->setRate(m_rate);
@@ -287,6 +313,8 @@ void MultiCamSyncService::seekWall(qint64 wallMs)
     for (int i = 0; i < m_engines.size(); ++i) {
         if (!m_engines[i] || !m_laneOk.value(i, false))
             continue;
+        if (!m_laneLinked.value(i, false))
+            continue;   // 未对齐临时路：墙钟 seek 无义，不动（保持自由播放）
         m_prevErr[i] = std::numeric_limits<qint64>::min();
         const bool covers = syncLaneCovers(m_lanes[i], wallMs);
         const qint64 target = qBound<qint64>(0, syncStreamOf(m_lanes[i], wallMs),
@@ -332,8 +360,8 @@ void MultiCamSyncService::scrubTo(qint64 wallMs)
     m_clockWallMs = wallMs;
     m_clockBaseWall = wallMs;
     for (int i = 0; i < m_engines.size(); ++i) {
-        if (!m_engines[i])
-            continue;
+        if (!m_engines[i] || !m_laneLinked.value(i, false))
+            continue;   // 未对齐临时路：追逐不跟随（模式B 未对齐拖拽各走各路）
         if (syncLaneCovers(m_lanes[i], wallMs))
             m_engines[i]->setScrubTarget(syncStreamOf(m_lanes[i], wallMs));
     }
@@ -376,23 +404,30 @@ void MultiCamSyncService::setLaneOffsetMs(int idx, qint64 offsetMs)
     if (idx < 0 || idx >= m_lanes.size() || !m_lanes[idx].temporary)
         return;
     m_lanes[idx].tempOffsetMs = offsetMs;
-    // 覆盖区间随偏移移动：重算内容总区间（与 finishLoading 同口径：跳过坏路）
-    m_contentStart = std::numeric_limits<qint64>::max();
-    m_contentEnd = 0;
-    for (int i = 0; i < m_lanes.size(); ++i) {
-        if (!m_laneOk.value(i, false))
-            continue;
-        m_contentStart = qMin(m_contentStart, syncLaneWallStart(m_lanes[i]));
-        m_contentEnd = qMax(m_contentEnd, syncLaneWallEnd(m_lanes[i]));
-    }
-    if (m_contentStart == std::numeric_limits<qint64>::max()) {
-        m_contentStart = 0;
-        m_contentEnd = 0;
-    }
+    m_laneLinked[idx] = true;   // 对齐即入墙钟轴
+    // 覆盖区间随偏移移动：重算内容总区间
+    recomputeContentRange();
     emit laneInfoChanged(idx);
     // 对齐完成即把时钟对齐到该路当前画面，避免跳变
     if (m_engines.value(idx))
         seekWall(syncWallOf(m_lanes[idx], m_engines[idx]->position()));
+}
+
+void MultiCamSyncService::alignTempLane(int tempIdx, int refIdx)
+{
+    if (tempIdx < 0 || tempIdx >= m_lanes.size()
+        || refIdx < 0 || refIdx >= m_lanes.size() || tempIdx == refIdx)
+        return;
+    if (!m_lanes[tempIdx].temporary)
+        return;
+    auto *et = m_engines.value(tempIdx);
+    auto *er = m_engines.value(refIdx);
+    if (!et || !er)
+        return;
+    // 参考路当前位置的墙钟 = 临时路当前位置应对齐到的墙钟
+    const qint64 offset = syncWallOf(m_lanes[refIdx], er->position()) - et->position();
+    m_laneLinked[refIdx] = true;   // 独立模式双临时路：参考路锚定为联动基准
+    setLaneOffsetMs(tempIdx, offset);
 }
 
 // ---------------------------------------------------------------------------
@@ -418,6 +453,8 @@ void MultiCamSyncService::applyCoverageAndDrift(int idx, qint64 wallMs)
     IVideoEngine *e = m_engines.value(idx);
     if (!e || m_scrubbing || !m_laneOk.value(idx, false))
         return;
+    if (!m_laneLinked.value(idx, false))
+        return;   // 未对齐临时路：恒覆盖、不纠偏（自由播放，对齐后纳入）
     const bool covers = syncLaneCovers(m_lanes[idx], wallMs);
     if (!covers) {
         if (m_lanePlaying[idx]) {
@@ -502,6 +539,8 @@ bool MultiCamSyncService::laneCoversNow(int idx) const
 {
     if (idx < 0 || idx >= m_lanes.size())
         return false;
+    if (!m_laneLinked.value(idx, false))
+        return true;   // 未对齐临时路：无墙钟轴语义，恒示有信号（独立播放）
     return syncLaneCovers(m_lanes[idx], m_clockWallMs);
 }
 
@@ -513,4 +552,9 @@ bool MultiCamSyncService::laneIsLowres(int idx) const
 bool MultiCamSyncService::laneUsable(int idx) const
 {
     return m_laneOk.value(idx, false);
+}
+
+bool MultiCamSyncService::laneLinked(int idx) const
+{
+    return m_laneLinked.value(idx, false);
 }

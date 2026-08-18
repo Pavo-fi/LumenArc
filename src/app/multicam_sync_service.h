@@ -65,6 +65,10 @@ public:
 
     // ---- 临时对齐（模式B，会话级不落盘）----
     void setLaneOffsetMs(int idx, qint64 offsetMs);
+    /// 模式B 对齐会话收口：以 refIdx 路当前位置墙钟为锚建立 tempIdx 偏移，
+    /// 两路转入联动（ref 路同为未联动临时路时一并锚定为基准轴）。
+    /// 对齐前：临时路独立播放——不驻停/不纠偏/不随墙钟 seek（墙钟轴无义）。
+    void alignTempLane(int tempIdx, int refIdx);
 
     // ---- 状态查询 ----
     State state() const { return m_state; }
@@ -77,6 +81,7 @@ public:
     bool laneCoversNow(int idx) const;
     bool laneIsLowres(int idx) const;   ///< 预览降清档角标（性能治理 §4）
     bool laneUsable(int idx) const;     ///< 加载成功且未暴毙（占位判定）
+    bool laneLinked(int idx) const;     ///< 已入统一墙钟轴（校时路恒 true；临时路对齐后 true）
 
 signals:
     void stateChanged(MultiCamSyncService::State s);
@@ -92,6 +97,7 @@ private:
     void onLaneDuration(int idx, qint64 durMs);
     void onLaneState(int idx, int st);
     void finishLoading();
+    void recomputeContentRange();       ///< 内容区间：仅含已联动路（无联动路时全量兑底）
     qint64 masterWallNow() const;
     void rebaseClock(qint64 wallMs);
     void applyCoverageAndDrift(int idx, qint64 wallMs);
@@ -102,6 +108,7 @@ private:
     QVector<IVideoEngine *> m_engines;
     QVector<bool> m_lowres;
     QVector<bool> m_laneOk;                 ///< 加载成功（失败路不参与播放/seek）
+    QVector<bool> m_laneLinked;             ///< 已入墙钟轴（校时路恒入；临时路对齐后入）
     QVector<bool> m_loadAccounted;          ///< 加载收口只计一次（lowres 重载防抖）
     QVector<qint64> m_prevErr;              ///< 纠偏迟滞：上次偏差
     QVector<bool> m_lanePlaying;            ///< 该路当前是否应在播（覆盖内）

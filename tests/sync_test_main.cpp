@@ -306,6 +306,70 @@ static void testServiceTempOffset()
     svc.closeAll();
 }
 
+// 模式B 核心语义（用户反馈修复）：未对齐临时路独立播放——
+// 不驻停/不随墙钟 seek/不显无信号；对齐后才进统一墙钟轴
+static void testServiceUnlinkedTemp()
+{
+    MultiCamSyncService svc;
+    QVector<FakeEngine *> eng;
+    SyncLaneData ref = makeLane("R", 500000);           // 校时路：墙钟在真实 epoch
+    SyncLaneData tmp;
+    tmp.id = "T1";
+    tmp.path = "/fake/t.mp4";
+    tmp.displayName = "t";
+    tmp.temporary = true;
+    tmp.durationMs = 60000;                              // 未对齐：偏移 0（1970）
+    setupService(svc, eng, {ref, tmp});
+
+    // 内容区间只含已联动路（校时路）：临时路不进墙钟轴
+    CHECK(svc.contentStartWallMs() == 500000, "unlinked: content start = ref only");
+    CHECK(svc.contentEndWallMs() == 560000, "unlinked: content end = ref only");
+    CHECK(svc.laneLinked(0) && !svc.laneLinked(1), "unlinked: linked flags");
+    CHECK(svc.laneCoversNow(1), "unlinked: temp lane never shows gap");
+
+    // 播放：两路都播（临时路自由播放，不被缺口驻停）
+    svc.play();
+    CHECK(eng[0]->playing && eng[1]->playing, "unlinked: both play independently");
+    // 墙钟 seek 只动联动路：临时路纹丝不动
+    const int tempSeeks = eng[1]->seekCount;
+    svc.seekWall(510000);
+    CHECK(eng[0]->lastSeek == 10000, "unlinked: ref lane seeks via wall");
+    CHECK(eng[1]->seekCount == tempSeeks, "unlinked: temp lane untouched by wall seek");
+    svc.pause();
+    svc.closeAll();
+}
+
+// 对齐会话：alignTempLane 建立偏移并双路转联动（独立模式参考路锚定）
+static void testServiceAlign()
+{
+    MultiCamSyncService svc;
+    QVector<FakeEngine *> eng;
+    SyncLaneData a, b;                                   // 独立模式：双临时路
+    a.id = "T1"; a.path = "/fake/a.mp4"; a.displayName = "a";
+    a.temporary = true; a.durationMs = 60000;
+    b = a; b.id = "T2"; b.path = "/fake/b.mp4"; b.displayName = "b";
+    setupService(svc, eng, {a, b});
+
+    // 未对齐兑底：无联动路 → 内容区间全量（各路走流内轴）
+    CHECK(svc.contentStartWallMs() == 0 && svc.contentEndWallMs() == 60000,
+          "align: fallback range before alignment");
+
+    // 用户操作：两路各拖到可辨认瞬间（ref 30000，temp 2000）→ 确认对齐
+    eng[0]->seek(30000);
+    eng[1]->seek(2000);
+    svc.alignTempLane(1, 0);
+    CHECK(svc.lanes()[1].tempOffsetMs == 28000, "align: offset = ref wall - temp pos");
+    CHECK(svc.laneLinked(0) && svc.laneLinked(1), "align: both lanes linked");
+    // 对齐后时钟锚到临时路当前画面（墙钟 30000）：两路同步 seek
+    CHECK(eng[0]->lastSeek == 30000, "align: ref lane seeks to anchor wall");
+    CHECK(eng[1]->lastSeek == 2000, "align: temp lane stays at its frame");
+    // 此后墙钟 seek 双路联动
+    svc.seekWall(45000);
+    CHECK(eng[0]->lastSeek == 45000, "align: ref follows wall");
+    CHECK(eng[1]->lastSeek == 17000, "align: temp follows via offset");
+    svc.closeAll();
+}
+
 static void testServiceLoadFailure()
 {
     MultiCamSyncService svc;
@@ -456,6 +520,8 @@ int main(int argc, char **argv)
     testServiceGap();
     testServiceDriftCorrects();
     testServiceTempOffset();
+    testServiceUnlinkedTemp();
+    testServiceAlign();
     testServiceLoadFailure();
     testServicePerfGovernance();
     testServiceGopThreshold();

@@ -5,22 +5,22 @@
 
 ## 表头（每次写完 HANDOVER 与 WORK_HISTORY 后必须同步更新本表头——规则 R2）
 
-- **当前 HEAD**：施工批（2026-08-18 §52 P-57 多机同步播放施工落地；版本 v1.10.0）
+- **当前 HEAD**：施工批（2026-08-18 §53 P-57 首轮实测修复：模式B 未对齐独立播放语义；版本 v1.10.0）
 - **构建**：`cmd //c "build_tmp\build_target.bat ALL"`；测试：`QT_QPA_PLATFORM=offscreen`
   + PATH 含 `C:\code\Qt\6.8.0\msvc2022_64\bin`（配置：`build_tmp\reconfigure.bat`）
-- **全回归基线**（13 套，v1.10.0 施工批）：mw **36**（+P-57 UI 链 10，LUMENARC_REPRO_VIDEO
+- **全回归基线**（13 套，v1.10.0 施工批）：mw **40**（+P-57 UI 链 14，LUMENARC_REPRO_VIDEO
   门控 +1）/ task_registry 41 / case 248 / case_e2e 51 / piecewise 96 / preprocess 176 /
   ui_chain 92 / calibration 77 / roi_model 23 / vla 54 / libav 25 / v17 34 /
-  **sync 78（P-57 新套件）**
+  **sync 96（P-57 套件）**
 - **当前保留批次**（新→旧，R2 限 5 批）：
+  第四十四批 §53（P-57 首轮实测修复：未对齐独立播放+时间线区重建清理）·
   第四十三批 §52（P-57 多机同步播放施工落地，版本→1.10.0）·
   第四十二批 §51（P-55 勾销 + 音量曲线 70% + 调研草案 P-57/P-58）·
   第四十一批 §50（P-55 闪退根除：音轨前导吃满探测窗→pix_fmt NONE→sws 断言；按帧属性惰性建表）·
-  第四十批 §49（亮度分析闪退排查，P-55 待复现信息）·
-  第三十九批 §48（P-31 拆分四组件+R3/R5 收口，版本→1.9.0）
-- **最近归档动作**：2026-08-18 §52 批——第三十八批（§47）移入 WORK_HISTORY.md 末尾；
-  早前：第三十七批（§46，§51 批）、第三十五批（§44，§49 批）、第三十一批（§40）、
-  第三十批（§39）、第五批（§14）至第二十九批（§38）共 25 批整体移入（原文未删改）。
+  第四十批 §49（亮度分析闪退排查，P-55 待复现信息）
+- **最近归档动作**：2026-08-18 §53 批——第三十九批（§48）移入 WORK_HISTORY.md 末尾；
+  早前：第三十八批（§47，§52 批）、第三十七批（§46，§51 批）、第三十五批（§44，§49 批）、
+  第三十一批（§40）、第三十批（§39）、第五批（§14）至第二十九批（§38）共 25 批整体移入（原文未删改）。
 - **常用参考导航**（已归档，查 WORK_HISTORY.md）：显示旋转 90° 方案 A
   （第三批 §12）、音频时间轴对齐与问题 A/B 定案（深夜批）、项目规则 R1/R2
   （08-13 晚批）、架构分层与红线 R 规则（二章）、构建部署 CI（九章）、
@@ -28,6 +28,56 @@
   救复速览（〇章）、案件模块 M1-M3（二十三章）。
 - **管理文档**（2026-08-16 §44 建立）：待办唯一登记处 `docs/PENDING.md`；
   文档体系与维护规矩 `docs/DOCS_MAP.md`（规矩 D1-D8，待办必登记 PENDING）。
+# ============================================================================
+# 工作记录（2026-08-18，第四十四批）——P-57 首轮实测修复【模式B 未对齐独立播放】
+# ============================================================================
+
+## 53. 用户首轮实测反馈：拖 A 时 B 显「无信号」+ 操作逻辑不清晰
+
+### 根因（实测实锤，三处）
+
+1. **未对齐临时路被硬塞统一墙钟轴**：案件模式的已校时路墙钟是真实 epoch
+   （~1.75×10¹² ms），临时路偏移 0 落在 1970——两路墙钟区间永不相交，
+   拖任一路另一路必显「无信号」，播放时临时路甚至被「缺口驻停」不播。
+   独立模式双偏移 0：A 拖过 B 时长界同样显「无信号」。
+   偏离拍板方案 §3.2 原意：**模式B 对齐前两路应各自独立**。
+2. **时间线区重建不删旧控件**：rebuildTimelineArea 只 delete 布局，子控件
+   （进度条/名称/时间标签/合并条）以宿主为父残留——换路重载后旧进度条
+   游离叠加占位抢交互（mw_test findChildren 抓到 6 条废弃 slider 实锤）。
+3. **测试面失真**：QSlider 鼠标语义随平台样式变（windowsvista 凹槽点击=
+   步翻页不抓手柄），UI 链 QTest 鼠标拖不动 slider——改直发信号走接线。
+
+### 修复（语义回方案 §3.2）
+
+- **服务引入 laneLinked 状态**：校时路恒联动；临时路对齐（alignTempLane/
+  setLaneOffsetMs）后入轴。未对齐临时路：**不驻停**（play 自由播放）、
+  **不随墙钟 seek/追逐**、**不纠偏**、**不显无信号**（laneCoversNow 恒 true）；
+  内容区间仅含联动路（无联动路兑底全量流内轴——独立模式双临时路场景）。
+- **alignTempLane(tempIdx, refIdx) 服务内收口**：以参考路当前位置墙钟为锚
+  建偏移；独立模式双临时路时参考路一并锚定为基准轴；时钟对齐到临时路
+  当前画面防跳变（原为窗口内联计算，收进服务可测）。
+- **窗口进度条三分支**：已联动路=墙钟轴 scrub 走带；未对齐路=本路独立
+  拖拽（引擎 setScrubMode/Target 直驱，同手感追逐，松手精确 seek）；
+  对齐会话=独立拖动。回起点：联动路回墙钟起点，未对齐路各回流内 0。
+- **OSD/进度条口径**：未对齐临时路显「未对齐·独立播放」（不给 ≈墙钟
+  推算——1970 伪推算防误读）；对齐后显 ≈墙钟。引导文案三档：未对齐
+  操作说明 / 对齐中（以声定点） / 已对齐联动说明。
+- rebuildTimelineArea 清旧控件（qDeleteAll 直接子控件）+ 布局。
+
+### 测试
+
+- sync_test **96 断言**（+18）：未对齐临时路不驻停/不随墙钟 seek/不显缺口
+  /区间只含联动路；alignTempLane 偏移计算+双路转联动+锚定 seek 序列。
+- mw_test **40 断言**（+4）：未对齐拖 A 不动 B（隔离断言）→ 对齐 → 拖 A
+  两路联动；rebuildTimelineArea 清理后窗口 slider 数量正确。
+- 全回归 13 套绿（计数见表头）。
+
+### 待办
+
+P-57 保持 ◐ 待真机复测（含本轮修复场景：模式B 未对齐独立播放体感）。
+注意：本轮构建时用户正运行旧版 LumenArc.exe（PID 锁），主程序需用户
+关闭后重链；测试目标已全部绿。
+
 # ============================================================================
 # 工作记录（2026-08-18，第四十三批）——P-57 多机同步播放【施工落地】（v1.10.0）
 # ============================================================================
@@ -255,51 +305,5 @@ P-55 已标✅待真机点检。
 
 拿到故障模块即可直接定位；若为素材相关，请把出问题素材单独拷一份
 （或告知文件名/来源），本地用同素材复现。
-
-# ============================================================================
-# 工作记录（2026-08-17，第三十九批）——v1.9.0 P-31 施工：MainWindow 拆分四组件
-# ============================================================================
-
-## 48. P2 拆分全量落地（方案 DEVELOPMENT_PLAN_V1.9_CN.md，拍板记录见其 §8）
-
-### 提交序列（T1 行为冻结纯移动纪律；每步全回归）
-
-| commit | 内容 |
-|---|---|
-| `feat: P-31 阶段1` | **AnalysisController**（引擎构造+TaskRegistry 注册+服务装配收口）/**UiState**（时长 SSOT：beginVideo/ingestEngineDuration/effectiveDuration 单点校准，删 MainWindow m_trusted/m_current 两副本——P-37 勾销）/**VideoSessionManager**（VideoStateManager 归属+OpenPlan 打开决策数据面+现场装配 saveCurrentState）/**ProjectIO** 落位 + **lumenarc_mw_test** 新测试目标（MainWindow 全源码无头链接，21 断言）；标题 v1.7.0→v1.8.0（D4 前批漏改补齐）；openVideoFile 入 private slots（QMetaObject 测试通道） |
-| `refactor: P-31 T1 ProjectIO 实装` | MainWindow 四函数体迁出（readTimestampRoiRegistry/savedTimestampRoi/saveTimestampRoi/calibrationBadgeSummary → ProjectIO 同名方法）+ saveCurrentVlaAsync 薄化（saveVlaAsync + collectVlaSaveRequest 采集器）+ onSaveAnalysis 路径分流/写出改 ProjectIO + onExportCsv 标签段整函数替换（exportLabelsCsv，三态提示逐字保留） |
-| `refactor: P-31 T2/T5` | openVideoFile 数据面拆分：planOpen 决策（内存现场探测/缓存路径/入案判定）+ .vla 直载与缓存两路装载归 ProjectIO::loadVla + **applyAnalysisArtifacts 去重**（R9：两处 30 行应用块合一）+ 内存现场引用化 + **ChartPanel::setXAxisRange** 收口 R3 实锤（全工程 axisX()->setRange 清零） |
-| `test: P-31 T2 决策面` | mw_test +5 断言（planOpen 冷开/内存现场往返/清空/键迁移）→ 26 断言 |
-| `refactor: P-31 T3 收尾` | MainWindow 删引擎直构造（仅经 AnalysisController）+ include 去 libav 具体引擎头（R4：ui 层不见引擎名） |
-| `docs+chore: §48 收口` | RELEASE_CHECKLIST_V1.9（A-F 34 项行为冻结对照）；PENDING 勾销 P-31/P-36/P-37；版本 1.9.0 四处一致；HANDOVER 归档 34 批 |
-
-### 结构成果
-
-- MainWindow 4183 → **3985 行**（净移 ~200 行 + 三处应用块去重）；openVideoFile
-  两段 30 行重复消除
-- 新组件（app 层，全部不 include Widgets，R1）：analysis_controller /
-  video_session_manager / project_io / uistate；mw_test 覆盖：UiState 校准规则、
-  ProjectIO 往返、OpenPlan 决策、openVideoFile 分支（dav/vla/失败）
-- **债项勾销**：P-31 ✅ / P-36（R3 穿透 1 处实锤收口）✅ / P-37（时长五副本 →
-  UiState 一源两派生）✅；P-35 已于 P-25 批清零；P-34 前批过期勾销——
-  **五条架构债全部收口**
-- 排除项照拍板执行：案件 UI/快照/播放传输留守 MainWindow（Q1-Q3）；范围只收时长（B2）
-
-### 遇到的坑（记录防再踩）
-
-1. **AutoUic 把 `ui_state.h` 误认为 Qt 设计器头**（`ui_*.h` 命名约定）→ UIC 报
-   "state.ui could not be found"。改名 `uistate.{h,cpp}` 解决——**app 层文件名
-   禁用 ui_ 前缀**。
-2. mw_test 链接 MainWindow 全源码需补 `${HEADERS}`（Q_OBJECT 元对象）与
-   FFMPEG_INCLUDE_DIR（ffmpeg_video_engine 直编）。
-3. 大段文本锚点脚本易脆（注释缩进/换行差异）——改行号手术 + 全函数替换；
-   中途污染时 git checkout 回滚重来，未污染提交。
-
-### 验证
-
-- 全回归 **13 套**绿（新增 mw_test 26）；每阶段提交后全量重跑
-- 待真机（RELEASE_CHECKLIST_V1.9 A-F，34 项）：全部为"与 v1.8 行为一致"的
-  对照验收（纯移动无功能变化）；重点 A2-A4 缓存三态 / B3-B4 保存链 /
-  C1 虚高钳制 / E1-E3 轴联动
 
 # ============================================================================
