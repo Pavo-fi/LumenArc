@@ -11,6 +11,8 @@
 #include "mainwindow.h"
 #include "app/uistate.h"
 #include "app/project_io.h"
+#include "app/video_session_manager.h"
+#include "app/case_manager.h"
 #include "domain/timeline_model.h"
 #include "app/case_manager.h"
 #include "domain/time_calibration.h"
@@ -125,6 +127,42 @@ static void testProjectIo()
 // ---------------------------------------------------------------------------
 // MainWindow 分支（行为级断言：窗口标题/引擎状态，不触私有成员）
 // ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// VideoSessionManager 决策面（P-31 T2-A）
+// ---------------------------------------------------------------------------
+static void testSessionPlan()
+{
+    VideoSessionManager mgr;
+    CHECK(mgr.stateManager() != nullptr, "plan: state manager owned");
+
+    // ① 无现场无缓存：空 plan
+    const QString v = QDir::tempPath() + "/lumenarc_p31/plan_video.mp4";
+    CaseManager none;
+    auto plan = mgr.planOpen(v, &none);
+    CHECK(!plan.hasMemoryState && plan.cacheVlaPath.isEmpty(),
+          "plan: cold open empty");
+
+    // ② 有内存现场：plan 带回（restore 副本）
+    VideoState st;
+    st.regions = {QRect(1, 2, 3, 4)};
+    st.calibration.source = TimeCalibration::Source::Manual;
+    st.calibration.offsetMs = 77;
+    mgr.saveCurrentState(v, st);
+    plan = mgr.planOpen(v, &none);
+    CHECK(plan.hasMemoryState && plan.memoryState.regions == st.regions
+          && plan.memoryState.calibration.offsetMs == 77,
+          "plan: memory state roundtrip");
+
+    // ③ 清空 + 键迁移
+    mgr.clear();
+    CHECK(!mgr.planOpen(v, &none).hasMemoryState, "plan: clear works");
+    mgr.saveCurrentState(v, st);
+    mgr.migrateKey(v, v + "2");
+    CHECK(!mgr.planOpen(v, &none).hasMemoryState
+          && mgr.planOpen(v + "2", &none).hasMemoryState,
+          "plan: migrateKey moves state");
+}
+
 static void testMainWindowBranches(QApplication &app)
 {
     MainWindow mw;
@@ -184,6 +222,7 @@ int main(int argc, char **argv)
 
     testUiState();
     testProjectIo();
+    testSessionPlan();
     testMainWindowBranches(app);
 
     fprintf(stderr, "mw_test: %d checks, %d failures\n", g_checks, g_failures);
