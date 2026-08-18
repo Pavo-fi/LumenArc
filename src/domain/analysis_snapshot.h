@@ -462,3 +462,7 @@ private:
     }
 
 };
+
+/// 跨线程信号参数契约（分析引擎工作线程 → 服务/UI 线程 QueuedConnection）
+/// 显式声明元类型（Qt 隐式注册亦可工作，显式化防回归并消除运行时警告）
+Q_DECLARE_METATYPE(AnalysisSnapshot)

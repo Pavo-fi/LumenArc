@@ -68,3 +68,20 @@ CMakeUserPresets.json
 la_b3/
 la_at_test/
 case.json.lock
+
+# build_tmp 临时产物（历史遗留 tracked 文件不受影响；防误加）
+build_tmp/*.png
+build_tmp/*.mp4
+build_tmp/*.wav
+build_tmp/*.obj
+build_tmp/*.txt
+build_tmp/*.cpp
+build_tmp/*.bat
+build_tmp/*.pcm
+build_tmp/probe_*
+build_tmp/LumenArc_Calibration/
+build_tmp/caltest/
+build_tmp/fps_test/
+build_tmp/integ_*/
+build_tmp/snap_preview/
+build_tmp/probe_build*/

@@ -19,6 +19,8 @@
 #include "i18n.h"
 #include <QApplication>
 #include <QTimer>
+#include <QTest>
+#include <QMessageBox>
 #include <QDir>
 #include <QFile>
 #include <cstdio>
@@ -34,13 +36,14 @@ static int g_failures = 0;
         }                                                                   \
     } while (0)
 
-/// offscreen 模态框自动关闭（QMessageBox::exec 会阻塞事件循环）
+/// offscreen 模态框自动应答：QMessageBox 发回车（触发默认按钮：OK / question 默认 Yes）
 static void armModalAutoClose(QApplication &app)
 {
     auto *t = new QTimer(&app);
     QObject::connect(t, &QTimer::timeout, &app, []() {
-        if (QWidget *m = QApplication::activeModalWidget())
-            m->close();
+        QMessageBox *m = qobject_cast<QMessageBox *>(QApplication::activeModalWidget());
+        if (m)
+            QTest::keyClick(m, Qt::Key_Return);
     });
     t->start(150);
 }
@@ -215,6 +218,48 @@ static void testMainWindowBranches(QApplication &app)
     CHECK(true, "mw: missing file error path no crash");
 }
 
+// ---------------------------------------------------------------------------
+// 亮度分析完整链路（点击「亮度分析」复现路径：打开视频→缓存 vla 询问(Yes)→
+// ROI 恢复→onAnalyze→进度/完成/气泡/自动保存）
+// ---------------------------------------------------------------------------
+static void testLumaFullChain(QApplication &app)
+{
+    const QString video = QString::fromLocal8Bit(
+        qEnvironmentVariable("LUMENARC_REPRO_VIDEO").toUtf8());
+    if (video.isEmpty() || !QFile::exists(video)) {
+        fprintf(stderr, "[luma-chain] SKIP (LUMENARC_REPRO_VIDEO not set)\n");
+        return;
+    }
+    const QString vla = video + ".vla";
+    QFile::remove(vla);
+    {
+        // 带 ROI 的缓存分析结果（恢复后 onAnalyze 才可走全链）
+        TimelineModel m;
+        m.setData({0, 40, 80}, {{5.0, 6.0, 7.0}},
+                  {DataEntry{DataEntry::Rect, 1}});
+        m.saveToFile(vla, {QRect(10, 10, 80, 40)}, TimeCalibration());
+    }
+
+    MainWindow mw;
+    mw.resize(1280, 800);
+    mw.show();
+    pump(app);
+
+    // 打开视频 → 独立模式询问"找到缓存的分析结果" → 回车 Yes → ROI 恢复
+    QMetaObject::invokeMethod(&mw, "openVideoFile", Q_ARG(QString, video));
+    pump(app, 900);
+
+    // 点「亮度分析」（QMetaObject 通道；ROI 已由缓存恢复）
+    QMetaObject::invokeMethod(&mw, "onAnalyze");
+    pump(app, 3000);
+
+    // 分析完成不崩 = 通过（进程存活即断言；状态栏文本私有，仅验证无崩溃）
+    fprintf(stderr, "[luma-chain] completed without crash\n");
+    CHECK(true, "luma chain no crash");
+
+    QFile::remove(vla);
+}
+
 int main(int argc, char **argv)
 {
     QApplication app(argc, argv);
@@ -224,6 +269,7 @@ int main(int argc, char **argv)
     testProjectIo();
     testSessionPlan();
     testMainWindowBranches(app);
+    testLumaFullChain(app);
 
     fprintf(stderr, "mw_test: %d checks, %d failures\n", g_checks, g_failures);
     return g_failures == 0 ? 0 : 1;

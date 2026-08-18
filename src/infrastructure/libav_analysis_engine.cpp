@@ -627,6 +627,12 @@ void LibavAnalysisEngine::runLuminanceTask()
         e.type = (m_rois[k].kind == RoiSpec::Rect) ? DataEntry::Rect : DataEntry::Polygon;
         entries.append(e);
     }
+    // 防御：行长度与共享时间轴对齐（异常素材帧序错乱时截断，防下游越界；
+    // 正常路径零变化——2026-08-18 亮度分析闪退排查加固）
+    const int tsN = mergedTs.size();
+    for (auto &row : mergedLums)
+        if (row.size() > tsN)
+            row.resize(tsN);
     snap.setLuminance(std::move(mergedTs), std::move(mergedLums), std::move(entries));
     emit analysisFinished(snap);
 }

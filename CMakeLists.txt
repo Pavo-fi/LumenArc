@@ -277,6 +277,7 @@ target_link_libraries(lumenarc_mw_test PRIVATE
     Qt6::Concurrent
     Qt6::OpenGL
     Qt6::OpenGLWidgets
+    Qt6::Test
     ${FFMPEG_LIBRARIES}
 )
 if(WIN32)

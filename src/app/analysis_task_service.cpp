@@ -24,6 +24,8 @@ AnalysisTaskService::AnalysisTaskService(IAnalysisEngine *engine, TimelineModel 
                                          QObject *parent)
     : QObject(parent), m_engine(engine), m_model(model)
 {
+    // 分析结果快照跨线程（工作线程→UI 线程）QueuedConnection 元类型注册
+    qRegisterMetaType<AnalysisSnapshot>();
     connect(m_engine, &IAnalysisEngine::progressUpdated,
             this, &AnalysisTaskService::onEngineProgress);
     connect(m_engine, &IAnalysisEngine::analysisFinished,
