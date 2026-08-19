@@ -63,7 +63,6 @@ public:
 
 protected:
     void closeEvent(QCloseEvent *event) override;
-    void changeEvent(QEvent *event) override;
 
 private slots:
     void onTogglePlay();
@@ -92,7 +91,6 @@ private:
     void rebuildTimelineArea();
     void refreshModeControls();
     void updateTilesOsd();
-    void updateMaxButtonText();
     QString fmtStream(qint64 ms) const;
     QString fmtWall(qint64 wallMs) const;
     QVector<CamLane> currentCamLanes() const;   ///< SyncLaneData → 条图块位
@@ -112,7 +110,6 @@ private:
     QLabel *m_pickHint = nullptr;
     QPushButton *m_startBtn = nullptr;
     QPushButton *m_repickBtn = nullptr;
-    QPushButton *m_maxBtn = nullptr;
 
     // UI 元素
     QGridLayout *m_grid = nullptr;

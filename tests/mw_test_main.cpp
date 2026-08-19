@@ -361,23 +361,10 @@ static void testMultiCamWindow(QApplication &app)
     win->show();
     pump(app);
 
-    // 最大化/窗口化按钮（用户布置）：存在+点击可切换+文案随态联动
-    QPushButton *maxBtn = nullptr;
-    for (auto *b : win->findChildren<QPushButton *>())
-        if (b->text().contains(QStringLiteral("最大化"))
-            || b->text().contains(QStringLiteral("窗口化"))) { maxBtn = b; break; }
-    CHECK(maxBtn != nullptr, "mc: maximize/windowed button exists");
-    if (maxBtn) {
-        const bool wasMax = win->isMaximized();
-        QTest::mouseClick(maxBtn, Qt::LeftButton);
-        pump(app, 100);
-        CHECK(win->isMaximized() != wasMax, "mc: maximize toggles window state");
-        CHECK(maxBtn->text().contains(QStringLiteral("最大化"))
-              || maxBtn->text().contains(QStringLiteral("窗口化")),
-              "mc: maximize button text follows state");
-        QTest::mouseClick(maxBtn, Qt::LeftButton);   // 还原，不干扰后续布局断言
-        pump(app, 100);
-    }
+    // 标题栏最小化/最大化钮（用户布置：与前处理页同款原生按钮）
+    CHECK((win->windowFlags() & Qt::WindowMinimizeButtonHint)
+          && (win->windowFlags() & Qt::WindowMaximizeButtonHint),
+          "mc: window flags carry native min/max buttons");
 
     // 临时进两路（测试通道：pickVideoForSlot 绕过文件对话框）
     win->pickVideoForSlot(0, "/fake/a.mp4");
