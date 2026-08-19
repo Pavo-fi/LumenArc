@@ -44,6 +44,7 @@
 | docs/PREPROCESSING_TECH_DESIGN_CN.md | 前处理技术设计 | ✅ 现行 |
 | docs/MULTICAM_PLAYBACK_TECH_DESIGN_CN.md | 多视频同步播放（多机时间线合并）技术方案（P-57） | ✅ v0.3 已拍板，**v1.10.0 已施工待真机**（2026-08-18） |
 | docs/SEGMENT_EXPORT_TECH_DESIGN_CN.md | 选段变速播放+图表/语谱一并导出技术方案（P-58） | ☐ 草案待拍板（2026-08-18） |
+| docs/OCR_SORT_OPTIMIZATION_CN.md | OCR 识别+智能排序「一个 Go」体验优化方案（P-60） | ☐ 草案待拍板（2026-08-19） |
 | docs/PREPROCESSING_UI_REDESIGN_CN.md | 前处理 UI 重设计 | ✅ 已落地（14.3） |
 | docs/RELEASE_CHECKLIST_V1.3_CN.md | v1.3 手工点检 A-H | ⚠️ 结果未填写（待真机执行，见 PENDING P-48） |
 | docs/FUTURE_OPTIMIZATIONS.md | 暂缓/移除功能记录（GPU 零拷贝、VLC） | ✅ 重启条件已写 |
