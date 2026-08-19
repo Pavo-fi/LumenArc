@@ -15,6 +15,7 @@
 #pragma once
 
 #include <QString>
+#include <QRectF>
 
 struct OcrResult {
     enum Source { Ocr, Manual, None };
@@ -31,4 +32,5 @@ struct OcrResult {
     qint64  durationMs = 0;     // 脚本侧使用的时长（可信时长或 ffprobe 兜底）
     QString sha256;
     QString ocrError;           // 空=成功；非空进入人工兜底（规范 C2）
+    QRectF  hitRoi;             // P-60 命中行归一化位置（ROI 自学习；无效=未回报）
 };

@@ -31,3 +31,26 @@ QVector<SortGroup> smartSort(const QVector<ProbeResult> &probes,
 
 /// 拖拽微调/人工改序后重算组内连续性警告（Overlap/Gap），保留其他类型警告
 void recomputeContinuityWarnings(SortGroup &group);
+
+/// P-60 估算段数（sourceKind == Estimated：夹缝插值/端点外延推算位）
+int estimatedCount(const SortGroup &group);
+
+/// P-60 自动放行硬标准（方案 §4.3）：单分组 && 无阻断级警告 && 无存疑 &&
+/// 估算段 ≤2 且占比 ≤20%。满足 → GO 可一键直通拼接（UserConfirm 可跳过）
+bool canAutoProceed(const QVector<SortGroup> &groups);
+
+/// P-60 问题清单（方案 §4.5 B 路径确认页的数据源）
+struct SortProblem {
+    enum Kind { Unidentified = 0,     // 未识别且未能推算归位的段
+                OverlapPair = 1,      // 时间轴重叠对（阻断级）
+                SuspiciousGroup = 2 };// 存疑组（证据不足/矛盾未裁决/大批未识别）
+    int kind = Unidentified;
+    int groupIndex = -1;
+    int indexA = -1, indexB = -1;     // 组内下标（组级为 -1）
+    QString fileA, fileB;             // 冗余路径（UI 直取缩略图；可空）
+    QString detail;                   // 工程师细节（卡片副行；主文案 UI 组）
+};
+/// 规则：Overlap 警告 → OverlapPair 卡；未识别段（None/Mtime 且未推算）≤3 →
+/// 逐段 Unidentified 卡，>3 → 单张 SuspiciousGroup 卡（框一段全批套用）；
+/// 其余存疑原因 → SuspiciousGroup 卡。估算段（Estimated）是提示级不算问题。
+QVector<SortProblem> collectSortProblems(const QVector<SortGroup> &groups);

@@ -16,6 +16,7 @@
 #include "sortablefiletable.h"
 #include "app/case_manager.h"
 #include "domain/filename_timestamp.h"
+#include "domain/smart_sorter.h"
 #include "i18n.h"
 #include "theme.h"
 
@@ -38,6 +39,111 @@
 #include "infrastructure/encoder_probe.h"
 #include <QCheckBox>
 #include <QTimer>
+#include <QDialog>
+#include <QDialogButtonBox>
+#include <QPainter>
+#include <QMouseEvent>
+
+// ---------------------------------------------------------------------------
+// P-60 框选时间戳对话框（问题卡「框一下画面上的时间」）：证据帧上拖框，
+// 返回归一化坐标。无 Q_OBJECT（免 moc）——选择与确认经对话框按钮外递。
+// ---------------------------------------------------------------------------
+class RoiPickLabel : public QLabel
+{
+public:
+    explicit RoiPickLabel(const QPixmap &pm, QWidget *parent = nullptr)
+        : QLabel(parent), m_pm(pm)
+    {
+        const int W = 880;
+        const double s = pm.width() > 0 ? qMin(1.0, double(W) / pm.width()) : 1.0;
+        setFixedSize(qMax(1, int(pm.width() * s)), qMax(1, int(pm.height() * s)));
+        setCursor(Qt::CrossCursor);
+    }
+    QRectF selectionNorm() const
+    {
+        if (m_sel.isNull() || width() <= 0 || height() <= 0)
+            return QRectF();
+        const double w = width(), h = height();
+        return QRectF(m_sel.left() / w, m_sel.top() / h,
+                      m_sel.width() / w, m_sel.height() / h).normalized();
+    }
+
+protected:
+    void paintEvent(QPaintEvent *e) override
+    {
+        Q_UNUSED(e);
+        QPainter p(this);
+        p.drawPixmap(rect(), m_pm);
+        if (!m_sel.isNull()) {
+            p.setPen(QPen(QColor("#F0B429"), 2));
+            p.fillRect(m_sel, QColor(240, 180, 41, 60));
+            p.drawRect(m_sel);
+        }
+    }
+    void mousePressEvent(QMouseEvent *e) override
+    {
+        if (e->button() == Qt::LeftButton) {
+            m_anchor = e->pos();
+            m_sel = QRect(m_anchor, QSize(1, 1));
+            update();
+        }
+    }
+    void mouseMoveEvent(QMouseEvent *e) override
+    {
+        if (!m_sel.isNull()) {
+            m_sel = QRect(m_anchor, e->pos()).normalized().intersected(rect());
+            update();
+        }
+    }
+    void mouseReleaseEvent(QMouseEvent *e) override
+    {
+        if (e->button() == Qt::LeftButton && !m_sel.isNull()) {
+            m_sel = QRect(m_anchor, e->pos()).normalized().intersected(rect());
+            update();
+        }
+    }
+
+private:
+    QPixmap m_pm;
+    QPoint m_anchor;
+    QRect m_sel;
+};
+
+void PreprocessWindow::roiPickForFile(const QString &filePath)
+{
+    const QString img = evidenceImageFor(filePath);
+    const QPixmap pm(img);
+    if (img.isEmpty() || pm.isNull()) {
+        // 无证据帧可框 → 退到手输（C2 不静默）
+        m_selectedPath = filePath;
+        showManualDialog(filePath);
+        return;
+    }
+    QDialog dlg(this);
+    dlg.setWindowTitle(lang("框选画面上的时间", "Box the on-screen time"));
+    auto *v = new QVBoxLayout(&dlg);
+    auto *hint = new QLabel(lang("在截图上拖框住时间显示区域，其余段会自动跟着认",
+                                 "Drag a box around the on-screen time; "
+                                 "other clips follow automatically"), &dlg);
+    hint->setWordWrap(true);
+    v->addWidget(hint);
+    auto *picker = new RoiPickLabel(pm, &dlg);
+    v->addWidget(picker, 0, Qt::AlignCenter);
+    auto *btns = new QDialogButtonBox(QDialogButtonBox::Ok
+                                      | QDialogButtonBox::Cancel, &dlg);
+    v->addWidget(btns);
+    QObject::connect(btns, &QDialogButtonBox::accepted, &dlg, &QDialog::accept);
+    QObject::connect(btns, &QDialogButtonBox::rejected, &dlg, &QDialog::reject);
+    if (dlg.exec() != QDialog::Accepted)
+        return;
+    const QRectF roi = picker->selectionNorm();
+    if (!roi.isValid() || roi.width() < 0.01 || roi.height() < 0.005)
+        return;   // 框太小视为误点
+    m_reviewSummary->setText(lang("正在按框选位置重新识别…",
+                                  "Re-identifying with the boxed area…"));
+    m_coord->reOcrWithRoi(filePath, roi);
+}
+
 #include <QFont>
 #include <QRadioButton>
 #include <QScrollArea>
@@ -353,29 +459,30 @@ QWidget *PreprocessWindow::buildPageImport()
     auto *row = new QHBoxLayout();
     auto *btnAdd = new QPushButton(lang("添加文件…", "Add files…"), w);
     auto *btnClear = new QPushButton(lang("清空重选", "Clear all"), w);
-    m_btnBeginSort = new QPushButton(lang("自动排序 ⚡（实验性）", "Auto sort ⚡ (experimental)"), w);
+    m_btnBeginSort = new QPushButton(lang("GO", "GO"), w);
     m_btnBeginSort->setEnabled(false);
+    m_btnBeginSort->setMinimumHeight(40);
+    m_btnBeginSort->setMinimumWidth(88);
     m_btnBeginSort->setToolTip(lang(
-        "实验性功能：识别画面/流内时间并按时间自动重排。\n不点也能直接拼接——拖拽列表行即可手动定序。",
-        "Experimental: reorders by on-screen/in-stream time. "
-        "You can skip it: drag rows to order manually, then merge directly."));
-    m_btnQuickMerge = new QPushButton(lang("GO", "GO"), w);
-    m_btnQuickMerge->setEnabled(false);
-    m_btnQuickMerge->setMinimumHeight(40);
-    m_btnQuickMerge->setMinimumWidth(88);
-    m_btnQuickMerge->setToolTip(lang(
-        "GO 自动判断：同参数 MP4（关键帧 ≤2s）无损直拼；非 MP4 或关键帧稀疏自动转码后拼接；"
-        "单文件则单独转码导出为 MP4。",
-        "GO decides: identical MP4s (≤2s keyframes) merge losslessly; non-MP4 or "
-        "sparse-keyframe clips are transcoded first; a single file is exported as MP4."));
-    QFont goFont = m_btnQuickMerge->font();
+        "GO 一键完成：识别画面时间 → 自动排序 → 拼接。\n认不出来的段会请你框一下画面上的时间。",
+        "One-click: read on-screen time, auto-sort, merge. "
+        "You'll only be asked to box the time if a clip can't be read."));
+    QFont goFont = m_btnBeginSort->font();
     goFont.setPointSize(16);
     goFont.setBold(true);
-    m_btnQuickMerge->setFont(goFont);
-    m_btnQuickMerge->setStyleSheet(QStringLiteral(
+    m_btnBeginSort->setFont(goFont);
+    m_btnBeginSort->setStyleSheet(QStringLiteral(
         "QPushButton { background:%1; color:%2; font-weight:bold; border-radius:10px; }"
         "QPushButton:disabled { background:%3; color:%4; }")
         .arg(Theme::Accent, Theme::AccentOnDark, Theme::BgCard, Theme::TextMuted));
+    m_btnQuickMerge = new QPushButton(
+        lang("直接拼接（不识别时间）", "Merge directly (no time read)"), w);
+    m_btnQuickMerge->setEnabled(false);
+    m_btnQuickMerge->setFlat(true);
+    m_btnQuickMerge->setToolTip(lang(
+        "高级旁路：不识别画面时间，按列表当前顺序直接拼接（可拖行定序）。",
+        "Advanced: skip time reading, merge in current list order "
+        "(drag rows to reorder)."));
     row->addWidget(btnAdd);
     row->addWidget(btnClear);
     row->addStretch(1);
@@ -579,12 +686,40 @@ QWidget *PreprocessWindow::buildPageReview()
         .arg(Theme::TextPrimary, Theme::BgPanel));
     lay->addWidget(m_reviewSummary);
 
-    m_timeline = new ClipTimelineWidget(w);
-    lay->addWidget(m_timeline);
+    // P-60 问题卡区（拍板 Q4A：拿不准才出现；大白话+缩略图+就地操作）
+    m_problemPanel = new QWidget(w);
+    m_problemLay = new QVBoxLayout(m_problemPanel);
+    m_problemLay->setContentsMargins(0, 0, 0, 0);
+    m_problemLay->setSpacing(8);
+    m_problemPanel->setVisible(false);
+    lay->addWidget(m_problemPanel);
+
+    // 完整视图折叠开关（默认收起——初级调查员只看问题卡）
+    m_showAllBtn = new QPushButton(lang("▸ 查看全部片段（时间线与证据卡）",
+                                        "▸ Show all clips (timeline & cards)"), w);
+    m_showAllBtn->setFlat(true);
+    m_showAllBtn->setStyleSheet(QStringLiteral("color:%1; text-align:left;")
+                                    .arg(Theme::TextSecond));
+    connect(m_showAllBtn, &QPushButton::clicked, this, [this]() {
+        const bool show = !m_fullReview->isVisible();
+        m_fullReview->setVisible(show);
+        m_showAllBtn->setText(show
+            ? lang("▾ 收起全部片段", "▾ Hide all clips")
+            : lang("▸ 查看全部片段（时间线与证据卡）",
+                   "▸ Show all clips (timeline & cards)"));
+    });
+    lay->addWidget(m_showAllBtn);
+
+    // 完整视图（原②页内容：时间线 + 证据卡）
+    m_fullReview = new QWidget(w);
+    auto *fr = new QVBoxLayout(m_fullReview);
+    fr->setContentsMargins(0, 0, 0, 0);
+    m_timeline = new ClipTimelineWidget(m_fullReview);
+    fr->addWidget(m_timeline);
     connect(m_timeline, &ClipTimelineWidget::clipClicked,
             this, &PreprocessWindow::onCardClicked);
 
-    m_cardScroll = new QScrollArea(w);
+    m_cardScroll = new QScrollArea(m_fullReview);
     m_cardScroll->setWidgetResizable(true);
     m_cardScroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAsNeeded);
     m_cardScroll->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
@@ -595,7 +730,9 @@ QWidget *PreprocessWindow::buildPageReview()
     m_cardHost->setAcceptDrops(true);
     m_cardHost->installEventFilter(this);
     m_cardScroll->setWidget(m_cardHost);
-    lay->addWidget(m_cardScroll, 1);
+    fr->addWidget(m_cardScroll, 1);
+    m_fullReview->setVisible(false);
+    lay->addWidget(m_fullReview, 1);
 
     auto *row = new QHBoxLayout();
     auto *btnLeft = new QPushButton(QStringLiteral("←"), w);
@@ -604,22 +741,22 @@ QWidget *PreprocessWindow::buildPageReview()
     btnRight->setToolTip(lang("选中片段后移", "Move selected later"));
     auto *btnManual = new QPushButton(lang("手动输入时间…", "Enter time manually…"), w);
     auto *btnRe = new QPushButton(lang("重新识别", "Re-identify"), w);
-    auto *btnConfirm = new QPushButton(lang("确认顺序，下一步 →", "Confirm order, next →"), w);
-    btnConfirm->setMinimumHeight(36);
-    btnConfirm->setStyleSheet(m_btnBeginSort->styleSheet());
+    m_confirmBtn = new QPushButton(lang("确认顺序，下一步 →", "Confirm order, next →"), w);
+    m_confirmBtn->setMinimumHeight(36);
+    m_confirmBtn->setStyleSheet(m_btnBeginSort->styleSheet());
     row->addWidget(btnLeft);
     row->addWidget(btnRight);
     row->addWidget(btnManual);
     row->addWidget(btnRe);
     row->addStretch(1);
-    row->addWidget(btnConfirm);
+    row->addWidget(m_confirmBtn);
     lay->addLayout(row);
 
     connect(btnLeft, &QPushButton::clicked, this, [this]() { onMoveSelected(-1); });
     connect(btnRight, &QPushButton::clicked, this, [this]() { onMoveSelected(+1); });
     connect(btnManual, &QPushButton::clicked, this, &PreprocessWindow::onManualTimestamp);
     connect(btnRe, &QPushButton::clicked, this, &PreprocessWindow::onReIdentify);
-    connect(btnConfirm, &QPushButton::clicked, this, &PreprocessWindow::onConfirmOrder);
+    connect(m_confirmBtn, &QPushButton::clicked, this, &PreprocessWindow::onConfirmOrder);
     return w;
 }
 
@@ -670,6 +807,241 @@ void PreprocessWindow::rebuildReviewViews()
     }
     hostLay->addStretch(1);
     refreshReviewSummary();
+    rebuildProblemPanel();   // P-60 问题卡区
+    updateConfirmGate();     // P-60 确认主按钮门控
+}
+
+// ---------------------------------------------------------------------------
+// P-60 问题卡区（方案 §4.5，拍板 Q4A）：大白话 + 缩略图 + 就地操作
+// ---------------------------------------------------------------------------
+static QString problemKey(const SortProblem &p)
+{
+    switch (p.kind) {
+    case SortProblem::Unidentified:
+        return QStringLiteral("u|") + p.fileA;
+    case SortProblem::OverlapPair:
+        return QStringLiteral("o|") + p.fileA + QStringLiteral("|") + p.fileB;
+    default:
+        return QStringLiteral("s|") + QString::number(p.groupIndex);
+    }
+}
+
+void PreprocessWindow::rebuildProblemPanel()
+{
+    while (QLayoutItem *it = m_problemLay->takeAt(0)) {
+        if (it->widget())
+            it->widget()->deleteLater();
+        delete it;
+    }
+    const auto problems = collectSortProblems(m_groups);
+    m_problemPanel->setVisible(!problems.isEmpty());
+    if (problems.isEmpty())
+        return;
+
+    int pending = 0;
+    for (const auto &p : problems)
+        if (!m_problemAcks.contains(problemKey(p)))
+            ++pending;
+    auto *hdr = new QLabel(lang("⚠ 有 %1 处需要你看一眼（处理完即可继续拼接）",
+                                "⚠ %1 issue(s) need your attention before merging")
+                               .arg(pending), m_problemPanel);
+    hdr->setWordWrap(true);
+    hdr->setStyleSheet(QStringLiteral("color:%1; font-size:15px; font-weight:bold;")
+                           .arg(Theme::Accent));
+    m_problemLay->addWidget(hdr);
+
+    for (const auto &p : problems) {
+        const QString key = problemKey(p);
+        const bool acked = m_problemAcks.contains(key);
+        auto *card = new QFrame(m_problemPanel);
+        card->setStyleSheet(QStringLiteral(
+            "QFrame { background:%1; border:1px solid %2; border-radius:8px; }")
+            .arg(Theme::BgPanel, acked ? Theme::Border : Theme::Accent));
+        auto *row = new QHBoxLayout(card);
+
+        // 缩略图（证据帧；P-60：认得出来自哪里比文件名直观）
+        const QString img = p.fileA.isEmpty() ? QString()
+                                              : evidenceImageFor(p.fileA);
+        auto *pic = new QLabel(card);
+        pic->setFixedSize(160, 90);
+        pic->setAlignment(Qt::AlignCenter);
+        if (!img.isEmpty()) {
+            const QPixmap pm(img);
+            if (!pm.isNull())
+                pic->setPixmap(pm.scaled(160, 90, Qt::KeepAspectRatio,
+                                         Qt::SmoothTransformation));
+            else
+                pic->setText(QStringLiteral("…"));
+        } else {
+            pic->setText(lang("无图", "no img"));
+        }
+        pic->setStyleSheet(QStringLiteral("color:%1;").arg(Theme::TextMuted));
+        row->addWidget(pic);
+
+        auto *mid = new QVBoxLayout();
+        auto *title = new QLabel(card);
+        title->setWordWrap(true);
+        title->setStyleSheet(QStringLiteral("color:%1; font-size:14px;")
+                                 .arg(Theme::TextPrimary));
+        auto *sub = new QLabel(card);
+        sub->setWordWrap(true);
+        sub->setStyleSheet(QStringLiteral("color:%1; font-size:12px;")
+                               .arg(Theme::TextSecond));
+        mid->addWidget(title);
+        mid->addWidget(sub);
+        row->addLayout(mid, 1);
+
+        auto *ops = new QVBoxLayout();
+        row->addLayout(ops);
+
+        const QString name = QFileInfo(p.fileA).fileName();
+        if (p.kind == SortProblem::Unidentified) {
+            title->setText(acked
+                ? lang("✓ 「%1」按当前位置拼接", "✓ %1 kept as placed").arg(name)
+                : lang("「%1」没认出画面上的时间", "Couldn't read time in %1")
+                      .arg(name));
+            sub->setText(p.detail);
+            if (!acked) {
+                if (!img.isEmpty()) {
+                    auto *b = new QPushButton(
+                        lang("框一下画面上的时间", "Box the on-screen time"), card);
+                    connect(b, &QPushButton::clicked, this,
+                            [this, f = p.fileA]() { roiPickForFile(f); });
+                    ops->addWidget(b);
+                }
+                auto *bm = new QPushButton(lang("手动输入…", "Enter manually…"),
+                                           card);
+                connect(bm, &QPushButton::clicked, this,
+                        [this, f = p.fileA]() {
+                            m_selectedPath = f;
+                            showManualDialog(f);
+                        });
+                ops->addWidget(bm);
+                auto *bk = new QPushButton(
+                    lang("按当前位置拼接（知道就好）", "Keep as placed (acknowledge)"),
+                    card);
+                connect(bk, &QPushButton::clicked, this, [this, key]() {
+                    m_problemAcks.insert(key);
+                    rebuildProblemPanel();
+                    updateConfirmGate();
+                });
+                ops->addWidget(bk);
+            }
+        } else if (p.kind == SortProblem::OverlapPair) {
+            title->setText(acked
+                ? lang("✓ 两段重叠已保持现状", "✓ Overlap kept as-is")
+                : lang("「%1」和「%2」的时间重叠了，哪个应该在前面？",
+                       "%1 and %2 overlap in time; which comes first?")
+                      .arg(name, QFileInfo(p.fileB).fileName()));
+            sub->setText(p.detail);
+            if (!acked) {
+                auto *bs = new QPushButton(lang("交换前后", "Swap order"), card);
+                connect(bs, &QPushButton::clicked, this,
+                        [this, p]() {
+                            if (p.groupIndex < 0 || p.groupIndex >= m_groups.size())
+                                return;
+                            const auto &g = m_groups[p.groupIndex];
+                            QStringList ord;
+                            for (const auto &e : g.ordered)
+                                ord << e.filePath;
+                            if (p.indexA >= 0 && p.indexB >= 0
+                                && p.indexA < ord.size() && p.indexB < ord.size())
+                                ord.swapItemsAt(p.indexA, p.indexB);
+                            m_coord->applyGroupOrder(g.channel, ord);
+                        });
+                ops->addWidget(bs);
+                auto *bk = new QPushButton(lang("保持现状", "Keep as-is"), card);
+                connect(bk, &QPushButton::clicked, this, [this, key]() {
+                    m_problemAcks.insert(key);
+                    rebuildProblemPanel();
+                    updateConfirmGate();
+                });
+                ops->addWidget(bk);
+            }
+        } else {   // SuspiciousGroup
+            if (!p.fileA.isEmpty()) {
+                title->setText(acked
+                    ? lang("✓ 本组按文件信息顺序拼接", "✓ Group kept in file order")
+                    : lang("这组有 %1 段没认出画面上的时间",
+                           "%1 clip(s) in this group have unreadable time")
+                          .arg(p.detail));
+                sub->setText(acked ? QString()
+                             : lang("框一段画面上的时间，其余段会自动跟着认",
+                                    "Box the time in one clip; the rest follow"));
+                if (!acked) {
+                    auto *b = new QPushButton(
+                        lang("框一段画面上的时间（全组跟着认）",
+                             "Box time in one clip (applies to group)"), card);
+                    connect(b, &QPushButton::clicked, this,
+                            [this, f = p.fileA]() { roiPickForFile(f); });
+                    ops->addWidget(b);
+                    auto *bk = new QPushButton(
+                        lang("按文件信息顺序拼接", "Keep file-info order"), card);
+                    connect(bk, &QPushButton::clicked, this, [this, key]() {
+                        m_problemAcks.insert(key);
+                        rebuildProblemPanel();
+                        updateConfirmGate();
+                    });
+                    ops->addWidget(bk);
+                }
+            } else {
+                title->setText(acked
+                    ? lang("✓ 已确认", "✓ Confirmed")
+                    : lang("这组的排序证据互相矛盾，我拿不准",
+                           "Conflicting ordering evidence in this group"));
+                sub->setText(p.detail);
+                if (!acked) {
+                    auto *bk = new QPushButton(
+                        lang("我确认这样排", "I confirm this order"), card);
+                    connect(bk, &QPushButton::clicked, this, [this, key]() {
+                        m_problemAcks.insert(key);
+                        rebuildProblemPanel();
+                        updateConfirmGate();
+                    });
+                    ops->addWidget(bk);
+                }
+            }
+        }
+        if (acked) {
+            auto *undo = new QPushButton(lang("再处理", "Re-handle"), card);
+            undo->setFlat(true);
+            undo->setStyleSheet(QStringLiteral("color:%1;").arg(Theme::TextSecond));
+            connect(undo, &QPushButton::clicked, this, [this, key]() {
+                m_problemAcks.remove(key);
+                rebuildProblemPanel();
+                updateConfirmGate();
+            });
+            ops->addWidget(undo);
+        }
+        m_problemLay->addWidget(card);
+    }
+}
+
+void PreprocessWindow::updateConfirmGate()
+{
+    if (!m_confirmBtn)
+        return;
+    const auto problems = collectSortProblems(m_groups);
+    int pending = 0;
+    for (const auto &p : problems)
+        if (!m_problemAcks.contains(problemKey(p)))
+            ++pending;
+    m_confirmBtn->setEnabled(pending == 0);
+    m_confirmBtn->setText(pending == 0
+        ? lang("✓ 确认顺序，继续拼接 →", "✓ Confirm order, merge →")
+        : lang("还剩 %1 处待确认", "%1 issue(s) to confirm").arg(pending));
+}
+
+QString PreprocessWindow::evidenceImageFor(const QString &filePath) const
+{
+    const OcrResult o = m_coord->ocrMap().value(filePath);
+    if (!o.firstFrameImg.isEmpty())
+        return o.firstFrameImg;
+    for (const auto &g : m_groups)
+        for (const auto &e : g.ordered)
+            if (e.filePath == filePath)
+                return e.thumbnailFirst;
+    return QString();
 }
 
 void PreprocessWindow::refreshReviewSummary()
@@ -1496,13 +1868,24 @@ void PreprocessWindow::onEvidenceReady(const QVector<SortGroup> &groups)
 {
     m_groups = groups;
     m_importProgress->setVisible(false);
-    rebuildReviewViews();
     if (m_pendingQuickMerge) {
         // 直接拼接链：列表顺序已就绪 → 自动确认并执行（不切校对页）
+        rebuildReviewViews();
         m_importStatus->setText(lang("就绪，开始拼接…", "Ready, merging…"));
         m_coord->confirmOrder();
         return;
     }
+    // P-60 GO 一键直通（方案 §4.1/§4.3，拍板 Q1A）：可信硬标准满足 →
+    // 跳过人工校对直接执行（估算段等在完成页/报告醒目标识，不静默）
+    if (canAutoProceed(groups)) {
+        rebuildReviewViews();   // 结果页统计与留痕仍用 m_groups
+        m_importStatus->setText(
+            lang("分析完成，顺序可信——直接开始拼接…",
+                 "Analysis done, order trusted — merging…"));
+        m_coord->startProcessing(collectProcessingOptions());
+        return;
+    }
+    rebuildReviewViews();
     m_importStatus->setText(lang("分析完成，请校对顺序（可直接开始拼接）",
                                  "Analysis done; review order (or merge directly)"));
 
@@ -1653,8 +2036,20 @@ void PreprocessWindow::onFinished(const PreprocessReport &report)
                  fmtDuration(m_runTimer.elapsed())));
         m_btnPlayOutput->setEnabled(true);
         // 源素材统计 + 统一帧率醒目提示（2026-08；与 operations.log 同源同公式）
-        m_resultStats->setText(buildProbeStatsText());
-        m_resultStats->setVisible(true);
+        {
+            QString statsText = buildProbeStatsText();
+            // P-60：估算段（位置为推算）完成页醒目标识（直通模式尤其需要）
+            int estTotal = 0;
+            for (const auto &g : m_groups)
+                estTotal += estimatedCount(g);
+            if (estTotal > 0)
+                statsText += lang("\n⚠ 其中 %1 段未识别到时间，位置为推算"
+                                  "（详见证据报告「衔接警告」列）",
+                                  "\n⚠ %1 clip(s) placed by estimation "
+                                  "(see report warnings column)").arg(estTotal);
+            m_resultStats->setText(statsText);
+            m_resultStats->setVisible(true);
+        }
 
         // v1.3.0 M2 任务8：案件导入模式 finalize 自动登记 ——
         // 会话目录/报告/输出引用 + sidecar 复制归类 sidecars/ 入 case.json

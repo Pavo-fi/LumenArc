@@ -198,7 +198,9 @@ def extract_frame(ffmpeg_path, video_path, out_png, ss=None, sseof=False,
 # ---------------------------------------------------------------------------
 def crop_blocks(img, wide=False):
     """6 OSD candidate blocks: 4 corners + top/bottom center (design §5.2.2).
-    wide=True doubles width for CJK date lines that exceed the narrow crop."""
+    wide=True doubles width for CJK date lines that exceed the narrow crop.
+    返回 (crop, rect, scale)：rect=(x0,y0,w,h) 为块在原图坐标（放大前）；
+    scale 为块内 OCR 坐标→rect 坐标的换算系数（CROP_MIN_WIDTH 放大时 <1）。"""
     h, w = img.shape[:2]
     cw = int(w * (CROP_W_RATIO_WIDE if wide else CROP_W_RATIO))
     cw = min(cw, w)
@@ -209,11 +211,12 @@ def crop_blocks(img, wide=False):
     crops = []
     for x, y in boxes:
         c = img[y:y + ch, x:x + cw]
+        scale = 1.0
         if c.shape[1] < CROP_MIN_WIDTH:
-            scale = CROP_MIN_WIDTH / max(c.shape[1], 1)
-            c = cv2.resize(c, None, fx=scale, fy=scale,
+            scale = max(c.shape[1], 1) / float(CROP_MIN_WIDTH)
+            c = cv2.resize(c, None, fx=1.0 / scale, fy=1.0 / scale,
                            interpolation=cv2.INTER_CUBIC)
-        crops.append(c)
+        crops.append((c, (x, y, cw, ch), scale))
     return crops
 
 
@@ -320,7 +323,12 @@ def merge_ocr_lines(items):
         line.sort(key=lambda it: it["x0"])
         text = " ".join(it["text"] for it in line)
         score = min(it["score"] for it in line)
-        out.append((text, score))
+        # 成员框并集（P-60 ROI 自学习：命中行位置回报）
+        bx0 = min(min(p[0] for p in it["box"]) for it in line)
+        by0 = min(min(p[1] for p in it["box"]) for it in line)
+        bx1 = max(max(p[0] for p in it["box"]) for it in line)
+        by1 = max(max(p[1] for p in it["box"]) for it in line)
+        out.append((text, score, (bx0, by0, bx1, by1)))
     return out
 
 
@@ -398,21 +406,26 @@ def parse_timestamp(text, filename=""):
 def _search_crops(crops, filename, use_binary):
     """Scan crops; 命中分级：full（完整日期）恒优先于 noyear/timeonly
     （窄裁剪碎片如 "11.1 03:18:01" 常被错配月日，full 行才是可信证据）。
-    full 命中即提前结束（控制成本）。"""
+    full 命中即提前结束（控制成本）。
+    crops 元素为 (img, rect, scale)（crop_blocks 契约；全帧传 ((img,整图,1.0),)）。
+    命中 cand 带 fbox：命中行在原图坐标（P-60 ROI 自学习位置回报）。"""
     best_full = None
     best_part = None
-    for crop in crops:
+    for crop, rect, scale in crops:
         enhanced, binary = preprocess(crop)
         variant = binary if use_binary else enhanced
-        for text, score in merge_ocr_lines(ocr_image(variant)):
+        for text, score, bbox in merge_ocr_lines(ocr_image(variant)):
             if score < MIN_OCR_SCORE:
                 continue
             parsed = parse_timestamp(text, filename)
             if parsed is None:
                 continue
             dt, ms, kind = parsed
+            rx, ry = rect[0], rect[1]
+            fbox = (rx + bbox[0] * scale, ry + bbox[1] * scale,
+                    rx + bbox[2] * scale, ry + bbox[3] * scale)
             cand = {"conf": score, "dt": dt, "ms": ms, "rawText": text,
-                    "kind": kind}
+                    "kind": kind, "fbox": fbox}
             if kind == "full":
                 if best_full is None or score > best_full["conf"]:
                     best_full = cand
@@ -451,19 +464,25 @@ def ocr_frame(frame_path, filename, roi=None):
             crop = cv2.resize(crop,
                               (OCR_MAX_WIDTH, int(ch * OCR_MAX_WIDTH / cw)),
                               interpolation=cv2.INTER_AREA)
-        best = _search_crops([crop], filename, use_binary=False)
+        best = _search_crops([(crop, (0, 0, cw, ch), 1.0)], filename,
+                             use_binary=False)
         if best is None:
-            best = _search_crops([crop], filename, use_binary=True)
+            best = _search_crops([(crop, (0, 0, cw, ch), 1.0)], filename,
+                                 use_binary=True)
+        if best is not None:
+            best["roiNorm"] = [float(roi[0]), float(roi[1]),
+                               float(roi[2]), float(roi[3])]
         return best
     if w > OCR_MAX_WIDTH:
         img = cv2.resize(img, (OCR_MAX_WIDTH, int(h * OCR_MAX_WIDTH / w)),
                          interpolation=cv2.INTER_AREA)
+    wh, ww = img.shape[:2]
     # 全帧优先：OSD 长行（含星期/通道前缀，如 2560 宽机身）常被 30% 窄裁剪
     # 切断；全帧 merge_ocr_lines 重组完整行，full-date 命中最可信。
     # 链：全帧 enhanced → 窄裁剪 enhanced → 窄裁剪 binary → 宽裁剪上角。
     # 任何 pass 出 full 即返回；都没有则取最优 partial（noyear/timeonly）。
     partial = None
-    for crops, use_bin in (([img], False),
+    for crops, use_bin in (([(img, (0, 0, ww, wh), 1.0)], False),
                            (crop_blocks(img), False),
                            (crop_blocks(img), True),
                            (crop_blocks(img, wide=True)[:2], False)):
@@ -471,10 +490,27 @@ def ocr_frame(frame_path, filename, roi=None):
         if best is None:
             continue
         if best.get("kind") == "full":
+            best["roiNorm"] = _fbox_to_roi_norm(best.get("fbox"), ww, wh)
             return best
         if partial is None or best["conf"] > partial["conf"]:
             partial = best
+    if partial is not None:
+        partial["roiNorm"] = _fbox_to_roi_norm(partial.get("fbox"), ww, wh)
     return partial
+
+
+def _fbox_to_roi_norm(fbox, w, h, mx_ratio=0.03, my_lines=1.0):
+    """命中行框 → 归一化 ROI（P-60 ROI 自学习）：横向外扩 3% 宽、纵向
+    外扩约 1 行高，clamp 到 [0,1]。fbox 缺失返回 None。"""
+    if not fbox or w <= 0 or h <= 0:
+        return None
+    x0, y0, x1, y1 = fbox
+    line_h = max(y1 - y0, 1.0)
+    x0 = max(0.0, x0 - w * mx_ratio)
+    x1 = min(float(w), x1 + w * mx_ratio)
+    y0 = max(0.0, y0 - line_h * my_lines)
+    y1 = min(float(h), y1 + line_h * my_lines)
+    return [x0 / w, y0 / h, x1 / w, y1 / h]
 
 
 def _ocr_frame_capped(frame_path, filename):
@@ -486,7 +522,8 @@ def _ocr_frame_capped(frame_path, filename):
     if w > OCR_MAX_WIDTH:
         img = cv2.resize(img, (OCR_MAX_WIDTH, int(h * OCR_MAX_WIDTH / w)),
                          interpolation=cv2.INTER_AREA)
-    return _search_crops([img], filename, use_binary=False)
+    return _search_crops([(img, (0, 0, img.shape[1], img.shape[0]), 1.0)],
+                         filename, use_binary=False)
 
 
 def vote(candidates):
@@ -543,8 +580,10 @@ def ocr_side(cands, filename, roi=None):
 # ---------------------------------------------------------------------------
 # Per-file pipeline (runs inside worker process)
 # ---------------------------------------------------------------------------
-def process_file(video_path, ffmpeg_path, frame_dir, duration_ms):
-    """Returns the per-file JSON dict (contract §6.4)."""
+def process_file(video_path, ffmpeg_path, frame_dir, duration_ms, roi=None):
+    """Returns the per-file JSON dict (contract §6.4).
+    roi: 可选归一化时间戳区域（P-60 ROI 自学习/人工框选重识别）——
+    指定时首尾帧均只识别该区域。"""
     os.makedirs(frame_dir, exist_ok=True)
     base = os.path.basename(video_path)
     out = {"file": video_path, "ok": False, "first": None, "last": None,
@@ -588,8 +627,8 @@ def process_file(video_path, ffmpeg_path, frame_dir, duration_ms):
     out["diag"]["tailExtractMs"] = tail_ms
 
     # --- OCR + incremental vote ---
-    w_first, conf_first, ch_first, used_first = ocr_side(head_cands, base)
-    w_last, conf_last, ch_last, used_last = ocr_side(tail_cands, base)
+    w_first, conf_first, ch_first, used_first = ocr_side(head_cands, base, roi)
+    w_last, conf_last, ch_last, used_last = ocr_side(tail_cands, base, roi)
 
     # bonus: tail vote failed but eof frame exists -> low-confidence evidence
     # (cost-capped: single narrow-enhanced pass, no wide fallback)
@@ -623,6 +662,7 @@ def process_file(video_path, ffmpeg_path, frame_dir, duration_ms):
             "impliedStartMs": int(implied_ms),
             "frameImg": img_path,
             "cropImg": "",
+            "roiNorm": chosen["raw"].get("roiNorm"),
         }
 
     out["first"] = side(w_first, conf_first, ch_first, used_first)
@@ -645,7 +685,8 @@ def _worker(video_path):
                                            ctx["durations"].get(video_path, 0))
         else:
             res = process_file(video_path, ctx["ffmpeg"], frame_dir,
-                               ctx["durations"].get(video_path, 0))
+                               ctx["durations"].get(video_path, 0),
+                               ctx.get("rois", {}).get(video_path))
         res["frameTag"] = tag
     except Exception as e:
         import traceback
@@ -787,11 +828,12 @@ def process_file_at(video_path, ffmpeg_path, frame_dir, duration_ms, positions,
 
 
 def _worker_init(ffmpeg_path, frame_root, durations, sha256,
-                 frames_only=frozenset()):
+                 frames_only=frozenset(), rois=None):
     # 模型加载惰性化（首个 OCR 调用时）：纯 frames-only 批次不加载模型
     _work_ctx.update({"ffmpeg": ffmpeg_path, "frame_root": frame_root,
                       "durations": durations, "sha256": sha256,
-                      "frames_only": set(frames_only)})
+                      "frames_only": set(frames_only),
+                      "rois": dict(rois or {})})
 
 
 def sha256_file(path):
@@ -945,7 +987,7 @@ def main():
                 max_workers=workers,
                 initializer=_worker_init,
                 initargs=(args.ffmpeg_path, frame_root, durations,
-                          args.with_sha256, frames_only)) as pool:
+                          args.with_sha256, frames_only, rois)) as pool:
             futs = {pool.submit(_worker, f): f for f in files}
             done = 0
             for fut in futures.as_completed(futs):

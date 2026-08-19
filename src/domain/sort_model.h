@@ -25,7 +25,8 @@ enum {
     Filename = 3,   // 文件名时间
     AbsStart = 4,   // 流内绝对起始墙钟（DHAV 等录像机固件写入）
     Creation = 5,   // 容器 creation_time 标签
-    Mtime = 6       // 文件修改时间
+    Mtime = 6,      // 文件修改时间
+    Estimated = 7   // P-60 夹缝插值/端点外延推算位（估算，提示级）
 };
 }
 
@@ -35,8 +36,17 @@ enum class SortWarningType {
     EvidenceConflict,   // 证据①②冲突，已按连续性误差裁决
     LowConfidence,      // 排序依据置信度低
     DurationDubious,    // 时长存疑（截断文件）
-    ManualInput         // 含人工手输时间戳
+    ManualInput,        // 含人工手输时间戳
+    EstimatedPlacement  // P-60 位置为推算（未识别段的夹缝/端点外延）
 };
+
+/// P-60 警告分级（方案 §4.3 自动放行硬标准）：阻断级 = 时间轴重叠冲突
+/// （两段互撞必须人工裁决；其余警告均为提示级——缺口是监控常态、
+/// 低置信/估算/人工均有留痕，不阻断一键直通）
+inline bool isBlockingWarning(SortWarningType t)
+{
+    return t == SortWarningType::Overlap;
+}
 
 struct SortWarning {
     SortWarningType type;

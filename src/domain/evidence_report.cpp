@@ -60,6 +60,13 @@ QString buildEvidenceCsv(const EvidenceReportInput &input)
                 linkWarn[path] = linkWarn.value(path).isEmpty()
                     ? w.detail
                     : linkWarn[path] + QStringLiteral("; ") + w.detail;
+            } else if (w.type == SortWarningType::EstimatedPlacement
+                       && w.indexA >= 0 && w.indexA < g.ordered.size()) {
+                // P-60：估算段（位置为推算）同样进报告留痕（取证可见性）
+                const QString &path = g.ordered[w.indexA].filePath;
+                linkWarn[path] = linkWarn.value(path).isEmpty()
+                    ? w.detail
+                    : linkWarn[path] + QStringLiteral("; ") + w.detail;
             }
         }
     }

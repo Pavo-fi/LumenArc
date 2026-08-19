@@ -67,6 +67,10 @@ public:
 
     /// 人工兜底：看图手输时间戳（UserConfirm 阶段，标记 source=Manual）
     void applyManualTimestamp(const QString &file, qint64 wallStartMs);
+    /// P-60 人工框选重识别（UserConfirm 阶段；问题卡「框一下画面上的时间」）：
+    /// 以人工 ROI 重跑 OCR——本段与其余未识别段一并套用（拍板 Q3：同一台
+    /// 录像机，一次框选全批受益；仅本次任务，不持久化）
+    void reOcrWithRoi(const QString &file, const QRectF &roiNorm);
     /// 拖拽微调：整组重排（UserConfirm 阶段，重算连续性提示）
     void applyGroupOrder(const QString &channel, const QStringList &orderedPaths);
     /// 人工分组调整（UserConfirm 阶段）
@@ -167,6 +171,11 @@ private:
     bool m_trimOverlap = false;                 // 用户选择修剪（默认关）
     QVector<CutPlan> m_cutPlans;                // 剪切计划（trimOverlap 时生效）
     QStringList m_overlapChannels;              // 检测到的重叠组（UI 提示）
+
+    // P-60 ROI 自学习（拍板 Q3：仅本次任务，不持久化）
+    bool m_roiRetryDone = false;    // 首轮后自学习重试仅一轮
+    bool m_reOcrBusy = false;       // 人工框选重识别进行中（防重入）
+    QRectF m_learnedRoi;            // 本批学到的命中位置（自学习或人工定版）
 };
 
 Q_DECLARE_METATYPE(QVector<OcrResult>)

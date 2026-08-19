@@ -304,6 +304,83 @@ QVector<SortGroup> smartSort(const QVector<ProbeResult> &probes,
                 g.warnings.append(w);
             }
         }
+
+        // --- P-60 未识别段兜底（方案 §4.4，拍板 Q1A）：最优证据仅 mtime 级/
+        // 无证据的段，存在唯一「时间空位」使前后连续 → 夹缝插入；无解/多解
+        // → 端点外延（mtime 近端优先，无 mtime 放尾；首段时长越界只能放尾）。
+        // 推算段标 Estimated（估算，提示级；占比参与 canAutoProceed 判定）。
+        // 已推算段即时并入骨架，支持相邻多段链式推算。
+        int unestimatedLeft = 0;
+        {
+            QVector<int> uid;              // 未识别段下标（ordered 内）
+            QVector<SortEntry> skel;       // 骨架（mtime 级以上证据段）
+            QMap<QString, qint64> mtimes;
+            for (const FileCtx &c : files)
+                if (c.mtime.epochMs > 0)
+                    mtimes.insert(c.filePath, c.mtime.epochMs);
+            for (int i = 0; i < g.ordered.size(); ++i) {
+                const SortEntry &e = g.ordered[i];
+                const bool identified = e.startMs > 0
+                    && e.sourceKind != SortEvidenceKind::None
+                    && e.sourceKind != SortEvidenceKind::Mtime;
+                if (identified)
+                    skel.append(e);
+                else
+                    uid.append(i);
+            }
+            if (!uid.isEmpty() && !skel.isEmpty()) {
+                const auto byStart = [](const SortEntry &a, const SortEntry &b) {
+                    return a.startMs < b.startMs;
+                };
+                std::stable_sort(skel.begin(), skel.end(), byStart);
+                for (int i : uid) {
+                    SortEntry e = g.ordered[i];
+                    if (e.durationMs > 0) {
+                        // 唯一空位探测：相邻骨架对间隙恰好容得下本段
+                        qint64 slot = -1;
+                        int slotCount = 0;
+                        for (int s = 1; s < skel.size(); ++s) {
+                            const qint64 gap = skel[s].startMs - skel[s - 1].endMs;
+                            if (qAbs(gap - e.durationMs) <= kContinuityToleranceMs) {
+                                slot = skel[s - 1].endMs;
+                                ++slotCount;
+                            }
+                        }
+                        if (slotCount == 1) {
+                            e.startMs = slot;   // 夹缝插入
+                        } else {
+                            // 端点外延
+                            const qint64 back = skel.last().endMs;
+                            const qint64 front = skel.first().startMs - e.durationMs;
+                            const qint64 mt = mtimes.value(e.filePath, 0);
+                            e.startMs = (front > 0 && mt > 0
+                                         && qAbs(mt - front) < qAbs(mt - back))
+                                        ? front : back;
+                        }
+                        e.endMs = e.startMs + e.durationMs;
+                        e.sourceKind = SortEvidenceKind::Estimated;
+                        e.conf = 0.5;
+                        skel.append(e);
+                        std::stable_sort(skel.begin(), skel.end(), byStart);
+                    } else {
+                        ++unestimatedLeft;   // 时长未知无法推算：原位保留
+                        skel.append(e);
+                    }
+                }
+                g.ordered = skel;
+                for (int pos = 0; pos < g.ordered.size(); ++pos) {
+                    if (g.ordered[pos].sourceKind != SortEvidenceKind::Estimated)
+                        continue;
+                    SortWarning w;
+                    w.type = SortWarningType::EstimatedPlacement;
+                    w.indexA = pos;
+                    w.detail = QStringLiteral("未识别到时间，位置为推算（请核对）");
+                    g.warnings.append(w);
+                }
+            } else {
+                unestimatedLeft = uid.size();
+            }
+        }
         for (int pos = 1; pos < g.ordered.size(); ++pos) {
             const SortEntry &a = g.ordered[pos - 1];
             const SortEntry &b = g.ordered[pos];
@@ -332,9 +409,90 @@ QVector<SortGroup> smartSort(const QVector<ProbeResult> &probes,
         }
         if (!anyOcr && !anyAbsStart)
             g.suspicious = true;        // 无 OCR 且无流内时间 → 强制人工确认
-        if (anyMtimeOnly)
-            g.suspicious = true;
+        if (anyMtimeOnly && unestimatedLeft > 0)
+            g.suspicious = true;        // 未识别段未能推算归位 → 人工确认
         out.append(g);
+    }
+    return out;
+}
+
+int estimatedCount(const SortGroup &group)
+{
+    int n = 0;
+    for (const auto &e : group.ordered)
+        if (e.sourceKind == SortEvidenceKind::Estimated)
+            ++n;
+    return n;
+}
+
+bool canAutoProceed(const QVector<SortGroup> &groups)
+{
+    // P-60 拍板：Q5A 多机位（多分组）一律人工确认；Q1A 估算段 ≤2 且 ≤20%
+    if (groups.size() != 1)
+        return false;
+    const SortGroup &g = groups[0];
+    if (g.suspicious)
+        return false;
+    for (const auto &w : g.warnings)
+        if (isBlockingWarning(w.type))
+            return false;
+    const int est = estimatedCount(g);
+    const int total = g.ordered.size();
+    return est <= 2 && est * 5 <= total;
+}
+
+QVector<SortProblem> collectSortProblems(const QVector<SortGroup> &groups)
+{
+    QVector<SortProblem> out;
+    for (int gi = 0; gi < groups.size(); ++gi) {
+        const SortGroup &g = groups[gi];
+        for (const auto &w : g.warnings) {
+            if (w.type != SortWarningType::Overlap)
+                continue;
+            SortProblem p;
+            p.kind = SortProblem::OverlapPair;
+            p.groupIndex = gi;
+            p.indexA = w.indexA;
+            p.indexB = w.indexB;
+            if (w.indexA >= 0 && w.indexA < g.ordered.size())
+                p.fileA = g.ordered[w.indexA].filePath;
+            if (w.indexB >= 0 && w.indexB < g.ordered.size())
+                p.fileB = g.ordered[w.indexB].filePath;
+            p.detail = w.detail;
+            out.append(p);
+        }
+        QVector<int> uid;   // 未识别且未推算归位的段
+        for (int i = 0; i < g.ordered.size(); ++i) {
+            const auto &e = g.ordered[i];
+            if (e.sourceKind == SortEvidenceKind::None
+                || e.sourceKind == SortEvidenceKind::Mtime)
+                uid.append(i);
+        }
+        if (g.suspicious && uid.size() > 3) {
+            // 大批量未识别：单张组级卡（框一段全批套用 / 确认按文件信息排）
+            SortProblem p;
+            p.kind = SortProblem::SuspiciousGroup;
+            p.groupIndex = gi;
+            p.fileA = g.ordered[uid.first()].filePath;   // 框选样本段
+            p.detail = QStringLiteral("本组 %1 段未识别").arg(uid.size());
+            out.append(p);
+        } else {
+            for (int i : uid) {
+                SortProblem p;
+                p.kind = SortProblem::Unidentified;
+                p.groupIndex = gi;
+                p.indexA = i;
+                p.fileA = g.ordered[i].filePath;
+                out.append(p);
+            }
+            if (g.suspicious) {
+                SortProblem p;
+                p.kind = SortProblem::SuspiciousGroup;
+                p.groupIndex = gi;
+                p.detail = QStringLiteral("存疑：证据不足或互相矛盾");
+                out.append(p);
+            }
+        }
     }
     return out;
 }

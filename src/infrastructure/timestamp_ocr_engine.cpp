@@ -107,7 +107,8 @@ bool TimestampOcrEngine::available(QString *errorDetail)
 void TimestampOcrEngine::run(const QStringList &paths, const QString &workDir,
                              const QMap<QString, qint64> &trustedDurationsMs,
                              const QString &evidenceDir, bool withSha256,
-                             const QStringList &framesOnlyFiles)
+                             const QStringList &framesOnlyFiles,
+                             const QMap<QString, QRectF> &rois)
 {
     if (isRunning())
         return;
@@ -156,6 +157,27 @@ void TimestampOcrEngine::run(const QStringList &paths, const QString &workDir,
             framesOnlyPath.clear();   // 写失败则退化为全量 OCR（不静默）
     }
 
+    // P-60 每文件归一化 ROI → JSON（键=normpath 后路径，与脚本一致；
+    // 写失败退化为全帧链路，不静默）
+    QString roiPath;
+    if (!rois.isEmpty()) {
+        QJsonObject roiObj;
+        for (auto it = rois.begin(); it != rois.end(); ++it) {
+            const QRectF &r = it.value();
+            if (!r.isValid())
+                continue;
+            roiObj.insert(QDir::toNativeSeparators(it.key()),
+                          QJsonArray{r.x(), r.y(),
+                                     r.x() + r.width(), r.y() + r.height()});
+        }
+        roiPath = workDir + QStringLiteral("/rois.json");
+        QFile f(roiPath);
+        if (f.open(QIODevice::WriteOnly | QIODevice::Text))
+            f.write(QJsonDocument(roiObj).toJson(QJsonDocument::Compact));
+        else
+            roiPath.clear();
+    }
+
     const QString script = QCoreApplication::applicationDirPath()
         + QStringLiteral("/probe_timestamps.py");
     QStringList args{QStringLiteral("-X"), QStringLiteral("utf8"),
@@ -170,6 +192,8 @@ void TimestampOcrEngine::run(const QStringList &paths, const QString &workDir,
         args << QStringLiteral("--with-sha256");
     if (!framesOnlyPath.isEmpty())
         args << QStringLiteral("--frames-only-json") << framesOnlyPath;
+    if (!roiPath.isEmpty())
+        args << QStringLiteral("--roi-json") << roiPath;
     args << paths;
 
     m_total = paths.size();
@@ -471,6 +495,12 @@ void TimestampOcrEngine::onFinished(int exitCode)
             r.startCropImg = first[QStringLiteral("cropImg")].toString();
             r.startFrameRelMs = static_cast<qint64>(
                 first[QStringLiteral("relMs")].toDouble());
+            // P-60 命中行位置回报（ROI 自学习）
+            const QJsonArray rn = first[QStringLiteral("roiNorm")].toArray();
+            if (rn.size() == 4)
+                r.hitRoi = QRectF(rn[0].toDouble(), rn[1].toDouble(),
+                                  rn[2].toDouble() - rn[0].toDouble(),
+                                  rn[3].toDouble() - rn[1].toDouble());
         }
         const QJsonObject last = o[QStringLiteral("last")].toObject();
         if (!last.isEmpty()) {

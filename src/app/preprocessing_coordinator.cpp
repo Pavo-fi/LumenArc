@@ -189,6 +189,9 @@ void PreprocessingCoordinator::begin(const QStringList &files)
         return;
     // 会话复位
     m_autoSortAfterProbe = false;
+    m_roiRetryDone = false;   // P-60 ROI 自学习随会话复位（仅本次任务）
+    m_reOcrBusy = false;
+    m_learnedRoi = QRectF();
     m_files = files;
     m_probes.clear();
     m_ocrs.clear();
@@ -387,6 +390,8 @@ void PreprocessingCoordinator::runAutoSort()
 {
     if (m_phase != TaskPhase::UserConfirm)
         return;
+    m_roiRetryDone = false;   // P-60 手动重跑：允许新一轮自学习
+    m_reOcrBusy = false;
     // OCR 依赖检测（§10.2：缺失 → 降级流程 + 引导安装，不静默）
     QString availErr;
     setPhase(TaskPhase::Ocr);
@@ -444,9 +449,85 @@ void PreprocessingCoordinator::onOcrFinished(const QVector<OcrResult> &results)
         return;
     for (const auto &r : results)
         m_ocrs.insert(r.filePath, r);
+
+    // P-60 同机位 ROI 自学习（方案 §4.2，拍板 Q3 仅本次任务）：首轮 OCR
+    // 结束后从成功段学命中位置，给未识别段用窄 ROI 重试一轮（小图推理快
+    // 且排除画面干扰文字）；第二轮回来 m_roiRetryDone=true 直通排序
+    if (!m_roiRetryDone && !m_reOcrBusy) {
+        QString learnedFrom;
+        if (!m_learnedRoi.isValid()) {
+            for (const auto &r : results) {
+                if (r.wallStartMs > 0 && r.hitRoi.isValid()
+                    && r.hitRoi.width() > 0.005 && r.hitRoi.height() > 0.003) {
+                    m_learnedRoi = r.hitRoi;
+                    learnedFrom = r.filePath;
+                    break;
+                }
+            }
+        }
+        if (m_learnedRoi.isValid()) {
+            QStringList retry;
+            QMap<QString, QRectF> rois;
+            for (const auto &r : results) {
+                if (r.wallStartMs > 0)
+                    continue;   // 已成功
+                if (m_probes.value(r.filePath).absStartEpochMs > 0)
+                    continue;   // frames-only 段（流内时间已可信，无需识别）
+                retry << r.filePath;
+                rois.insert(r.filePath, m_learnedRoi);
+            }
+            if (!retry.isEmpty()) {
+                m_roiRetryDone = true;
+                log(QStringLiteral(
+                        "[%1] ROI 自学习：以「%2」的命中位置重试 %3 个未识别段")
+                        .arg(tsLog(),
+                             learnedFrom.isEmpty() ? QStringLiteral("人工框选")
+                                                   : learnedFrom)
+                        .arg(retry.size()));
+                m_ocrEngine->run(retry, m_evidenceDir, buildDurMap({}),
+                                 m_evidenceDir + QStringLiteral("/frames"),
+                                 m_opts.withSha256, {}, rois);
+                return;   // 第二轮 onOcrFinished 合并后继续排序
+            }
+        }
+        m_roiRetryDone = true;   // 没有可学/可重试的 → 标记免回头
+    }
+    m_reOcrBusy = false;
+
     emit ocrDone(results);
     setPhase(TaskPhase::Sorting);
     runSorting();
+}
+
+void PreprocessingCoordinator::reOcrWithRoi(const QString &file,
+                                            const QRectF &roiNorm)
+{
+    if (m_phase != TaskPhase::UserConfirm || m_reOcrBusy || !roiNorm.isValid())
+        return;
+    m_reOcrBusy = true;
+    m_roiRetryDone = true;       // 人工定版轮即重试轮（onOcrFinished 直通排序）
+    m_learnedRoi = roiNorm;
+    // 本段 + 其余未识别段一并套用（同一台录像机，一次框选全批受益）
+    QStringList retry;
+    QMap<QString, QRectF> rois;
+    for (auto it = m_ocrs.begin(); it != m_ocrs.end(); ++it) {
+        const bool failed = it->wallStartMs <= 0
+            && m_probes.value(it.key()).absStartEpochMs <= 0;
+        if (failed || it.key() == file) {
+            retry << it.key();
+            rois.insert(it.key(), roiNorm);
+        }
+    }
+    if (!retry.contains(file)) {
+        retry << file;
+        rois.insert(file, roiNorm);
+    }
+    log(QStringLiteral("[%1] 人工框选重识别：%2 个段按框选位置重跑 OCR")
+            .arg(tsLog()).arg(retry.size()));
+    setPhase(TaskPhase::Ocr);   // 复用 Ocr 阶段进度/完成链路
+    m_ocrEngine->run(retry, m_evidenceDir, buildDurMap({}),
+                     m_evidenceDir + QStringLiteral("/frames"),
+                     m_opts.withSha256, {}, rois);
 }
 
 void PreprocessingCoordinator::runSorting()
@@ -454,11 +535,16 @@ void PreprocessingCoordinator::runSorting()
     QVector<ProbeResult> probes = m_probes.values();
     QVector<OcrResult> ocrs = m_ocrs.values();
     m_groups = smartSort(probes, ocrs, m_channelOverrides);
-    for (const auto &g : m_groups)
-        log(QStringLiteral("[%1] 排序：组 '%2' 含 %3 个文件%4")
+    for (const auto &g : m_groups) {
+        const int est = estimatedCount(g);
+        log(QStringLiteral("[%1] 排序：组 '%2' 含 %3 个文件%4%5")
                 .arg(tsLog(), g.channel).arg(g.ordered.size())
+                .arg(est > 0 ? QStringLiteral("（其中 %1 段位置为推算——未识别到"
+                                              "时间的夹缝插值/端点外延）").arg(est)
+                             : QString())
                 .arg(g.suspicious ? QStringLiteral("（存疑，需人工确认）")
                                   : QString()));
+    }
     setPhase(TaskPhase::UserConfirm);
     emit evidenceReady(m_groups);
 }

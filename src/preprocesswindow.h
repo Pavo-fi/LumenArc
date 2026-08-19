@@ -16,6 +16,7 @@
 
 #include <QMainWindow>
 #include <QMap>
+#include <QSet>
 #include <QVector>
 #include <QStringList>
 #include <QElapsedTimer>
@@ -24,6 +25,7 @@
 #include "domain/sort_model.h"
 
 class QStackedWidget;
+class QVBoxLayout;
 class QPushButton;
 class QLabel;
 class QTableWidget;
@@ -162,11 +164,24 @@ private:
     ClipTimelineWidget *m_timeline = nullptr;
     QScrollArea *m_cardScroll = nullptr;
     QWidget *m_cardHost = nullptr;
+    // P-60 B 路径问题卡区（方案 §4.5，拍板 Q4A）：拿不准才出现；
+    // 完整视图默认折叠（查看全部片段展开）；确认主按钮由问题清零门控
+    QWidget *m_problemPanel = nullptr;
+    QVBoxLayout *m_problemLay = nullptr;
+    QWidget *m_fullReview = nullptr;
+    QPushButton *m_showAllBtn = nullptr;
+    QPushButton *m_confirmBtn = nullptr;
+    QSet<QString> m_problemAcks;           // 已知悉问题键（u|path / o|a|b / s|channel）
     QVector<SortGroup> m_groups;
     QVector<ProbeResult> m_probeResults;   // 探测结果存档（结果页统计用，2026-08）
     QString m_selectedPath;
     QMap<QString, QPixmap> m_thumbCache;
     static constexpr int kThumbCacheCap = 96;
+
+    void rebuildProblemPanel();            // 问题卡重建（collectSortProblems → UI）
+    void updateConfirmGate();              // 确认主按钮门控（问题清零才可继续）
+    void roiPickForFile(const QString &filePath);   // 框选时间戳对话框
+    QString evidenceImageFor(const QString &filePath) const;  // 首帧证据图
 
     // 卡片拖拽换序状态
     QString m_dragPath;

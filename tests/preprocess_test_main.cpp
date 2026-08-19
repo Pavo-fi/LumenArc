@@ -271,6 +271,141 @@ static void testSmartSorterGroupingAndSuspicious()
     CHECK(smartSort({}, {}).isEmpty());
 }
 
+static void testSmartSorterEstimation()
+{
+    const qint64 t0 = epochOf(2024, 7, 1, 12, 0, 0);
+    // ---- 夹缝插值：b 无证据，恰容入 a-c 空位 ----
+    QVector<ProbeResult> probes{
+        makeProbe(QStringLiteral("a.mp4"), 60000),
+        makeProbe(QStringLiteral("b.mp4"), 60000),
+        makeProbe(QStringLiteral("c.mp4"), 60000),
+    };
+    QVector<OcrResult> ocrs{
+        makeOcr(QStringLiteral("a.mp4"), t0),
+        makeOcr(QStringLiteral("b.mp4"), 0),            // 识别失败
+        makeOcr(QStringLiteral("c.mp4"), t0 + 120000),  // 与 a 间留 60s 空位
+    };
+    auto groups = smartSort(probes, ocrs);
+    CHECK(groups.size() == 1);
+    {
+        const SortGroup &g = groups[0];
+        CHECK(g.ordered.size() == 3);
+        CHECK(g.ordered[0].filePath == QLatin1String("a.mp4"));
+        CHECK(g.ordered[1].filePath == QLatin1String("b.mp4"));   // 夹缝插入
+        CHECK(g.ordered[1].startMs == t0 + 60000);
+        CHECK(g.ordered[1].sourceKind == SortEvidenceKind::Estimated);
+        CHECK(g.ordered[2].filePath == QLatin1String("c.mp4"));
+        CHECK(!g.suspicious);                                     // 推算归位不存疑
+        CHECK(estimatedCount(g) == 1);
+        bool sawEst = false;
+        for (const auto &w : g.warnings)
+            if (w.type == SortWarningType::EstimatedPlacement && w.indexA == 1)
+                sawEst = true;
+        CHECK(sawEst);
+        // 插值后连续：不应有 Gap/Overlap
+        for (const auto &w : g.warnings)
+            CHECK(w.type != SortWarningType::Overlap
+                  && w.type != SortWarningType::Gap);
+        CHECK(!isBlockingWarning(SortWarningType::EstimatedPlacement));
+        CHECK(isBlockingWarning(SortWarningType::Overlap));
+    }
+
+    // ---- 端点外延（无空位 → 放尾） ----
+    ocrs[2].wallStartMs = t0 + 60000;   // a-c 连续无空位
+    groups = smartSort(probes, ocrs);
+    CHECK(groups[0].ordered[2].filePath == QLatin1String("b.mp4"));
+    CHECK(groups[0].ordered[2].startMs == t0 + 120000);   // 尾端外延
+    CHECK(groups[0].ordered[2].sourceKind == SortEvidenceKind::Estimated);
+
+    // ---- 端点外延放前（mtime 近端优先） ----
+    probes[1].fileMtimeMs = t0 - 30000;
+    groups = smartSort(probes, ocrs);
+    CHECK(groups[0].ordered[0].filePath == QLatin1String("b.mp4"));
+    CHECK(groups[0].ordered[0].startMs == t0 - 60000);    // 前端外延
+    CHECK(groups[0].ordered[0].sourceKind == SortEvidenceKind::Estimated);
+    probes[1].fileMtimeMs = 0;
+
+    // ---- canAutoProceed 硬标准（拍板 Q1A/Q5A） ----
+    {
+        // 10 段全 OCR：可信直通
+        QVector<ProbeResult> ps;
+        QVector<OcrResult> os;
+        for (int i = 0; i < 10; ++i) {
+            ps.append(makeProbe(QString::number(i) + ".mp4", 60000));
+            os.append(makeOcr(QString::number(i) + ".mp4", t0 + i * 60000));
+        }
+        auto gs = smartSort(ps, os);
+        CHECK(canAutoProceed(gs));
+        // 1 段识别失败 → 估算 1/10 ≤20% 仍直通
+        os[4].wallStartMs = 0;
+        os[4].source = OcrResult::None;
+        gs = smartSort(ps, os);
+        CHECK(estimatedCount(gs[0]) == 1);
+        CHECK(canAutoProceed(gs));
+        // 3 段失败 → 3 估算 >2 且 >20% → 停人工
+        os[5].wallStartMs = 0; os[5].source = OcrResult::None;
+        os[6].wallStartMs = 0; os[6].source = OcrResult::None;
+        gs = smartSort(ps, os);
+        CHECK(estimatedCount(gs[0]) == 3);
+        CHECK(!canAutoProceed(gs));
+        // 重叠 → 阻断
+        os = {};
+        for (int i = 0; i < 10; ++i)
+            os.append(makeOcr(QString::number(i) + ".mp4", t0 + i * 30000)); // 全部重叠
+        gs = smartSort(ps, os);
+        CHECK(!canAutoProceed(gs));
+        // 多分组 → 停人工（Q5A）
+        QVector<ProbeResult> ps2{
+            makeProbe(QStringLiteral("CH01_20240701_120000.mp4"), 60000),
+            makeProbe(QStringLiteral("CH02_20240701_120000.mp4"), 60000),
+        };
+        QVector<OcrResult> os2{
+            makeOcr(QStringLiteral("CH01_20240701_120000.mp4"), t0),
+            makeOcr(QStringLiteral("CH02_20240701_120000.mp4"), t0),
+        };
+        CHECK(!canAutoProceed(smartSort(ps2, os2)));
+    }
+
+    // ---- collectSortProblems（B 路径确认页数据源） ----
+    {
+        // 干净组：无问题
+        QVector<ProbeResult> ps{makeProbe(QStringLiteral("a.mp4"), 60000),
+                                makeProbe(QStringLiteral("b.mp4"), 60000)};
+        QVector<OcrResult> os{makeOcr(QStringLiteral("a.mp4"), t0),
+                              makeOcr(QStringLiteral("b.mp4"), t0 + 60000)};
+        CHECK(collectSortProblems(smartSort(ps, os)).isEmpty());
+        // 重叠 → OverlapPair 卡（阻断级）
+        os[1].wallStartMs = t0 + 30000;
+        auto probs = collectSortProblems(smartSort(ps, os));
+        CHECK(probs.size() == 1
+              && probs[0].kind == SortProblem::OverlapPair
+              && probs[0].fileA == QLatin1String("a.mp4")
+              && probs[0].fileB == QLatin1String("b.mp4"));
+        // 估算段不算问题（提示级）：b 推算归位后问题清单为空
+        QVector<OcrResult> osGap{makeOcr(QStringLiteral("a.mp4"), t0),
+                                 makeOcr(QStringLiteral("b.mp4"), 0)};
+        CHECK(collectSortProblems(smartSort(ps, osGap)).isEmpty());
+        // 大批量未识别（5 段全无证据）→ 单张组级卡（防卡片海）
+        QVector<ProbeResult> ps5;
+        for (int i = 0; i < 5; ++i)
+            ps5.append(makeProbe(QStringLiteral("u%1.mp4").arg(i), 60000));
+        probs = collectSortProblems(smartSort(ps5, {}));
+        CHECK(probs.size() == 1
+              && probs[0].kind == SortProblem::SuspiciousGroup
+              && !probs[0].fileA.isEmpty());
+        // 少量未识别（2 段全组无证据）→ 逐段卡 + 组级存疑卡
+        QVector<ProbeResult> psU{makeProbe(QStringLiteral("u1.mp4"), 60000),
+                                 makeProbe(QStringLiteral("u2.mp4"), 60000)};
+        probs = collectSortProblems(smartSort(psU, {}));
+        int nU = 0, nS = 0;
+        for (const auto &p : probs) {
+            if (p.kind == SortProblem::Unidentified) ++nU;
+            if (p.kind == SortProblem::SuspiciousGroup) ++nS;
+        }
+        CHECK(nU == 2 && nS == 1);
+    }
+}
+
 static void testSmartSorterConflictAdjudication()
 {
     const qint64 t0 = epochOf(2024, 7, 1, 12, 0, 0);
@@ -667,6 +802,7 @@ int main(int argc, char **argv)
     testAbsStartEvidence();
     testSmartSorterBasic();
     testSmartSorterGroupingAndSuspicious();
+    testSmartSorterEstimation();
     testSmartSorterConflictAdjudication();
     testTextUtils();
     testPrecheck();

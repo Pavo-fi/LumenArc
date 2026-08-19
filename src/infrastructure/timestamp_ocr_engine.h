@@ -49,10 +49,13 @@ public:
     /// evidenceDir：证据帧持久目录（空 = 临时目录，任务结束清理）。
     /// framesOnlyFiles：仅截取证据帧、跳过 OCR 推理的文件（流内绝对时间
     /// 已可信，识别仅徒增耗时——现场反馈②）。
+    /// rois：P-60 每文件归一化时间戳区域（ROI 自学习重试/人工框选重识别；
+    /// 键=文件路径，空 = 全帧自适应链路）
     void run(const QStringList &paths, const QString &workDir,
              const QMap<QString, qint64> &trustedDurationsMs,
              const QString &evidenceDir, bool withSha256,
-             const QStringList &framesOnlyFiles = {});
+             const QStringList &framesOnlyFiles = {},
+             const QMap<QString, QRectF> &rois = {});
 
     /// 校时取样（V1 方案 §3.2）：单文件多位置，每位置 ±0.25s 候选帧投票，
     /// 产出每位置一个墙钟测点（TimeCalibration::Sample，relMs 为实测真值）。
