@@ -14,6 +14,7 @@
 #pragma once
 
 #include <QObject>
+#include <QMutex>
 #include <QRect>
 #include <QRectF>
 #include <QPolygon>
@@ -94,8 +95,18 @@ signals:
 
 private:
     static QRectF readTimestampRoiRegistry(const QString &videoPath);
+    void runSaveLoop(TimelineModel *m);   // 保存工作线程（单飞+尾追）
 
     CaseManager *m_cases = nullptr;      // 不持有
     TimelineModel *m_model = nullptr;    // 不持有；空 → 惰性临时模型
     TimelineModel *model();
+
+    // 保存合并（P-59：校时落盘偶发丢失实锤——在途旧请求与最新请求并发，
+    // 提交顺序倒置时旧请求后落盘盖掉新校时）：单飞+尾追——保存中来的新
+    // 请求只留最新，在途完成后拾取再写一次；最新请求必胜
+    QMutex m_saveMutex;
+    bool m_saveRunning = false;
+    bool m_savePending = false;
+    QString m_savePendingPath;
+    VlaSaveRequest m_savePendingReq;
 };

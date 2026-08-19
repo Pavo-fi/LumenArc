@@ -531,6 +531,14 @@ MainWindow::MainWindow(QWidget *parent)
     m_caseManager = new CaseManager(this);
     // v1.9.0 P-31 T1：工程读写服务（vla/CSV/时间戳ROI/徽标）
     m_projectIo = new ProjectIO(m_caseManager, m_timelineModel, this);
+    // C2 不静默：后台保存失败上表面（此前 vlaSaved 无消费者，写盘失败用户无感）
+    connect(m_projectIo, &ProjectIO::vlaSaved, this,
+            [this](const QString &path, bool ok) {
+                if (!ok)
+                    showOperationStatus(
+                        lang("⚠ 分析结果保存失败：%1", "⚠ Failed to save: %1")
+                            .arg(QFileInfo(path).fileName()));
+            });
     // 校时证据帧目录分流（M2 任务8）：入案→案件 evidence/calibration/V###；
     // 未入案/无案件→CaseManager 内部回落老路径 LumenArc_Calibration
     m_calibrationService->setEvidenceDirResolver(

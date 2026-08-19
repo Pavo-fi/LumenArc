@@ -55,16 +55,43 @@ bool ProjectIO::saveVlaNow(const QString &path, const VlaSaveRequest &req)
 
 void ProjectIO::saveVlaAsync(const QString &path, const VlaSaveRequest &req)
 {
-    QDir().mkpath(QFileInfo(path).absolutePath());
     // 全部参数为值拷贝（各 model 的 getter 返回副本），后台线程安全
     TimelineModel *m = model();
-    QtConcurrent::run([this, m, path, req]() {
+    {
+        QMutexLocker lock(&m_saveMutex);
+        m_savePendingPath = path;
+        m_savePendingReq = req;      // 覆盖式登记：只留最新请求（合并写）
+        m_savePending = true;
+        if (m_saveRunning)
+            return;                  // 在途保存收尾时会拾取最新请求
+        m_saveRunning = true;
+    }
+    QtConcurrent::run([this, m]() { runSaveLoop(m); });
+}
+
+void ProjectIO::runSaveLoop(TimelineModel *m)
+{
+    for (;;) {
+        QString path;
+        VlaSaveRequest req;
+        {
+            QMutexLocker lock(&m_saveMutex);
+            if (!m_savePending) {
+                m_saveRunning = false;
+                return;
+            }
+            path = m_savePendingPath;
+            req = m_savePendingReq;
+            m_savePending = false;
+        }
+        QDir().mkpath(QFileInfo(path).absolutePath());
         const bool ok = m->saveToFile(path, req.regions, req.calibration,
-                                      req.magnifierRect, req.labels, req.pinnedRect,
-                                      req.fusion, req.polygons, req.guideLines,
-                                      req.regionRoiIds, req.polygonRoiIds);
+                                      req.magnifierRect, req.labels,
+                                      req.pinnedRect, req.fusion, req.polygons,
+                                      req.guideLines, req.regionRoiIds,
+                                      req.polygonRoiIds);
         emit vlaSaved(path, ok);   // 工作线程发射 → 槽侧自动队列回 UI 线程
-    });
+    }
 }
 
 bool ProjectIO::loadVla(const QString &path, LoadedVla *out)

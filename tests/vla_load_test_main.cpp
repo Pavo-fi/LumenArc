@@ -491,6 +491,55 @@ static int testV10UnknownChannelPassthrough()
     return g_v10Failures;
 }
 
+// ---------------------------------------------------------------------------
+// P-59 用户实测实锤：校时先于分析时旧 saveToFile 快照空即拒写 → 校时丢失。
+// 修复后：校时有效即可写（META+空 TMS/LUM 合法 v10）；真正全空（无分析且
+// 无有效校时）→ 删残留旧文件（清除校时语义落盘，重开不复活）
+// ---------------------------------------------------------------------------
+static int testV10CalibrationOnly()
+{
+    QDir tmp(QDir::tempPath() + QStringLiteral("/lumenarc_vla_calonly"));
+    tmp.removeRecursively();
+    QDir().mkpath(tmp.path());
+    const QString path = tmp.path() + QStringLiteral("/cal_only.vla");
+
+    TimeCalibration cal;
+    cal.source = TimeCalibration::Source::Manual;
+    cal.dateKnown = true;
+    cal.offsetMs = 1784700002000LL;
+
+    // ① 空快照 + 有效校时 → 写成；装载回读校时完整、零数据点
+    TimelineModel empty;
+    V10CHECK(empty.saveToFile(path, {}, cal, {}, {}, {}, {}, {}, {}, {}, {}),
+             "cal-only: save succeeds with empty snapshot");
+    V10CHECK(QFile::exists(path), "cal-only: file exists");
+    TimelineModel back;
+    TimeCalibration cal2;
+    V10CHECK(back.loadFromFile(path, nullptr, &cal2, nullptr, nullptr, nullptr,
+                               nullptr, nullptr, nullptr, nullptr, nullptr),
+             "cal-only: reload ok");
+    V10CHECK(cal2.isValid() && cal2.isEffective()
+             && cal2.offsetMs == 1784700002000LL && cal2.dateKnown,
+             "cal-only: calibration roundtrips");
+    V10CHECK(back.snapshot().timestamps.isEmpty()
+             && back.snapshot().lumRows().isEmpty(),
+             "cal-only: zero data points tolerated");
+
+    // ② 清除校时（无分析+无效校时）→ 删残留文件（不复活）
+    TimelineModel empty2;
+    V10CHECK(empty2.saveToFile(path, {}, TimeCalibration(), {}, {}, {}, {}, {},
+                               {}, {}, {}),
+             "cal-clear: save reports ok (removal path)");
+    V10CHECK(!QFile::exists(path), "cal-clear: stale file removed");
+
+    // ③ 无中生有也不建文件（全空且无旧文件 → 静默成功不落盘）
+    V10CHECK(!QFile::exists(path), "cal-clear: no phantom file created");
+
+    fprintf(stderr, "[v10-calonly] total: %d checks, %d failures\n",
+            g_v10Checks, g_v10Failures);
+    return g_v10Failures;
+}
+
 
 int main(int argc, char **argv)
 {
@@ -524,6 +573,7 @@ int main(int argc, char **argv)
     int v10Fail = 0;
     v10Fail += testV10RoundTripAndChain();
     v10Fail += testV10UnknownChannelPassthrough();
+    v10Fail += testV10CalibrationOnly();
 
     RoiModel rm;
     RoiModel pm;

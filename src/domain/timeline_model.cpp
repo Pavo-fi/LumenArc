@@ -252,8 +252,17 @@ bool TimelineModel::saveToFile(const QString &filePath,
 {
     QReadLocker lock(&m_lock);
 
-    if (m_snapshot.isEmpty() && !m_snapshot.hasAudio())
-        return false;
+    // P-59 用户实测实锤：校时先于分析时旧判定（快照空即拒写）直接丢校时
+    // ——校时有效即可写（META+空 TMS/LUM 是合法 v10，读端容忍零计数）；
+    // 真正全空（无分析且无有效校时，如「清除校时」后）→ 串行区内删除
+    // 残留旧文件再返回（清除语义落盘，重开不复活旧校时）
+    if (m_snapshot.isEmpty() && !m_snapshot.hasAudio() && !calibration.isValid()) {
+        lock.unlock();
+        QMutexLocker writeLock(&g_vlaWriteMutex);
+        if (QFile::exists(filePath))
+            QFile::remove(filePath);
+        return true;
+    }
 
     QJsonObject root;
     root["version"] = 10;

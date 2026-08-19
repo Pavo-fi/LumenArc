@@ -70,23 +70,27 @@ QVector<CamInventoryItem> buildCamInventory(const CaseManager &cm)
         it.displayName = v.cameraLabel.isEmpty()
             ? QFileInfo(v.originalPath).fileName() : v.cameraLabel;
         // 校时实读案内 .vla（SSOT，R5；不看徽标缓存）。已校时路顺手填妥
-        // SyncLaneData（勾选即可入列，避免开始后二次读盘）
-        if (!v.vlaRelPath.isEmpty()) {
-            const QString vlaPath = dir.absoluteFilePath(v.vlaRelPath);
-            if (QFile::exists(vlaPath)) {
-                TimelineModel model;
-                TimeCalibration cal;
-                if (model.loadFromFile(vlaPath, nullptr, &cal)
-                    && cal.isValid() && cal.isEffective()) {
-                    it.calibrated = true;
-                    it.lane.id = v.id;
-                    it.lane.path = it.path;
-                    it.lane.displayName = it.displayName;
-                    it.lane.calibrated = true;
-                    it.lane.temporary = false;
-                    it.lane.cal = cal;
-                    it.lane.durationMs = 0;  // 真实时长由引擎加载后回报（R4）
-                }
+        // SyncLaneData（勾选即可入列，避免开始后二次读盘）。
+        // 路径分流与 CaseManager::vlaPathFor 同语义：登记路径优先；
+        // vlaRelPath 空（旧数据产物）回落源旁 .vla
+        QString vlaPath;
+        if (!v.vlaRelPath.isEmpty())
+            vlaPath = dir.absoluteFilePath(v.vlaRelPath);
+        else if (it.pathExists)
+            vlaPath = it.path + QStringLiteral(".vla");
+        if (!vlaPath.isEmpty() && QFile::exists(vlaPath)) {
+            TimelineModel model;
+            TimeCalibration cal;
+            if (model.loadFromFile(vlaPath, nullptr, &cal)
+                && cal.isValid() && cal.isEffective()) {
+                it.calibrated = true;
+                it.lane.id = v.id;
+                it.lane.path = it.path;
+                it.lane.displayName = it.displayName;
+                it.lane.calibrated = true;
+                it.lane.temporary = false;
+                it.lane.cal = cal;
+                it.lane.durationMs = 0;  // 真实时长由引擎加载后回报（R4）
             }
         }
         out.append(it);

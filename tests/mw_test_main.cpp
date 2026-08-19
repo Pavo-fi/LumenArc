@@ -28,6 +28,7 @@
 #include <QDir>
 #include <QFile>
 #include <QWheelEvent>
+#include <QElapsedTimer>
 #include <QSlider>
 #include <QCheckBox>
 #include <QPushButton>
@@ -133,6 +134,35 @@ static void testProjectIo()
           "pio: timestamp roi registry roundtrip");
     CHECK(!pio.savedTimestampRoi(tmp.path() + "/never.mp4").isValid(),
           "pio: unknown -> invalid");
+
+    // P-59 保存合并（最新请求必胜）：连发旧/新两请求，在途完成后尾追拾取
+    // 最新——落盘结果必须是最新校时（顺序倒置旧请求盖新校时的修复防线）；
+    // 同时覆盖 Fix A：模型有数据与否均可，校时随请求值拷贝落盘
+    {
+        const QString cp = tmp.path() + "/coalesce.vla";
+        ProjectIO::VlaSaveRequest reqA, reqB;
+        reqA.calibration.source = TimeCalibration::Source::Manual;
+        reqA.calibration.offsetMs = 111;
+        reqB.calibration.source = TimeCalibration::Source::Manual;
+        reqB.calibration.offsetMs = 222;
+        pio.saveVlaAsync(cp, reqA);
+        pio.saveVlaAsync(cp, reqB);
+        QElapsedTimer wait;
+        wait.start();
+        bool landed = false;
+        while (wait.elapsed() < 3000) {
+            QCoreApplication::processEvents();
+            TimelineModel chk;
+            TimeCalibration got;
+            if (chk.loadFromFile(cp, nullptr, &got, nullptr, nullptr, nullptr,
+                                 nullptr, nullptr, nullptr, nullptr, nullptr)
+                && got.offsetMs == 222) {
+                landed = true;
+                break;
+            }
+        }
+        CHECK(landed, "pio: coalesced save lands latest calibration");
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -588,6 +618,34 @@ static void testMultiCamCaseFlow(QApplication &app)
         if (b->text().contains(QStringLiteral("开始"))) { startBtn3 = b; break; }
     CHECK(!startBtn3->isEnabled(),
           "p59: 3 lanes with uncalibrated blocked (inline guidance)");
+
+    // ---- ④ 校时落盘修复（Fix A 端到端）：V003 校时独占 .vla（无分析数据
+    //      旧逻辑拒写丢校时）→ 刷新清单 → V003 变 ✅ 已校时并被默认勾 ----
+    {
+        const auto *v3 = cm.videoById(id3);
+        TimeCalibration cal;
+        cal.source = TimeCalibration::Source::Manual;
+        cal.dateKnown = true;
+        cal.offsetMs = 1700000060000LL;
+        TimelineModel emptyModel;   // 空快照 + 有效校时（Fix A 前拒写）
+        CHECK(emptyModel.saveToFile(QDir(cm.caseDir()).filePath(v3->vlaRelPath),
+                                    {}, cal, {}, {}, {}, {}, {}, {}, {}, {}),
+              "p59: calibration-only vla saves (empty snapshot)");
+    }
+    QMetaObject::invokeMethod(win, "onRefreshPicker");
+    pump(app, 100);
+    {
+        const auto checks4 = win->findChildren<QCheckBox *>();
+        CHECK(checks4.size() == 4, "p59: picker refreshed in place");
+        CHECK(checks4[2]->isChecked(),
+              "p59: V003 becomes calibrated after refresh (pre-checked)");
+        QPushButton *startBtn4 = nullptr;
+        for (auto *b : win->findChildren<QPushButton *>())
+            if (b->text().contains(QStringLiteral("开始"))) { startBtn4 = b; break; }
+        // 4 路全校时（V001+V002+V003+P001 默认全勾）→ 放行模式A
+        CHECK(startBtn4->isEnabled(),
+              "p59: 4 calibrated lanes allowed after refresh");
+    }
 
     win->close();
     delete win;
