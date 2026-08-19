@@ -609,6 +609,92 @@ static void testLateVideoProbeLimit()
             snap.pointCount());
 }
 
+// ============================================================================
+// 6. P-59 回归：拼接产物音频 PTS 空档补齐（用户实测实锤：concat 直拷在拼点
+//    插 ~0.7s 音频空档，分析纯按解码序拼 PCM 会塌掉空档 → 音量/语谱轴渐进
+//    提前，58 分钟产物 37 分钟处偏早 27s）。合成 MKV：8kHz mono pcm_s16le
+//    两段 440Hz 正弦（各 0.512s），第二段 PTS 跳至 1.5s（空档 ~0.988s）。
+//    修复前总时长 ~1.02s（空档塌掉）；修复后 ~2.012s、空档区静音、两段分列
+// ============================================================================
+static void testAudioPtsGapPadding()
+{
+    const QString path = QDir::temp().filePath(
+        QStringLiteral("lumenarc_gaptest.mkv"));
+    QFile::remove(path);
+
+    AVFormatContext *oc = nullptr;
+    const QByteArray u8 = path.toUtf8();
+    bool ok = avformat_alloc_output_context2(&oc, nullptr, "matroska", u8.constData()) >= 0
+              && oc != nullptr;
+    CHECK(ok, "gaptest: mkv muxer alloc");
+    if (!ok)
+        return;
+    AVStream *st = avformat_new_stream(oc, nullptr);
+    st->codecpar->codec_type = AVMEDIA_TYPE_AUDIO;
+    st->codecpar->codec_id = AV_CODEC_ID_PCM_S16LE;
+    st->codecpar->sample_rate = 8000;
+    av_channel_layout_default(&st->codecpar->ch_layout, 1);
+    st->time_base = {1, 8000};
+    ok = avio_open(&oc->pb, u8.constData(), AVIO_FLAG_WRITE) >= 0
+         && avformat_write_header(oc, nullptr) >= 0;
+    CHECK(ok, "gaptest: mkv header");
+    if (ok) {
+        // 注意：matroska 写头后会把流 time_base 收编为 1/1000——按实际
+        // time_base 打点（毫秒 → tb 换算），否则 pts 被当毫秒读出大数倍
+        const AVRational tb = st->time_base;
+        auto ms2tb = [&](int64_t ms) {
+            return av_rescale_q(ms, {1, 1000}, tb);
+        };
+        const double PI2 = 6.283185307179586;
+        int16_t samples[1024];
+        for (int i = 0; i < 8; ++i) {
+            for (int j = 0; j < 1024; ++j)
+                samples[j] = int16_t(20000.0
+                    * std::sin(PI2 * 440.0 * double((i * 1024 + j) % 8000) / 8000.0));
+            AVPacket *p = av_packet_alloc();
+            av_new_packet(p, int(sizeof(samples)));
+            memcpy(p->data, samples, sizeof(samples));
+            // 帧 0-3：0/128/256/384ms（0~0.512s）；帧 4-7：1500/1628/1756/1884ms
+            // （空档 0.988s——模拟拼点）
+            p->pts = ms2tb((i < 4) ? int64_t(i) * 128 : 1500 + int64_t(i - 4) * 128);
+            p->dts = p->pts;
+            p->duration = ms2tb(128);
+            p->stream_index = st->index;
+            av_interleaved_write_frame(oc, p);   // 成功即接管所有权
+        }
+        av_write_trailer(oc);
+    }
+    if (oc->pb)
+        avio_closep(&oc->pb);
+    avformat_free_context(oc);
+
+    LibavAnalysisEngine eng;
+    AnalysisSnapshot snap;
+    bool done = false, failed = false;
+    QEventLoop loop;
+    QObject::connect(&eng, &IAnalysisEngine::analysisFinished,
+                     &loop, [&](const AnalysisSnapshot &s) { snap = s; done = true; loop.quit(); });
+    QObject::connect(&eng, &IAnalysisEngine::analysisFailed,
+                     &loop, [&](const QString &) { failed = true; loop.quit(); });
+    eng.startAudioAnalysis(path);
+    QTimer::singleShot(30000, &loop, &QEventLoop::quit);
+    loop.exec();
+    CHECK(done && !failed && snap.hasAudio(), "gaptest: analyze ok");
+    const auto &vol = snap.audioData().volume;
+    // 期望总时长 ≈ 2.012s → 音量帧数 ≈ 2.012*24000/512 ≈ 94（修复前 ~46）
+    fprintf(stderr, "[gaptest] volume frames = %lld (expect ~94)\n",
+            (long long)vol.size());
+    CHECK(vol.size() >= 85 && vol.size() <= 105,
+          "gaptest: timeline spans full PTS incl. gap");
+    if (vol.size() > 90) {
+        // 空档区静音（~1.0s → idx ≈ 47）；两段正弦响亮（0.25s→11；1.75s→82）
+        CHECK(vol[47] < 0.05, "gaptest: gap region silent");
+        CHECK(vol[11] > 0.5, "gaptest: tone A present at 0.25s");
+        CHECK(vol[82] > 0.5, "gaptest: tone B present at 1.75s (not collapsed)");
+    }
+    QFile::remove(path);
+}
+
 int main(int argc, char **argv)
 {
     QCoreApplication app(argc, argv);
@@ -617,6 +703,7 @@ int main(int argc, char **argv)
     testRasterizeDegenerate();
     testScaleRect();
     testLateVideoProbeLimit();
+    testAudioPtsGapPadding();
 
     QString video = QStringLiteral("build_tmp/caltest/basic.mp4");
     QString audioVideo = QStringLiteral("build_tmp/caltest/audio_varied.mp4");

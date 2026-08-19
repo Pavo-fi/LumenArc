@@ -725,6 +725,12 @@ bool LibavAnalysisEngine::analyzeAudioOne(const QString &path, AudioData *out)
     AVPacket *pkt = av_packet_alloc();
     AVFrame *frame = av_frame_alloc();
     bool flushed = false;
+    // 拼点空档追踪（P-59 用户实测实锤：前处理拼接产物走 concat 直拷，
+    // 每个拼点音频 PTS 插入 ~0.7s 空档对齐墙钟——播放端按 PTS 走，音画正确；
+    // 而本分析此前纯按解码序拼 PCM，把空档塌掉 → 音量曲线/语谱时间轴渐进
+    // 提前（实测 58 分钟产物 37 分钟处偏早 27s、尾部累计 ~56s）。修复：
+    // 逐帧比对 PTS 与「上一帧 PTS+时长」的期望位置，超出阈值即补等量静音）
+    int64_t expectPts = AV_NOPTS_VALUE;   // 期望下一帧起点（ast->time_base）
     while (!m_cancel.load()) {
         if (!flushed) {
             const int r = av_read_frame(fmt, pkt);
@@ -745,6 +751,22 @@ bool LibavAnalysisEngine::analyzeAudioOne(const QString &path, AudioData *out)
         }
         const int d = avcodec_receive_frame(dec, frame);
         if (d == 0) {
+            const int64_t fpts = (frame->pts != AV_NOPTS_VALUE)
+                ? frame->pts : frame->best_effort_timestamp;
+            // 拼点空档：本帧起点晚于期望位置 → 先补等量静音（>20ms 起补，
+            // 单段上限 30s 防御；与下方首偏移补齐同策略）
+            if (fpts != AV_NOPTS_VALUE && expectPts != AV_NOPTS_VALUE
+                && fpts > expectPts) {
+                const double gapMs = double(fpts - expectPts)
+                    * av_q2d(ast->time_base) * 1000.0;
+                if (gapMs > 20.0) {
+                    const int padN = int(std::lround(
+                        qMin(gapMs, 30000.0) * 24.0));   // 24 样本/ms@24k
+                    const int old = pcm.size();
+                    pcm.resize(old + padN);
+                    memset(pcm.data() + old, 0, padN * sizeof(float));
+                }
+            }
             // AAC priming samples：ffmpeg CLI 默认 trim（skip_samples 侧数据），
             // 引擎必须同样丢弃，否则 PCM 与 Python 通路错位（实测 corr 0.57）
             int skip = 0;
@@ -768,6 +790,14 @@ bool LibavAnalysisEngine::analyzeAudioOne(const QString &path, AudioData *out)
                 memcpy(pcm.data() + old, buf.constData() + begin,
                        (got - begin) * sizeof(float));
             }
+            // 期望位置推进：本帧 PTS + 帧时长（输入率样本数换算到流 time_base）；
+            // PTS 缺失帧按期望位置自然顺延（无校可依，维持连续假设）
+            const int64_t durTb = av_rescale_q(frame->nb_samples,
+                {1, frame->sample_rate}, ast->time_base);
+            if (fpts != AV_NOPTS_VALUE)
+                expectPts = fpts + durTb;
+            else if (expectPts != AV_NOPTS_VALUE)
+                expectPts += durTb;
             av_frame_unref(frame);
             continue;
         }
