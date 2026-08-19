@@ -75,6 +75,22 @@ void MultiCamPlaybackWindow::closeEvent(QCloseEvent *event)
     QDialog::closeEvent(event);
 }
 
+void MultiCamPlaybackWindow::changeEvent(QEvent *event)
+{
+    QDialog::changeEvent(event);
+    if (event->type() == QEvent::WindowStateChange)
+        updateMaxButtonText();   // 最大化/窗口化文案随窗口状态联动
+}
+
+void MultiCamPlaybackWindow::updateMaxButtonText()
+{
+    if (!m_maxBtn)
+        return;
+    m_maxBtn->setText(isMaximized()
+        ? lang("🗗 窗口化", "🗗 Windowed")
+        : lang("⛶ 最大化", "⛶ Maximize"));
+}
+
 // ---------------------------------------------------------------------------
 // UI 骨架（P-59 双页栈：机位勾选面板 ↔ 播放页）
 // ---------------------------------------------------------------------------
@@ -395,6 +411,20 @@ void MultiCamPlaybackWindow::buildPlayPage()
     m_statusLabel->setStyleSheet(
         QStringLiteral("color:%1;").arg(Theme::TextSecond));
     bar->addWidget(m_statusLabel);
+
+    // 最大化/窗口化切换（用户布置）：系统标题栏最大化之外的显式按钮，
+    // 多路铺屏看细节时一键铺满；文案随窗口状态联动（changeEvent）
+    m_maxBtn = new QPushButton(this);
+    m_maxBtn->setFocusPolicy(Qt::NoFocus);
+    m_maxBtn->setToolTip(lang("最大化 / 窗口化切换", "Maximize / restore"));
+    connect(m_maxBtn, &QPushButton::clicked, this, [this]() {
+        if (isMaximized())
+            showNormal();
+        else
+            showMaximized();
+    });
+    updateMaxButtonText();
+    bar->addWidget(m_maxBtn);
     root->addLayout(bar);
 
     // 瓦片网格
