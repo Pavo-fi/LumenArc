@@ -109,7 +109,7 @@ MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent)
 {
     loadLanguage();
-    setWindowTitle(lang("追光者 Lumen Arc v1.12.1", "Lumen Arc v1.12.1") + buildStamp());
+    setWindowTitle(lang("追光者 Lumen Arc v1.12.2", "Lumen Arc v1.12.2") + buildStamp());
     resize(1280, 720);
 
     m_roiModel = new RoiModel(this);   // 统一 ROI 模型（矩形+多边形，v1.5.0 Q-18）
@@ -2186,7 +2186,7 @@ void MainWindow::openVideoFile(const QString &filePath)
 
         // Do NOT overwrite m_currentVideoPath with the .vla path: it is an
         // analysis file, not a playable video, and it keys VideoStateManager.
-        setWindowTitle(windowTitleWithCase("Lumen Arc v1.12.1 - [Loaded: " +
+        setWindowTitle(windowTitleWithCase("Lumen Arc v1.12.2 - [Loaded: " +
                            QFileInfo(filePath).fileName() + "]"));
         } else {
             QMessageBox::critical(this, lang("错误", "Error"),
@@ -2539,7 +2539,7 @@ void MainWindow::onLoadAnalysis()
                 m_guideLineModel->addLine(line);
 
             // Do NOT overwrite m_currentVideoPath with the .vla path (see openVideoFile).
-        setWindowTitle(windowTitleWithCase("Lumen Arc v1.12.1 - [Loaded: " +
+        setWindowTitle(windowTitleWithCase("Lumen Arc v1.12.2 - [Loaded: " +
                        QFileInfo(filePath).fileName() + "]"));
         QMessageBox::information(this, lang("已加载", "Loaded"),
             lang("分析结果加载成功。", "Analysis result loaded successfully."));

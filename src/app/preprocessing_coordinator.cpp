@@ -161,8 +161,14 @@ void PreprocessingCoordinator::setAnalysisEngine(IAnalysisEngine *engine)
 
 void PreprocessingCoordinator::beginWithAutoSort(const QStringList &files)
 {
-    m_autoSortAfterProbe = true;
+    // v1.12.2 修复（2026-08-21 用户实测「按 GO 不走 OCR 智能排序」）：旧版
+    // 先置链式标志再调 begin()，而 begin() 会话复位第一刀就清本标志——
+    // 标志被吞，探测完成后永不链式 runAutoSort（GO 实际等价直接拼接）。
+    // 修正为 begin 成功（阶段已转 Probing）后才挂标志；begin 早退（进行中）
+    // 不挂。
     begin(files);
+    if (m_phase == TaskPhase::Probing)
+        m_autoSortAfterProbe = true;
 }
 
 // ---------------------------------------------------------------------------
@@ -266,16 +272,26 @@ void PreprocessingCoordinator::onTrustedDurationsReady(const QMap<QString, qint6
         return;
     const QMap<QString, qint64> durMap = buildDurMap(durations);
     // 就绪：按导入顺序成组（自动排序为可选步骤，不强制——现场反馈）
-    setPhase(TaskPhase::UserConfirm);
     buildListOrderGroups();
     logProbeStats();   // 帧率/编码/分辨率统计 + 统一帧率预告（2026-08）
+    if (m_autoSortAfterProbe) {
+        // GO 直通链（v1.12.2 修复）：列表序中间态不上表面——
+        // ① 不发 evidenceReady：窗口 onEvidenceReady 会把「全未知序组」当
+        //    最终结果（canAutoProceed 对单组/无警告/估算 0 恒真）→ 直通拼接，
+        //    OCR 永无机会跑；
+        // ② 不发 phaseChanged(UserConfirm)：防窗口中途切校对页闪屏。
+        // OCR+排序完成后由 runSorting 统一发相位与 evidenceReady。
+        m_autoSortAfterProbe = false;
+        m_phase = TaskPhase::UserConfirm;   // runAutoSort 相位前置（静默置位）
+        log(QStringLiteral("[%1] 探测完成，GO 链式触发画面时间识别与智能排序…")
+                .arg(tsLog()));
+        runAutoSort();
+        return;
+    }
+    setPhase(TaskPhase::UserConfirm);
     log(QStringLiteral("[%1] 探测完成，%2 个文件已按导入顺序就绪（可开始拼接或自动排序）")
             .arg(tsLog()).arg(m_files.size()));
     emit evidenceReady(m_groups);
-    if (m_autoSortAfterProbe) {
-        m_autoSortAfterProbe = false;
-        runAutoSort();
-    }
 }
 
 void PreprocessingCoordinator::logProbeStats()

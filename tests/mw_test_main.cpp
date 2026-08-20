@@ -19,6 +19,7 @@
 #include "multicamplaybackwindow.h"
 #include "camtilewidget.h"
 #include "multicamview.h"
+#include "app/preprocessing_coordinator.h"
 #include "infrastructure/ivideo_engine.h"
 #include "i18n.h"
 #include <QApplication>
@@ -202,6 +203,107 @@ static void testSessionPlan()
     CHECK(!mgr.planOpen(v, &none).hasMemoryState
           && mgr.planOpen(v + "2", &none).hasMemoryState,
           "plan: migrateKey moves state");
+}
+
+// ---------------------------------------------------------------------------
+// P-62 前处理 GO 链回归（v1.12.2，2026-08-21 用户实测「按 GO 不走 OCR 智能
+// 排序」）。双根因：
+//  ① beginWithAutoSort 先置链式标志再调 begin()，begin() 会话复位第一刀
+//     清标志 → 探测后永不链式 runAutoSort（GO 实际等价直接拼接）；
+//  ② 探测就绪的「列表序中间态」evidenceReady 上表面 → 窗口 onEvidenceReady
+//     把全未知序组当最终结果（canAutoProceed 对单组/无警告/估算 0 恒真）
+//     → 直通拼接，OCR 永无机会跑。
+// 断言：GO 链必经 Ocr/Sorting 相位、evidenceReady 仅发一次且在 UserConfirm
+// 发出、文件全保留；对照组 begin() 直拼链不进 OCR/排序（既有行为不变）。
+// （OCR 引擎本环境可用与否均可：不可用时走降级链，相位序列一致。）
+// ---------------------------------------------------------------------------
+struct ChainWatch {
+    QVector<TaskPhase> phases;
+    int evidenceCount = 0;
+    TaskPhase phaseAtEvidence = TaskPhase::Idle;
+    int filesAtEvidence = -1;
+    void wire(PreprocessingCoordinator &coord)
+    {
+        QObject::connect(&coord, &PreprocessingCoordinator::phaseChanged,
+                         [this](TaskPhase p) { phases.append(p); });
+        QObject::connect(&coord, &PreprocessingCoordinator::evidenceReady,
+                         [this, &coord](const QVector<SortGroup> &groups) {
+                             ++evidenceCount;
+                             phaseAtEvidence = coord.phase();
+                             filesAtEvidence = 0;
+                             for (const auto &g : groups)
+                                 filesAtEvidence += g.ordered.size();
+                         });
+    }
+    bool waitUserConfirm(PreprocessingCoordinator &coord, qint64 capMs = 90000)
+    {
+        QElapsedTimer t;
+        t.start();
+        while (coord.phase() != TaskPhase::UserConfirm
+               && coord.phase() != TaskPhase::Failed
+               && coord.phase() != TaskPhase::Cancelled
+               && t.elapsed() < capMs)
+            QCoreApplication::processEvents(QEventLoop::AllEvents, 50);
+        return coord.phase() == TaskPhase::UserConfirm;
+    }
+};
+
+static void testPreprocessGoChain()
+{
+    // 不存在文件：探测快速失败、OCR 降级/报错均收敛 runSorting——
+    // 状态机行为与被测内容无关，全环境确定性
+    const QStringList files = {
+        QStringLiteral("Z:/__mwtest_nonexistent__/c1.mp4"),
+        QStringLiteral("Z:/__mwtest_nonexistent__/c2.mp4"),
+        QStringLiteral("Z:/__mwtest_nonexistent__/c3.mp4"),
+    };
+
+    // —— GO 链：beginWithAutoSort 必须链式 OCR → 排序 ——
+    // （w 先于 coord 声明：coord 析构内 cancel() 仍发信号，w 必须后死）
+    {
+        ChainWatch w;
+        PreprocessingCoordinator coord;
+        w.wire(coord);
+        coord.beginWithAutoSort(files);
+        CHECK(w.waitUserConfirm(coord),
+              "gochain: reaches UserConfirm (no hang)");
+        CHECK(w.phases.size() >= 2 && w.phases.first() == TaskPhase::Probing,
+              "gochain: probing first");
+        CHECK(w.phases.contains(TaskPhase::Ocr),
+              "gochain: OCR phase entered (chain flag survives session reset)");
+        CHECK(w.phases.contains(TaskPhase::Sorting),
+              "gochain: sorting phase entered");
+        CHECK(w.phases.last() == TaskPhase::UserConfirm,
+              "gochain: lands on UserConfirm");
+        CHECK(w.evidenceCount == 1,
+              "gochain: exactly one evidenceReady (no premature list-order)");
+        CHECK(w.phaseAtEvidence == TaskPhase::UserConfirm,
+              "gochain: evidenceReady emitted at UserConfirm");
+        CHECK(w.filesAtEvidence == files.size(),
+              "gochain: all files retained in sorted groups");
+    }
+
+    // —— 对照：begin() 直拼链不进 OCR/排序（非强制一键语义不变） ——
+    {
+        ChainWatch w;
+        PreprocessingCoordinator coord;
+        w.wire(coord);
+        coord.begin(files);
+        CHECK(w.waitUserConfirm(coord),
+              "plain: reaches UserConfirm (no hang)");
+        CHECK(w.phases.size() == 2
+              && w.phases.first() == TaskPhase::Probing
+              && w.phases.last() == TaskPhase::UserConfirm,
+              "plain: Probing -> UserConfirm only");
+        CHECK(!w.phases.contains(TaskPhase::Ocr)
+              && !w.phases.contains(TaskPhase::Sorting),
+              "plain: no OCR/sort without GO");
+        CHECK(w.evidenceCount == 1
+              && w.phaseAtEvidence == TaskPhase::UserConfirm,
+              "plain: single list-order evidenceReady at UserConfirm");
+        CHECK(w.filesAtEvidence == files.size(),
+              "plain: all files in list-order group");
+    }
 }
 
 static void testMainWindowBranches(QApplication &app)
@@ -666,6 +768,7 @@ int main(int argc, char **argv)
     testUiState();
     testProjectIo();
     testSessionPlan();
+    testPreprocessGoChain();
     testMainWindowBranches(app);
     testMultiCamWindow(app);
     testMultiCamCaseFlow(app);
