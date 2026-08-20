@@ -17,6 +17,7 @@
 #include "app/case_manager.h"
 #include "domain/dedupe_plan.h"
 #include "domain/filename_timestamp.h"
+#include "domain/run_summary.h"
 #include "domain/smart_sorter.h"
 #include "i18n.h"
 #include "theme.h"
@@ -571,6 +572,7 @@ void PreprocessWindow::addFiles(const QStringList &files)
         if (!plan.duplicates.isEmpty()) {
             excludedDups = plan.duplicates;
             m_pendingFiles = plan.kept;
+            m_dupExcluded += plan.duplicates;   // 累计入会话清单（完成页留痕）
         }
     }
 
@@ -691,6 +693,7 @@ void PreprocessWindow::onClearFiles()
         && m_coord->phase() != TaskPhase::Cancelled)
         return;
     m_pendingFiles.clear();
+    m_dupExcluded.clear();   // 清空重选：去重排除清单一并复位
     m_fileTable->setRowCount(0);
     m_importSummary->setText(lang("尚未导入文件", "No files imported"));
     m_btnBeginSort->setEnabled(false);
@@ -1884,6 +1887,17 @@ QWidget *PreprocessWindow::buildPageRun()
         .arg(Theme::BgCard, Theme::Accent, Theme::TextPrimary));
     m_resultStats->setVisible(false);
     rcLay->addWidget(m_resultStats);
+    // v1.12.1 证据摘要卡（2026-08-20 拍板：完成页清单加强，只做 A 默认展开；
+    // 缺口逐条列出缺了哪段墙钟时间）：只读、可选中复制、默认展开
+    m_resultSummary = new QPlainTextEdit(m_resultCard);
+    m_resultSummary->setReadOnly(true);
+    m_resultSummary->setVisible(false);
+    m_resultSummary->setMaximumHeight(220);
+    m_resultSummary->setStyleSheet(QStringLiteral(
+        "QPlainTextEdit { background:%1; border:1px solid %2; border-radius:6px;"
+        " padding:6px 10px; color:%3; font-family:Consolas,monospace; }")
+        .arg(Theme::BgCard, Theme::Border, Theme::TextPrimary));
+    rcLay->addWidget(m_resultSummary);
     m_resultEvidence = new QLabel(m_resultCard);
     m_resultEvidence->setTextInteractionFlags(Qt::TextSelectableByMouse);
     m_resultEvidence->setWordWrap(true);
@@ -2205,6 +2219,113 @@ void PreprocessWindow::onFinished(const PreprocessReport &report)
             m_resultStats->setVisible(true);
         }
 
+        // v1.12.1 证据摘要卡（2026-08-20 拍板 A 默认展开）：一行结论 + 覆盖
+        // 时间 + 缺口逐条（缺了哪段墙钟时间）+ 修剪/丢弃 + 去重清单。
+        // 事实由 domain 纯函数计算（与产物 sidecar 同口径，三处一致）。
+        {
+            const RunSummaryFacts facts =
+                computeRunSummary(m_groups, m_coord->cutPlans());
+            auto fmtWall = [](qint64 ms, qint64 refMs) {
+                const QDateTime dt = QDateTime::fromMSecsSinceEpoch(ms, Qt::LocalTime);
+                const QDateTime ref = QDateTime::fromMSecsSinceEpoch(refMs, Qt::LocalTime);
+                return dt.date() == ref.date()
+                    ? dt.toString(QStringLiteral("HH:mm:ss"))
+                    : dt.toString(QStringLiteral("MM-dd HH:mm:ss"));
+            };
+            auto fmtGap = [](qint64 ms) {
+                if (ms < 60000)
+                    return lang("%1 秒", "%1 s")
+                        .arg(ms / 1000.0, 0, 'f', 0);
+                if (ms < 3600000)
+                    return lang("%1 分钟", "%1 min")
+                        .arg(ms / 60000.0, 0, 'f', 1);
+                return lang("%1 小时", "%1 h")
+                    .arg(ms / 3600000.0, 0, 'f', 1);
+            };
+            QStringList lines;
+            const int importedTotal = m_pendingFiles.size() + m_dupExcluded.size();
+            const int outCount = report.outputPaths.isEmpty()
+                ? 1 : report.outputPaths.size();
+            lines << lang("导入 %1 段 → 排除重复 %2 段 → 识别 %3 / 推算 %4 / 人工 %5"
+                          " → 输出 %6 个文件",
+                          "%1 imported → %2 duplicates excluded → %3 recognized / "
+                          "%4 estimated / %5 manual → %6 output file(s)")
+                             .arg(importedTotal).arg(m_dupExcluded.size())
+                             .arg(facts.ocrCount + facts.absStartCount
+                                  + facts.filenameCount)
+                             .arg(facts.estimatedCount).arg(facts.manualCount)
+                             .arg(outCount);
+            if (facts.coverageStartMs > 0) {
+                lines << lang("覆盖时间：%1 → %2（跨 %3）",
+                              "Coverage: %1 → %2 (spans %3)")
+                             .arg(QDateTime::fromMSecsSinceEpoch(
+                                      facts.coverageStartMs, Qt::LocalTime)
+                                      .toString(QStringLiteral("yyyy-MM-dd HH:mm:ss")),
+                                  QDateTime::fromMSecsSinceEpoch(
+                                      facts.coverageEndMs, Qt::LocalTime)
+                                      .toString(QStringLiteral("yyyy-MM-dd HH:mm:ss")),
+                                  fmtGap(facts.coverageEndMs
+                                         - facts.coverageStartMs));
+            }
+            if (!facts.gaps.isEmpty()) {
+                qint64 totalGap = 0;
+                for (const auto &gp : facts.gaps)
+                    totalGap += gp.toMs - gp.fromMs;
+                lines << lang("缺口 %1 处（共缺约 %2）——缺了这些时间段：",
+                              "%1 gap(s) (~%2 missing in total) — missing ranges:")
+                             .arg(facts.gaps.size()).arg(fmtGap(totalGap));
+                const int capN = 30;
+                for (int i = 0; i < facts.gaps.size() && i < capN; ++i) {
+                    const auto &gp = facts.gaps[i];
+                    lines << QStringLiteral("  · %1 → %2（%3 %4）")
+                                 .arg(fmtWall(gp.fromMs, gp.toMs),
+                                      fmtWall(gp.toMs, gp.fromMs),
+                                      lang("缺", "missing"),
+                                      fmtGap(gp.toMs - gp.fromMs));
+                }
+                if (facts.gaps.size() > capN)
+                    lines << lang("  … 等共 %1 处", "  … %1 in total")
+                                 .arg(facts.gaps.size());
+            } else if (facts.coverageStartMs > 0) {
+                lines << lang("缺口：无（时间连续）", "Gaps: none (continuous)");
+            }
+            if (facts.trimmedCount > 0 || !facts.droppedFiles.isEmpty()) {
+                QString s = lang("重叠修剪：%1 段开头（共 %2）",
+                                 "Overlap trimmed: %1 segment head(s) (%2 total)")
+                                .arg(facts.trimmedCount)
+                                .arg(fmtGap(facts.trimmedStreamMs));
+                if (!facts.droppedFiles.isEmpty()) {
+                    QStringList names;
+                    const int showN = qMin(5, facts.droppedFiles.size());
+                    for (int i = 0; i < showN; ++i)
+                        names << QFileInfo(facts.droppedFiles[i]).fileName();
+                    s += lang("；整段丢弃 %1 段（%2%3）",
+                              "; %1 dropped entirely (%2%3)")
+                             .arg(facts.droppedFiles.size())
+                             .arg(names.join(lang("、", ", ")))
+                             .arg(facts.droppedFiles.size() > showN
+                                      ? lang(" 等", " …") : QString());
+                }
+                lines << s;
+            }
+            if (!m_dupExcluded.isEmpty()) {
+                QStringList names;
+                const int showN = qMin(10, m_dupExcluded.size());
+                for (int i = 0; i < showN; ++i)
+                    names << lang("%1（同 %2）", "%1 (same as %2)")
+                                 .arg(QFileInfo(m_dupExcluded[i].filePath).fileName(),
+                                      QFileInfo(m_dupExcluded[i].keptPath).fileName());
+                lines << lang("排除重复 %1 段：%2%3",
+                              "%1 duplicate(s) excluded: %2%3")
+                             .arg(m_dupExcluded.size())
+                             .arg(names.join(lang("、", ", ")))
+                             .arg(m_dupExcluded.size() > showN
+                                      ? lang(" 等", " …") : QString());
+            }
+            m_resultSummary->setPlainText(lines.join(QStringLiteral("\n")));
+            m_resultSummary->setVisible(true);   // 默认展开（拍板）
+        }
+
         // v1.3.0 M2 任务8：案件导入模式 finalize 自动登记 ——
         // 会话目录/报告/输出引用 + sidecar 复制归类 sidecars/ 入 case.json
         if (m_caseImportMode && m_caseManager && m_caseManager->isOpen()) {
@@ -2242,6 +2363,7 @@ void PreprocessWindow::onFinished(const PreprocessReport &report)
             "Merge finished but produced no output (see log and evidence report)."));
         m_btnPlayOutput->setEnabled(false);
         m_resultStats->setVisible(false);
+        m_resultSummary->setVisible(false);   // 无输出：不显示摘要（防残留）
     }
     m_resultEvidence->setText(lang("证据报告：%1\n（首/尾帧截图、CSV 明细、操作日志均已留档）",
                                    "Evidence report: %1\n(frames, CSV, operation log archived)")

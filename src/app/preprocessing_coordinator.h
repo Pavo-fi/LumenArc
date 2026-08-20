@@ -60,6 +60,8 @@ public:
 
     TaskPhase phase() const { return m_phase; }
     QVector<SortGroup> groups() const { return m_groups; }
+    /// 重叠修剪计划（setTrimOverlap 后生效；空 = 未修剪）。完成页证据摘要用
+    QVector<CutPlan> cutPlans() const { return m_cutPlans; }
     QMap<QString, ProbeResult> probeMap() const { return m_probes; }
     QMap<QString, OcrResult> ocrMap() const { return m_ocrs; }
     QMap<QString, PrecheckResult> precheckMap() const { return m_prechecks; }

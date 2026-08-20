@@ -22,6 +22,7 @@
 #include <QElapsedTimer>
 #include <QComboBox>
 #include "app/preprocessing_coordinator.h"
+#include "domain/dedupe_plan.h"
 #include "domain/sort_model.h"
 
 class QStackedWidget;
@@ -155,6 +156,7 @@ private:
     QPushButton *m_btnBeginSort = nullptr;
     QPushButton *m_btnQuickMerge = nullptr;
     QStringList m_pendingFiles;
+    QVector<DuplicatePair> m_dupExcluded;   // 导入去重排除清单（完成页证据摘要留痕）
     int m_tableDragRow = -1;               // 导入表拖拽起点行（自建拖拽，不依赖 Qt 内置）
     bool m_pendingQuickMerge = false;      // 直接拼接链式标志（列表顺序）
     ProcessingOptions m_pendingOpts;
@@ -225,6 +227,7 @@ private:
     QLabel *m_resultTitle = nullptr;
     QLabel *m_resultOutput = nullptr;
     QLabel *m_resultStats = nullptr;      // 源素材统计 + 统一帧率醒目提示（2026-08）
+    QPlainTextEdit *m_resultSummary = nullptr;  // v1.12.1 证据摘要卡（默认展开）
     QLabel *m_resultEvidence = nullptr;
     QPushButton *m_btnOpenFolder = nullptr;
     QPushButton *m_btnOpenReport = nullptr;

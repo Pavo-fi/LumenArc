@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(LumenArc VERSION 1.12.0 LANGUAGES CXX)
+project(LumenArc VERSION 1.12.1 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -87,6 +87,7 @@ set(SOURCES
     src/domain/concat_precheck.cpp
     src/domain/concat_naming.cpp
     src/domain/dedupe_plan.cpp
+    src/domain/run_summary.cpp
     src/domain/evidence_report.cpp
     src/domain/time_calibration.cpp
     src/domain/time_piecewise.cpp
@@ -160,6 +161,7 @@ set(HEADERS
     src/domain/ocr_result.h
     src/domain/sort_model.h
     src/domain/dedupe_plan.h
+    src/domain/run_summary.h
     src/domain/preprocess_task.h
     src/domain/filename_timestamp.h
     src/domain/smart_sorter.h
@@ -214,10 +216,12 @@ add_executable(lumenarc_preprocess_test
     tests/preprocess_test_main.cpp
     src/domain/filename_timestamp.cpp
     src/domain/dedupe_plan.cpp
+    src/domain/run_summary.cpp
     src/domain/smart_sorter.cpp
     src/domain/concat_precheck.cpp
     src/domain/concat_naming.cpp
     src/domain/evidence_report.cpp
+    src/domain/overlap_cut.cpp
 )
 target_include_directories(lumenarc_preprocess_test PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src
@@ -651,8 +655,8 @@ elseif(APPLE)
         MACOSX_BUNDLE TRUE
         MACOSX_BUNDLE_INFO_PLIST "${CMAKE_CURRENT_SOURCE_DIR}/src/Info.plist"
         MACOSX_BUNDLE_BUNDLE_NAME "LumenArc"
-        MACOSX_BUNDLE_BUNDLE_VERSION "1.12.0"
-        MACOSX_BUNDLE_SHORT_VERSION_STRING "1.12.0"
+        MACOSX_BUNDLE_BUNDLE_VERSION "1.12.1"
+        MACOSX_BUNDLE_SHORT_VERSION_STRING "1.12.1"
         MACOSX_BUNDLE_GUI_IDENTIFIER "com.firetech.lumenarc"
     )
 else()

@@ -20,6 +20,7 @@
  */
 #include "domain/filename_timestamp.h"
 #include "domain/dedupe_plan.h"
+#include "domain/run_summary.h"
 #include "domain/smart_sorter.h"
 #include "domain/preprocess_text.h"
 #include "domain/concat_precheck.h"
@@ -118,6 +119,115 @@ static void testDedupePlan()
     {
         const DedupePlan plan = planDedupe({});
         CHECK(plan.kept.isEmpty() && plan.duplicates.isEmpty());
+    }
+}
+
+static SortEntry mkEntry(const QString &name, qint64 wallStart, qint64 durMs,
+                         qint64 ocrEnd = 0, qint64 ocrEndRel = 0)
+{
+    SortEntry e;
+    e.filePath = name;
+    e.startMs = wallStart;
+    e.endMs = wallStart > 0 ? wallStart + durMs : 0;
+    e.ocrEndMs = ocrEnd;
+    e.ocrEndFrameRelMs = ocrEndRel;
+    e.durationMs = durMs;
+    e.startSource = wallStart > 0 ? OcrResult::Ocr : OcrResult::None;
+    e.sourceKind = wallStart > 0 ? SortEvidenceKind::Ocr : SortEvidenceKind::None;
+    e.conf = 0.95;
+    return e;
+}
+
+// ---------------------------------------------------------------------------
+// v1.12.1 完成页证据摘要事实（与 sidecar 同口径：速率感知/修剪剔除/缺口逐条）
+static void testRunSummary()
+{
+    const qint64 t0 = epochOf(2024, 7, 1, 12, 0, 0);
+
+    // ---- 连续三段（rate 1）：无缺口，覆盖 = 首段起 → 尾段止 ----
+    {
+        SortGroup g;
+        g.channel = QStringLiteral("(默认组)");
+        g.ordered << mkEntry(QStringLiteral("a.mp4"), t0, 60000, t0 + 58000, 58000)
+                  << mkEntry(QStringLiteral("b.mp4"), t0 + 60000, 60000,
+                             t0 + 118000, 58000)
+                  << mkEntry(QStringLiteral("c.mp4"), t0 + 120000, 60000,
+                             t0 + 178000, 58000);
+        const auto f = computeRunSummary({g}, {});
+        CHECK(f.segments == 3 && f.ocrCount == 3);
+        CHECK(f.coverageStartMs == t0);
+        CHECK(f.coverageEndMs == t0 + 180000);   // 速率 1：起+时长
+        CHECK(f.gaps.isEmpty());
+        CHECK(f.trimmedCount == 0 && f.droppedFiles.isEmpty());
+    }
+
+    // ---- 缺口逐条：from = 前段墙钟止，to = 后段墙钟起 ----
+    {
+        SortGroup g;
+        g.channel = QStringLiteral("(默认组)");
+        g.ordered << mkEntry(QStringLiteral("a.mp4"), t0, 60000, t0 + 58000, 58000)
+                  << mkEntry(QStringLiteral("b.mp4"), t0 + 3600000, 60000,
+                             t0 + 3658000, 58000);
+        const auto f = computeRunSummary({g}, {});
+        CHECK(f.gaps.size() == 1);
+        CHECK(f.gaps[0].fromMs == t0 + 60000);       // a 墙钟止
+        CHECK(f.gaps[0].toMs == t0 + 3600000);       // b 墙钟起
+        CHECK(f.coverageEndMs == t0 + 3660000);
+    }
+
+    // ---- 变速段速率感知：rate=2 段墙钟跨 2×时长，与后段连续 → 无幻影缺口 ----
+    {
+        SortGroup g;
+        g.channel = QStringLiteral("(默认组)");
+        // a：61s 流内装 122s 墙钟（尾帧在 58s 流内位，墙钟 +116s → rate 2）
+        g.ordered << mkEntry(QStringLiteral("a.mp4"), t0, 61000, t0 + 116000, 58000)
+                  << mkEntry(QStringLiteral("b.mp4"), t0 + 122000, 60000,
+                             t0 + 180000, 58000);
+        const auto f = computeRunSummary({g}, {});
+        CHECK(f.gaps.isEmpty());                     // 朴素 endMs 口径会报 61s 幻影缺口
+        CHECK(f.coverageEndMs == t0 + 182000);
+    }
+
+    // ---- 修剪段：墙钟起点后移 trim×rate；丢弃段不入覆盖不更新参照 ----
+    {
+        SortGroup g;
+        g.channel = QStringLiteral("(默认组)");
+        g.ordered << mkEntry(QStringLiteral("a.mp4"), t0, 60000, t0 + 58000, 58000)
+                  << mkEntry(QStringLiteral("b.mp4"), t0 + 50000, 60000,
+                             t0 + 108000, 58000)   // 与 a 重叠 10s
+                  << mkEntry(QStringLiteral("c.mp4"), t0 + 52000, 50000)
+                  << mkEntry(QStringLiteral("d.mp4"), t0 + 110000, 60000,
+                             t0 + 168000, 58000);   // 接 b 修剪后止点 t0+110s
+        QVector<CutPlan> cuts;
+        CutPlan cb;   // b 剪开头 10s（流内）
+        cb.file = QStringLiteral("b.mp4");
+        cb.trimmed = true; cb.keepStartMs = 10000;
+        cuts << cb;
+        CutPlan cc;   // c 完全包含丢弃
+        cc.file = QStringLiteral("c.mp4");
+        cc.trimmed = true; cc.dropped = true;
+        cuts << cc;
+        const auto f = computeRunSummary({g}, cuts);
+        CHECK(f.trimmedCount == 1 && f.trimmedStreamMs == 10000);
+        CHECK(f.droppedFiles.size() == 1
+              && f.droppedFiles[0] == QLatin1String("c.mp4"));
+        CHECK(f.gaps.isEmpty());   // b 起点后移 10s 与 a 止连续；d 接 b 止连续
+        CHECK(f.coverageEndMs == t0 + 170000);
+        CHECK(f.coverageStartMs == t0);
+    }
+
+    // ---- 无墙钟段：不计缺口，unknownCount 计入 ----
+    {
+        SortGroup g;
+        g.channel = QStringLiteral("(默认组)");
+        g.ordered << mkEntry(QStringLiteral("a.mp4"), t0, 60000)
+                  << mkEntry(QStringLiteral("u.mp4"), 0, 60000);   // 无墙钟
+        g.ordered[1].sourceKind = SortEvidenceKind::None;
+        g.ordered[1].startSource = OcrResult::None;
+        const auto f = computeRunSummary({g}, {});
+        CHECK(f.unknownCount == 1);
+        CHECK(f.gaps.isEmpty());
+        CHECK(f.coverageStartMs == t0 && f.coverageEndMs == t0 + 60000);
     }
 }
 
@@ -983,6 +1093,7 @@ int main(int argc, char **argv)
     testFilenamePatterns();
     testDedupePlan();
     testHeadTailCrossCheck();
+    testRunSummary();
     testSmartSorterBasic();
     testAbsStartEvidence();
     testSmartSorterBasic();
