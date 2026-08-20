@@ -95,7 +95,8 @@ private slots:
 public slots:
     /// 后台可信时长计算回投（QThreadPool → UI 线程，functor 投递）
     void onTrustedDurationsReady(const QMap<QString, qint64> &durations);
-    /// v1.7.0 M2：用户选择是否修剪重叠段（Q-17：剪后段开头保前段完整）
+    /// v1.7.0 M2：是否修剪重叠段（Q-17：剪后段开头保前段完整）；
+    /// v1.12.0（2026-08-20 拍板）：默认修剪、仅留痕，UI 高级选项可设保留原样
     void setTrimOverlap(bool trim);
 
 private slots:
@@ -168,7 +169,7 @@ private:
     QSet<QString> m_activeGroups;                    // 进行中文件的组
     int m_lastTxPercent = 0;                         // 进度单调钳位
     // v1.7.0 M2：重叠剪切
-    bool m_trimOverlap = false;                 // 用户选择修剪（默认关）
+    bool m_trimOverlap = false;                 // 修剪开关（检测到重叠后由窗口按默认修剪策略置真）
     QVector<CutPlan> m_cutPlans;                // 剪切计划（trimOverlap 时生效）
     QStringList m_overlapChannels;              // 检测到的重叠组（UI 提示）
 

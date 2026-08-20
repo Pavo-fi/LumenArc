@@ -37,7 +37,11 @@ int estimatedCount(const SortGroup &group);
 
 /// P-60 自动放行硬标准（方案 §4.3）：单分组 && 无阻断级警告 && 无存疑 &&
 /// 估算段 ≤2 且占比 ≤20%。满足 → GO 可一键直通拼接（UserConfirm 可跳过）
-bool canAutoProceed(const QVector<SortGroup> &groups);
+/// v1.12.0（2026-08-20 拍板）：trimOverlap=true（默认修剪策略）时 Overlap
+/// 不再阻断——重叠段将被自动修剪并留痕（Q-17：剪后段开头保前段完整）；
+/// trimOverlap=false（用户高级选项「保留原样」）时 Overlap 恢复阻断语义
+///（顺序需人工裁决）。
+bool canAutoProceed(const QVector<SortGroup> &groups, bool trimOverlap);
 
 /// P-60 问题清单（方案 §4.5 B 路径确认页的数据源）
 struct SortProblem {
@@ -50,7 +54,9 @@ struct SortProblem {
     QString fileA, fileB;             // 冗余路径（UI 直取缩略图；可空）
     QString detail;                   // 工程师细节（卡片副行；主文案 UI 组）
 };
-/// 规则：Overlap 警告 → OverlapPair 卡；未识别段（None/Mtime 且未推算）≤3 →
+/// 规则：Overlap 警告 → OverlapPair 卡（trimOverlap=true 时豁免——默认修剪
+/// 已自动处置并留痕，无需人工裁决）；未识别段（None/Mtime 且未推算）≤3 →
 /// 逐段 Unidentified 卡，>3 → 单张 SuspiciousGroup 卡（框一段全批套用）；
 /// 其余存疑原因 → SuspiciousGroup 卡。估算段（Estimated）是提示级不算问题。
-QVector<SortProblem> collectSortProblems(const QVector<SortGroup> &groups);
+QVector<SortProblem> collectSortProblems(const QVector<SortGroup> &groups,
+                                         bool trimOverlap);

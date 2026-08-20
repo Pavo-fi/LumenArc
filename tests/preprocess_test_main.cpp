@@ -19,6 +19,7 @@
  *  - 拼接一致性校验分级（OK/WARN/BLOCK）
  */
 #include "domain/filename_timestamp.h"
+#include "domain/dedupe_plan.h"
 #include "domain/smart_sorter.h"
 #include "domain/preprocess_text.h"
 #include "domain/concat_precheck.h"
@@ -50,6 +51,74 @@ static qint64 epochOf(int y, int mo, int d, int h, int mi, int s, int ms = 0)
 {
     return QDateTime(QDate(y, mo, d), QTime(h, mi, s, ms), Qt::LocalTime)
         .toMSecsSinceEpoch();
+}
+
+// ---------------------------------------------------------------------------
+// 素材去重计划（dedupe_plan.h：尺寸预分组 + SHA-256 判重，保留首个）
+static void testDedupePlan()
+{
+    // filesNeedingHash：仅同尺寸碰撞组需要哈希；尺寸唯一/未知不算
+    {
+        const QVector<DedupeEntry> entries = {
+            {QStringLiteral("a.mp4"), 100, QString()},
+            {QStringLiteral("b.mp4"), 200, QString()},
+            {QStringLiteral("c.mp4"), 100, QString()},
+            {QStringLiteral("d.mp4"), -1,  QString()},
+            {QStringLiteral("e.mp4"), 300, QString()},
+        };
+        const QStringList need = filesNeedingHash(entries);
+        CHECK(need.size() == 2);
+        CHECK(need.contains(QStringLiteral("a.mp4"))
+              && need.contains(QStringLiteral("c.mp4")));
+    }
+
+    // 同尺寸+同指纹 → 后者判重排除，保留首个；同路径兜底判重
+    {
+        const QVector<DedupeEntry> entries = {
+            {QStringLiteral("a.mp4"), 100, QStringLiteral("h1")},
+            {QStringLiteral("b.mp4"), 100, QStringLiteral("h1")},
+            {QStringLiteral("c.mp4"), 100, QStringLiteral("h2")},
+            {QStringLiteral("a.mp4"), 100, QStringLiteral("h1")},   // 同路径
+            {QStringLiteral("e.mp4"), 999, QString()},              // 无指纹→保守保留
+        };
+        const DedupePlan plan = planDedupe(entries);
+        CHECK(plan.kept.size() == 3);
+        CHECK(plan.kept[0] == QStringLiteral("a.mp4"));
+        CHECK(plan.kept[1] == QStringLiteral("c.mp4"));
+        CHECK(plan.kept[2] == QStringLiteral("e.mp4"));
+        CHECK(plan.duplicates.size() == 2);
+        CHECK(plan.duplicates[0].filePath == QStringLiteral("b.mp4"));
+        CHECK(plan.duplicates[0].keptPath == QStringLiteral("a.mp4"));
+    }
+
+    // 三个同指纹副本 → 两个均映射到首个保留件
+    {
+        const QVector<DedupeEntry> entries = {
+            {QStringLiteral("x.mp4"), 50, QStringLiteral("hh")},
+            {QStringLiteral("y.mp4"), 50, QStringLiteral("hh")},
+            {QStringLiteral("z.mp4"), 50, QStringLiteral("hh")},
+        };
+        const DedupePlan plan = planDedupe(entries);
+        CHECK(plan.kept.size() == 1 && plan.kept[0] == QStringLiteral("x.mp4"));
+        CHECK(plan.duplicates.size() == 2);
+        CHECK(plan.duplicates[1].keptPath == QStringLiteral("x.mp4"));
+    }
+
+    // 尺寸不同即使指纹相同也不判重（尺寸是内容必要条件的反向保护）
+    {
+        const QVector<DedupeEntry> entries = {
+            {QStringLiteral("p.mp4"), 100, QStringLiteral("same")},
+            {QStringLiteral("q.mp4"), 101, QStringLiteral("same")},
+        };
+        const DedupePlan plan = planDedupe(entries);
+        CHECK(plan.kept.size() == 2 && plan.duplicates.isEmpty());
+    }
+
+    // 空输入
+    {
+        const DedupePlan plan = planDedupe({});
+        CHECK(plan.kept.isEmpty() && plan.duplicates.isEmpty());
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -142,6 +211,13 @@ static void testConcatNaming()
                            QStringLiteral("C:/a/235645_100.mp4"))
           == QStringLiteral("LAMerged_001132_100_235645"),
           "naming: 默认组别名不带通道");
+    // 运行期实际默认组名为半角 "(默认组)"（smart_sorter/coordinator）——
+    // 2026-08-20 越秀案实测：全角未覆盖半角导致产物带字面 "(默认组)" 前缀
+    CHECK(concatOutputName(QStringLiteral("(默认组)"),
+                           QStringLiteral("C:/a/87.mp4"),
+                           QStringLiteral("C:/a/21.mp4"))
+          == QStringLiteral("LAMerged_87_21"),
+          "naming: 半角默认组同样不带通道");
     CHECK(concatOutputName(QStringLiteral("CH02"),
                            QStringLiteral("C:/a/abc.mp4"),
                            QStringLiteral("C:/a/xyz.mp4"))
@@ -335,25 +411,27 @@ static void testSmartSorterEstimation()
             os.append(makeOcr(QString::number(i) + ".mp4", t0 + i * 60000));
         }
         auto gs = smartSort(ps, os);
-        CHECK(canAutoProceed(gs));
+        CHECK(canAutoProceed(gs, true));
+        CHECK(canAutoProceed(gs, false));   // 无重叠：修剪策略无关
         // 1 段识别失败 → 估算 1/10 ≤20% 仍直通
         os[4].wallStartMs = 0;
         os[4].source = OcrResult::None;
         gs = smartSort(ps, os);
         CHECK(estimatedCount(gs[0]) == 1);
-        CHECK(canAutoProceed(gs));
+        CHECK(canAutoProceed(gs, true));
         // 3 段失败 → 3 估算 >2 且 >20% → 停人工
         os[5].wallStartMs = 0; os[5].source = OcrResult::None;
         os[6].wallStartMs = 0; os[6].source = OcrResult::None;
         gs = smartSort(ps, os);
         CHECK(estimatedCount(gs[0]) == 3);
-        CHECK(!canAutoProceed(gs));
-        // 重叠 → 阻断
+        CHECK(!canAutoProceed(gs, true));
+        // 重叠：默认修剪（v1.12.0 拍板）→ 直通；退出修剪（保留原样）→ 阻断
         os = {};
         for (int i = 0; i < 10; ++i)
             os.append(makeOcr(QString::number(i) + ".mp4", t0 + i * 30000)); // 全部重叠
         gs = smartSort(ps, os);
-        CHECK(!canAutoProceed(gs));
+        CHECK(canAutoProceed(gs, true));    // 自动修剪+留痕替代人工裁决
+        CHECK(!canAutoProceed(gs, false));  // 保留原样时顺序需人工裁决
         // 多分组 → 停人工（Q5A）
         QVector<ProbeResult> ps2{
             makeProbe(QStringLiteral("CH01_20240701_120000.mp4"), 60000),
@@ -363,7 +441,7 @@ static void testSmartSorterEstimation()
             makeOcr(QStringLiteral("CH01_20240701_120000.mp4"), t0),
             makeOcr(QStringLiteral("CH02_20240701_120000.mp4"), t0),
         };
-        CHECK(!canAutoProceed(smartSort(ps2, os2)));
+        CHECK(!canAutoProceed(smartSort(ps2, os2), true));
     }
 
     // ---- collectSortProblems（B 路径确认页数据源） ----
@@ -373,10 +451,11 @@ static void testSmartSorterEstimation()
                                 makeProbe(QStringLiteral("b.mp4"), 60000)};
         QVector<OcrResult> os{makeOcr(QStringLiteral("a.mp4"), t0),
                               makeOcr(QStringLiteral("b.mp4"), t0 + 60000)};
-        CHECK(collectSortProblems(smartSort(ps, os)).isEmpty());
-        // 重叠 → OverlapPair 卡（阻断级）
+        CHECK(collectSortProblems(smartSort(ps, os), true).isEmpty());
+        // 重叠：默认修剪（v1.12.0）→ 不出卡；退出修剪 → OverlapPair 卡（阻断级）
         os[1].wallStartMs = t0 + 30000;
-        auto probs = collectSortProblems(smartSort(ps, os));
+        CHECK(collectSortProblems(smartSort(ps, os), true).isEmpty());
+        auto probs = collectSortProblems(smartSort(ps, os), false);
         CHECK(probs.size() == 1
               && probs[0].kind == SortProblem::OverlapPair
               && probs[0].fileA == QLatin1String("a.mp4")
@@ -384,19 +463,19 @@ static void testSmartSorterEstimation()
         // 估算段不算问题（提示级）：b 推算归位后问题清单为空
         QVector<OcrResult> osGap{makeOcr(QStringLiteral("a.mp4"), t0),
                                  makeOcr(QStringLiteral("b.mp4"), 0)};
-        CHECK(collectSortProblems(smartSort(ps, osGap)).isEmpty());
+        CHECK(collectSortProblems(smartSort(ps, osGap), true).isEmpty());
         // 大批量未识别（5 段全无证据）→ 单张组级卡（防卡片海）
         QVector<ProbeResult> ps5;
         for (int i = 0; i < 5; ++i)
             ps5.append(makeProbe(QStringLiteral("u%1.mp4").arg(i), 60000));
-        probs = collectSortProblems(smartSort(ps5, {}));
+        probs = collectSortProblems(smartSort(ps5, {}), true);
         CHECK(probs.size() == 1
               && probs[0].kind == SortProblem::SuspiciousGroup
               && !probs[0].fileA.isEmpty());
         // 少量未识别（2 段全组无证据）→ 逐段卡 + 组级存疑卡
         QVector<ProbeResult> psU{makeProbe(QStringLiteral("u1.mp4"), 60000),
                                  makeProbe(QStringLiteral("u2.mp4"), 60000)};
-        probs = collectSortProblems(smartSort(psU, {}));
+        probs = collectSortProblems(smartSort(psU, {}), true);
         int nU = 0, nS = 0;
         for (const auto &p : probs) {
             if (p.kind == SortProblem::Unidentified) ++nU;
@@ -798,6 +877,7 @@ int main(int argc, char **argv)
         return 0;
     }
     testFilenamePatterns();
+    testDedupePlan();
     testSmartSorterBasic();
     testAbsStartEvidence();
     testSmartSorterBasic();

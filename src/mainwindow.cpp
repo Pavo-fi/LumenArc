@@ -109,7 +109,7 @@ MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent)
 {
     loadLanguage();
-    setWindowTitle(lang("追光者 Lumen Arc v1.11.0", "Lumen Arc v1.11.0") + buildStamp());
+    setWindowTitle(lang("追光者 Lumen Arc v1.12.0", "Lumen Arc v1.12.0") + buildStamp());
     resize(1280, 720);
 
     m_roiModel = new RoiModel(this);   // 统一 ROI 模型（矩形+多边形，v1.5.0 Q-18）
@@ -2186,7 +2186,7 @@ void MainWindow::openVideoFile(const QString &filePath)
 
         // Do NOT overwrite m_currentVideoPath with the .vla path: it is an
         // analysis file, not a playable video, and it keys VideoStateManager.
-        setWindowTitle(windowTitleWithCase("Lumen Arc v1.11.0 - [Loaded: " +
+        setWindowTitle(windowTitleWithCase("Lumen Arc v1.12.0 - [Loaded: " +
                            QFileInfo(filePath).fileName() + "]"));
         } else {
             QMessageBox::critical(this, lang("错误", "Error"),
@@ -2419,6 +2419,7 @@ void MainWindow::openVideoFile(const QString &filePath)
         }
 
         // v1.2.0 sidecar 继承：拼接输出的校时自动带入（仅无现有校时时，Q-4）
+        // v1.12.0：分段校时——各段按画面时间锚定，缺口处墙钟精确跳变
         if (!m_calibration.isValid()) {
             TimeCalibration inherited;
             QString sidecarWarning;
@@ -2436,13 +2437,19 @@ void MainWindow::openVideoFile(const QString &filePath)
                         lang("已继承前处理校时",
                              "Inherited calibration from preprocessing"));
                 } else {
-                    QMessageBox::warning(this,
+                    // sidecarWarning 类型化前缀（C1）："gaps:<数量>:<最大|缺口|ms>"
+                    QString gapCount;
+                    const QStringList wp = sidecarWarning.split(QLatin1Char(':'));
+                    if (wp.size() >= 3 && wp[0] == QLatin1String("gaps"))
+                        gapCount = wp[1];
+                    QMessageBox::information(this,
                         lang("拼接时间缺口提示", "Time Gap Notice"),
-                        lang("已继承前处理校时。注意：此拼接文件段间存在时间缺口/重叠，\n"
-                             "首段之后的墙钟可能不准（将写入报告）。",
-                             "Calibration inherited. Note: this concatenated file has "
-                             "time gaps/overlaps;\nwall clock after the first segment "
-                             "may drift (will be noted in reports)."));
+                        lang("已继承前处理校时（分段模式：每段按画面时间锚定）。\n"
+                             "此拼接文件含 %1 处时间缺口（监控常态），缺口处墙钟跳变（将写入报告）。",
+                             "Calibration inherited (piecewise: each segment anchored\n"
+                             "by its on-screen time). This merged file has %1 time gap(s);\n"
+                             "wall clock jumps at gaps (will be noted in reports).")
+                            .arg(gapCount));
                 }
             }
         }
@@ -2532,7 +2539,7 @@ void MainWindow::onLoadAnalysis()
                 m_guideLineModel->addLine(line);
 
             // Do NOT overwrite m_currentVideoPath with the .vla path (see openVideoFile).
-        setWindowTitle(windowTitleWithCase("Lumen Arc v1.11.0 - [Loaded: " +
+        setWindowTitle(windowTitleWithCase("Lumen Arc v1.12.0 - [Loaded: " +
                        QFileInfo(filePath).fileName() + "]"));
         QMessageBox::information(this, lang("已加载", "Loaded"),
             lang("分析结果加载成功。", "Analysis result loaded successfully."));

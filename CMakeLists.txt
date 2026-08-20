@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(LumenArc VERSION 1.11.0 LANGUAGES CXX)
+project(LumenArc VERSION 1.12.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -86,6 +86,7 @@ set(SOURCES
     src/domain/smart_sorter.cpp
     src/domain/concat_precheck.cpp
     src/domain/concat_naming.cpp
+    src/domain/dedupe_plan.cpp
     src/domain/evidence_report.cpp
     src/domain/time_calibration.cpp
     src/domain/time_piecewise.cpp
@@ -158,6 +159,7 @@ set(HEADERS
     src/domain/probe_result.h
     src/domain/ocr_result.h
     src/domain/sort_model.h
+    src/domain/dedupe_plan.h
     src/domain/preprocess_task.h
     src/domain/filename_timestamp.h
     src/domain/smart_sorter.h
@@ -211,6 +213,7 @@ target_link_libraries(lumenarc_engine_test PRIVATE
 add_executable(lumenarc_preprocess_test
     tests/preprocess_test_main.cpp
     src/domain/filename_timestamp.cpp
+    src/domain/dedupe_plan.cpp
     src/domain/smart_sorter.cpp
     src/domain/concat_precheck.cpp
     src/domain/concat_naming.cpp
@@ -459,6 +462,74 @@ target_link_libraries(lumenarc_preprocess_integration PRIVATE
     ${FFMPEG_LIBRARIES}
 )
 
+# --- 现场素材文件夹无头全流程测试（去重→智能排序→重叠修剪→转码拼接） ---
+add_executable(lumenarc_folder_pipeline
+    tests/folder_pipeline_main.cpp
+    src/infrastructure/ianalysis_engine.h
+    src/infrastructure/media_probe_engine.cpp
+    src/infrastructure/timestamp_ocr_engine.cpp
+    src/infrastructure/concat_engine.cpp
+    src/infrastructure/transcode_engine.cpp
+    src/infrastructure/encoder_probe.cpp
+    src/infrastructure/tool_paths.cpp
+    src/infrastructure/integrity_checker.cpp
+    src/i18n.cpp
+    src/app/calibration_service.cpp   # 校时 sidecar 写出/读回（v1.3.1 分段锚点）
+    src/domain/filename_timestamp.cpp
+    src/domain/dedupe_plan.cpp
+    src/domain/smart_sorter.cpp
+    src/domain/concat_precheck.cpp
+    src/domain/concat_naming.cpp
+    src/domain/evidence_report.cpp
+    src/domain/overlap_cut.cpp
+    src/domain/time_calibration.cpp
+    src/domain/time_piecewise.cpp
+)
+target_include_directories(lumenarc_folder_pipeline PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+    ${FFMPEG_INCLUDE_DIR}
+)
+target_link_libraries(lumenarc_folder_pipeline PRIVATE
+    Qt6::Core
+    Qt6::Gui
+    Qt6::Concurrent
+    ${FFMPEG_LIBRARIES}
+)
+
+# --- 校时 sidecar（分段锚点）domain/app 无媒体依赖单测 ---
+add_executable(lumenarc_sidecar_test
+    tests/sidecar_test_main.cpp
+    src/app/calibration_service.cpp
+    src/infrastructure/ianalysis_engine.h
+    src/infrastructure/media_probe_engine.cpp
+    src/infrastructure/timestamp_ocr_engine.cpp
+    src/infrastructure/concat_engine.cpp
+    src/infrastructure/transcode_engine.cpp
+    src/infrastructure/encoder_probe.cpp
+    src/infrastructure/tool_paths.cpp
+    src/infrastructure/integrity_checker.cpp
+    src/i18n.cpp
+    src/domain/filename_timestamp.cpp
+    src/domain/dedupe_plan.cpp
+    src/domain/smart_sorter.cpp
+    src/domain/concat_precheck.cpp
+    src/domain/concat_naming.cpp
+    src/domain/evidence_report.cpp
+    src/domain/overlap_cut.cpp
+    src/domain/time_calibration.cpp
+    src/domain/time_piecewise.cpp
+)
+target_include_directories(lumenarc_sidecar_test PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+    ${FFMPEG_INCLUDE_DIR}
+)
+target_link_libraries(lumenarc_sidecar_test PRIVATE
+    Qt6::Core
+    Qt6::Gui
+    Qt6::Concurrent
+    ${FFMPEG_LIBRARIES}
+)
+
 # --- Offscreen .vla load → chart rebuild chain test ---
 add_executable(lumenarc_vla_test
     tests/vla_load_test_main.cpp
@@ -580,8 +651,8 @@ elseif(APPLE)
         MACOSX_BUNDLE TRUE
         MACOSX_BUNDLE_INFO_PLIST "${CMAKE_CURRENT_SOURCE_DIR}/src/Info.plist"
         MACOSX_BUNDLE_BUNDLE_NAME "LumenArc"
-        MACOSX_BUNDLE_BUNDLE_VERSION "1.11.0"
-        MACOSX_BUNDLE_SHORT_VERSION_STRING "1.11.0"
+        MACOSX_BUNDLE_BUNDLE_VERSION "1.12.0"
+        MACOSX_BUNDLE_SHORT_VERSION_STRING "1.12.0"
         MACOSX_BUNDLE_GUI_IDENTIFIER "com.firetech.lumenarc"
     )
 else()

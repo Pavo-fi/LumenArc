@@ -15,6 +15,8 @@
 
 #include <QObject>
 #include <QString>
+#include <QMap>
+#include <QSet>
 #include <QRectF>
 #include <QVector>
 #include <functional>
@@ -79,10 +81,20 @@ public:
     /// 携带缺口提示（Q-4：超 2s 容差必须警告，且进报告）。
     static bool loadSidecar(const QString &videoPath, TimeCalibration *out,
                             QString *warning);
-    /// sidecar 写出（前处理 finalize 调用）：逐段墙钟起点/速率 + 缺口表。
+    /// sidecar（<输出>.lumencal.json）写出（前处理 finalize 调用）：
+    /// 逐段墙钟起点/速率 + 缺口表。
+    /// v1.12.0（2026-08-20 拍板：校时反映到前处理产物时间轴）：
+    /// - trimStartMs：重叠修剪段（>0 → 墙钟起点后移 trim×rate，流内时长扣减）；
+    /// - skipFiles：整段丢弃（完全重叠）/转码失败的文件，不在产物中；
+    /// - actualStreamMs：各段在拼接产物中的实测流内时长（转码件逐段实测——
+    ///   实测转码段与源时长偏差 ±30~300ms，累积会污染尾部锚点；缺省回退
+    ///   durationMs−trim）。
     static bool writeSidecar(const QString &outputPath,
                              const QVector<SortEntry> &orderedEntries,
-                             QString *err);
+                             QString *err,
+                             const QMap<QString, qint64> &trimStartMs = {},
+                             const QSet<QString> &skipFiles = {},
+                             const QMap<QString, qint64> &actualStreamMs = {});
 
     /// 视频流时长（ffprobe -select_streams v:0）。容器总时长取音画最长流，
     /// 音画不同长时会虚标（B3一单元客梯：音轨 102min/画面 74min）→

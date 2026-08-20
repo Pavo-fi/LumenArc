@@ -15,6 +15,7 @@
 #include "cliptimelinewidget.h"
 #include "sortablefiletable.h"
 #include "app/case_manager.h"
+#include "domain/dedupe_plan.h"
 #include "domain/filename_timestamp.h"
 #include "domain/smart_sorter.h"
 #include "i18n.h"
@@ -149,10 +150,14 @@ void PreprocessWindow::roiPickForFile(const QString &filePath)
 #include <QScrollArea>
 #include <QFileDialog>
 #include <QMessageBox>
+#include <QCryptographicHash>
 #include <QDateTime>
 #include "infrastructure/tool_paths.h"
 #include "infrastructure/integrity_checker.h"
 #include <QFileInfo>
+#include <QFile>
+#include <QCollator>
+#include <QGuiApplication>
 #include <QDateTime>
 #include <QDateTimeEdit>
 #include <QDialog>
@@ -181,6 +186,19 @@ bool isVideoFile(const QString &path)
         if (suffix == QLatin1String(e))
             return true;
     return false;
+}
+
+/// SHA-256 内容指纹（与案件指纹 CaseManager::computeSha256 同算法同语义）；
+/// 失败返回空（去重判定保守保留，见 domain/dedupe_plan.h）
+QString sha256OfFile(const QString &path)
+{
+    QFile f(path);
+    if (!f.open(QIODevice::ReadOnly))
+        return QString();
+    QCryptographicHash h(QCryptographicHash::Sha256);
+    if (!h.addData(&f))
+        return QString();
+    return QString::fromLatin1(h.result().toHex());
 }
 
 QString cardStyle(const QString &border)
@@ -255,6 +273,7 @@ QWidget *PreprocessWindow::buildFormatBanner()
     lay->addWidget(title);
     auto *desc = new QLabel(
         lang("用法：拖入视频文件 → 按顺序排好（拖拽行）→ 点右下角 GO\n"
+             "│ 拖入时自动排除内容完全相同的重复文件（SHA-256 指纹，保留首个）\n"
              "│\n"
              "│ GO 会自动判断：\n"
              "│ - 全部是参数一致的 MP4 且关键帧间隔 ≤2 秒 → 直接无损拼接（不重编码、画质零损失）\n"
@@ -264,6 +283,7 @@ QWidget *PreprocessWindow::buildFormatBanner()
              "│\n"
              "│ 输出：MP4（H.264）拼接产物可直接在主窗口播放；证据报告自动生成。",
              "Usage: drop video clips → order them (drag rows) → hit GO (bottom right)\n"
+             "│ Exact duplicates are excluded on import (SHA-256 fingerprint, first copy kept)\n"
              "│\n"
              "│ GO decides automatically:\n"
              "│ - identical MP4s with ≤2s keyframes → lossless merge (no re-encode, zero quality loss)\n"
@@ -527,11 +547,41 @@ void PreprocessWindow::addFiles(const QStringList &files)
     if (added == 0 && !files.isEmpty())
         return;
 
+    // v1.12.0（2026-08-19 现场反馈）：导入即内容去重（排除重复文件）——同一批
+    // 监控素材常混入完全相同的重复导出段，不去重会让拼接产物出现重复画面。
+    // 规则见 domain/dedupe_plan.h：尺寸不同必然不同内容（免哈希）；仅同尺寸
+    // 碰撞组算 SHA-256，指纹一致判重、保留首个；哈希失败保守保留。
+    QVector<DuplicatePair> excludedDups;
+    {
+        QVector<DedupeEntry> entries;
+        entries.reserve(m_pendingFiles.size());
+        for (const QString &f : m_pendingFiles)
+            entries.append({f, QFileInfo(f).size(), QString()});
+        const QStringList needHash = filesNeedingHash(entries);
+        QMap<QString, QString> hashes;
+        if (!needHash.isEmpty()) {
+            QGuiApplication::setOverrideCursor(Qt::WaitCursor);
+            for (const QString &f : needHash)
+                hashes.insert(f, sha256OfFile(f));
+            QGuiApplication::restoreOverrideCursor();
+        }
+        for (auto &e : entries)
+            e.sha256 = hashes.value(e.filePath);
+        const DedupePlan plan = planDedupe(entries);
+        if (!plan.duplicates.isEmpty()) {
+            excludedDups = plan.duplicates;
+            m_pendingFiles = plan.kept;
+        }
+    }
+
     // 2026-08-13（Bug B 加固）：导入列表立即按文件名时间戳排序——
     // 所见即所得（导入页顺序 = 校对页顺序 = 拼接顺序），不再等探测
     // 完成才由 buildListOrderGroups 纠正；用户拖拽仍可在导入后微调
     // （coordinator 侧 sortFilesByNameTime 为最终兜底，二者语义一致）。
     // 无时间戳文件保持相对序排末尾（与 coordinator 同一约定）。
+    // v1.12.0 修复（2026-08-20 现场）：无时间戳兜底改用自然序（QCollator
+    // 数字感知）——旧 a.file < b.file 全路径字典序会把 0,1,2… 排成
+    // 0,1,10,11…19,2…，与资源管理器及用户预期均不符
     {
         struct PendingItem { QString file; qint64 ts; bool hasTs; };
         QVector<PendingItem> items;
@@ -541,13 +591,16 @@ void PreprocessWindow::addFiles(const QStringList &files)
                 QFileInfo(f).fileName());
             items.append({f, ft.epochMs, ft.hit()});
         }
+        QCollator natural;
+        natural.setNumericMode(true);
         std::stable_sort(items.begin(), items.end(),
-            [](const PendingItem &a, const PendingItem &b) {
+            [&](const PendingItem &a, const PendingItem &b) {
                 if (a.hasTs && b.hasTs)
                     return a.ts < b.ts;
                 if (a.hasTs != b.hasTs)
                     return a.hasTs;   // 有时间戳的排前
-                return a.file < b.file;
+                return natural.compare(QFileInfo(a.file).fileName(),
+                                       QFileInfo(b.file).fileName()) < 0;
             });
         m_pendingFiles.clear();
         for (const auto &it : items)
@@ -572,10 +625,47 @@ void PreprocessWindow::addFiles(const QStringList &files)
     m_importSummary->setText(lang("已导入 %1 段（共 %2）",
                                   "%1 clip(s) imported (%2 total)")
                                  .arg(m_pendingFiles.size())
-                                 .arg(fmtBytes(totalBytes)));
+                                 .arg(fmtBytes(totalBytes))
+                             + (excludedDups.isEmpty() ? QString()
+                                : lang("；已排除重复 %1 段", "; %1 duplicate(s) excluded")
+                                      .arg(excludedDups.size())));
     m_btnBeginSort->setEnabled(!m_pendingFiles.isEmpty());
     m_btnQuickMerge->setEnabled(!m_pendingFiles.isEmpty());
     m_importStatus->clear();
+    if (!excludedDups.isEmpty()) {
+        // 明示排除清单（前 5 段）：排除是数据取舍，必须留痕可见（规范 C2）
+        QStringList names;
+        const int showN = qMin(5, excludedDups.size());
+        for (int i = 0; i < showN; ++i)
+            names << lang("%1（同 %2）", "%1 (same as %2)")
+                         .arg(QFileInfo(excludedDups[i].filePath).fileName(),
+                              QFileInfo(excludedDups[i].keptPath).fileName());
+        m_importStatus->setText(
+            lang("已排除重复文件（内容与保留段完全相同）：%1%2",
+                 "Duplicates excluded (identical content): %1%2")
+                .arg(names.join(lang("、", ", ")))
+                .arg(excludedDups.size() > showN
+                         ? lang(" 等 %1 段", " … %1 in total").arg(excludedDups.size())
+                         : QString()));
+    }
+    // v1.12.0（2026-08-20 现场反馈）：文件名全无时间信息时导入即引导——
+    // 列表顺序由拖入锚点决定不可信，「直接拼接」会盲拼（护栏弹窗会被点穿）
+    {
+        int namedCnt = 0;
+        for (const QString &f : m_pendingFiles)
+            if (parseFilenameTimestamp(QFileInfo(f).fileName()).hit())
+                ++namedCnt;
+        if (namedCnt == 0 && m_pendingFiles.size() > 1) {
+            const QString hint = lang(
+                "ⓘ 文件名都不含时间信息：建议点右下角 GO 自动识别画面时间并排序；"
+                "「直接拼接」将只按列表顺序执行",
+                "ⓘ No filename timestamps: use GO (bottom right) to read on-screen "
+                "time and sort; direct merge follows list order only");
+            const QString cur = m_importStatus->text();
+            m_importStatus->setText(cur.isEmpty()
+                ? hint : cur + QStringLiteral("\n") + hint);
+        }
+    }
 }
 
 /// 表格行拖拽后同步文件顺序（直接拼接按此行序执行）
@@ -613,6 +703,7 @@ void PreprocessWindow::onBeginSort()
 {
     if (m_pendingFiles.isEmpty())
         return;
+    m_overlapPendingChannels.clear();   // 新一轮分析：清除上一轮重叠记录
 
     if (m_coord->phase() == TaskPhase::UserConfirm) {
         // 已探测就绪：直接对当前列表重跑自动排序（覆盖顺序）
@@ -635,9 +726,54 @@ void PreprocessWindow::onQuickMerge()
 {
     if (m_pendingFiles.isEmpty())
         return;
+    m_overlapPendingChannels.clear();   // 新一轮执行：清除上一轮重叠记录
+
+    // v1.12.0（2026-08-20 现场反馈）：文件名全部不含时间信息且尚未识别排序时，
+    // 「直接拼接」= 按拖入顺序盲拼（Explorer 拖拽锚点决定顺序）——现场实测
+    // 8/18 片段被拼到 8/19 之后、时间重叠段也未修剪。护栏：强制确认并
+    // 引导改用 GO（识别画面时间 → 排序 → 修剪重叠 → 拼接）。
+    if (m_coord->phase() != TaskPhase::UserConfirm && m_pendingFiles.size() > 1) {
+        int named = 0;
+        for (const QString &f : m_pendingFiles)
+            if (parseFilenameTimestamp(QFileInfo(f).fileName()).hit())
+                ++named;
+        if (named == 0) {
+            QMessageBox box(this);
+            box.setWindowTitle(lang("直接拼接可能乱序", "Direct merge may misorder"));
+            box.setIcon(QMessageBox::Warning);
+            box.setText(lang(
+                QStringLiteral("当前 %1 个文件的文件名都不含时间信息，直接拼接将只按"
+                               "列表顺序（即拖入顺序）执行，监控素材极易乱序，\n"
+                               "且时间重叠的重复片段不会被修剪。\n\n"
+                               "建议改用【GO】：自动识别画面时间 → 按真实时间排序 → "
+                               "修剪重叠 → 拼接。").arg(m_pendingFiles.size()),
+                QStringLiteral("None of the %1 filenames carry a timestamp; direct "
+                               "merge follows the list (drop) order only and will not "
+                               "trim time-overlapped duplicates — misordering is likely.\n\n"
+                               "Recommended: use GO to read on-screen time, sort by real "
+                               "time and trim overlaps before merging.")
+                    .arg(m_pendingFiles.size())));
+            QPushButton *goBtn = box.addButton(
+                lang("改用 GO 识别排序（推荐）", "Use GO auto-sort (recommended)"),
+                QMessageBox::AcceptRole);
+            QPushButton *anywayBtn = box.addButton(
+                lang("仍按列表顺序拼接", "Merge in list order anyway"),
+                QMessageBox::DestructiveRole);
+            box.addButton(QMessageBox::Cancel);
+            box.exec();
+            if (box.clickedButton() == goBtn) {
+                onBeginSort();
+                return;
+            }
+            if (box.clickedButton() != anywayBtn)
+                return;
+        }
+    }
 
     if (m_coord->phase() == TaskPhase::UserConfirm) {
         // 已探测就绪：按当前列表顺序直接拼接（不识别画面时间）
+        // 默认修剪同样生效（重叠计划基于已完成的排序结果；无重叠为空操作）
+        m_coord->setTrimOverlap(overlapTrimOn());
         m_coord->startProcessing(collectProcessingOptions());   // 内部自动确认顺序
         return;
     }
@@ -826,6 +962,11 @@ static QString problemKey(const SortProblem &p)
     }
 }
 
+bool PreprocessWindow::overlapTrimOn() const
+{
+    return !(m_keepOverlapCheck && m_keepOverlapCheck->isChecked());
+}
+
 void PreprocessWindow::rebuildProblemPanel()
 {
     while (QLayoutItem *it = m_problemLay->takeAt(0)) {
@@ -833,7 +974,7 @@ void PreprocessWindow::rebuildProblemPanel()
             it->widget()->deleteLater();
         delete it;
     }
-    const auto problems = collectSortProblems(m_groups);
+    const auto problems = collectSortProblems(m_groups, overlapTrimOn());
     m_problemPanel->setVisible(!problems.isEmpty());
     if (problems.isEmpty())
         return;
@@ -1021,7 +1162,7 @@ void PreprocessWindow::updateConfirmGate()
 {
     if (!m_confirmBtn)
         return;
-    const auto problems = collectSortProblems(m_groups);
+    const auto problems = collectSortProblems(m_groups, overlapTrimOn());
     int pending = 0;
     for (const auto &p : problems)
         if (!m_problemAcks.contains(problemKey(p)))
@@ -1088,8 +1229,11 @@ void PreprocessWindow::refreshReviewSummary()
         issues << lang("%1 处缺口（共约 %2）", "%1 gap(s) (~%2 total)")
                       .arg(gaps).arg(fmtDuration(gapMs));
     if (overlaps > 0)
-        issues << lang("%1 处重叠（共 %2）", "%1 overlap(s) (%2 total)")
-                      .arg(overlaps).arg(fmtDuration(overlapMs));
+        issues << (overlapTrimOn()
+            ? lang("%1 处重叠（共 %2，将自动修剪）", "%1 overlap(s) (%2, auto-trimmed)")
+                  .arg(overlaps).arg(fmtDuration(overlapMs))
+            : lang("%1 处重叠（共 %2）", "%1 overlap(s) (%2 total)")
+                  .arg(overlaps).arg(fmtDuration(overlapMs)));
     if (unknownCount > 0)
         issues << lang("%1 段时间未知（排在末尾，需人工输入）",
                        "%1 clip(s) with unknown time (at end, need manual input)")
@@ -1411,6 +1555,11 @@ QWidget *PreprocessWindow::buildPageSettings()
     m_normalizeCheck = new QCheckBox(
         lang("时间戳归一化（修复重叠/乱序时间轴，改变输出时间戳，默认关）",
              "Timestamp normalization (rewrites output timestamps; default off)"), w);
+    // v1.12.0（2026-08-20 拍板）：重叠默认修剪、仅留痕；此项为唯一退出开关
+    m_keepOverlapCheck = new QCheckBox(
+        lang("保留时间重叠段原样（默认自动修剪：剪后段开头、保前段完整，报告留痕）",
+             "Keep time-overlapped segments as-is (default: auto-trim — cut the later "
+             "segment's head, keep the earlier one intact; noted in report)"), w);
     m_deinterlaceCheck = new QCheckBox(
         lang("隔行源反交错（转码时生效）", "Deinterlace interlaced sources (transcode only)"), w);
     m_deinterlaceCheck->setChecked(true);
@@ -1455,6 +1604,7 @@ QWidget *PreprocessWindow::buildPageSettings()
     encRow->addWidget(m_encoderCombo);
     encRow->addStretch(1);
     advLay->addWidget(m_normalizeCheck);
+    advLay->addWidget(m_keepOverlapCheck);
     advLay->addWidget(m_deinterlaceCheck);
     advLay->addWidget(m_sha256Check);
     advLay->addWidget(m_ignoreWarnCheck);
@@ -1665,6 +1815,16 @@ void PreprocessWindow::onStartProcessing()
     m_runLog->clear();
     m_runEta->clear();
     m_runTimer.start();
+    // v1.12.0（2026-08-20 拍板）：默认修剪重叠（Q-17 剪后段开头、保前段完整）、
+    // 仅留痕标注；高级选项勾选"保留原样"退出。无重叠时为空操作，全路径统一应用。
+    const bool keepOverlap = !overlapTrimOn();
+    m_coord->setTrimOverlap(!keepOverlap);
+    if (!m_overlapPendingChannels.isEmpty())
+        m_runLog->appendPlainText(keepOverlap
+            ? QStringLiteral("检测到时间重叠（组：%1）→ 按高级选项设置保留原样，报告标注")
+                  .arg(m_overlapPendingChannels.join(QStringLiteral("、")))
+            : QStringLiteral("检测到时间重叠（组：%1）→ 已默认修剪（剪后段开头、保前段完整），报告逐段留痕")
+                  .arg(m_overlapPendingChannels.join(QStringLiteral("、"))));
     m_coord->startProcessing(opts);
 }
 
@@ -1877,11 +2037,16 @@ void PreprocessWindow::onEvidenceReady(const QVector<SortGroup> &groups)
     }
     // P-60 GO 一键直通（方案 §4.1/§4.3，拍板 Q1A）：可信硬标准满足 →
     // 跳过人工校对直接执行（估算段等在完成页/报告醒目标识，不静默）
-    if (canAutoProceed(groups)) {
+    // v1.12.0（2026-08-20 拍板）：默认修剪策略下重叠不再阻断直通——
+    // 自动修剪（Q-17）+ 报告/日志留痕替代人工裁决
+    if (canAutoProceed(groups, overlapTrimOn())) {
         rebuildReviewViews();   // 结果页统计与留痕仍用 m_groups
         m_importStatus->setText(
             lang("分析完成，顺序可信——直接开始拼接…",
                  "Analysis done, order trusted — merging…"));
+        // 默认修剪（2026-08-20 拍板）：直通路径同样生效——可补上排序器
+        // 推算视角漏掉的 OCR 实证重叠（抽帧源 ocrEndMs > endMs）；无重叠空操作
+        m_coord->setTrimOverlap(overlapTrimOn());
         m_coord->startProcessing(collectProcessingOptions());
         return;
     }
@@ -1901,35 +2066,24 @@ void PreprocessWindow::onPrecheckReady(const QMap<QString, PrecheckResult> &)
     }
 }
 
-/// v1.7.0 M2：Precheck 检测到时间重叠 → 询问是否修剪（Q-17：剪后段开头，
-/// 默认关闭——保留原样并在报告中标注为默认语义）
+/// v1.7.0 M2 → v1.12.0 改判（2026-08-20 用户拍板）：Precheck 检测到时间重叠 →
+/// 默认修剪（Q-17：剪后段开头保前段完整），不再弹窗询问、仅留痕标注；
+/// 实际修剪在「开始拼接」时生效（onStartProcessing），用户可在设置页
+/// 高级选项勾选"保留原样"退出修剪。
 void PreprocessWindow::onOverlapDetected(const QStringList &channels)
 {
     if (channels.isEmpty())
         return;
-    const QString detail = channels.join(QStringLiteral("、"));
-    QMessageBox box(this);
-    box.setWindowTitle(lang("检测到时间重叠", "Time Overlap Detected"));
-    box.setText(lang(
-        QStringLiteral("组 %1 存在相邻片段时间重叠（多机同时段录制）。\n\n"
-                       "修剪：剪掉后一段的重叠开头，保留前段完整（推荐，"
-                       "消除时间线重复）。\n保留原样：不裁剪，重叠段在报告中标注。")
-            .arg(detail),
-        QStringLiteral("Group %1 has overlapping segments (simultaneous "
-                       "recordings).\n\nTrim: cut the overlapping head of the "
-                       "later segment, keep the earlier one intact (recommended).\n"
-                       "Keep as-is: no cut, overlaps are noted in the report.")
-            .arg(detail)));
-    QPushButton *trimBtn = box.addButton(
-        lang("修剪重叠（推荐）", "Trim overlaps (recommended)"),
-        QMessageBox::AcceptRole);
-    box.addButton(lang("保留原样", "Keep as-is"), QMessageBox::RejectRole);
-    box.exec();
-    const bool trim = box.clickedButton() == trimBtn;
-    m_coord->setTrimOverlap(trim);
-    m_runLog->appendPlainText(trim
-        ? QStringLiteral("已选择修剪重叠段（组：%1）").arg(detail)
-        : QStringLiteral("保留重叠段原样（组：%1）").arg(detail));
+    m_overlapPendingChannels = channels;
+    // 设置页明示（precheckReady 先于本信号，updateSettingsPage 已填好主文案）
+    if (m_modeReason)
+        m_modeReason->setText(m_modeReason->text() + QStringLiteral("\n") +
+            lang("ⓘ 检测到时间重叠（组 %1）：默认自动修剪（剪后段开头、保前段完整），"
+                 "报告逐段留痕；如需保留原样见下方高级选项",
+                 "ⓘ Time overlap detected (group %1): auto-trim by default (later "
+                 "segment's head cut, earlier kept intact), noted per segment in report; "
+                 "to keep as-is see Advanced options below")
+                .arg(channels.join(QStringLiteral("、"))));
 }
 
 /// 源素材统计 + 统一帧率提示（与 coordinator::logProbeStats 同源同公式：

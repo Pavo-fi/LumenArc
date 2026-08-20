@@ -425,23 +425,29 @@ int estimatedCount(const SortGroup &group)
     return n;
 }
 
-bool canAutoProceed(const QVector<SortGroup> &groups)
+bool canAutoProceed(const QVector<SortGroup> &groups, bool trimOverlap)
 {
     // P-60 拍板：Q5A 多机位（多分组）一律人工确认；Q1A 估算段 ≤2 且 ≤20%
+    // v1.12.0（2026-08-20 拍板）：默认修剪策略下重叠自动处置（Q-17 留痕），
+    // 不再阻断 GO 直通；用户选「保留原样」（trimOverlap=false）时恢复阻断
     if (groups.size() != 1)
         return false;
     const SortGroup &g = groups[0];
     if (g.suspicious)
         return false;
-    for (const auto &w : g.warnings)
+    for (const auto &w : g.warnings) {
+        if (trimOverlap && w.type == SortWarningType::Overlap)
+            continue;   // 默认修剪处置，不阻断
         if (isBlockingWarning(w.type))
             return false;
+    }
     const int est = estimatedCount(g);
     const int total = g.ordered.size();
     return est <= 2 && est * 5 <= total;
 }
 
-QVector<SortProblem> collectSortProblems(const QVector<SortGroup> &groups)
+QVector<SortProblem> collectSortProblems(const QVector<SortGroup> &groups,
+                                         bool trimOverlap)
 {
     QVector<SortProblem> out;
     for (int gi = 0; gi < groups.size(); ++gi) {
@@ -449,6 +455,8 @@ QVector<SortProblem> collectSortProblems(const QVector<SortGroup> &groups)
         for (const auto &w : g.warnings) {
             if (w.type != SortWarningType::Overlap)
                 continue;
+            if (trimOverlap)
+                continue;   // v1.12.0：默认修剪自动处置并留痕，不出问题卡
             SortProblem p;
             p.kind = SortProblem::OverlapPair;
             p.groupIndex = gi;

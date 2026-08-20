@@ -621,21 +621,39 @@ TimeCalibration CalibrationService::fromAbsStart(qint64 absStartEpochMs)
 // ---------------------------------------------------------------------------
 bool CalibrationService::writeSidecar(const QString &outputPath,
                                       const QVector<SortEntry> &orderedEntries,
-                                      QString *err)
+                                      QString *err,
+                                      const QMap<QString, qint64> &trimStartMs,
+                                      const QSet<QString> &skipFiles,
+                                      const QMap<QString, qint64> &actualStreamMs)
 {
     QJsonArray segs, gaps;
     qint64 streamCursor = 0;
     qint64 prevWallEnd = -1;
     for (const SortEntry &e : orderedEntries) {
-        QJsonObject s;
-        s[QStringLiteral("streamStartMs")] = static_cast<double>(streamCursor);
-        s[QStringLiteral("streamEndMs")] =
-            static_cast<double>(streamCursor + e.durationMs);
-        s[QStringLiteral("wallStartMs")] = static_cast<double>(e.startMs);
+        // v1.12.0：不在产物中的段（整段丢弃/转码失败）跳过
+        if (skipFiles.contains(e.filePath))
+            continue;
         // 段速率：首尾 OCR 双墙钟可估；否则 1.0（未知）
         double rate = 1.0;
         if (e.startMs > 0 && e.ocrEndMs > e.startMs && e.durationMs > 0)
             rate = double(e.ocrEndMs - e.startMs) / double(e.durationMs);
+        // v1.12.0：重叠修剪——保留部分墙钟起点后移 trim×rate，流内时长扣减
+        const qint64 trim = qMax<qint64>(0, trimStartMs.value(e.filePath, 0));
+        const qint64 keptStreamMs = qMax<qint64>(0, e.durationMs - trim);
+        if (keptStreamMs <= 0)
+            continue;
+        const qint64 wallStart = e.startMs > 0
+            ? e.startMs + static_cast<qint64>(
+                  std::llround(rate * static_cast<double>(trim)))
+            : 0;
+        // 产物中的实际流内时长：实测优先（转码段与源时长有 ±30~300ms 偏差）
+        const qint64 streamDur = actualStreamMs.value(e.filePath, 0) > 0
+            ? actualStreamMs.value(e.filePath) : keptStreamMs;
+        QJsonObject s;
+        s[QStringLiteral("streamStartMs")] = static_cast<double>(streamCursor);
+        s[QStringLiteral("streamEndMs")] =
+            static_cast<double>(streamCursor + streamDur);
+        s[QStringLiteral("wallStartMs")] = static_cast<double>(wallStart);
         s[QStringLiteral("rate")] = rate;
         s[QStringLiteral("source")] = TimeCalibration::sourceToString(
             e.sourceKind == SortEvidenceKind::AbsStart
@@ -645,9 +663,9 @@ bool CalibrationService::writeSidecar(const QString &outputPath,
                        : TimeCalibration::Source::None));
         segs.append(s);
 
-        // 缺口/重叠（墙钟域，推算口径）
-        if (prevWallEnd > 0 && e.startMs > 0) {
-            const qint64 gap = e.startMs - prevWallEnd;
+        // 缺口/重叠（墙钟域，段内按 rate 推算末端）
+        if (prevWallEnd > 0 && wallStart > 0) {
+            const qint64 gap = wallStart - prevWallEnd;
             if (qAbs(gap) > kGapToleranceMs) {
                 QJsonObject g;
                 g[QStringLiteral("afterStreamMs")] = static_cast<double>(streamCursor);
@@ -655,9 +673,10 @@ bool CalibrationService::writeSidecar(const QString &outputPath,
                 gaps.append(g);
             }
         }
-        if (e.startMs > 0)
-            prevWallEnd = e.startMs + e.durationMs;
-        streamCursor += e.durationMs;
+        if (wallStart > 0)
+            prevWallEnd = wallStart + static_cast<qint64>(
+                std::llround(rate * static_cast<double>(keptStreamMs)));
+        streamCursor += streamDur;
     }
 
     QJsonObject root;
@@ -729,6 +748,37 @@ bool CalibrationService::loadSidecar(const QString &videoPath,
     cal.dateKnown = true;
     cal.conf = 0.8;
     cal.calibratedAtMs = QDateTime::currentMSecsSinceEpoch();
+
+    // v1.12.0（2026-08-20 拍板：校时反映到前处理产物时间轴）：分段锚点 →
+    // 分段映射（查表校时）。拼接产物流内连续而墙钟在缺口处跳变，单条仿射
+    // 必然在缺口后失真（此前 Q-4 只能警告"首段之后可能不准"）；分段映射
+    // 使每段墙钟均按其画面时间锚定，缺口跳变即真实监控常态（仍进警告）。
+    // 无墙钟段（wallStartMs<=0）不入表——其区间由前段延伸覆盖，与旧行为一致。
+    {
+        PiecewiseTimeMap pw;
+        for (const QJsonValue &v : segs) {
+            const QJsonObject s = v.toObject();
+            TimeSegment ts;
+            ts.streamStartMs = static_cast<qint64>(
+                s[QStringLiteral("streamStartMs")].toDouble());
+            ts.wallStartMs = static_cast<qint64>(
+                s[QStringLiteral("wallStartMs")].toDouble());
+            ts.rate = s[QStringLiteral("rate")].toDouble(1.0);
+            if (ts.rate <= 0.0)
+                ts.rate = 1.0;
+            if (ts.wallStartMs > 0)
+                pw.segments.append(ts);
+        }
+        if (!pw.segments.isEmpty()) {
+            cal.piecewise = pw;
+            cal.piecewiseApplied = true;
+            for (const auto &t : pw.segments)
+                if (std::fabs(t.rate - 1.0) > 1e-3) {
+                    cal.speedVariant = true;   // 含抽帧/变速段（报告标注）
+                    break;
+                }
+        }
+    }
 
     // 缺口警告（Q-4：必进报告，UI 同步提示）
     const QJsonArray gaps = root[QStringLiteral("gaps")].toArray();

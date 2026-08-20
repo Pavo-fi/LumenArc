@@ -180,6 +180,9 @@ private:
 
     void rebuildProblemPanel();            // 问题卡重建（collectSortProblems → UI）
     void updateConfirmGate();              // 确认主按钮门控（问题清零才可继续）
+    /// v1.12.0：重叠默认修剪策略是否生效（高级选项「保留原样」勾选时退出）；
+    /// 生效时重叠不再阻断 GO 直通/不出问题卡（自动修剪+留痕）
+    bool overlapTrimOn() const;
     void roiPickForFile(const QString &filePath);   // 框选时间戳对话框
     QString evidenceImageFor(const QString &filePath) const;  // 首帧证据图
 
@@ -202,6 +205,8 @@ private:
     QPushButton *m_btnAdvanced = nullptr;
     QWidget *m_advancedHost = nullptr;
     QCheckBox *m_normalizeCheck = nullptr;
+    QCheckBox *m_keepOverlapCheck = nullptr;  // 勾选=保留重叠原样；默认自动修剪
+    QStringList m_overlapPendingChannels;     // 预检发现的重叠组（开始拼接时应用修剪）
     QCheckBox *m_deinterlaceCheck = nullptr;
     QCheckBox *m_sha256Check = nullptr;
     QCheckBox *m_ignoreWarnCheck = nullptr;

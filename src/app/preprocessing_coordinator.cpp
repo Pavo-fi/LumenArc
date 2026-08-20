@@ -21,6 +21,7 @@
 #include "domain/evidence_report.h"
 
 #include <QDateTime>
+#include <QCollator>
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
@@ -192,6 +193,8 @@ void PreprocessingCoordinator::begin(const QStringList &files)
     m_roiRetryDone = false;   // P-60 ROI 自学习随会话复位（仅本次任务）
     m_reOcrBusy = false;
     m_learnedRoi = QRectF();
+    m_trimOverlap = false;    // 修剪开关随会话复位（默认修剪由窗口逐会话应用）
+    m_cutPlans.clear();
     m_files = files;
     m_probes.clear();
     m_ocrs.clear();
@@ -368,13 +371,17 @@ void PreprocessingCoordinator::sortFilesByNameTime(QStringList &files)
         }
         items.append(it);
     }
+    // 都无时间戳：按文件名自然序（v1.12.0 修复：数字感知——
+    // 旧字典序会把 0,1,2… 排成 0,1,10,11…19,2…，2026-08-20 现场实证）
+    QCollator natural;
+    natural.setNumericMode(true);
     std::stable_sort(items.begin(), items.end(),
-        [](const Item &a, const Item &b) {
+        [&natural](const Item &a, const Item &b) {
             if (a.dt.isValid() && b.dt.isValid())
                 return a.dt < b.dt;
             if (a.dt.isValid() != b.dt.isValid())
                 return a.dt.isValid();   // 有时间戳的排前
-            return a.name < b.name;      // 都无时间戳：按文件名
+            return natural.compare(a.name, b.name) < 0;
         });
     files.clear();
     for (const auto &it : items)
@@ -618,8 +625,9 @@ void PreprocessingCoordinator::runPrecheck()
         for (const auto &e : g.ordered)
             ordered.append(m_probes.value(e.filePath));
         m_prechecks.insert(g.channel, concatPrecheck(ordered));
-        // v1.7.0 M2：组内时间重叠检测（墙钟相邻比较，容差 2s；
-        // 默认关闭修剪——检测到重叠仅提示，Q-17 拍板）
+        // v1.7.0 M2：组内时间重叠检测（墙钟相邻比较，容差 2s）；
+        // v1.12.0（2026-08-20 拍板）：检测到重叠默认修剪、仅留痕标注，
+        // 保留原样为 UI 高级选项（Q-17 修剪规则不变）
         for (int i = 1; i < g.ordered.size(); ++i) {
             const SortEntry &prev = g.ordered[i - 1];
             const SortEntry &cur = g.ordered[i];
@@ -992,8 +1000,9 @@ void PreprocessingCoordinator::setTrimOverlap(bool trim)
                                         }),
                          g.warnings.end());
     }
-    log(QStringLiteral("[%1] 重叠修剪已启用：%2 段将被裁剪（Q-17：保前段完整）")
-            .arg(tsLog()).arg(trimmed));
+    if (trimmed > 0)
+        log(QStringLiteral("[%1] 重叠修剪已启用：%2 段将被裁剪（Q-17：保前段完整）")
+                .arg(tsLog()).arg(trimmed));
 }
 
 /// 输出路径归一（报告通道映射键，与 case 登记 normPath 一致）
@@ -1281,13 +1290,41 @@ void PreprocessingCoordinator::finalize()
     }
     // v1.2.0：拼接输出随附校时 sidecar（§3.5；主程序打开输出时自动继承。
     // C2：写入失败仅记日志不静默，不阻断完成态）
+    // v1.12.0（2026-08-20 拍板：校时反映到产物时间轴）：sidecar 感知重叠修剪/
+    // 整段丢弃/转码失败剔除；转码段逐段实测时长（转码件与源时长偏差 ±30~
+    // 300ms，累积会污染尾部锚点——实测仅尾段一次 ffprobe，量级可忽略）
     for (auto it = m_concatOutputs.constBegin();
          it != m_concatOutputs.constEnd(); ++it) {
         for (const auto &g : m_groups) {
             if (g.channel != it.key())
                 continue;
+            QMap<QString, qint64> trimStarts;
+            QSet<QString> skips;
+            QMap<QString, qint64> actualMs;
+            for (const CutPlan &p : m_cutPlans) {
+                if (p.dropped)
+                    skips.insert(p.file);
+                else if (p.trimmed)
+                    trimStarts.insert(p.file, p.keepStartMs);
+            }
+            for (const QString &f : m_transcodeFailed)
+                skips.insert(f);
+            for (const auto &e : g.ordered) {
+                if (skips.contains(e.filePath))
+                    continue;
+                const QString part = m_transcoded.value(e.filePath);
+                if (part.isEmpty())
+                    continue;   // 未转码段（无损直拼）：流内时长 = 源时长
+                const ProbeResult pr = MediaProbeEngine::probeOne(part);
+                if (pr.ok() && pr.durationMs > 0)
+                    actualMs.insert(e.filePath, pr.durationMs);
+                else
+                    log(QStringLiteral("[%1] ⚠ 段产物时长实测失败（锚点回退源时长）：%2")
+                            .arg(tsLog(), part));
+            }
             QString serr;
-            if (!CalibrationService::writeSidecar(it.value(), g.ordered, &serr))
+            if (!CalibrationService::writeSidecar(it.value(), g.ordered, &serr,
+                                                  trimStarts, skips, actualMs))
                 log(QStringLiteral("[%1] sidecar 写入失败：%2")
                         .arg(tsLog(), serr));
         }

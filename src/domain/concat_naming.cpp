@@ -5,9 +5,13 @@
 namespace {
 
 /// 通道是否是"默认组"（无通道信息）——此时不带通道前缀
+/// 2026-08-20 实测修复：运行期实际默认组名为半角 "(默认组)"（smart_sorter/
+/// coordinator 两侧均是），此前仅匹配全角 "（默认组）" 导致拼接产物带上
+/// 字面 "(默认组)" 前缀（LAMerged_(默认组)_87_21.mp4，越秀案实测实锤）
 bool isDefaultGroup(const QString &channel)
 {
-    return channel.isEmpty() || channel == QStringLiteral("（默认组）")
+    return channel.isEmpty() || channel == QStringLiteral("(默认组)")
+        || channel == QStringLiteral("（默认组）")
         || channel == QStringLiteral("_默认组_");
 }
 
