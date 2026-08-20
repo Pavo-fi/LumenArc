@@ -66,6 +66,7 @@ struct SortEntry {
     double  conf = 0.0;
     QString thumbnailFirst, thumbnailLast;
     QString rawStartText, rawEndText;   // OCR 原文（逐字保留，取证展示用）
+    qint64  ocrEndFrameRelMs = 0;   // 尾帧证据的流内实测位置（速率换算分母；0=未知）
 };
 
 struct SortGroup {

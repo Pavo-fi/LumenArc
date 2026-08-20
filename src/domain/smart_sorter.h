@@ -25,6 +25,12 @@ constexpr qint64 kContinuityToleranceMs = 2000;
 /// 证据①②交叉验证容差（§5.2.5：偏差 > 容差则降置信 + WARN）
 constexpr qint64 kCrossCheckToleranceMs = 120000;   // 2 min
 
+/// v1.12.0 首尾帧 OCR 交叉验证下限容差（越秀案实测：OSD 单位数字误读会使
+/// 单端墙钟跳变 ±10s/±60s/±600s…，rate 出现 8.69/0.049 级异常）；实际容差
+/// = max(本值, 尾帧流内位置 × 10%)——容忍真变速（抽帧/快放）段的合理分歧，
+/// 又足以捕捉数字级误读
+constexpr qint64 kHeadTailCheckFloorMs = 15000;
+
 QVector<SortGroup> smartSort(const QVector<ProbeResult> &probes,
                              const QVector<OcrResult> &ocrs,
                              const QMap<QString, QString> &channelOverrides = {});

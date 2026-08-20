@@ -193,6 +193,110 @@ static OcrResult makeOcr(const QString &path, qint64 wallStartMs, double conf = 
     return o;
 }
 
+/// 带尾帧证据的 OCR 结果（v1.12.0 首尾交叉验证测试用）
+static OcrResult makeOcrHT(const QString &path, qint64 wallStartMs,
+                           qint64 tailWallMs, qint64 tailRelMs)
+{
+    OcrResult o = makeOcr(path, wallStartMs);
+    o.wallEndMs = tailWallMs;
+    o.endFrameRelMs = tailRelMs;
+    o.rawStartText = QStringLiteral("head-raw");
+    o.rawEndText = QStringLiteral("tail-raw");
+    return o;
+}
+
+// ---------------------------------------------------------------------------
+// v1.12.0 首尾帧 OCR 交叉验证（越秀案实测：OSD 单位数字误读 → rate 8.69/0.049
+// 级异常 → 幻影跨度级联：错位排序/误修剪/健康段误丢弃）
+static void testHeadTailCrossCheck()
+{
+    const qint64 t0 = epochOf(2024, 7, 1, 12, 0, 0);
+
+    // ---- 首帧误读（47.mp4 场景复刻）：b 首帧误读提前 8 分钟，尾帧正确；
+    // 连续性裁决应采尾帧推算起点，d/e 不受幻影跨度影响 ----
+    {
+        QVector<ProbeResult> ps;
+        QVector<OcrResult> os;
+        // 真实布局：a[0,60) c[61,121) d[420,480) b[480,540) e[540,600)（秒）
+        ps.append(makeProbe(QStringLiteral("a.mp4"), 60000));
+        os.append(makeOcrHT(QStringLiteral("a.mp4"), t0, t0 + 58000, 58000));
+        ps.append(makeProbe(QStringLiteral("b.mp4"), 60000));
+        os.append(makeOcrHT(QStringLiteral("b.mp4"), t0 + 8000,   // 首帧误读
+                            t0 + 538000, 58000));                 // 尾帧正确
+        ps.append(makeProbe(QStringLiteral("c.mp4"), 60000));
+        os.append(makeOcrHT(QStringLiteral("c.mp4"), t0 + 61000, t0 + 119000, 58000));
+        ps.append(makeProbe(QStringLiteral("d.mp4"), 60000));
+        os.append(makeOcrHT(QStringLiteral("d.mp4"), t0 + 420000, t0 + 478000, 58000));
+        ps.append(makeProbe(QStringLiteral("e.mp4"), 60000));
+        os.append(makeOcrHT(QStringLiteral("e.mp4"), t0 + 540000, t0 + 598000, 58000));
+
+        const auto groups = smartSort(ps, os);
+        CHECK(groups.size() == 1);
+        const SortGroup &g = groups[0];
+        CHECK(!g.suspicious);
+        CHECK(g.ordered.size() == 5);
+        // b 被纠正到 d 与 e 之间（尾帧推算 t0+480s）
+        CHECK(g.ordered[0].filePath == QLatin1String("a.mp4"));
+        CHECK(g.ordered[1].filePath == QLatin1String("c.mp4"));
+        CHECK(g.ordered[2].filePath == QLatin1String("d.mp4"));
+        CHECK(g.ordered[3].filePath == QLatin1String("b.mp4"));
+        CHECK(g.ordered[3].startMs == t0 + 480000);
+        CHECK(g.ordered[3].ocrEndMs == t0 + 538000);   // 尾帧锚点保留
+        CHECK(g.ordered[4].filePath == QLatin1String("e.mp4"));
+        // 有裁决留痕，且不再有幻影重叠
+        bool sawConflict = false, sawOverlap = false;
+        for (const auto &w : g.warnings) {
+            if (w.type == SortWarningType::EvidenceConflict) sawConflict = true;
+            if (w.type == SortWarningType::Overlap) sawOverlap = true;
+        }
+        CHECK(sawConflict);
+        CHECK(!sawOverlap);
+    }
+
+    // ---- 尾帧误读（8.mp4 场景）：尾帧多读一分钟错位 → 采首帧，尾帧弃用 ----
+    {
+        QVector<ProbeResult> ps{makeProbe(QStringLiteral("a.mp4"), 60000),
+                                makeProbe(QStringLiteral("b.mp4"), 60000)};
+        QVector<OcrResult> os{
+            makeOcrHT(QStringLiteral("a.mp4"), t0, t0 + 58000, 58000),
+            // b 尾帧误读为仅 3s 后（真实应为 t0+61s+58s）
+            makeOcrHT(QStringLiteral("b.mp4"), t0 + 61000, t0 + 64000, 58000)};
+        const auto groups = smartSort(ps, os);
+        const SortGroup &g = groups[0];
+        CHECK(!g.suspicious);
+        CHECK(g.ordered.size() == 2);
+        CHECK(g.ordered[1].filePath == QLatin1String("b.mp4"));
+        CHECK(g.ordered[1].startMs == t0 + 61000);      // 首帧保留
+        CHECK(g.ordered[1].ocrEndMs == 0);              // 尾帧已弃用
+    }
+
+    // ---- 首尾一致（正常段）：不触发裁决，尾帧保留 ----
+    {
+        QVector<ProbeResult> ps{makeProbe(QStringLiteral("a.mp4"), 60000)};
+        QVector<OcrResult> os{
+            makeOcrHT(QStringLiteral("a.mp4"), t0, t0 + 58000, 58000)};
+        const auto groups = smartSort(ps, os);
+        CHECK(!groups[0].suspicious);
+        CHECK(groups[0].ordered[0].ocrEndMs == t0 + 58000);
+        CHECK(groups[0].ordered[0].ocrEndFrameRelMs == 58000);
+        bool sawConflict = false;
+        for (const auto &w : groups[0].warnings)
+            if (w.type == SortWarningType::EvidenceConflict) sawConflict = true;
+        CHECK(!sawConflict);
+    }
+
+    // ---- 单文件组首尾矛盾：无邻段可裁决 → 弃尾帧 + 存疑 ----
+    {
+        QVector<ProbeResult> ps{makeProbe(QStringLiteral("x.mp4"), 60000)};
+        QVector<OcrResult> os{
+            makeOcrHT(QStringLiteral("x.mp4"), t0, t0 + 300000, 58000)};
+        const auto groups = smartSort(ps, os);
+        CHECK(groups[0].suspicious);
+        CHECK(groups[0].ordered[0].startMs == t0);
+        CHECK(groups[0].ordered[0].ocrEndMs == 0);
+    }
+}
+
 static void testConcatNaming()
 {
     // §45 定案：LAMerged_<通道>_<首>_<尾>，共同后缀只留首视频
@@ -878,6 +982,7 @@ int main(int argc, char **argv)
     }
     testFilenamePatterns();
     testDedupePlan();
+    testHeadTailCrossCheck();
     testSmartSorterBasic();
     testAbsStartEvidence();
     testSmartSorterBasic();

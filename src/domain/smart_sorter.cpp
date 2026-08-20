@@ -35,6 +35,7 @@ struct FileCtx {
     QString thumbFirst, thumbLast;
     QString rawStart, rawEnd;
     qint64  ocrEndMs = 0;
+    qint64  ocrEndFrameRelMs = 0;   // 尾帧证据流内实测位置（首尾交叉验证用）
 };
 
 /// 权重最高且有值者优先；同权冲突取 conf 高者
@@ -162,6 +163,7 @@ QVector<SortGroup> smartSort(const QVector<ProbeResult> &probes,
         c.rawStart = o.rawStartText;
         c.rawEnd = o.rawEndText;
         c.ocrEndMs = o.wallEndMs;
+        c.ocrEndFrameRelMs = o.endFrameRelMs;
         if (o.wallStartMs > 0) {
             // 人工手输与 OCR 同为证据①；人工值 conf 视为 1.0（用户即真相）
             const double conf = o.source == OcrResult::Manual ? 1.0 : o.conf;
@@ -184,10 +186,71 @@ QVector<SortGroup> smartSort(const QVector<ProbeResult> &probes,
 
     QVector<SortGroup> out;
     for (auto git = groups.begin(); git != groups.end(); ++git) {
-        const QVector<FileCtx> &files = git.value();
+        QVector<FileCtx> files = git.value();   // 可改：首尾裁决会修订证据
         SortGroup g;
         g.channel = git.key().isEmpty()
             ? QStringLiteral("(默认组)") : git.key();
+
+        // --- v1.12.0 首尾帧 OCR 交叉验证（2026-08-20 越秀案实测实锤）---
+        // OSD 单位数字误读会使首/尾一端墙钟跳变（rate 8.69/0.049 级异常），
+        // 幻影跨度级联放大：错位排序 → 误修剪 → 健康段被「完全重叠」误丢弃。
+        // 首帧 wallStart 与尾帧推算起点（尾帧墙钟 − 尾帧流内实测位置）是两路
+        // 独立证据；分歧 > max(15s, 尾帧位置×10%) → 两套候选各排一次序，取全组
+        // 连续性误差 Σ|Δ| 小者（与证据①②裁决同法）；平局保留首帧并标存疑。
+        // 被否端弃用（防污染 sidecar 速率与修剪计算），原文留痕于警告 detail。
+        if (files.size() > 1) {
+            for (int fi = 0; fi < files.size(); ++fi) {
+                FileCtx &c = files[fi];
+                if (c.ocr.epochMs <= 0 || c.ocrEndMs <= 0
+                    || c.ocrEndFrameRelMs <= 0)
+                    continue;   // 缺一端或尾帧位置未知（bonus 帧）→ 无法交叉
+                const qint64 tailImplied = c.ocrEndMs - c.ocrEndFrameRelMs;
+                const qint64 dev = qAbs(tailImplied - c.ocr.epochMs);
+                const qint64 tol = qMax<qint64>(kHeadTailCheckFloorMs,
+                                                c.ocrEndFrameRelMs / 10);
+                if (dev <= tol)
+                    continue;   // 首尾一致（含真变速合理分歧）
+                const qint64 headStart = c.ocr.epochMs;
+                auto keyWith = [&](qint64 start) {
+                    return std::function<qint64(const FileCtx &)>(
+                        [&, start](const FileCtx &x) {
+                            if (&x == &c)
+                                return start;
+                            const Evidence *e = bestEvidence(x);
+                            return e ? e->epochMs
+                                     : std::numeric_limits<qint64>::max();
+                        });
+                };
+                const auto keyH = keyWith(headStart);
+                const auto keyT = keyWith(tailImplied);
+                const qint64 errH = continuityErrorWithKey(
+                    files, orderBy(files, keyH), keyH);
+                const qint64 errT = continuityErrorWithKey(
+                    files, orderBy(files, keyT), keyT);
+                SortWarning w;
+                w.type = SortWarningType::EvidenceConflict;
+                w.deltaMs = dev;
+                if (errT < errH) {
+                    // 尾帧更可信：起点改采尾帧推算，保留尾帧锚点
+                    c.ocr.epochMs = tailImplied;
+                    w.detail = QStringLiteral(
+                        "首帧识别(%1)与尾帧推算(%2)矛盾，按连续性采用尾帧 "
+                        "(Σ|Δ|: 首=%3ms, 尾=%4ms)")
+                        .arg(c.rawStart, c.rawEnd).arg(errH).arg(errT);
+                } else {
+                    // 首帧保留；尾帧证据弃用（防速率/修剪污染）
+                    c.ocrEndMs = 0;
+                    c.ocrEndFrameRelMs = 0;
+                    w.detail = QStringLiteral(
+                        "首帧识别(%1)与尾帧推算(%2)矛盾，按连续性采用首帧 "
+                        "(Σ|Δ|: 首=%3ms, 尾=%4ms)")
+                        .arg(c.rawStart, c.rawEnd).arg(errH).arg(errT);
+                    if (errH == errT)
+                        g.suspicious = true;   // 无法裁决 → 强制人工确认
+                }
+                g.warnings.append(w);
+            }
+        }
 
         if (files.size() == 1) {
             // 单文件组：跳过排序逻辑，直接可拼接（§10.2）
@@ -202,9 +265,33 @@ QVector<SortGroup> smartSort(const QVector<ProbeResult> &probes,
             e.conf = ev ? ev->conf : 0.0;
             e.thumbnailFirst = files[0].thumbFirst;
             e.thumbnailLast = files[0].thumbLast;
-            e.ocrEndMs = files[0].ocrEndMs;
             e.rawStartText = files[0].rawStart;
             e.rawEndText = files[0].rawEnd;
+            // v1.12.0 单文件组首尾交叉验证：无邻段可裁决，分歧超容差 →
+            // 保留首帧（排序主证据）、弃用尾帧（防速率污染）并标存疑
+            qint64 ocrEnd = files[0].ocrEndMs;
+            qint64 ocrEndRel = files[0].ocrEndFrameRelMs;
+            if (e.startMs > 0 && ocrEnd > 0 && ocrEndRel > 0) {
+                const qint64 dev = qAbs(ocrEnd - ocrEndRel - e.startMs);
+                const qint64 tol = qMax<qint64>(kHeadTailCheckFloorMs,
+                                                ocrEndRel / 10);
+                if (dev > tol) {
+                    ocrEnd = 0;
+                    ocrEndRel = 0;
+                    g.suspicious = true;
+                    SortWarning w;
+                    w.type = SortWarningType::EvidenceConflict;
+                    w.indexA = 0;
+                    w.deltaMs = dev;
+                    w.detail = QStringLiteral(
+                        "首帧识别(%1)与尾帧推算(%2)矛盾（无邻段可裁决），"
+                        "已保留首帧、弃用尾帧，请人工核对")
+                        .arg(files[0].rawStart, files[0].rawEnd);
+                    g.warnings.append(w);
+                }
+            }
+            e.ocrEndMs = ocrEnd;
+            e.ocrEndFrameRelMs = ocrEndRel;
             g.ordered.append(e);
             appendCrossChecks(files[0], g, 0);
             if (!ev || ev->weight <= 0.2)
@@ -270,6 +357,7 @@ QVector<SortGroup> smartSort(const QVector<ProbeResult> &probes,
             e.thumbnailFirst = c.thumbFirst;
             e.thumbnailLast = c.thumbLast;
             e.ocrEndMs = c.ocrEndMs;
+            e.ocrEndFrameRelMs = c.ocrEndFrameRelMs;
             e.rawStartText = c.rawStart;
             e.rawEndText = c.rawEnd;
             g.ordered.append(e);

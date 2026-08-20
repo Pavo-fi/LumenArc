@@ -634,9 +634,14 @@ bool CalibrationService::writeSidecar(const QString &outputPath,
         if (skipFiles.contains(e.filePath))
             continue;
         // 段速率：首尾 OCR 双墙钟可估；否则 1.0（未知）
+        // v1.12.0 修复分母：尾帧墙钟对应的是尾帧流内实测位置（通常比总时长
+        // 提前 1~3s）——旧按 durationMs 计得系统性 ~0.94 偏慢速率，越秀案实测
+        // 实锤；缺尾帧位置时回退总时长。首尾矛盾段尾帧已被排序器弃用（ocrEnd=0）
         double rate = 1.0;
-        if (e.startMs > 0 && e.ocrEndMs > e.startMs && e.durationMs > 0)
-            rate = double(e.ocrEndMs - e.startMs) / double(e.durationMs);
+        const qint64 rateSpan = e.ocrEndFrameRelMs > 0 ? e.ocrEndFrameRelMs
+                                                       : e.durationMs;
+        if (e.startMs > 0 && e.ocrEndMs > e.startMs && rateSpan > 0)
+            rate = double(e.ocrEndMs - e.startMs) / double(rateSpan);
         // v1.12.0：重叠修剪——保留部分墙钟起点后移 trim×rate，流内时长扣减
         const qint64 trim = qMax<qint64>(0, trimStartMs.value(e.filePath, 0));
         const qint64 keptStreamMs = qMax<qint64>(0, e.durationMs - trim);

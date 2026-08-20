@@ -144,12 +144,48 @@ static void testClassicContinuous()
     // 无墙钟段不入表：全 None 组回退为空映射（与旧 affine 回退一致）
 }
 
+/// 场景 C（v1.12.0 速率分母修复）：尾帧墙钟对应尾帧流内实测位置而非总时长。
+/// 时长 61s、尾帧在 58s 处、首尾墙钟恰差 58s 的正常段，旧代码按 61s 分母
+/// 算出 rate≈0.951（系统性偏慢，越秀批普遍出现 0.94）；修复后 rate=1.0，
+/// 不标 speedVariant。
+static void testRateDenominator()
+{
+    const qint64 W = epochOf(2026, 8, 19, 3, 0, 0);
+    QVector<SortEntry> ordered;
+    auto e1 = mkEntry(QStringLiteral("n0.mp4"), W, 61000, W + 58000);
+    e1.ocrEndFrameRelMs = 58000;    // 尾帧在流内 58s 处：rate = 58s/58s = 1.0
+    auto e2 = mkEntry(QStringLiteral("n1.mp4"), W + 61000, 61000, W + 119000);
+    e2.ocrEndFrameRelMs = 58000;
+    ordered << e1 << e2;
+
+    const QString dir = QDir::temp().absolutePath()
+        + QStringLiteral("/lumenarc_sidecar_test");
+    QDir().mkpath(dir);
+    const QString out = dir + QStringLiteral("/merged_rate.mp4");
+    QFile::remove(out + QStringLiteral(".lumencal.json"));
+
+    QString err;
+    CHECK(CalibrationService::writeSidecar(out, ordered, &err));
+    TimeCalibration cal;
+    QString warning;
+    CHECK(CalibrationService::loadSidecar(out, &cal, &warning));
+    CHECK(cal.piecewiseMode());
+    CHECK(cal.piecewise.segments.size() == 2);
+    CHECK(!cal.speedVariant);       // rate=1.0：不标变速（修复前 0.951 会标）
+    // 段内推进速率 1:1
+    CHECK(cal.wallMsOf(30000) == W + 30000);
+    CHECK(qAbs(cal.wallMsOf(61000 + 10000) - (W + 61000 + 10000)) <= 1000);
+    // 段尾（58s 尾帧之后延伸 3s 到边界）不越过下段起点
+    CHECK(cal.wallMsOf(60000) <= W + 61000 + 3000);
+}
+
 int main(int argc, char **argv)
 {
     QCoreApplication app(argc, argv);
     Q_UNUSED(app)
     testTrimSkipActual();
     testClassicContinuous();
+    testRateDenominator();
     fprintf(stderr, "checks: %d failures: %d\n", g_checks, g_failures);
     return g_failures == 0 ? 0 : 1;
 }

@@ -216,6 +216,31 @@ static void testCutPlans()
         CHECK(plans.size() == 2 && !plans[1].trimmed && !plans[0].trimmed,
               "cut: zero wallclock no false trim");
     }
+    // v1.12.0 变速段速率换算：b 为 2× 快放段（墙钟跨 120s / 流内 60s），
+    // 墙钟重叠 20s → 流内修剪 10s（旧版按 rate=1 直剪会过剪 2 倍）
+    {
+        QVector<WallSegment> segs = {
+            {QStringLiteral("a"), 0, 100000, 100000},
+            {QStringLiteral("b"), 80000, 200000, 60000},   // rate=2
+        };
+        const auto plans = planOverlapCuts(segs);
+        CHECK(plans[1].trimmed && plans[1].keepStartMs == 10000
+              && !plans[1].dropped,
+              "cut: 2x timelapse wall-overlap 20s -> stream trim 10s");
+    }
+    // v1.12.0 丢弃后参照系不回退：b 被 a 完全包含丢弃后，c 仍与 a 的
+    // 真实覆盖止点比较（旧版回退到 b 的墙钟止 → 漏剪 c 的 40s 重叠）
+    {
+        QVector<WallSegment> segs = {
+            {QStringLiteral("a"), 0, 200000, 200000},
+            {QStringLiteral("b"), 50000, 150000, 100000},  // 被 a 包含 → 丢弃
+            {QStringLiteral("c"), 160000, 260000, 100000}, // 与 a 重叠 40s
+        };
+        const auto plans = planOverlapCuts(segs);
+        CHECK(plans[1].dropped, "cut: contained b dropped");
+        CHECK(plans[2].trimmed && plans[2].keepStartMs == 40000,
+              "cut: c trimmed against a's coverage end after drop");
+    }
 }
 
 // ============================================================================
