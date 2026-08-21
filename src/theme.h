@@ -19,6 +19,7 @@
 #include <QColor>
 #include <QVector>
 #include <QApplication>
+#include <QFont>
 
 namespace Theme {
 
@@ -130,6 +131,24 @@ inline QString globalStyleSheet()
 
         // ---- 对话框 ----
         "QDialog { background: %5; }"
+
+        // ---- v1.12.9 面板观感统一（用户反馈④）：分组框/树表/表格头 ----
+        "QGroupBox { background: transparent; border: 1px solid %4; border-radius: 8px;"
+        "  margin-top: 14px; padding-top: 8px; }"
+        "QGroupBox::title { subcontrol-origin: margin; subcontrol-position: top left;"
+        "  left: 10px; top: 2px; padding: 0 6px; color: %8; }"
+        "QTreeWidget, QTableWidget { background: %1; color: %2; border: 1px solid %4;"
+        "  border-radius: 6px; outline: none; }"
+        "QTreeWidget::item, QTableWidget::item { padding: 2px 4px; }"
+        "QTreeWidget::item:selected, QTableWidget::item:selected { background: %3; color: %2; }"
+        "QTreeWidget::item:hover, QTableWidget::item:hover { background: %9; }"
+        "QHeaderView::section { background: %5; color: %8; border: none;"
+        "  border-bottom: 1px solid %4; padding: 4px 6px; }"
+        "QTabWidget::pane { border: 1px solid %4; border-radius: 6px; top: -1px; }"
+        "QTabBar::tab { background: %5; color: %8; padding: 6px 14px;"
+        "  border-top-left-radius: 6px; border-top-right-radius: 6px; }"
+        "QTabBar::tab:selected { background: %3; color: %2; }"
+        "QTabBar::tab:hover:!selected { background: %9; }"
     ).arg(BgApp)      // %1
      .arg(TextPrimary)// %2
      .arg(BgCard)     // %3
@@ -149,6 +168,17 @@ inline void apply(QApplication &app)
 {
     app.setStyle(QStringLiteral("Fusion"));
     app.setStyleSheet(globalStyleSheet());
+    // v1.12.9（用户反馈④）：全局默认字体统一——此前未设，未显式指定的
+    // 控件回落 Qt 平台默认（Windows 为 MS Shell Dlg），与各界面元素的
+    // Segoe UI/Microsoft YaHei 声明混搭显乱。setFamilies 逐级回退。
+    QFont baseFont;
+    baseFont.setFamilies({QStringLiteral("Microsoft YaHei UI"),
+                          QStringLiteral("Microsoft YaHei"),
+                          QStringLiteral("Segoe UI"),
+                          QStringLiteral("PingFang SC"),
+                          QStringLiteral("sans-serif")});
+    baseFont.setPointSize(9);
+    app.setFont(baseFont);
 }
 
 } // namespace Theme

@@ -289,6 +289,8 @@ protected:
     QWidget *m_videoListSidebar = nullptr;
     QWidget *m_videoListContent = nullptr;
     QDockWidget *m_videoListPlaceholder = nullptr;
+    QDockWidget *m_casePlaceholder = nullptr;   ///< 案件列表折叠占位条（v1.12.9）
+    bool m_caseDockWasExpanded = false;
     /// 打开素材转码拼接窗口（v1.2 独立任务窗口）
     void openPreprocessWindow();
     QWidget *m_chartContainer = nullptr;

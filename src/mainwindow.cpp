@@ -109,7 +109,7 @@ MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent)
 {
     loadLanguage();
-    setWindowTitle(lang("追光者 Lumen Arc v1.12.8", "Lumen Arc v1.12.8") + buildStamp());
+    setWindowTitle(lang("追光者 Lumen Arc v1.12.9", "Lumen Arc v1.12.9") + buildStamp());
     resize(1280, 720);
 
     m_roiModel = new RoiModel(this);   // 统一 ROI 模型（矩形+多边形，v1.5.0 Q-18）
@@ -485,6 +485,52 @@ MainWindow::MainWindow(QWidget *parent)
         m_videoListCollapseBtn->setText(QString::fromUtf8("\xe2\x97\x80")); // ◀
         m_videoListCollapseBtn->setToolTip(lang("收起视频列表", "Collapse video list"));
         resizeDocks({m_videoListPanel}, {250}, Qt::Horizontal);
+    });
+
+    // v1.12.9（用户反馈①）：案件面板同款折叠占位条——打开放大镜时
+    // 案件列表与旧版视频列表一样收成细条，点击 ▶ 展开。
+    m_casePlaceholder = new QDockWidget(this);
+    m_casePlaceholder->setFeatures(QDockWidget::NoDockWidgetFeatures);
+    m_casePlaceholder->setTitleBarWidget(new QWidget());
+    m_casePlaceholder->titleBarWidget()->setFixedHeight(0);
+    m_casePlaceholder->setStyleSheet(
+        "QDockWidget { border: 0px; padding: 0px; }"
+        "QDockWidget::title { padding: 0px; margin: 0px; border: 0px; }");
+    auto *casePhContent = new QWidget();
+    casePhContent->setFixedWidth(28);
+    casePhContent->setStyleSheet("background: " + Theme::BgPanel
+        + "; border-right: 1px solid " + Theme::Border + ";");
+    auto *casePhLay = new QVBoxLayout(casePhContent);
+    casePhLay->setContentsMargins(2, 4, 2, 4);
+    casePhLay->setSpacing(4);
+    auto *casePhExpandBtn = new QPushButton(QString::fromUtf8("â¶"),
+                                            casePhContent);   // ▶
+    casePhExpandBtn->setFixedSize(22, 22);
+    casePhExpandBtn->setStyleSheet(collapseBtnStyle);
+    casePhExpandBtn->setToolTip(lang("展开案件列表", "Expand case list"));
+    casePhExpandBtn->setFocusPolicy(Qt::NoFocus);
+    casePhLay->addWidget(casePhExpandBtn);
+    casePhLay->addStretch();
+    {
+        const QString vertText = lang("案件列表", "Case");
+        for (const QChar &ch : vertText) {
+            auto *chLabel = new QLabel(QString(ch), casePhContent);
+            chLabel->setStyleSheet("color: " + Theme::TextSecond
+                + "; font-size: 11px; background: transparent;");
+            chLabel->setAlignment(Qt::AlignCenter);
+            casePhLay->addWidget(chLabel);
+        }
+    }
+    casePhLay->addStretch();
+    m_casePlaceholder->setWidget(casePhContent);
+    addDockWidget(Qt::LeftDockWidgetArea, m_casePlaceholder);
+    resizeDocks({m_casePlaceholder}, {24}, Qt::Horizontal);
+    m_casePlaceholder->setVisible(false);
+    connect(casePhExpandBtn, &QPushButton::clicked, this, [this]() {
+        m_casePlaceholder->setVisible(false);
+        m_caseDock->setVisible(true);
+        m_caseDockWasExpanded = true;
+        resizeDocks({m_caseDock}, {250}, Qt::Horizontal);
     });
 
     // v0.3: Status bar with progress
@@ -1409,8 +1455,19 @@ void MainWindow::setupConnections()
     connect(m_snapshotBtn, &QPushButton::clicked,
             this, &MainWindow::onSnapshotQuick);
     connect(m_adjustBtn, &QPushButton::toggled, this, [this](bool on) {
-        if (m_adjustPanel)
+        if (m_adjustPanel) {
+            // v1.12.9（用户反馈③）：独立浮窗呼出（与多机同步页同款），
+            // 不挤占 dock 布局；关闭浮窗回写钮态由 visibilityChanged 负责
+            if (on)
+                m_adjustPanel->setFloating(true);
             m_adjustPanel->setVisible(on);
+            if (on) {
+                m_adjustPanel->resize(320, 460);
+                const QPoint anchor = mapToGlobal(
+                    QPoint(width() - 340, 90));
+                m_adjustPanel->move(anchor);
+            }
+        }
     });
     if (m_adjustPanel) {
         connect(m_adjustPanel, &PlaybackAdjustPanel::adjustChanged, this,
@@ -2186,7 +2243,7 @@ void MainWindow::openVideoFile(const QString &filePath)
 
         // Do NOT overwrite m_currentVideoPath with the .vla path: it is an
         // analysis file, not a playable video, and it keys VideoStateManager.
-        setWindowTitle(windowTitleWithCase("Lumen Arc v1.12.8 - [Loaded: " +
+        setWindowTitle(windowTitleWithCase("Lumen Arc v1.12.9 - [Loaded: " +
                            QFileInfo(filePath).fileName() + "]"));
         } else {
             QMessageBox::critical(this, lang("错误", "Error"),
@@ -2539,7 +2596,7 @@ void MainWindow::onLoadAnalysis()
                 m_guideLineModel->addLine(line);
 
             // Do NOT overwrite m_currentVideoPath with the .vla path (see openVideoFile).
-        setWindowTitle(windowTitleWithCase("Lumen Arc v1.12.8 - [Loaded: " +
+        setWindowTitle(windowTitleWithCase("Lumen Arc v1.12.9 - [Loaded: " +
                        QFileInfo(filePath).fileName() + "]"));
         QMessageBox::information(this, lang("已加载", "Loaded"),
             lang("分析结果加载成功。", "Analysis result loaded successfully."));
@@ -2728,7 +2785,7 @@ void MainWindow::onSetStartTime()
                               .arg(cal.offsetMs / 1000.0, 0, 'f', 1);
                 }
                 showOperationStatus(msg);
-                // v1.12.8 对时图片留档（拍板：存档）：校时图片复制入案件
+                // v1.12.9 对时图片留档（拍板：存档）：校时图片复制入案件
                 // calibration/ 目录（best effort；未入案件则保留原路径引用）
                 if (cal.truthSet
                     && cal.truthSource == QLatin1String("photo")
@@ -2947,15 +3004,24 @@ void MainWindow::createMagnifier()
     m_magnifier->setWindowTitle(lang("放大镜", "Magnifier"));
     m_magnifier->show();
 
-    // Auto-layout: hide video list panel, show placeholder, resize magnifier to ~40%
+    // Auto-layout: 收起左侧列表（案件模式收案件面板，否则收视频列表，
+    // v1.12.9 用户反馈①：案件列表此前不折叠）并显示占位细条
     m_videoListWasExpanded = m_videoListContent->isVisible();
-    if (m_videoListWasExpanded || m_videoListPanel->isVisible()) {
+    const bool caseMode = m_caseDock && m_caseDock->isVisible();
+    if (caseMode) {
+        m_caseDockWasExpanded = true;
+        m_caseDock->setVisible(false);
+        m_casePlaceholder->setVisible(true);
+        resizeDocks({m_casePlaceholder}, {24}, Qt::Horizontal);
+    } else if (m_videoListWasExpanded || m_videoListPanel->isVisible()) {
         m_videoListPanel->setVisible(false);
         m_videoListPlaceholder->setVisible(true);
         resizeDocks({m_videoListPlaceholder}, {24}, Qt::Horizontal);
     }
+    // v1.12.9（用户反馈②拍板布局）：放大镜占窗口一半——
+    // 左半原始画面、右半放大镜，双画面等大并列
     int windowWidth = width();
-    resizeDocks({m_magnifier}, {static_cast<int>(windowWidth * 0.4)}, Qt::Horizontal);
+    resizeDocks({m_magnifier}, {static_cast<int>(windowWidth * 0.5)}, Qt::Horizontal);
 
     // Sync snapshot overlay if currently active
     if (m_snapshotOverlay && m_snapshotOverlay->hasSnapshot() && m_snapshotOverlay->isOverlayActive()) {
@@ -3024,6 +3090,15 @@ void MainWindow::removeMagnifier()
     if (!m_magnifier)
         return;
 
+    // 恢复案件面板（v1.12.9：与视频列表同语义——占位条还亮着说明用户
+    // 没主动展开过，按进入前状态恢复）
+    if (m_casePlaceholder && m_casePlaceholder->isVisible()) {
+        m_casePlaceholder->setVisible(false);
+        if (m_caseDockWasExpanded && m_caseDock) {
+            m_caseDock->setVisible(true);
+            resizeDocks({m_caseDock}, {250}, Qt::Horizontal);
+        }
+    }
     // Restore video list panel state
     if (m_videoListPlaceholder->isVisible()) {
         // User didn't expand video list while magnifier was open
