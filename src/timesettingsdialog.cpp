@@ -392,28 +392,6 @@ QString TimeSettingsDialog::fmtOffset(qint64 offsetMs)
     return (neg ? QStringLiteral("-") : QStringLiteral("+")) + body;
 }
 
-// v1.12.5 拍板表述：「监控主机时间比北京时间 快/慢 X日X时X分X秒」
-// （truthOffsetMs = 北京 − 监控：正 = 监控慢，负 = 监控快；秒级精度）
-QString TimeSettingsDialog::fmtOffsetVerbose(qint64 offsetMs) const
-{
-    const qint64 a = qAbs(offsetMs) / 1000;
-    const qint64 d = a / 86400;
-    const qint64 h = a % 86400 / 3600;
-    const qint64 m = a % 3600 / 60;
-    const qint64 s = a % 60;
-    QString body;
-    if (d)
-        body += lang("%1 日", "%1 d ").arg(d);
-    if (h)
-        body += lang("%1 时", "%1 h ").arg(h);
-    if (m)
-        body += lang("%1 分", "%1 m ").arg(m);
-    if (s || body.isEmpty())
-        body += lang("%1 秒", "%1 s").arg(s);
-    return (offsetMs >= 0 ? lang("慢 ", "slower by ")
-                          : lang("快 ", "faster by ")) + body;
-}
-
 void TimeSettingsDialog::refreshWorkingSummary()
 {
     if (!m_working.isValid()) {
@@ -965,7 +943,8 @@ void TimeSettingsDialog::onTruthInputChanged()
                           - monitorWall;
     m_truthPreviewLabel->setText(lang(
         "偏移：监控主机时间比北京时间 %1",
-        "Offset: recorder clock is %1").arg(fmtOffsetVerbose(offset)));
+        "Offset: recorder clock is %1")
+            .arg(TruthPhotoConfirmDialog::fmtOffsetVerbose(offset)));
 }
 
 void TimeSettingsDialog::onAdoptTruth()
@@ -1145,17 +1124,16 @@ void TimeSettingsDialog::onCalibPhotoFinished(
                                 "(Beijing time taken as next day)");
         }
     }
-    const qint64 offset = bj.wallMs - mon.wallMs;
-    // 确认卡（v1.12.5 拍板：校时图片集成上卡 + 滚轮放大/拖动校对）：
-    // 左侧图片（两框叠加可放大），右侧解析结果 + 原文 + 偏差表述
+    // 确认卡（v1.12.6：图片集成可放大校对 + 两个时间可直接修改、
+    // 偏差实时重算；采用时以卡上（可能被用户修正的）时间为准）
     TruthPhotoConfirmDialog confirmDlg(
         m_pendingTruthImage, m_pendingTruthBox1, m_pendingTruthBox2,
-        fmtWall(mon.wallMs), mon.matchedText,
-        fmtWall(bj.wallMs), bj.matchedText,
-        fmtOffsetVerbose(offset), crossDayNote, this);
+        mon.wallMs, mon.matchedText,
+        bj.wallMs, bj.matchedText,
+        crossDayNote, this);
     if (confirmDlg.exec() != QDialog::Accepted)
         return;
-    m_working.truthOffsetMs = offset;
+    const qint64 offset = confirmDlg.offsetMs();
     m_working.truthSet = true;
     m_working.truthCheckedAtMs = QDateTime::currentMSecsSinceEpoch();
     m_working.truthSource = QStringLiteral("photo");
@@ -1166,6 +1144,9 @@ void TimeSettingsDialog::onCalibPhotoFinished(
     m_working.truthBeijingText = bj.matchedText;
     if (m_working.truthNote.isEmpty())
         m_working.truthNote = lang("校时图片对时", "Photo time check");
+    if (confirmDlg.userEdited())
+        m_working.truthNote += lang("（确认卡人工修正读数）",
+                                    " (readings hand-corrected in confirm card)");
     m_applied = true;
     refreshWorkingSummary();
     emit calibrationApplied(m_working);

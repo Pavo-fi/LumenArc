@@ -18,6 +18,7 @@
 #include <QWheelEvent>
 #include <QPushButton>
 #include <QVBoxLayout>
+#include <QDateTimeEdit>
 
 namespace {
 /// 视图最大尺寸（图片等比缩放进此框）
@@ -344,13 +345,53 @@ void ZoomPhotoView::paintEvent(QPaintEvent *)
 // ---------------------------------------------------------------------------
 // TruthPhotoConfirmDialog：图片（左，可缩放）+ 识别结果（右）+ 确认/取消
 // ---------------------------------------------------------------------------
+// v1.12.5 拍板表述：「监控主机时间比北京时间 快/慢 X日X时X分X秒」
+// （truthOffsetMs = 北京 − 监控：正 = 监控慢，负 = 监控快；秒级精度）
+QString TruthPhotoConfirmDialog::fmtOffsetVerbose(qint64 offsetMs)
+{
+    const qint64 a = qAbs(offsetMs) / 1000;
+    const qint64 d = a / 86400;
+    const qint64 h = a % 86400 / 3600;
+    const qint64 m = a % 3600 / 60;
+    const qint64 s = a % 60;
+    QString body;
+    if (d)
+        body += lang("%1 日", "%1 d ").arg(d);
+    if (h)
+        body += lang("%1 时", "%1 h ").arg(h);
+    if (m)
+        body += lang("%1 分", "%1 m ").arg(m);
+    if (s || body.isEmpty())
+        body += lang("%1 秒", "%1 s").arg(s);
+    return (offsetMs >= 0 ? lang("慢 ", "slower by ")
+                          : lang("快 ", "faster by ")) + body;
+}
+
+qint64 TruthPhotoConfirmDialog::offsetMs() const
+{
+    return m_beijingEdit->dateTime().toMSecsSinceEpoch()
+           - m_monitorEdit->dateTime().toMSecsSinceEpoch();
+}
+
+bool TruthPhotoConfirmDialog::userEdited() const
+{
+    return offsetMs() != m_initialOffsetMs;
+}
+
+void TruthPhotoConfirmDialog::updateOffsetLabel()
+{
+    m_offsetLabel->setText(
+        lang("偏差：监控主机时间比北京时间 %1", "Offset: recorder is %1")
+            .arg(fmtOffsetVerbose(offsetMs())));
+}
+
 TruthPhotoConfirmDialog::TruthPhotoConfirmDialog(
     const QString &imagePath, const QRect &monitorBox, const QRect &beijingBox,
-    const QString &monitorTimeText, const QString &monitorRawText,
-    const QString &beijingTimeText, const QString &beijingRawText,
-    const QString &offsetVerboseText, const QString &crossDayNote,
-    QWidget *parent)
+    qint64 monitorMs, const QString &monitorRawText,
+    qint64 beijingMs, const QString &beijingRawText,
+    const QString &crossDayNote, QWidget *parent)
     : QDialog(parent)
+    , m_initialOffsetMs(beijingMs - monitorMs)
 {
     setWindowTitle(lang("确认对时偏差", "Confirm offset"));
     auto *lay = new QHBoxLayout(this);
@@ -361,49 +402,69 @@ TruthPhotoConfirmDialog::TruthPhotoConfirmDialog(
     lay->addWidget(view, 1);
 
     auto *right = new QVBoxLayout();
-    auto *title = new QLabel(lang("请核对原文读数（滚轮放大图片、拖动平移、双击复位）",
+    auto *title = new QLabel(lang("请核对原文读数（滚轮放大图片、拖动平移、双击复位）；\n"
+                                  "识别有误可直接修改下方两个时间，偏差实时重算。",
                                   "Verify readings (wheel=zoom, drag=pan, "
-                                  "double-click=fit)"), this);
+                                  "double-click=fit); edit the times below "
+                                  "if OCR misread; offset recalculates live."), this);
     title->setWordWrap(true);
     title->setStyleSheet(QStringLiteral("color:#c90;font-weight:bold;"));
     right->addWidget(title);
 
-    auto mkRow = [this](const QString &k, const QString &v, bool mono) {
-        auto *row = new QVBoxLayout();
+    auto mkKey = [this](const QString &k) {
         auto *kl = new QLabel(k, this);
         kl->setStyleSheet(QStringLiteral("color:#888;"));
+        return kl;
+    };
+    auto mkRawRow = [this, mkKey](const QString &k, const QString &v) {
+        auto *row = new QVBoxLayout();
+        row->addWidget(mkKey(k));
         auto *vl = new QLabel(v, this);
         vl->setTextInteractionFlags(Qt::TextSelectableByMouse);
         vl->setWordWrap(true);
-        if (mono)
-            vl->setStyleSheet(QStringLiteral("font-family:Consolas,monospace;"));
-        row->addWidget(kl);
+        vl->setStyleSheet(QStringLiteral("font-family:Consolas,monospace;"));
         row->addWidget(vl);
         return row;
     };
-    right->addLayout(mkRow(lang("监控主机时间：", "Recorder clock:"),
-                           monitorTimeText, false));
-    right->addLayout(mkRow(lang("框 1 原文：", "Box 1 raw:"),
-                           monitorRawText, true));
+
+    // 监控主机时间（可编辑）
+    right->addWidget(mkKey(lang("监控主机时间（可修改）：",
+                                "Recorder clock (editable):")));
+    m_monitorEdit = new QDateTimeEdit(QDateTime::fromMSecsSinceEpoch(monitorMs), this);
+    m_monitorEdit->setDisplayFormat(QStringLiteral("yyyy-MM-dd HH:mm:ss"));
+    m_monitorEdit->setDateTimeRange(QDateTime(QDate(2000, 1, 1), QTime(0, 0, 0)),
+                                    QDateTime(QDate(2100, 12, 31), QTime(23, 59, 59)));
+    right->addWidget(m_monitorEdit);
+    right->addLayout(mkRawRow(lang("框 1 原文：", "Box 1 raw:"), monitorRawText));
     right->addSpacing(6);
-    right->addLayout(mkRow(lang("北京时间：", "Beijing time:"),
-                           beijingTimeText, false));
-    right->addLayout(mkRow(lang("框 2 原文：", "Box 2 raw:"),
-                           beijingRawText, true));
+
+    // 北京时间（可编辑）
+    right->addWidget(mkKey(lang("北京时间（可修改）：",
+                                "Beijing time (editable):")));
+    m_beijingEdit = new QDateTimeEdit(QDateTime::fromMSecsSinceEpoch(beijingMs), this);
+    m_beijingEdit->setDisplayFormat(QStringLiteral("yyyy-MM-dd HH:mm:ss"));
+    m_beijingEdit->setDateTimeRange(QDateTime(QDate(2000, 1, 1), QTime(0, 0, 0)),
+                                    QDateTime(QDate(2100, 12, 31), QTime(23, 59, 59)));
+    right->addWidget(m_beijingEdit);
+    right->addLayout(mkRawRow(lang("框 2 原文：", "Box 2 raw:"), beijingRawText));
     right->addSpacing(10);
 
-    auto *offLabel = new QLabel(lang("偏差：监控主机时间比北京时间 %1 %2",
-                                     "Offset: recorder is %1 %2")
-                                    .arg(offsetVerboseText, crossDayNote),
-                                this);
-    offLabel->setWordWrap(true);
-    offLabel->setStyleSheet(QStringLiteral("font-weight:bold; font-size:14px;"));
-    right->addWidget(offLabel);
+    m_offsetLabel = new QLabel(this);
+    m_offsetLabel->setWordWrap(true);
+    m_offsetLabel->setStyleSheet(QStringLiteral("font-weight:bold; font-size:14px;"));
+    right->addWidget(m_offsetLabel);
+    updateOffsetLabel();
+    if (!crossDayNote.isEmpty()) {
+        auto *note = new QLabel(crossDayNote, this);
+        note->setWordWrap(true);
+        note->setStyleSheet(QStringLiteral("color:#c90;"));
+        right->addWidget(note);
+    }
 
-    auto *warn = new QLabel(lang("OCR 可能误读个别数字（如秒位）。请放大图片核对\n"
-                                 "两个框内读数与上方解析一致后再确认。",
+    auto *warn = new QLabel(lang("OCR 可能误读个别数字（如秒位）。请放大图片核对；\n"
+                                 "修改后偏差行会实时重算，确认后再应用。",
                                  "OCR may misread digits (e.g. seconds). Zoom in "
-                                 "and verify both boxes before confirming."),
+                                 "to verify; edits recalculate the offset live."),
                             this);
     warn->setWordWrap(true);
     warn->setStyleSheet(QStringLiteral("color:#c90;"));
@@ -421,11 +482,16 @@ TruthPhotoConfirmDialog::TruthPhotoConfirmDialog(
     right->addLayout(btnRow);
     auto *rightW = new QWidget(this);
     rightW->setLayout(right);
-    rightW->setFixedWidth(360);
+    rightW->setFixedWidth(380);
     lay->addWidget(rightW);
 
+    connect(m_monitorEdit, &QDateTimeEdit::dateTimeChanged,
+            this, [this](const QDateTime &) { updateOffsetLabel(); });
+    connect(m_beijingEdit, &QDateTimeEdit::dateTimeChanged,
+            this, [this](const QDateTime &) { updateOffsetLabel(); });
     connect(useBtn, &QPushButton::clicked, this, &QDialog::accept);
     connect(cancelBtn, &QPushButton::clicked, this, &QDialog::reject);
 
     resize(1120, 640);
 }
+

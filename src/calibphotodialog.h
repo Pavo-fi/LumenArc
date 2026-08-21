@@ -21,6 +21,7 @@
 #include <QRect>
 
 class QLabel;
+class QDateTimeEdit;
 class QPushButton;
 
 /// 可缩放图片视图（v1.12.5 对时确认卡）：滚轮以光标为锚缩放、左键拖动平移、
@@ -54,22 +55,31 @@ private:
     bool m_dragging = false;
 };
 
-/// 对时偏差确认卡（v1.12.5 拍板：校时图片集成上卡 + 可放大校对）：
-/// 左侧可缩放图片（两框叠加），右侧识别结果（两个时间+原文+偏差表述）
-/// + 人工核对提示 + 使用/取消。exec()==Accepted = 用户确认采用。
+/// 对时偏差确认卡（v1.12.6 拍板：校时图片集成上卡 + 可放大校对 +
+/// 两个时间可直接修改、偏移量实时重算）：左侧可缩放图片（两框叠加），
+/// 右侧识别结果——监控主机时间/北京时间为可编辑框（改后偏差立即重算），
+/// 原文行只读留证。exec()==Accepted = 用户确认采用，offsetMs() 取编辑后的值。
 class TruthPhotoConfirmDialog : public QDialog
 {
     Q_OBJECT
 public:
     TruthPhotoConfirmDialog(const QString &imagePath,
                             const QRect &monitorBox, const QRect &beijingBox,
-                            const QString &monitorTimeText,
-                            const QString &monitorRawText,
-                            const QString &beijingTimeText,
-                            const QString &beijingRawText,
-                            const QString &offsetVerboseText,
+                            qint64 monitorMs, const QString &monitorRawText,
+                            qint64 beijingMs, const QString &beijingRawText,
                             const QString &crossDayNote,
                             QWidget *parent = nullptr);
+    qint64 offsetMs() const;   ///< 当前（可能已被用户修改的）偏差=北京−监控
+    bool userEdited() const;   ///< 用户是否在卡上修改过时间
+    /// 偏差白话表述（正=监控慢/负=监控快）：「慢 X日X时X分X秒」
+    static QString fmtOffsetVerbose(qint64 offsetMs);
+
+private:
+    void updateOffsetLabel();
+    QDateTimeEdit *m_monitorEdit = nullptr;
+    QDateTimeEdit *m_beijingEdit = nullptr;
+    QLabel *m_offsetLabel = nullptr;
+    qint64 m_initialOffsetMs = 0;
 };
 
 class CalibPhotoDialog : public QDialog

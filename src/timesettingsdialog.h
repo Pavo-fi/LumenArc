@@ -115,7 +115,6 @@ private:
     static QString fmtWall(qint64 epochMs);
     static QString fmtOffset(qint64 offsetMs);
     /// v1.12.5 拍板表述：「（比北京时间）快/慢 X日X时X分X秒」
-    QString fmtOffsetVerbose(qint64 offsetMs) const;
 
     QString m_videoPath;
     qint64 m_currentPosMs = 0;
