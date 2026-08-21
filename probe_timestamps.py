@@ -847,7 +847,62 @@ def sha256_file(path):
 # ---------------------------------------------------------------------------
 # main
 # ---------------------------------------------------------------------------
+def calibphoto_main(argv):
+    """calibphoto 模式（v1.12.5 北京时间对时，2026-08-21 拍板）：
+    识别一张校时照片的两个框（框 1 监控主机时间 / 框 2 北京时间）。
+    argv: <image> <x,y,w,h> <x,y,w,h>
+    stdout 单行 JSON:
+      {"ok": true,  "box1": [{"text":..,"score":..}..], "box2": [..]}
+      {"ok": false, "error": "..."}
+    每框：裁剪 → preprocess 双变体（增强+二值）→ OCR → merge_ocr_lines，
+    两变体行合并去重、按 score 降序（C++ 域解析器取首个合法命中）。
+    照片路径可能含中文（_imread_unicode 走 Win32 Unicode）。"""
+    def _parse_rect(s):
+        p = s.split(",")
+        if len(p) != 4:
+            raise ValueError(f"bad rect: {s}")
+        return tuple(int(v) for v in p)
+    try:
+        if len(argv) != 3:
+            raise ValueError("usage: calibphoto <image> <r1> <r2>")
+        img = _imread_unicode(argv[0])
+        if img is None:
+            raise ValueError(f"image unreadable: {argv[0]}")
+        ih, iw = img.shape[:2]
+        out = {"ok": True}
+        for idx, rect_s in enumerate((argv[1], argv[2]), start=1):
+            x, y, w, h = _parse_rect(rect_s)
+            x0, y0 = max(0, x), max(0, y)
+            x1, y1 = min(iw, x + w), min(ih, y + h)
+            if x1 <= x0 or y1 <= y0:
+                out[f"box{idx}"] = []
+                continue
+            crop = img[y0:y1, x0:x1]
+            enhanced, binary = preprocess(crop)
+            seen = set()
+            lines = []
+            for variant in (enhanced, binary):
+                for text, score, _box in merge_ocr_lines(
+                        ocr_image(variant)):
+                    t = text.strip()
+                    if t and t not in seen:
+                        seen.add(t)
+                        lines.append({"text": t, "score": round(score, 4)})
+            lines.sort(key=lambda it: -it["score"])
+            out[f"box{idx}"] = lines
+        print("CALIBPHOTO:" + json.dumps(out, ensure_ascii=False))
+        return 0
+    except Exception as e:  # 校时照片识别失败不得崩进程（C2 显式错误）
+        print("CALIBPHOTO:" + json.dumps(
+            {"ok": False, "error": str(e)}, ensure_ascii=False))
+        return 1
+
+
 def main():
+    # v1.12.5：校时照片模式先行分流（不需 ffmpeg/工作目参数）
+    if len(sys.argv) > 1 and sys.argv[1] == "calibphoto":
+        sys.exit(calibphoto_main(sys.argv[2:]))
+
     ap = argparse.ArgumentParser(description="OSD timestamp OCR probe")
     ap.add_argument("files", nargs="+")
     ap.add_argument("--ffmpeg-path", required=True)

@@ -28,6 +28,8 @@ class QTableWidgetItem;
 class QDateTimeEdit;
 class QLineEdit;
 class QCheckBox;
+class QComboBox;
+class QSpinBox;
 class QWidget;
 
 /// GO 一键校时状态机
@@ -87,6 +89,13 @@ private slots:
     void onTruthInputChanged();
     void onAdoptTruth();
     void onClearTruth();
+    /// v1.12.5 北京时间对时（拍板：校时图片框选 OCR / 手动两时间 / 直输偏移）
+    void onTruthPhotoPick();          // 选图 → 框选对话框 → 引擎识别
+    void onCalibPhotoFinished(bool ok,
+                              const QVector<QPair<QString, double>> &monitorLines,
+                              const QVector<QPair<QString, double>> &beijingLines,
+                              const QString &error);
+    void onAdoptTruthManualOffset();  // 方式三：直输偏移量「快/慢 X日X时X分X秒」
     void onNoDriftCorrectionToggled(bool on);
 
 public slots:
@@ -110,6 +119,8 @@ private:
     void fillSegmentTable(const TimeCalibration &proposed);
     static QString fmtWall(qint64 epochMs);
     static QString fmtOffset(qint64 offsetMs);
+    /// v1.12.5 拍板表述：「（比北京时间）快/慢 X日X时X分X秒」
+    QString fmtOffsetVerbose(qint64 offsetMs) const;
 
     QString m_videoPath;
     qint64 m_currentPosMs = 0;
@@ -151,10 +162,21 @@ private:
     QPushButton *m_adoptManualBtn = nullptr;
     QLabel *m_monitorTimeLabel = nullptr;
     QDateTimeEdit *m_beijingEdit = nullptr;
+    QDateTimeEdit *m_monitorEdit = nullptr;   // v1.12.5 手输：监控主机时间
+    QComboBox *m_offsetDirCombo = nullptr;    // v1.12.5 直输偏移：快/慢
+    QSpinBox *m_offsetDays = nullptr;         // v1.12.5 直输偏移：日/时/分/秒
+    QSpinBox *m_offsetHours = nullptr;
+    QSpinBox *m_offsetMins = nullptr;
+    QSpinBox *m_offsetSecs = nullptr;
+    QPushButton *m_truthPhotoBtn = nullptr;   // v1.12.5 校时图片识别入口
     QLabel *m_truthPreviewLabel = nullptr;
     QLineEdit *m_truthNoteEdit = nullptr;
     QPushButton *m_adoptTruthBtn = nullptr;
     QPushButton *m_clearTruthBtn = nullptr;
+    // v1.12.5 校时图片流程待应用（识别完成回传后写入 m_working）
+    QString m_pendingTruthImage;
+    QRect   m_pendingTruthBox1;
+    QRect   m_pendingTruthBox2;
     QPushButton *m_reconForceBtn = nullptr; // 强制变速重建
     QLabel *m_reconSummaryLabel = nullptr;  // 重建状态（高级区）
     QTableWidget *m_segmentTable = nullptr;

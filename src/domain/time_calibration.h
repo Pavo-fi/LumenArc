@@ -16,6 +16,7 @@
 
 #include <QVector>
 #include <QString>
+#include <QRect>
 #include <QJsonObject>
 #include <QJsonArray>
 #include <QtGlobal>
@@ -58,6 +59,15 @@ struct TimeCalibration
     bool    truthSet = false;      ///< 是否做过北京时间校验
     qint64  truthCheckedAtMs = 0;  ///< 校验操作时刻
     QString truthNote;             ///< 校验说明（如对时来源，留档）
+
+    // ---- v1.12.5 北京时间对时留档（2026-08-21 拍板：图片框选 OCR / 手动输入）----
+    QString truthSource;         ///< "" / "photo"（校时图片框选）/ "manualTimes"
+                                 ///< （手输两个时间）/ "manualOffset"（直输偏移量）
+    QString truthImagePath;      ///< photo 来源：校时图片绝对路径（另复制入案件留档）
+    QRect   truthMonitorBox;     ///< 框 1 监控主机时间（图片像素坐标）
+    QRect   truthBeijingBox;     ///< 框 2 北京时间（图片像素坐标）
+    QString truthMonitorText;    ///< 框 1 OCR 原文（留档）
+    QString truthBeijingText;    ///< 框 2 OCR 原文（留档）
 
     // ---- 分段重建（v1.2.1 时间重建：变速/抽帧文件查表校时）----
     PiecewiseTimeMap piecewise;   ///< 分段映射表（isValid = 重建产物）

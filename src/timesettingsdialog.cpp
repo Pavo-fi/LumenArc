@@ -10,6 +10,8 @@
  */
 #include "timesettingsdialog.h"
 #include "app/calibration_service.h"
+#include "calibphotodialog.h"
+#include "domain/truth_time_parse.h"
 #include "i18n.h"
 
 #include <QVBoxLayout>
@@ -27,6 +29,10 @@
 #include <QFrame>
 #include <QDateTime>
 #include <QFileInfo>
+#include <QFileDialog>
+#include <QMessageBox>
+#include <QComboBox>
+#include <QSpinBox>
 #include <QPixmap>
 
 namespace {
@@ -66,6 +72,8 @@ TimeSettingsDialog::TimeSettingsDialog(const QString &videoPath,
     if (m_service) {
         connect(m_service, &CalibrationService::progress,
                 this, &TimeSettingsDialog::onServiceProgress);
+        connect(m_service, &CalibrationService::calibPhotoFinished,
+                this, &TimeSettingsDialog::onCalibPhotoFinished);
         connect(m_service, &CalibrationService::threePointReady,
                 this, &TimeSettingsDialog::onThreePointReady);
         connect(m_service, &CalibrationService::reconstructionReady,
@@ -178,44 +186,132 @@ void TimeSettingsDialog::buildUi()
     gg->addWidget(m_detailsBox);
     lay->addWidget(grpGo);
 
-    // ---- 第 2 步：对真实时间（北京时间，可选）----
+    // ---- 第 2 步：对真实时间（北京时间，可选；v1.12.5 重做）----
+    // 拍板（2026-08-21）：取证惯例 = 对监控屏幕拍照时同框拍入标准时间参照物
+    // （手机授时网页等）。三种方式：
+    //   ① 校时图片框选 OCR（一张图两个框：监控主机时间 / 北京时间，自动算偏差）
+    //   ② 手动输入两个时间（自动算偏差）
+    //   ③ 直接输入偏移量「监控主机时间比北京时间 快/慢 X日X时X分X秒」
     auto *grpTruth = new QGroupBox(lang("第 2 步 · 对真实时间（可选）",
                                         "Step 2 · Align to real time (optional)"), this);
     auto *gt = new QVBoxLayout(grpTruth);
     auto *truthExplain = new QLabel(lang(
-        "监控画面里的时间可能整体慢/快于真实北京时间（如监控主机从未对时）。\n"
-        "第 1 步解决「视频进度 ↔ 画面时间」，这一步解决「画面时间 ↔ 真实时间」。\n"
-        "做法：暂停画面读当前显示时间（或拍照同时拍到手机时间与画面时间），"
-        "把真实北京时间填到下方，软件自动算出偏移并应用。",
-        "The on-screen clock may be offset from real Beijing time (e.g. recorder "
-        "never synced). Step 1 maps playback↔on-screen time; this step maps "
-        "on-screen↔real time. Pause and read the on-screen time (or photograph "
-        "phone + screen together), enter the real Beijing time below."), this);
+        "监控主机时钟可能偏快/偏慢（如从未对时）。第 1 步解决「视频进度 ↔ 画面时间」，\n"
+        "这一步解决「画面时间 ↔ 真实北京时间」。推荐拍照校时：对屏幕拍照时把手机\n"
+        "标准时间同框拍入，框选两处时间自动识别计算偏差（图片随案件存档）；也可手动输入。",
+        "The on-screen clock may be fast/slow (e.g. recorder never synced). Step 1 maps "
+        "playback↔on-screen time; this step maps on-screen↔real Beijing time. "
+        "Recommended: photograph the screen together with a phone showing standard "
+        "time, box both clocks for OCR (photo archived with the case); or enter manually."), this);
     truthExplain->setWordWrap(true);
     truthExplain->setStyleSheet(QStringLiteral("color:#666;"));
     gt->addWidget(truthExplain);
+
+    // 方式一：校时图片框选 OCR
+    auto *photoRow = new QHBoxLayout();
+    m_truthPhotoBtn = new QPushButton(
+        lang("📷 从校时图片识别（框选监控主机时间 + 北京时间）…",
+             "📷 From calibration photo (box both clocks)…"), this);
+    m_truthPhotoBtn->setEnabled(m_service != nullptr);
+    if (!m_service)
+        m_truthPhotoBtn->setToolTip(lang("OCR 引擎不可用", "OCR engine unavailable"));
+    photoRow->addWidget(m_truthPhotoBtn);
+    photoRow->addStretch(1);
+    gt->addLayout(photoRow);
+
+    // 方式二：手动输入两个时间（自动算偏差）
     auto *grid = new QGridLayout();
+    auto *manualTitle = new QLabel(lang("方式二 · 手动输入两个时间：",
+                                        "Manual — enter both times:"), this);
+    manualTitle->setStyleSheet(QStringLiteral("font-weight:bold;"));
+    grid->addWidget(manualTitle, 0, 0, 1, 2);
+    grid->addWidget(new QLabel(lang("画面上的时间（当前播放位置）：",
+                                    "On-screen time (playhead): "), this), 1, 0);
     m_monitorTimeLabel = new QLabel(this);
-    grid->addWidget(new QLabel(lang("画面上的时间（自动读取）：", "On-screen time (auto): "), this), 0, 0);
-    grid->addWidget(m_monitorTimeLabel, 0, 1);
-    grid->addWidget(new QLabel(lang("真实北京时间：", "Actual Beijing time: "), this), 1, 0);
+    grid->addWidget(m_monitorTimeLabel, 1, 1);
+    grid->addWidget(new QLabel(lang("监控主机时间：", "Recorder time: "), this), 2, 0);
+    auto *monRow = new QHBoxLayout();
+    m_monitorEdit = new QDateTimeEdit(QDateTime::currentDateTime(), this);
+    m_monitorEdit->setObjectName(QStringLiteral("truthMonitorEdit"));
+    m_monitorEdit->setDisplayFormat(QStringLiteral("yyyy-MM-dd HH:mm:ss"));
+    m_monitorEdit->setCalendarPopup(true);
+    monRow->addWidget(m_monitorEdit);
+    auto *takeCurBtn = new QPushButton(lang("取当前画面时间", "Use playhead time"), this);
+    monRow->addWidget(takeCurBtn);
+    monRow->addStretch(1);
+    grid->addLayout(monRow, 2, 1);
+    grid->addWidget(new QLabel(lang("真实北京时间：", "Actual Beijing time: "), this), 3, 0);
     m_beijingEdit = new QDateTimeEdit(QDateTime::currentDateTime(), this);
+    m_beijingEdit->setObjectName(QStringLiteral("truthBeijingEdit"));
     m_beijingEdit->setDisplayFormat(QStringLiteral("yyyy-MM-dd HH:mm:ss"));
     m_beijingEdit->setCalendarPopup(true);
-    grid->addWidget(m_beijingEdit, 1, 1);
+    grid->addWidget(m_beijingEdit, 3, 1);
     m_truthPreviewLabel = new QLabel(this);
+    m_truthPreviewLabel->setObjectName(QStringLiteral("truthPreviewLabel"));
     m_truthPreviewLabel->setStyleSheet(QStringLiteral("font-weight:bold;"));
-    grid->addWidget(m_truthPreviewLabel, 2, 1);
+    grid->addWidget(m_truthPreviewLabel, 4, 1);
+    grid->addWidget(m_adoptTruthBtn = new QPushButton(
+                        lang("使用此偏移", "Use this offset"), this), 5, 0);
+    m_adoptTruthBtn->setObjectName(QStringLiteral("adoptTruthBtn"));
+    grid->addWidget(m_clearTruthBtn = new QPushButton(
+                        lang("清除偏移", "Clear"), this), 5, 1);
+    m_clearTruthBtn->setObjectName(QStringLiteral("clearTruthBtn"));
+    gt->addLayout(grid);
+
+    // 方式三：直接输入偏移量「比北京时间 快/慢 X日X时X分X秒」
+    auto *offTitle = new QLabel(lang("方式三 · 直接输入偏移量：",
+                                     "Direct offset:"), this);
+    offTitle->setStyleSheet(QStringLiteral("font-weight:bold;"));
+    gt->addWidget(offTitle);
+    auto *offRow = new QHBoxLayout();
+    offRow->addWidget(new QLabel(lang("监控主机时间比北京时间",
+                                      "Recorder clock is"), this));
+    m_offsetDirCombo = new QComboBox(this);
+    m_offsetDirCombo->setObjectName(QStringLiteral("truthOffsetDir"));
+    m_offsetDirCombo->addItem(lang("慢", "slower than Beijing by"));
+    m_offsetDirCombo->addItem(lang("快", "faster than Beijing by"));
+    offRow->addWidget(m_offsetDirCombo);
+    const auto mkSpin = [this](int maxV, const QString &suffix) {
+        auto *sp = new QSpinBox(this);
+        sp->setRange(0, maxV);
+        sp->setSuffix(suffix);
+        return sp;
+    };
+    m_offsetDays  = mkSpin(3650, lang(" 日", " d"));
+    m_offsetHours = mkSpin(23,   lang(" 时", " h"));
+    m_offsetMins  = mkSpin(59,   lang(" 分", " m"));
+    m_offsetSecs  = mkSpin(59,   lang(" 秒", " s"));
+    m_offsetDays->setObjectName(QStringLiteral("truthOffsetDays"));
+    m_offsetHours->setObjectName(QStringLiteral("truthOffsetHours"));
+    m_offsetMins->setObjectName(QStringLiteral("truthOffsetMins"));
+    m_offsetSecs->setObjectName(QStringLiteral("truthOffsetSecs"));
+    offRow->addWidget(m_offsetDays);
+    offRow->addWidget(m_offsetHours);
+    offRow->addWidget(m_offsetMins);
+    offRow->addWidget(m_offsetSecs);
+    auto *adoptOffBtn = new QPushButton(lang("采用此偏移量", "Use this offset"), this);
+    adoptOffBtn->setObjectName(QStringLiteral("adoptManualOffsetBtn"));
+    offRow->addWidget(adoptOffBtn);
+    offRow->addStretch(1);
+    gt->addLayout(offRow);
+
     m_truthNoteEdit = new QLineEdit(this);
     m_truthNoteEdit->setPlaceholderText(
         lang("说明（如：与指挥中心对时），留档用", "Note (e.g. synced with HQ), for record"));
-    grid->addWidget(m_truthNoteEdit, 3, 0, 1, 2);
-    m_adoptTruthBtn = new QPushButton(lang("使用此偏移", "Use this offset"), this);
-    m_clearTruthBtn = new QPushButton(lang("清除偏移", "Clear"), this);
-    grid->addWidget(m_adoptTruthBtn, 4, 0);
-    grid->addWidget(m_clearTruthBtn, 4, 1);
-    gt->addLayout(grid);
+    gt->addWidget(m_truthNoteEdit);
     lay->addWidget(grpTruth);
+
+    connect(takeCurBtn, &QPushButton::clicked, this, [this]() {
+        if (m_working.isValid() && m_working.dateKnown)
+            m_monitorEdit->setDateTime(QDateTime::fromMSecsSinceEpoch(
+                m_working.wallMsOf(m_currentPosMs)));
+    });
+    connect(m_monitorEdit, &QDateTimeEdit::dateTimeChanged,
+            this, [this](const QDateTime &) { onTruthInputChanged(); });
+    connect(m_truthPhotoBtn, &QPushButton::clicked,
+            this, &TimeSettingsDialog::onTruthPhotoPick);
+    connect(adoptOffBtn, &QPushButton::clicked,
+            this, &TimeSettingsDialog::onAdoptTruthManualOffset);
 
     // ---- 第 3 步：高级（折叠）----
     auto *grpMore = new QGroupBox(lang("第 3 步 · 高级（点击展开）",
@@ -374,6 +470,28 @@ QString TimeSettingsDialog::fmtOffset(qint64 offsetMs)
     return (neg ? QStringLiteral("-") : QStringLiteral("+")) + body;
 }
 
+// v1.12.5 拍板表述：「监控主机时间比北京时间 快/慢 X日X时X分X秒」
+// （truthOffsetMs = 北京 − 监控：正 = 监控慢，负 = 监控快；秒级精度）
+QString TimeSettingsDialog::fmtOffsetVerbose(qint64 offsetMs) const
+{
+    const qint64 a = qAbs(offsetMs) / 1000;
+    const qint64 d = a / 86400;
+    const qint64 h = a % 86400 / 3600;
+    const qint64 m = a % 3600 / 60;
+    const qint64 s = a % 60;
+    QString body;
+    if (d)
+        body += lang("%1 日", "%1 d ").arg(d);
+    if (h)
+        body += lang("%1 时", "%1 h ").arg(h);
+    if (m)
+        body += lang("%1 分", "%1 m ").arg(m);
+    if (s || body.isEmpty())
+        body += lang("%1 秒", "%1 s").arg(s);
+    return (offsetMs >= 0 ? lang("慢 ", "slower by ")
+                          : lang("快 ", "faster by ")) + body;
+}
+
 void TimeSettingsDialog::refreshWorkingSummary()
 {
     if (!m_working.isValid()) {
@@ -403,11 +521,16 @@ void TimeSettingsDialog::refreshWorkingSummary()
         m_workingSummary->setText(text);
     }
     // 北京时间对齐区显示当前播放位置换算出的画面时间
-    if (m_working.isValid() && m_working.dateKnown)
-        m_monitorTimeLabel->setText(fmtWall(m_working.wallMsOf(m_currentPosMs)));
-    else
+    if (m_working.isValid() && m_working.dateKnown) {
+        const qint64 curWall = m_working.wallMsOf(m_currentPosMs);
+        m_monitorTimeLabel->setText(fmtWall(curWall));
+        // 方式二手输默认取当前画面时间（可编辑；取后用户自行微调）
+        if (!m_monitorEdit->hasFocus())
+            m_monitorEdit->setDateTime(QDateTime::fromMSecsSinceEpoch(curWall));
+    } else {
         m_monitorTimeLabel->setText(lang("（需先完成自动校时）",
                                          "(run auto calibrate first)"));
+    }
     onTruthInputChanged();
 }
 
@@ -978,25 +1101,65 @@ void TimeSettingsDialog::setGoBusy(bool busy, const QString &stageText)
 // ---------------------------------------------------------------------------
 void TimeSettingsDialog::onTruthInputChanged()
 {
-    if (!m_working.isValid() || !m_working.dateKnown) {
-        m_truthPreviewLabel->clear();
-        return;
-    }
-    const qint64 monitorWall = m_working.wallMsOf(m_currentPosMs);
+    // v1.12.5：方式二预览——两个时间都可编辑，偏移 = 北京时间 − 监控主机时间
+    const qint64 monitorWall = m_monitorEdit->dateTime().toMSecsSinceEpoch();
     const qint64 offset = m_beijingEdit->dateTime().toMSecsSinceEpoch()
                           - monitorWall;
     m_truthPreviewLabel->setText(lang(
-        "偏移：%1（画面时间 %2）", "Offset: %1 (on-screen %2)")
-        .arg(fmtOffset(offset)).arg(fmtWall(monitorWall)));
+        "偏移：监控主机时间比北京时间 %1",
+        "Offset: recorder clock is %1").arg(fmtOffsetVerbose(offset)));
 }
 
 void TimeSettingsDialog::onAdoptTruth()
 {
-    const qint64 monitorWall = m_working.wallMsOf(m_currentPosMs);
-    m_working.truthOffsetMs = m_beijingEdit->dateTime().toMSecsSinceEpoch() - monitorWall;
+    // 方式二：手动输入两个时间（自动算偏差）
+    if (!m_working.isValid() || !m_working.dateKnown) {
+        QMessageBox::warning(this, lang("无法应用", "Cannot apply"),
+            lang("需先完成第 1 步（画面时间校时），再对真实时间。",
+                 "Finish step 1 (on-screen time) before aligning to real time."));
+        return;
+    }
+    m_working.truthOffsetMs = m_beijingEdit->dateTime().toMSecsSinceEpoch()
+                              - m_monitorEdit->dateTime().toMSecsSinceEpoch();
     m_working.truthSet = true;
     m_working.truthCheckedAtMs = QDateTime::currentMSecsSinceEpoch();
     m_working.truthNote = m_truthNoteEdit->text().trimmed();
+    m_working.truthSource = QStringLiteral("manualTimes");
+    // 来源切换：清掉图片来源的留档字段（SSOT：留档与来源一致）
+    m_working.truthImagePath.clear();
+    m_working.truthMonitorBox = QRect();
+    m_working.truthBeijingBox = QRect();
+    m_working.truthMonitorText.clear();
+    m_working.truthBeijingText.clear();
+    m_applied = true;
+    refreshWorkingSummary();
+    emit calibrationApplied(m_working);
+}
+
+void TimeSettingsDialog::onAdoptTruthManualOffset()
+{
+    // 方式三：直输偏移量「监控主机时间比北京时间 快/慢 X日X时X分X秒」
+    if (!m_working.isValid() || !m_working.dateKnown) {
+        QMessageBox::warning(this, lang("无法应用", "Cannot apply"),
+            lang("需先完成第 1 步（画面时间校时），再对真实时间。",
+                 "Finish step 1 (on-screen time) before aligning to real time."));
+        return;
+    }
+    const qint64 total =
+        ((static_cast<qint64>(m_offsetDays->value()) * 24
+          + m_offsetHours->value()) * 3600
+         + m_offsetMins->value() * 60 + m_offsetSecs->value()) * 1000;
+    const bool slower = (m_offsetDirCombo->currentIndex() == 0);  // 慢=正偏移
+    m_working.truthOffsetMs = slower ? total : -total;
+    m_working.truthSet = true;
+    m_working.truthCheckedAtMs = QDateTime::currentMSecsSinceEpoch();
+    m_working.truthNote = m_truthNoteEdit->text().trimmed();
+    m_working.truthSource = QStringLiteral("manualOffset");
+    m_working.truthImagePath.clear();
+    m_working.truthMonitorBox = QRect();
+    m_working.truthBeijingBox = QRect();
+    m_working.truthMonitorText.clear();
+    m_working.truthBeijingText.clear();
     m_applied = true;
     refreshWorkingSummary();
     emit calibrationApplied(m_working);
@@ -1008,6 +1171,150 @@ void TimeSettingsDialog::onClearTruth()
     m_working.truthSet = false;
     m_working.truthCheckedAtMs = 0;
     m_working.truthNote.clear();
+    m_working.truthSource.clear();
+    m_working.truthImagePath.clear();
+    m_working.truthMonitorBox = QRect();
+    m_working.truthBeijingBox = QRect();
+    m_working.truthMonitorText.clear();
+    m_working.truthBeijingText.clear();
+    m_applied = true;
+    refreshWorkingSummary();
+    emit calibrationApplied(m_working);
+}
+
+// ---------------------------------------------------------------------------
+// v1.12.5 校时图片框选识别（方式一）：选图 → CalibPhotoDialog 两框 →
+// CalibrationService::runCalibPhoto → 域解析器算偏差 → 确认卡（原文核对）
+// ---------------------------------------------------------------------------
+void TimeSettingsDialog::onTruthPhotoPick()
+{
+    if (!m_service)
+        return;
+    if (!m_working.isValid() || !m_working.dateKnown) {
+        QMessageBox::warning(this, lang("无法识别", "Cannot recognize"),
+            lang("需先完成第 1 步（画面时间校时），再对真实时间。",
+                 "Finish step 1 (on-screen time) before aligning to real time."));
+        return;
+    }
+    const QString img = QFileDialog::getOpenFileName(
+        this, lang("选择校时图片（监控屏幕与标准时间同框照片）",
+                   "Choose calibration photo"),
+        QString(),
+        lang("图片 (*.jpg *.jpeg *.png *.bmp);;所有文件 (*)",
+             "Images (*.jpg *.jpeg *.png *.bmp);;All files (*)"));
+    if (img.isEmpty())
+        return;
+    CalibPhotoDialog dlg(img, this);
+    if (!dlg.isValidImage()) {
+        QMessageBox::warning(this, lang("无法读取", "Unreadable"),
+            lang("图片无法读取：%1", "Cannot read image: %1").arg(img));
+        return;
+    }
+    if (dlg.exec() != QDialog::Accepted)
+        return;
+    m_pendingTruthImage = img;
+    m_pendingTruthBox1 = dlg.monitorBox();
+    m_pendingTruthBox2 = dlg.beijingBox();
+    m_truthPhotoBtn->setEnabled(false);
+    m_truthPhotoBtn->setText(lang("识别中…", "Recognizing…"));
+    m_service->runCalibPhoto(img, m_pendingTruthBox1, m_pendingTruthBox2);
+}
+
+void TimeSettingsDialog::onCalibPhotoFinished(
+    bool ok, const QVector<QPair<QString, double>> &monitorLines,
+    const QVector<QPair<QString, double>> &beijingLines, const QString &error)
+{
+    m_truthPhotoBtn->setEnabled(true);
+    m_truthPhotoBtn->setText(
+        lang("📷 从校时图片识别（框选监控主机时间 + 北京时间）…",
+             "📷 From calibration photo (box both clocks)…"));
+    if (!ok) {
+        QMessageBox::warning(this, lang("识别失败", "OCR failed"),
+            lang("校时图片识别失败：%1\n可改用方式二/三手动输入。",
+                 "Photo OCR failed: %1\nYou can use manual input instead.")
+                .arg(error));
+        return;
+    }
+    const auto toTexts = [](const QVector<QPair<QString, double>> &lines) {
+        QStringList out;
+        for (const auto &p : lines)
+            out.append(p.first);
+        return out;
+    };
+    // 框 1 监控主机时间：须含完整日期+时分秒（取证留痕要求日期可考）
+    const TruthTimeParse mon = parseTruthTimeText(toTexts(monitorLines), QDate());
+    if (!mon.ok || !mon.dateFromText) {
+        QMessageBox::warning(this, lang("框 1 未识出完整时间", "Box 1 failed"),
+            lang("框 1（监控主机时间）需包含完整日期与带秒的时间，\n"
+                 "如「2026年07月22日 星期三 12:25:47」。请重新框选或手动输入。\n"
+                 "（错误：%1）",
+                 "Box 1 (recorder clock) must contain full date and time with "
+                 "seconds. Re-box or enter manually. (error: %1)")
+                .arg(mon.error));
+        return;
+    }
+    // 框 2 北京时间：完整/跨行组合/纯时间（日期取框 1 同日，跨日疑义自动 ±1 日取小）
+    const QDate monDate =
+        QDateTime::fromMSecsSinceEpoch(mon.wallMs).date();
+    TruthTimeParse bj = parseTruthTimeText(toTexts(beijingLines), monDate);
+    if (!bj.ok) {
+        const QString hint = bj.error.startsWith(QStringLiteral("noseconds:"))
+            ? lang("框 2（北京时间）识别到的时间不含秒（如手机状态栏 12:39）。\n"
+                   "请框含秒的时间显示（如授时网页大时钟），或手动输入。",
+                   "Box 2 time has no seconds. Box a clock with seconds, or "
+                   "enter manually.")
+            : lang("框 2（北京时间）未识出有效时间。请重新框选或手动输入。\n"
+                   "（错误：%1）",
+                   "Box 2 (Beijing time) not recognized. Re-box or enter "
+                   "manually. (error: %1)").arg(bj.error);
+        QMessageBox::warning(this, lang("框 2 未识出", "Box 2 failed"), hint);
+        return;
+    }
+    // 跨日疑义：框 2 仅时间且 |偏差|>12h → 试 ±1 日取 |偏差| 较小者（取证稳妥）
+    QString crossDayNote;
+    if (!bj.dateFromText && qAbs(bj.wallMs - mon.wallMs) > 12LL * 3600000) {
+        const qint64 day = 86400000LL;
+        const qint64 o0 = bj.wallMs - mon.wallMs;
+        const qint64 oM = bj.wallMs - day - mon.wallMs;
+        const qint64 oP = bj.wallMs + day - mon.wallMs;
+        if (qAbs(oM) < qAbs(o0) && qAbs(oM) <= qAbs(oP)) {
+            bj.wallMs -= day;
+            crossDayNote = lang("（北京时间按前一日处理）",
+                                "(Beijing time taken as previous day)");
+        } else if (qAbs(oP) < qAbs(o0)) {
+            bj.wallMs += day;
+            crossDayNote = lang("（北京时间按后一日处理）",
+                                "(Beijing time taken as next day)");
+        }
+    }
+    const qint64 offset = bj.wallMs - mon.wallMs;
+    // 确认卡：两个时间 + 原文（OCR 可能误读秒位，必须人工核对后确认）
+    const QString card = lang(
+        "监控主机时间：%1\n  原文：%2\n\n"
+        "北京时间：%3\n  原文：%4\n\n"
+        "偏差：监控主机时间比北京时间 %5 %6\n\n"
+        "请核对原文读数（OCR 可能误读个别数字）。确认后偏差将应用到全时间轴。",
+        "Recorder clock: %1\n  raw: %2\n\nBeijing time: %3\n  raw: %4\n\n"
+        "Offset: recorder is %5 %6\n\nVerify the raw readings (OCR may "
+        "misread digits). The offset applies to the whole timeline.")
+        .arg(fmtWall(mon.wallMs), mon.matchedText,
+             fmtWall(bj.wallMs), bj.matchedText,
+             fmtOffsetVerbose(offset), crossDayNote);
+    if (QMessageBox::question(this, lang("确认对时偏差", "Confirm offset"),
+                              card, QMessageBox::Yes | QMessageBox::No)
+        != QMessageBox::Yes)
+        return;
+    m_working.truthOffsetMs = offset;
+    m_working.truthSet = true;
+    m_working.truthCheckedAtMs = QDateTime::currentMSecsSinceEpoch();
+    m_working.truthSource = QStringLiteral("photo");
+    m_working.truthImagePath = m_pendingTruthImage;
+    m_working.truthMonitorBox = m_pendingTruthBox1;
+    m_working.truthBeijingBox = m_pendingTruthBox2;
+    m_working.truthMonitorText = mon.matchedText;
+    m_working.truthBeijingText = bj.matchedText;
+    if (m_working.truthNote.isEmpty())
+        m_working.truthNote = lang("校时图片对时", "Photo time check");
     m_applied = true;
     refreshWorkingSummary();
     emit calibrationApplied(m_working);

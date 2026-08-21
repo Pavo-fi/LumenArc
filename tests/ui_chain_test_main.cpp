@@ -8,6 +8,10 @@
 #include <QSettings>
 #include <QtTest/QtTest>
 #include <QCryptographicHash>
+#include <QDateTimeEdit>
+#include <QComboBox>
+#include <QSpinBox>
+#include <QLabel>
 #include <cstdio>
 #include "timesettingsdialog.h"
 #include "videowidget.h"
@@ -724,6 +728,76 @@ int main(int argc, char **argv)
     runFlow(c, "onRunGo");       // 场景 1：GO 入口
     if (argc < 4)
         runFlow(c, "onRoiButton");   // 场景 2：框选按钮入口（合成片）
+
+    // ---- v1.12.5 第 2 步重做：手动两时间 / 直输偏移量 / 清除（拍板语义）----
+    {
+        TimeCalibration base;
+        base.source = TimeCalibration::Source::Ocr;
+        base.offsetMs = QDateTime(QDate(2026, 7, 22), QTime(6, 0, 2),
+                                  Qt::LocalTime).toMSecsSinceEpoch();
+        base.dateKnown = true;
+
+        TimeSettingsDialog dlg(QStringLiteral("dummy.mp4"), 0, 30000, base,
+                               QString(), &service, nullptr);
+        auto *monEdit = dlg.findChild<QDateTimeEdit*>(
+            QStringLiteral("truthMonitorEdit"));
+        auto *bjEdit = dlg.findChild<QDateTimeEdit*>(
+            QStringLiteral("truthBeijingEdit"));
+        auto *preview = dlg.findChild<QLabel*>(
+            QStringLiteral("truthPreviewLabel"));
+        auto *adoptBtn = dlg.findChild<QPushButton*>(
+            QStringLiteral("adoptTruthBtn"));
+        auto *clearBtn = dlg.findChild<QPushButton*>(
+            QStringLiteral("clearTruthBtn"));
+        auto *dirCombo = dlg.findChild<QComboBox*>(
+            QStringLiteral("truthOffsetDir"));
+        auto *spinM = dlg.findChild<QSpinBox*>(
+            QStringLiteral("truthOffsetMins"));
+        auto *spinS = dlg.findChild<QSpinBox*>(
+            QStringLiteral("truthOffsetSecs"));
+        auto *adoptOffBtn = dlg.findChild<QPushButton*>(
+            QStringLiteral("adoptManualOffsetBtn"));
+        CHECK(monEdit && bjEdit && preview && adoptBtn && clearBtn && dirCombo
+              && spinM && spinS && adoptOffBtn,
+              "truth-ui: all step-2 widgets present");
+
+        TimeCalibration applied;
+        int appliedCount = 0;
+        QObject::connect(&dlg, &TimeSettingsDialog::calibrationApplied,
+                         [&](const TimeCalibration &cc) {
+                             applied = cc;
+                             ++appliedCount;
+                         });
+
+        // 方式二：监控 12:25:47 / 北京 12:39:41 → 偏差 +834s（监控慢 13分54秒）
+        monEdit->setDateTime(QDateTime(QDate(2026, 7, 22), QTime(12, 25, 47)));
+        bjEdit->setDateTime(QDateTime(QDate(2026, 7, 22), QTime(12, 39, 41)));
+        CHECK(preview->text().contains(QStringLiteral("慢"))
+              && preview->text().contains(QStringLiteral("13"))
+              && preview->text().contains(QStringLiteral("54")),
+              "truth-ui: preview verbose offset wording");
+        adoptBtn->click();
+        CHECK(appliedCount == 1 && applied.truthSet
+              && applied.truthOffsetMs == 834000
+              && applied.truthSource == QLatin1String("manualTimes"),
+              "truth-ui: manual two-times adopt (+834s, manualTimes)");
+
+        // 方式三：直输「快 13 分 54 秒」→ 偏差 -834s
+        dirCombo->setCurrentIndex(1);   // 快
+        spinM->setValue(13);
+        spinS->setValue(54);
+        adoptOffBtn->click();
+        CHECK(appliedCount == 2 && applied.truthOffsetMs == -834000
+              && applied.truthSource == QLatin1String("manualOffset"),
+              "truth-ui: manual offset adopt (-834s, manualOffset)");
+
+        // 清除：全部对时字段复位
+        clearBtn->click();
+        CHECK(appliedCount == 3 && !applied.truthSet
+              && applied.truthOffsetMs == 0 && applied.truthSource.isEmpty()
+              && applied.truthImagePath.isEmpty(),
+              "truth-ui: clear resets all truth fields");
+    }
 
     fprintf(stderr, "ui_chain_v3: %d checks, %d failures\n", g_checks, g_failures);
     return g_failures ? 1 : 0;

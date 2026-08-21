@@ -81,6 +81,11 @@ public:
     /// 携带缺口提示（Q-4：超 2s 容差必须警告，且进报告）。
     static bool loadSidecar(const QString &videoPath, TimeCalibration *out,
                             QString *warning);
+    /// 校时照片两框识别（v1.12.5 北京时间对时）：转发 OCR 引擎，
+    /// 结果经 calibPhotoFinished 回报（行组按置信度降序）
+    void runCalibPhoto(const QString &imagePath, const QRect &monitorBox,
+                       const QRect &beijingBox);
+
     /// sidecar（<输出>.lumencal.json）写出（前处理 finalize 调用）：
     /// 逐段墙钟起点/速率 + 缺口表。
     /// v1.12.0（2026-08-20 拍板：校时反映到前处理产物时间轴）：
@@ -116,6 +121,11 @@ signals:
     void quickCheckReady(const QString &videoPath, double overallRate,
                          bool suspicious, bool ocrSuspect);
     void absStartReady(const QString &videoPath, qint64 absStartEpochMs);
+    /// v1.12.5 校时照片识别完成（转发引擎；ok=false 时 error 可读）
+    void calibPhotoFinished(bool ok,
+                            const QVector<QPair<QString, double>> &monitorLines,
+                            const QVector<QPair<QString, double>> &beijingLines,
+                            const QString &error);
     void failed(const QString &videoPath, const QString &error);
 
 private slots:

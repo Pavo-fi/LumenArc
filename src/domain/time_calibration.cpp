@@ -157,6 +157,25 @@ QJsonObject TimeCalibration::toJson() const
     o[QStringLiteral("truthCheckedAtMs")] = static_cast<double>(truthCheckedAtMs);
     if (!truthNote.isEmpty())
         o[QStringLiteral("truthNote")] = truthNote;
+    // v1.12.5 对时留档（有值才写；老读取端不识新增键，向后兼容）
+    if (!truthSource.isEmpty())
+        o[QStringLiteral("truthSource")] = truthSource;
+    if (!truthImagePath.isEmpty())
+        o[QStringLiteral("truthImagePath")] = truthImagePath;
+    if (truthMonitorBox.isValid()) {
+        const QRect r = truthMonitorBox;
+        o[QStringLiteral("truthMonitorBox")] = QStringLiteral("%1,%2,%3,%4")
+            .arg(r.x()).arg(r.y()).arg(r.width()).arg(r.height());
+    }
+    if (truthBeijingBox.isValid()) {
+        const QRect r = truthBeijingBox;
+        o[QStringLiteral("truthBeijingBox")] = QStringLiteral("%1,%2,%3,%4")
+            .arg(r.x()).arg(r.y()).arg(r.width()).arg(r.height());
+    }
+    if (!truthMonitorText.isEmpty())
+        o[QStringLiteral("truthMonitorText")] = truthMonitorText;
+    if (!truthBeijingText.isEmpty())
+        o[QStringLiteral("truthBeijingText")] = truthBeijingText;
     QJsonArray arr;
     for (const Sample &s : samples) {
         QJsonObject so;
@@ -199,6 +218,19 @@ TimeCalibration TimeCalibration::fromJson(const QJsonObject &o)
     c.truthSet = o[QStringLiteral("truthSet")].toBool();
     c.truthCheckedAtMs = static_cast<qint64>(o[QStringLiteral("truthCheckedAtMs")].toDouble());
     c.truthNote = o[QStringLiteral("truthNote")].toString();
+    // v1.12.5 对时留档（老文件无此字段 → 空，行为不变）
+    c.truthSource = o[QStringLiteral("truthSource")].toString();
+    c.truthImagePath = o[QStringLiteral("truthImagePath")].toString();
+    const auto parseRect = [](const QJsonValue &v) {
+        const QStringList p = v.toString().split(QLatin1Char(','));
+        if (p.size() != 4)
+            return QRect();
+        return QRect(p[0].toInt(), p[1].toInt(), p[2].toInt(), p[3].toInt());
+    };
+    c.truthMonitorBox = parseRect(o[QStringLiteral("truthMonitorBox")]);
+    c.truthBeijingBox = parseRect(o[QStringLiteral("truthBeijingBox")]);
+    c.truthMonitorText = o[QStringLiteral("truthMonitorText")].toString();
+    c.truthBeijingText = o[QStringLiteral("truthBeijingText")].toString();
     const QJsonArray arr = o[QStringLiteral("samples")].toArray();
     for (const QJsonValue &v : arr) {
         const QJsonObject so = v.toObject();

@@ -238,6 +238,82 @@ void TimestampOcrEngine::run(const QStringList &paths, const QString &workDir,
     }
 }
 
+void TimestampOcrEngine::runCalibPhoto(const QString &imagePath,
+                                       const QRect &monitorBox,
+                                       const QRect &beijingBox)
+{
+    if (isRunning() || imagePath.isEmpty())
+        return;
+    if (!monitorBox.isValid() || !beijingBox.isValid()) {
+        emit calibPhotoFinished(false, {}, {},
+                                QStringLiteral("invalid roi"));
+        return;
+    }
+
+    const QString script = QCoreApplication::applicationDirPath()
+        + QStringLiteral("/probe_timestamps.py");
+    if (!QFile::exists(script)) {
+        emit calibPhotoFinished(false, {}, {},
+                                QStringLiteral("probe_timestamps.py not found"));
+        return;
+    }
+    const auto rectStr = [](const QRect &r) {
+        return QStringLiteral("%1,%2,%3,%4")
+            .arg(r.x()).arg(r.y()).arg(r.width()).arg(r.height());
+    };
+    QStringList args{QStringLiteral("-X"), QStringLiteral("utf8"),
+                     script, QStringLiteral("calibphoto"),
+                     imagePath, rectStr(monitorBox), rectStr(beijingBox)};
+
+    m_total = 0;
+    m_cancelled = false;
+    m_calibPhotoMode = true;
+    m_stdoutBuf.clear();
+    m_stderrBuf.clear();
+
+    m_process = new QProcess(this);
+    m_process->setProgram(pythonExecutable());
+    m_process->setArguments(args);
+    QProcessEnvironment env = QProcessEnvironment::systemEnvironment();
+    env.insert(QStringLiteral("OMP_NUM_THREADS"), QStringLiteral("1"));
+    env.insert(QStringLiteral("OPENBLAS_NUM_THREADS"), QStringLiteral("1"));
+    env.insert(QStringLiteral("MKL_NUM_THREADS"), QStringLiteral("1"));
+    m_process->setProcessEnvironment(env);
+    connect(m_process, &QProcess::readyReadStandardOutput, this, [this]() {
+        m_stdoutBuf += m_process->readAllStandardOutput();
+    });
+    connect(m_process, &QProcess::readyReadStandardError,
+            this, &TimestampOcrEngine::onReadyReadStderr);
+    connect(m_process, qOverload<int, QProcess::ExitStatus>(&QProcess::finished),
+            this, [this](int code, QProcess::ExitStatus) { onFinished(code); });
+    // 照片识别（模型懒加载 + 两框双变体）最坏约 1~2 分钟，看门狗 3 分钟
+    if (!m_watchdog) {
+        m_watchdog = new QTimer(this);
+        m_watchdog->setSingleShot(true);
+        connect(m_watchdog, &QTimer::timeout, this, [this]() {
+            if (m_process) {
+                m_process->kill();
+                if (m_calibPhotoMode) {
+                    m_calibPhotoMode = false;
+                    emit calibPhotoFinished(false, {}, {},
+                                            QStringLiteral("calibphoto timeout"));
+                }
+            }
+        });
+    }
+    m_watchdog->start(180000);
+    m_process->start();
+    if (!m_process->waitForStarted(5000)) {
+        m_calibPhotoMode = false;
+        QProcess *proc = m_process;
+        m_process = nullptr;
+        if (proc)
+            proc->deleteLater();
+        emit calibPhotoFinished(false, {}, {},
+                                QStringLiteral("python start failed"));
+    }
+}
+
 void TimestampOcrEngine::runAtPositions(const QString &path,
                                         const QVector<qint64> &positionsMs,
                                         qint64 trustedDurationMs,
@@ -416,6 +492,48 @@ void TimestampOcrEngine::onFinished(int exitCode)
         proc->deleteLater();
     if (cancelled)
         return;     // 取消路径由 Coordinator 状态机接管（C1 类型化）
+
+    // ---- v1.12.5 校时照片模式分流：stdout 中 CALIBPHOTO: 单行 JSON ----
+    if (m_calibPhotoMode) {
+        m_calibPhotoMode = false;
+        const QString out = QString::fromUtf8(m_stdoutBuf);
+        const int tag = out.lastIndexOf(QStringLiteral("CALIBPHOTO:"));
+        if (tag < 0) {
+            emit calibPhotoFinished(false, {}, {},
+                QStringLiteral("calibphoto no output (exit %1)").arg(exitCode));
+            return;
+        }
+        const QString line = out.mid(tag + 11).split(QLatin1Char('\n')).first().trimmed();
+        QJsonParseError jerr{};
+        const QJsonDocument doc = QJsonDocument::fromJson(line.toUtf8(), &jerr);
+        if (!doc.isObject()) {
+            emit calibPhotoFinished(false, {}, {},
+                QStringLiteral("calibphoto bad json: %1").arg(jerr.errorString()));
+            return;
+        }
+        const QJsonObject root = doc.object();
+        if (!root[QStringLiteral("ok")].toBool()) {
+            emit calibPhotoFinished(false, {}, {},
+                root[QStringLiteral("error")].toString(
+                    QStringLiteral("calibphoto failed")));
+            return;
+        }
+        const auto parseLines = [](const QJsonArray &arr) {
+            QVector<QPair<QString, double>> lines;
+            for (const QJsonValue &v : arr) {
+                const QJsonObject o = v.toObject();
+                lines.append({o[QStringLiteral("text")].toString(),
+                              o[QStringLiteral("score")].toDouble()});
+            }
+            return lines;
+        };
+        emit calibPhotoFinished(
+            true,
+            parseLines(root[QStringLiteral("box1")].toArray()),
+            parseLines(root[QStringLiteral("box2")].toArray()),
+            QString());
+        return;
+    }
 
     if (exitCode != 0 && m_stdoutBuf.trimmed().isEmpty()) {
         if (m_atMode) {

@@ -82,6 +82,16 @@ CalibrationService::CalibrationService(IAnalysisEngine *analysisEngine,
             });
     connect(m_probeEngine, &MediaProbeEngine::probeFinished,
             this, &CalibrationService::onProbeFinished);
+    // v1.12.5 北京时间对时：校时照片两框识别结果转发
+    connect(m_ocrEngine, &TimestampOcrEngine::calibPhotoFinished,
+            this, &CalibrationService::calibPhotoFinished);
+}
+
+void CalibrationService::runCalibPhoto(const QString &imagePath,
+                                       const QRect &monitorBox,
+                                       const QRect &beijingBox)
+{
+    m_ocrEngine->runCalibPhoto(imagePath, monitorBox, beijingBox);
 }
 
 void CalibrationService::setPythonExecutable(const QString &path)

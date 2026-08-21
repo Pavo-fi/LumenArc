@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(LumenArc VERSION 1.12.4 LANGUAGES CXX)
+project(LumenArc VERSION 1.12.5 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -90,6 +90,7 @@ set(SOURCES
     src/domain/run_summary.cpp
     src/domain/evidence_report.cpp
     src/domain/time_calibration.cpp
+    src/domain/truth_time_parse.cpp   # v1.12.5 北京时间对时文本解析
     src/domain/time_piecewise.cpp
     src/domain/case_model.cpp
     src/app/case_manager.cpp
@@ -110,6 +111,7 @@ set(SOURCES
     src/app/analysis_task_service.cpp
     src/app/multicam_sync_service.cpp
     src/timesettingsdialog.cpp
+    src/calibphotodialog.cpp        # v1.12.5 北京时间对时：校时图片两框框选
     src/infrastructure/ffmpeg_video_engine.cpp
     src/infrastructure/tool_paths.cpp
     src/infrastructure/integrity_checker.cpp
@@ -237,6 +239,7 @@ add_executable(lumenarc_calibration_test
     tests/calibration_test_main.cpp
     src/domain/time_calibration.cpp
     src/domain/time_piecewise.cpp
+    src/domain/truth_time_parse.cpp   # v1.12.5 北京时间对时文本解析
 )
 target_include_directories(lumenarc_calibration_test PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src
@@ -597,6 +600,7 @@ target_link_libraries(lumenarc_case_e2e PRIVATE
 add_executable(lumenarc_ui_chain_test
     tests/ui_chain_test_main.cpp
     src/timesettingsdialog.cpp
+    src/calibphotodialog.cpp        # v1.12.5 校时图片框选（对话框依赖）
     src/videowidget.cpp
     src/magnifierwidget.cpp
     src/displayadjust.cpp
@@ -610,6 +614,7 @@ add_executable(lumenarc_ui_chain_test
     src/i18n.cpp
     src/domain/time_calibration.cpp
     src/domain/time_piecewise.cpp
+    src/domain/truth_time_parse.cpp  # v1.12.5 对时文本解析（对话框依赖）
     src/domain/roi_model.cpp
     src/domain/guide_line_model.cpp
 )
@@ -655,8 +660,8 @@ elseif(APPLE)
         MACOSX_BUNDLE TRUE
         MACOSX_BUNDLE_INFO_PLIST "${CMAKE_CURRENT_SOURCE_DIR}/src/Info.plist"
         MACOSX_BUNDLE_BUNDLE_NAME "LumenArc"
-        MACOSX_BUNDLE_BUNDLE_VERSION "1.12.4"
-        MACOSX_BUNDLE_SHORT_VERSION_STRING "1.12.4"
+        MACOSX_BUNDLE_BUNDLE_VERSION "1.12.5"
+        MACOSX_BUNDLE_SHORT_VERSION_STRING "1.12.5"
         MACOSX_BUNDLE_GUI_IDENTIFIER "com.firetech.lumenarc"
     )
 else()

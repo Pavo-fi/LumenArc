@@ -64,6 +64,14 @@ public:
     void runAtPositions(const QString &path, const QVector<qint64> &positionsMs,
                         qint64 trustedDurationMs, const QString &evidenceDir,
                         const QRectF &roi = QRectF());
+
+    /// 校时照片两框识别（v1.12.5 北京时间对时，2026-08-21 拍板）：
+    /// 一张校时照片框两个框（监控主机时间 / 北京时间），python calibphoto
+    /// 模式返回两框 OCR 行组（置信度降序），域解析器（truth_time_parse）
+    /// 计算偏差。结果经 calibPhotoFinished 回报。rects 为图片像素坐标。
+    /// 与 run()/runAtPositions() 互斥（isRunning 守卫）。
+    void runCalibPhoto(const QString &imagePath, const QRect &monitorBox,
+                       const QRect &beijingBox);
     void cancel();
     bool isRunning() const;
 
@@ -74,6 +82,12 @@ signals:
     void engineError(PreprocessError error, const QString &detail);
     void atPositionsFinished(const QVector<TimeCalibration::Sample> &samples);
     void atPositionsFailed(const QString &error);
+    /// v1.12.5 校时照片识别完成：ok=false 时 error 为可读原因（C2 不静默）；
+    /// 行组 = (文本, 置信度) 按置信度降序
+    void calibPhotoFinished(bool ok,
+                            const QVector<QPair<QString, double>> &monitorLines,
+                            const QVector<QPair<QString, double>> &beijingLines,
+                            const QString &error);
 
 private slots:
     void onReadyReadStderr();
@@ -90,6 +104,7 @@ private:
     int m_total = 0;
     bool m_cancelled = false;
     bool m_atMode = false;      // true = runAtPositions 取样模式（onFinished 分流）
+    bool m_calibPhotoMode = false; // true = runCalibPhoto 校时照片模式（分流）
     int m_availability = -1;    // -1 未检测 / 0 不可用 / 1 可用
     QString m_availError;
 };

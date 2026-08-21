@@ -17,8 +17,10 @@
  *  - wallMsOf/streamMsOf 往返一致性、v7 旧格式迁移
  */
 #include "domain/time_calibration.h"
+#include "domain/truth_time_parse.h"
 
 #include <QCoreApplication>
+#include <QDateTime>
 #include <cstdio>
 #include <cmath>
 
@@ -325,6 +327,119 @@ static void testJsonRoundTrip()
 }
 
 // ---------------------------------------------------------------------------
+// v1.12.5 北京时间对时：校时图片两框 OCR 原文解析（用户拍板约定，增城案
+// 典型照片实证）+ 对时留档字段序列化
+// ---------------------------------------------------------------------------
+static void testTruthTimeParse()
+{
+    const QDate day(2026, 7, 22);
+    const qint64 expectMon = QDateTime(QDate(2026, 7, 22), QTime(12, 25, 47),
+                                       Qt::LocalTime).toMSecsSinceEpoch();
+    const qint64 expectBj  = QDateTime(QDate(2026, 7, 22), QTime(12, 39, 41),
+                                       Qt::LocalTime).toMSecsSinceEpoch();
+
+    // ① 单行完整（监控 OSD：中文年月日补零 + 星期）
+    {
+        const auto r = parseTruthTimeText(
+            {QStringLiteral("2026年07月22日 星期三 12:25:47")}, day);
+        CHECK(r.ok && r.dateFromText && r.wallMs == expectMon);
+        CHECK(r.matchedText.contains(QStringLiteral("12:25:47")));
+    }
+    // ① 单行完整（横杠格式 + 毫秒小数）
+    {
+        const auto r = parseTruthTimeText(
+            {QStringLiteral("2026-07-22 12:25:47.500")}, day);
+        CHECK(r.ok && r.wallMs == expectMon + 500);
+    }
+    // ② 跨行组合（授时网页：不补零中文日期行 + 纯时间行；含噪声行）
+    {
+        const auto r = parseTruthTimeText(
+            {QStringLiteral("标准北京时间"),
+             QStringLiteral("现在是2026年7月22日星期三，第30周"),
+             QStringLiteral("12:39:41"),
+             QStringLiteral("你的设备时间慢了750毫秒")}, day);
+        CHECK(r.ok && r.dateFromText && r.wallMs == expectBj);
+        CHECK(r.matchedText.contains(QStringLiteral("第30周")));
+    }
+    // ③ 纯时间 + 假定日期（框 1 同日）
+    {
+        const auto r = parseTruthTimeText({QStringLiteral("12:39:41")}, day);
+        CHECK(r.ok && !r.dateFromText && r.wallMs == expectBj);
+    }
+    // ③ 无假定日期 → nomatch
+    {
+        const auto r = parseTruthTimeText({QStringLiteral("12:39:41")}, QDate());
+        CHECK(!r.ok && r.error == QStringLiteral("nomatch"));
+    }
+    // 拒识：仅时分（手机状态栏 12:39）→ noseconds
+    {
+        const auto r = parseTruthTimeText({QStringLiteral("12:39")}, day);
+        CHECK(!r.ok && r.error.startsWith(QStringLiteral("noseconds:")));
+    }
+    // 拒识：全角冒号归一化后命中（12：25：47）
+    {
+        const auto r = parseTruthTimeText(
+            {QString::fromUtf8("2026年07月22日 12\uff1a25\uff1a47")}, day);
+        CHECK(r.ok && r.wallMs == expectMon);
+    }
+    // 拒识：值域非法（25:99:99 之类误读）→ invalid
+    {
+        const auto r = parseTruthTimeText(
+            {QStringLiteral("2026年07月22日 25:99:99")}, QDate());
+        CHECK(!r.ok && r.error.startsWith(QStringLiteral("invalid:")));
+    }
+    // 拒识：毫无时间文本 → nomatch
+    {
+        const auto r = parseTruthTimeText(
+            {QStringLiteral("标准北京时间"), QStringLiteral("本时间同步国家授时中心精确到毫秒")},
+            day);
+        CHECK(!r.ok && r.error == QStringLiteral("nomatch"));
+    }
+    // 防碎片错配：112:39:41 不应在内层误命中 12:39:41
+    {
+        const auto r = parseTruthTimeText({QStringLiteral("112:39:41")}, day);
+        CHECK(!r.ok);
+    }
+}
+
+static void testTruthArchiveRoundTrip()
+{
+    // v1.12.5 对时留档字段 JSON 往返（含老文件无字段的兼容退化）
+    TimeCalibration c;
+    c.source = TimeCalibration::Source::Ocr;
+    c.offsetMs = kOff;
+    c.dateKnown = true;
+    c.truthSet = true;
+    c.truthOffsetMs = -834000;   // 监控快 13 分 54 秒 → 北京 = 监控 + (-834s)
+    c.truthSource = QStringLiteral("photo");
+    c.truthImagePath = QStringLiteral("D:/cases/x/calibration/abc.jpg");
+    c.truthMonitorBox = QRect(100, 50, 800, 40);
+    c.truthBeijingBox = QRect(1500, 900, 400, 120);
+    c.truthMonitorText = QStringLiteral("2026年07月22日 星期三 12:25:47");
+    c.truthBeijingText = QStringLiteral("现在是2026年7月22日星期三，第30周 | 12:39:41");
+
+    const TimeCalibration r = TimeCalibration::fromJson(c.toJson());
+    CHECK(r.truthSet && r.truthOffsetMs == -834000);
+    CHECK(r.truthSource == QStringLiteral("photo"));
+    CHECK(r.truthImagePath == c.truthImagePath);
+    CHECK(r.truthMonitorBox == QRect(100, 50, 800, 40));
+    CHECK(r.truthBeijingBox == QRect(1500, 900, 400, 120));
+    CHECK(r.truthMonitorText == c.truthMonitorText);
+    CHECK(r.truthBeijingText == c.truthBeijingText);
+
+    // 老文件（无新字段）→ 空值安全退化
+    TimeCalibration legacy;
+    legacy.source = TimeCalibration::Source::Manual;
+    legacy.offsetMs = kOff;
+    legacy.truthSet = true;
+    legacy.truthOffsetMs = 5000;
+    const TimeCalibration lr = TimeCalibration::fromJson(legacy.toJson());
+    CHECK(lr.truthSource.isEmpty() && lr.truthImagePath.isEmpty());
+    CHECK(!lr.truthMonitorBox.isValid() && !lr.truthBeijingBox.isValid());
+    CHECK(lr.truthOffsetMs == 5000 && lr.truthSet);
+}
+
+// ---------------------------------------------------------------------------
 int main(int argc, char *argv[])
 {
     QCoreApplication app(argc, argv);
@@ -344,6 +459,8 @@ int main(int argc, char *argv[])
     testLegacyMigration();
     testTruthOffset();
     testJsonRoundTrip();
+    testTruthTimeParse();
+    testTruthArchiveRoundTrip();
 
     printf("calibration_test: %d checks, %d failures\n", g_checks, g_failures);
     return g_failures ? 1 : 0;
