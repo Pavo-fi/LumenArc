@@ -44,7 +44,11 @@ public:
 
     /// v1.12.7：画面调节（显示链路 LUT + 90° 步进旋转，与单路同口径；
     /// 仅影响本瓦片显示，引擎原始帧/证据链不变）。默认参数零开销直通。
+    /// v1.12.8 起逐瓦片独立参数（窗口按选中瓦片下发）。
     void setDisplayAdjust(const DisplayAdjust &adj, int rotationDegrees);
+    /// 选中态（v1.12.8）：强调色外框——画面调节面板作用于选中瓦片
+    void setSelected(bool on);
+    bool isSelected() const { return m_selected; }
 
     qreal zoom() const { return m_zoom; }
 
@@ -84,4 +88,5 @@ private:
     QPointF m_center{0.5, 0.5};
     bool m_panning = false;
     QPoint m_panLast;
+    bool m_selected = false;
 };

@@ -93,9 +93,18 @@ struct TimeCalibration
      */
     bool   isEffective() const
     {
-        return isValid()
-            && (dateKnown || offsetMs != 0 || rateApplied || truthSet
-                || piecewiseMode());
+        if (!isValid())
+            return false;
+        if (piecewiseMode()) {
+            // v1.12.8（天河案实测）：分段全部零锚（sidecar 源均未校时，
+            // wallStartMs=0）=「没有时间信息」——不算有效，否则继承后
+            // 时间轴以 1970-01-01 起显示。
+            for (const auto &s : piecewise.segments)
+                if (s.wallStartMs != 0)
+                    return true;
+            return false;
+        }
+        return dateKnown || offsetMs != 0 || rateApplied || truthSet;
     }
     double effectiveRate() const { return rateApplied ? rate : 1.0; }
 

@@ -377,27 +377,35 @@ void MultiCamPlaybackWindow::buildPlayPage()
     });
     bar->addWidget(m_osdBtn);
 
-    // v1.12.7：画面调节（全部瓦片统一应用，显示链路 LUT/旋转；证据链不变）
+    // v1.12.8（用户拍板）：画面调节只作用于当前选中的瓦片，每路独立参数
+    // （点击瓦片选中，强调色外框标示；仅显示链路，证据链不变）
     m_adjustBtn = new QPushButton(lang("画面调节", "Adjust"), this);
     m_adjustBtn->setCheckable(true);
-    m_adjustBtn->setToolTip(lang("亮度/对比度/伽马/色阶/反色/旋转（仅显示）",
-                                 "Brightness/contrast/gamma/levels/invert/rotate (display only)"));
+    m_adjustBtn->setToolTip(lang(
+        "调节当前选中机位的亮度/对比度/伽马/色阶/反色/旋转（仅显示）。"
+        "点击瓦片切换作用对象。",
+        "Adjust the selected tile (brightness/contrast/gamma/levels/invert/"
+        "rotate, display only). Click a tile to change target."));
     connect(m_adjustBtn, &QPushButton::toggled, this, [this](bool on) {
         if (on) {
             if (!m_adjustPanel) {
                 m_adjustPanel = new PlaybackAdjustPanel(this);
                 m_adjustPanel->setFloating(true);
-                m_adjustPanel->setWindowTitle(lang("画面调节（全部机位）",
-                                                   "Adjust (all lanes)"));
                 connect(m_adjustPanel, &PlaybackAdjustPanel::adjustChanged,
                         this, [this](const DisplayAdjust &adj) {
-                    m_adjust = adj;
-                    applyAdjustToTiles();
+                    if (m_selectedTile >= 0
+                        && m_selectedTile < m_tileAdjusts.size()) {
+                        m_tileAdjusts[m_selectedTile] = adj;
+                        applyAdjustToTiles();
+                    }
                 });
                 connect(m_adjustPanel, &PlaybackAdjustPanel::rotationChanged,
                         this, [this](int deg) {
-                    m_rotation = deg;
-                    applyAdjustToTiles();
+                    if (m_selectedTile >= 0
+                        && m_selectedTile < m_tileRotations.size()) {
+                        m_tileRotations[m_selectedTile] = deg;
+                        applyAdjustToTiles();
+                    }
                 });
                 connect(m_adjustPanel, &QDockWidget::visibilityChanged,
                         this, [this](bool vis) {
@@ -406,6 +414,9 @@ void MultiCamPlaybackWindow::buildPlayPage()
                 });
                 m_adjustPanel->resize(300, 420);
             }
+            if (m_selectedTile < 0 && m_svc->laneCount() > 0)
+                selectTile(0);
+            selectTile(m_selectedTile);   // 刷新面板数值与标题
             m_adjustPanel->show();
             m_adjustPanel->raise();
         } else if (m_adjustPanel) {
@@ -501,9 +512,10 @@ void MultiCamPlaybackWindow::rebuildTiles()
         auto *tile = new CamTileWidget(this);
         tile->setOsdVisible(m_osdOn);
         tile->setAudible(i == m_svc->audibleLane());
-        tile->setDisplayAdjust(m_adjust, m_rotation);   // 画面调节（v1.12.7）
+        tile->setSelected(i == m_selectedTile);
         const int idx = i;
         connect(tile, &CamTileWidget::clicked, this, [this, idx]() {
+            selectTile(idx);   // v1.12.8：画面调节作用对象跟随点击
             // 空槽位点击 = 选视频；已载路点击 = 切听（U-2）
             if (idx >= m_svc->laneCount()
                 || m_svc->lanes()[idx].path.isEmpty()) {
@@ -526,6 +538,14 @@ void MultiCamPlaybackWindow::rebuildTiles()
         m_tiles.append(tile);
         m_grid->addWidget(tile, i / cols, i % cols);
     }
+    // v1.12.8：逐瓦片调节参数表与路数对齐（保留旧值，新路补默认）
+    while (m_tileAdjusts.size() < n) {
+        m_tileAdjusts.append(DisplayAdjust());
+        m_tileRotations.append(0);
+    }
+    applyAdjustToTiles();
+    if (m_selectedTile < 0 && n > 0)
+        selectTile(0);
     updateTilesOsd();
 }
 
@@ -910,9 +930,35 @@ QString MultiCamPlaybackWindow::fmtWall(qint64 wallMs) const
 
 void MultiCamPlaybackWindow::applyAdjustToTiles()
 {
-    for (auto *t : m_tiles)
-        if (t)
-            t->setDisplayAdjust(m_adjust, m_rotation);
+    for (int i = 0; i < m_tiles.size(); ++i) {
+        if (!m_tiles[i])
+            continue;
+        const DisplayAdjust adj = (i < m_tileAdjusts.size())
+            ? m_tileAdjusts[i] : DisplayAdjust();
+        const int rot = (i < m_tileRotations.size()) ? m_tileRotations[i] : 0;
+        m_tiles[i]->setDisplayAdjust(adj, rot);
+    }
+}
+
+void MultiCamPlaybackWindow::selectTile(int idx)
+{
+    if (idx < 0 || idx >= m_tiles.size())
+        return;
+    m_selectedTile = idx;
+    for (int i = 0; i < m_tiles.size(); ++i)
+        if (m_tiles[i])
+            m_tiles[i]->setSelected(i == idx);
+    if (m_adjustPanel) {
+        const DisplayAdjust adj = (idx < m_tileAdjusts.size())
+            ? m_tileAdjusts[idx] : DisplayAdjust();
+        const int rot = (idx < m_tileRotations.size()) ? m_tileRotations[idx] : 0;
+        m_adjustPanel->setValues(adj, rot);
+        QString name;
+        if (idx < m_svc->laneCount())
+            name = m_svc->lanes()[idx].displayName;
+        m_adjustPanel->setWindowTitle(
+            lang("画面调节（当前：%1）", "Adjust (lane: %1)").arg(name));
+    }
 }
 
 void MultiCamPlaybackWindow::onClock(qint64 wallMs)

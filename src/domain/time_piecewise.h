@@ -58,6 +58,9 @@ struct PiecewiseDetectReport
     bool    audioKnown = false;     ///< 是否取得音频时长做过校验
     int     outlierCount = 0;       ///< 剔除的 OCR 异常测点数（尖峰野点）
     QVector<int> outlierIdx;        ///< 异常测点在输入 samples 中的索引（留档/UI）
+    /// v1.12.8：分段结果因墙钟倒流被物理闸拒绝（OCR 成片误读伪边界）——
+    /// 调用方应回落稳健仿射拟合而非报错。
+    bool    rejectedNonMonotonic = false;
 };
 
 /// 时间缺口（拼接产物监控常态：缺段/关机/漏录；流内连续而墙钟跳变）

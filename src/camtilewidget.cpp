@@ -65,6 +65,14 @@ void CamTileWidget::setDisplayAdjust(const DisplayAdjust &adj, int rotationDegre
     update();
 }
 
+void CamTileWidget::setSelected(bool on)
+{
+    if (m_selected == on)
+        return;
+    m_selected = on;
+    update();
+}
+
 void CamTileWidget::rebuildDisplay()
 {
     if (m_raw.isNull()) {
@@ -280,6 +288,13 @@ void CamTileWidget::paintEvent(QPaintEvent *)
         f.setPixelSize(14);
         p.setFont(f);
         p.drawText(rect(), Qt::AlignCenter, m_placeholder);
+    }
+
+    // 选中外框（画面调节作用于该瓦片，v1.12.8）
+    if (m_selected) {
+        p.setPen(QPen(QColor(Theme::Accent), 3));
+        p.setBrush(Qt::NoBrush);
+        p.drawRect(rect().adjusted(1, 1, -2, -2));
     }
 
     // OSD（U-5 可关）

@@ -234,6 +234,53 @@ static void buildCoarseSlopes(const QVector<Point> &pts,
     }
 }
 
+/// v1.12.8（天河案 merged_concat 实测）：偏移域双侧基线野点过滤。
+/// 病灶：某些 DVR 字体的月份位被 OCR 成片误读（07→02/03），置信度高、
+/// 格式干净（不过单点可疑判定），且常 2~3 个连续成簇——尖峰检测的
+/// 「单点、前后斜率异号」特征不成立而漏网，随后边界检测把每簇当
+/// 真边界，产出墙钟倒流数月的病态分段。
+/// 物理事实：r_i = wall − stream（隐含偏移）对正常文件近似恒定；
+/// 月份误读使 r 瞬时偏 5 个月。判定：|r_i − 前窗中位| 与 |r_i − 后窗中位|
+/// 同超阈值才标记（真时间缺口是台阶非尖刺，单侧即吻合，不误伤）。
+/// 两遍执行（第 2 遍吸收第 1 遍标记后的邻居变化），可剔 ≤3 连簇；
+/// 更长连簇由 detect() 末尾的墙钟单调性闸门兕底。
+constexpr qint64 kOffsetSpikeMs = 600000;   ///< 10 min：误读量级为月
+void markOffsetSpikes(QVector<Point> &pts, QVector<int> *outlierIdxOut)
+{
+    const int n = pts.size();
+    if (n < 5)
+        return;
+    auto medianOf = [](QVector<qint64> v) {
+        std::sort(v.begin(), v.end());
+        return v[v.size() / 2];   // 上中位（偶数偏右，对本用途足够稳健）
+    };
+    for (int pass = 0; pass < 2; ++pass) {
+        bool any = false;
+        for (int i = 0; i < n; ++i) {
+            if (pts[i].outlier)
+                continue;
+            QVector<qint64> before, after;
+            for (int j = i - 1; j >= 0 && before.size() < 3; --j)
+                if (!pts[j].outlier)
+                    before.append(pts[j].w - pts[j].s);
+            for (int j = i + 1; j < n && after.size() < 3; ++j)
+                if (!pts[j].outlier)
+                    after.append(pts[j].w - pts[j].s);
+            if (before.size() < 2 || after.size() < 2)
+                continue;   // 边端点基线不足，不参与（尖峰检测补）
+            const qint64 ri = pts[i].w - pts[i].s;
+            if (qAbs(ri - medianOf(before)) > kOffsetSpikeMs
+                && qAbs(ri - medianOf(after)) > kOffsetSpikeMs) {
+                pts[i].outlier = true;
+                outlierIdxOut->append(i);
+                any = true;
+            }
+        }
+        if (!any)
+            break;
+    }
+}
+
 void markSpikeOutliers(QVector<Point> &pts,
                        QVector<CoarseSlope> *slopesOut,
                        QVector<int> *outlierIdxOut)
@@ -424,6 +471,7 @@ CoarseAnalysis PiecewiseTimeMap::analyzeCoarse(const QVector<PiecewiseSample> &i
     if (pts.size() < 2)
         return out;
 
+    markOffsetSpikes(pts, &out.outlierIdx);   // v1.12.8：偏移域成片误读先剔
     QVector<CoarseSlope> slopes;
     markSpikeOutliers(pts, &slopes, &out.outlierIdx);
 
@@ -495,7 +543,40 @@ PiecewiseTimeMap PiecewiseTimeMap::detect(const QVector<PiecewiseSample> &in,
     // 2. 粗分析：粗斜率 + 尖峰野点剔除
     QVector<CoarseSlope> slopes;
     QVector<int> outlierIdx;
+    markOffsetSpikes(pts, &outlierIdx);   // v1.12.8：偏移域成片误读先剔
     markSpikeOutliers(pts, &slopes, &outlierIdx);
+
+    // 2.9 数据级墙钟单调闸（v1.12.8 天河案实测）：连续录像墙钟不倒流。
+    //     干净点序列中相邻倒流 > 10s = OCR 长连簇误读（如小时位）造出的
+    //     不可能数据——分段合并会把这种台阶吸收成「正常单段」而静默出错，
+    //     必须在边界检测前拒绝整张图，由调用方回落稳健仿射拟合。
+    //     （尖刺已被前两步剔除，到这里的倒流必为持续台阶。）
+    {
+        qint64 prevW = -1;
+        for (const Point &p : pts) {
+            if (p.outlier)
+                continue;
+            if (prevW >= 0 && p.w < prevW - 10000) {
+                PiecewiseTimeMap empty;
+                rep.rejectedNonMonotonic = true;
+                rep.segmentCount = 0;
+                rep.boundaryCount = 0;
+                rep.outlierCount = 0;
+                rep.outlierIdx.clear();
+                for (const Point &q : pts) {
+                    if (!q.outlier)
+                        continue;
+                    ++rep.outlierCount;
+                    if (q.origIdx >= 0)
+                        rep.outlierIdx.append(q.origIdx);
+                }
+                if (report)
+                    *report = rep;
+                return empty;
+            }
+            prevW = p.w;
+        }
+    }
 
     // 3. 粗边界：干净粗斜率跳变 > 阈值。跳变发生在点对 k-1 与 k 之间，
     //    真实边界 ∈ [pts[slopes[k-1].idx].s, pts[slopes[k].idx].s]，
@@ -730,6 +811,23 @@ PiecewiseTimeMap PiecewiseTimeMap::detect(const QVector<PiecewiseSample> &in,
         map.segments.append(seg);
     }
     map.streamEndMs = qMax(streamEndMs, pts.last().s);
+
+    // 8.5 墙钟单调性物理闸（v1.12.8 天河案实测）：连续录像墙钟不倒流。
+    //     段交界倒流 > 2s = OCR 成片误读造出的伪边界（如月份位 07→02），
+    //     整张分段图不可信：清空段并置标志，由调用方回落稳健仿射拟合。
+    for (int i = 0; i + 1 < map.segments.size(); ++i) {
+        const qint64 bStream = map.segments[i + 1].streamStartMs;
+        const qint64 wallLeft = map.segments[i].wallStartMs
+            + static_cast<qint64>(std::llround(
+                  map.segments[i].rate
+                  * static_cast<double>(bStream
+                                        - map.segments[i].streamStartMs)));
+        if (map.segments[i + 1].wallStartMs < wallLeft - 2000) {
+            map.segments.clear();
+            rep.rejectedNonMonotonic = true;
+            break;
+        }
+    }
 
     // 全片判定
     rep.overallRate = rep.totalStreamSpanMs > 0

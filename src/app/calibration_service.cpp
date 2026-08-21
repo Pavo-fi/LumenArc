@@ -460,7 +460,45 @@ void CalibrationService::finalizeReconstruction()
     PiecewiseDetectReport rep;
     PiecewiseTimeMap map = PiecewiseTimeMap::detect(ps, dur, &rep);
     if (!map.isValid()) {
-        emit failed(video, QStringLiteral("reconstruction failed"));
+        if (!rep.rejectedNonMonotonic) {
+            emit failed(video, QStringLiteral("reconstruction failed"));
+            return;
+        }
+        // v1.12.8（天河案实测）：OCR 成片误读（月份位）造伪边界致分段
+        // 墙钟倒流被物理闸拒绝 → 回落稳健仿射：偏移 = 干净测点的
+        // r=wall−stream 中位数，rate 固定 1.0（该类文件实为正常录像）。
+        QVector<qint64> offs;
+        for (int i = 0; i < allSamples.size(); ++i) {
+            const auto &s = allSamples[i];
+            if (!s.used || s.wallMs <= 0)
+                continue;
+            if (rep.outlierIdx.contains(i))
+                continue;
+            offs.append(s.wallMs - s.streamMs);
+        }
+        if (offs.isEmpty()) {
+            emit failed(video, QStringLiteral("reconstruction failed"));
+            return;
+        }
+        std::sort(offs.begin(), offs.end());
+        TimeCalibration cal;
+        cal.source = TimeCalibration::Source::Ocr;
+        cal.samples = allSamples;
+        for (int idx : rep.outlierIdx)
+            if (idx >= 0 && idx < cal.samples.size())
+                cal.samples[idx].ocrSuspicious = true;
+        cal.offsetMs = offs[offs.size() / 2];
+        cal.rate = 1.0;
+        cal.rateApplied = false;
+        cal.dateKnown = true;
+        cal.conf = 0.5;   // 回落结果降置信，UI 提示复核
+        cal.calibratedAtMs = QDateTime::currentMSecsSinceEpoch();
+        cal.piecewiseApplied = false;
+        cal.speedVariant = false;
+        cal.boundaryCount = 0;
+        cal.audioConsistent = true;
+        cal.audioKnown = false;
+        emit reconstructionReady(video, cal);
         return;
     }
 

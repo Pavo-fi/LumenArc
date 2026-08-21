@@ -159,6 +159,65 @@ static void testNoiseNoFalseBoundary()
     CHECK(std::fabs(map.segments[0].rate - 1.0) < 1e-3);
 }
 
+// v1.12.8（天河案 merged_concat 实测复现）：正常 rate=1 文件 + 月份位
+// OCR 成片误读（07→02，偏 5 个月）。
+// ① ≤2 连簇：偏移域双侧过滤应全剔，不产生边界、不拒绝；
+// ② ≥4 连簇：过滤可能漏，但墙钟单调性闸必须拒绝（调用方回落仿射）。
+static void testMonthMisreadClusters()
+{
+    const qint64 base = 1784650000000LL;         // 2026-07-22 附近
+    const qint64 misread = -5LL * 31 * 86400000; // 07→02 ≈ −5 个月
+    // ① 孤立 + 2 连簇误读
+    QVector<PiecewiseSample> pts;
+    for (qint64 s = 0; s <= 7200000; s += 120000)
+        pts.append(pt(s, base + s));
+    pts[10].wallMs += misread;                    // 孤立
+    pts[20].wallMs += misread;                    // 2 连簇
+    pts[21].wallMs += misread;
+    PiecewiseDetectReport rep;
+    auto map = PiecewiseTimeMap::detect(pts, 7200000, &rep);
+    CHECK(map.isValid(), "2-run misreads: map valid");
+    CHECK(map.size() == 1, "2-run misreads: no false boundary");
+    CHECK(!rep.rejectedNonMonotonic, "2-run: no rejection needed");
+    CHECK(rep.outlierCount >= 3, "2-run: outliers flagged");
+    CHECK(std::fabs(map.segments[0].rate - 1.0) < 1e-3, "2-run: rate≈1");
+
+    // ② 4 连簇（过滤可能漏 1~2 个）→ 要么剔净无伪边界，要么闸门拒绝；
+    //    绝不允许产出墙钟倒流的病态分段图
+    QVector<PiecewiseSample> pts2;
+    for (qint64 s = 0; s <= 7200000; s += 120000)
+        pts2.append(pt(s, base + s));
+    for (int k = 30; k < 34; ++k)
+        pts2[k].wallMs += misread;                // 4 连簇
+    PiecewiseDetectReport rep2;
+    auto map2 = PiecewiseTimeMap::detect(pts2, 7200000, &rep2);
+    if (map2.isValid() && map2.size() > 1) {
+        for (int i = 0; i + 1 < map2.segments.size(); ++i) {
+            const qint64 bS = map2.segments[i + 1].streamStartMs;
+            const qint64 wl = map2.segments[i].wallStartMs
+                + (qint64)std::llround(map2.segments[i].rate
+                                       * (double)(bS - map2.segments[i].streamStartMs));
+            CHECK(map2.segments[i + 1].wallStartMs >= wl - 2000,
+                  "4-run: no backward wall jump in output");
+        }
+    } else {
+        CHECK(rep2.rejectedNonMonotonic || map2.size() <= 1,
+              "4-run: rejected or degenerated safely");
+    }
+
+    // ③ 闸门判别性：墙钟永久下台阶（物理不可能，非尖刺——偏移域/尖峰
+    //    过滤均不应误剔）→ 必须被单调性闸拒绝（调用方回落仿射）
+    QVector<PiecewiseSample> pts3;
+    for (qint64 s = 0; s <= 7200000; s += 120000) {
+        const qint64 step = (s >= 3600000) ? -3600000 : 0;  // 半程下跳 1h
+        pts3.append(pt(s, base + s + step));
+    }
+    PiecewiseDetectReport rep3;
+    auto map3 = PiecewiseTimeMap::detect(pts3, 7200000, &rep3);
+    CHECK(rep3.rejectedNonMonotonic, "backward step: gate rejected");
+    CHECK(!map3.isValid(), "backward step: map invalid");
+}
+
 static void testRoundTrip()
 {
     // 分段 wallMsOf/streamMsOf 往返一致
@@ -263,6 +322,7 @@ int main(int argc, char **argv)
     testOverallSpeedVariant();
     testThreeSegmentBoundaries();
     testNoiseNoFalseBoundary();
+    testMonthMisreadClusters();
     testRoundTrip();
     testJsonRoundTrip();
     testGapSemantics();

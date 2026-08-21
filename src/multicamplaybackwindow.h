@@ -92,7 +92,7 @@ private:
     void rebuildTimelineArea();
     void refreshModeControls();
     void updateTilesOsd();
-    void applyAdjustToTiles();   ///< 画面调节应用到全部瓦片（v1.12.7）
+    void applyAdjustToTiles();   ///< 画面调节按存储参数下发各瓦片（v1.12.8 逐瓦片）
     QString fmtStream(qint64 ms) const;
     QString fmtWall(qint64 wallMs) const;
     QVector<CamLane> currentCamLanes() const;   ///< SyncLaneData → 条图块位
@@ -123,10 +123,12 @@ private:
     QPushButton *m_playBtn = nullptr;
     QPushButton *m_rateBtn = nullptr;
     QPushButton *m_osdBtn = nullptr;
-    QPushButton *m_adjustBtn = nullptr;           ///< 画面调节（v1.12.7）
+    QPushButton *m_adjustBtn = nullptr;           ///< 画面调节（选中瓦片，v1.12.8）
     class PlaybackAdjustPanel *m_adjustPanel = nullptr;
-    DisplayAdjust m_adjust;
-    int m_rotation = 0;
+    QVector<DisplayAdjust> m_tileAdjusts;         ///< 逐瓦片独立调节参数
+    QVector<int> m_tileRotations;
+    int m_selectedTile = -1;                      ///< 画面调节作用对象（点击选中）
+    void selectTile(int idx);
     QPushButton *m_alignBtn = nullptr;
     QPushButton *m_alignOkBtn = nullptr;
     QPushButton *m_alignCancelBtn = nullptr;
