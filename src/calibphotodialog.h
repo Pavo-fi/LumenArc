@@ -23,6 +23,55 @@
 class QLabel;
 class QPushButton;
 
+/// 可缩放图片视图（v1.12.5 对时确认卡）：滚轮以光标为锚缩放、左键拖动平移、
+/// 双击复位适应窗口；叠加绘制两个框（原图像素坐标，随缩放平移）
+class ZoomPhotoView : public QWidget
+{
+public:
+    ZoomPhotoView(const QPixmap &pix, const QRect &box1, const QRect &box2,
+                  QWidget *parent = nullptr);
+    QSize sizeHint() const override { return QSize(720, 540); }
+
+protected:
+    void paintEvent(QPaintEvent *event) override;
+    void wheelEvent(QWheelEvent *event) override;
+    void mousePressEvent(QMouseEvent *event) override;
+    void mouseMoveEvent(QMouseEvent *event) override;
+    void mouseReleaseEvent(QMouseEvent *event) override;
+    void mouseDoubleClickEvent(QMouseEvent *event) override;
+    void resizeEvent(QResizeEvent *event) override;
+
+private:
+    void resetFit();
+    qreal fitScale() const;
+
+    QPixmap m_pix;
+    QRect m_box1, m_box2;      // 原图像素
+    qreal m_scale = 1.0;
+    QPointF m_offset;          // 图片左上角在控件内的位置（px）
+    bool m_userZoomed = false; // 用户碰过缩放/平移后不再自动 resetFit
+    QPoint m_dragLast;
+    bool m_dragging = false;
+};
+
+/// 对时偏差确认卡（v1.12.5 拍板：校时图片集成上卡 + 可放大校对）：
+/// 左侧可缩放图片（两框叠加），右侧识别结果（两个时间+原文+偏差表述）
+/// + 人工核对提示 + 使用/取消。exec()==Accepted = 用户确认采用。
+class TruthPhotoConfirmDialog : public QDialog
+{
+    Q_OBJECT
+public:
+    TruthPhotoConfirmDialog(const QString &imagePath,
+                            const QRect &monitorBox, const QRect &beijingBox,
+                            const QString &monitorTimeText,
+                            const QString &monitorRawText,
+                            const QString &beijingTimeText,
+                            const QString &beijingRawText,
+                            const QString &offsetVerboseText,
+                            const QString &crossDayNote,
+                            QWidget *parent = nullptr);
+};
+
 class CalibPhotoDialog : public QDialog
 {
     Q_OBJECT

@@ -10,7 +10,6 @@
  */
 #include "calibration_service.h"
 #include "infrastructure/ianalysis_engine.h"
-#include "infrastructure/media_probe_engine.h"
 #include "infrastructure/tool_paths.h"
 #include "infrastructure/timestamp_ocr_engine.h"
 #include "domain/probe_result.h"
@@ -70,7 +69,6 @@ CalibrationService::CalibrationService(IAnalysisEngine *analysisEngine,
     : QObject(parent)
     , m_analysisEngine(analysisEngine)
     , m_ocrEngine(new TimestampOcrEngine(this))
-    , m_probeEngine(new MediaProbeEngine(this))
 {
     connect(m_ocrEngine, &TimestampOcrEngine::atPositionsFinished,
             this, &CalibrationService::onAtPositionsFinished);
@@ -80,8 +78,6 @@ CalibrationService::CalibrationService(IAnalysisEngine *analysisEngine,
             [this](int done, int total, const QString &) {
                 emit progress(QStringLiteral("ocr %1/%2").arg(done).arg(total));
             });
-    connect(m_probeEngine, &MediaProbeEngine::probeFinished,
-            this, &CalibrationService::onProbeFinished);
     // v1.12.5 北京时间对时：校时照片两框识别结果转发
     connect(m_ocrEngine, &TimestampOcrEngine::calibPhotoFinished,
             this, &CalibrationService::calibPhotoFinished);
@@ -242,20 +238,10 @@ bool CalibrationService::quickCheckSamplesInconsistent(
     return false;
 }
 
-void CalibrationService::probeAbsStart(const QString &videoPath)
-{
-    if (videoPath.isEmpty())
-        return;
-    m_pendingVideo = videoPath;
-    m_absPending = true;
-    m_probeEngine->probe({videoPath});
-}
-
 void CalibrationService::cancel()
 {
     m_ocrEngine->cancel();
     m_pendingVideo.clear();
-    m_absPending = false;
     m_quickPending = false;
     m_reconStage = ReconStage::None;
     m_reconSamples.clear();
@@ -526,20 +512,6 @@ void CalibrationService::onAtPositionsFailed(const QString &error)
     emit failed(video, error);
 }
 
-void CalibrationService::onProbeFinished(const QVector<ProbeResult> &results)
-{
-    if (!m_absPending)
-        return;
-    m_absPending = false;
-    for (const ProbeResult &pr : results) {
-        if (pr.filePath == m_pendingVideo || results.size() == 1) {
-            if (pr.absStartEpochMs > 0)
-                emit absStartReady(m_pendingVideo, pr.absStartEpochMs);
-            return;
-        }
-    }
-}
-
 // ---------------------------------------------------------------------------
 // ffprobe 辅助（视频流/音频流时长；容器总时长取最长流会虚标）
 // ---------------------------------------------------------------------------
@@ -594,36 +566,6 @@ qint64 CalibrationService::probeVideoStreamDurationMs(const QString &videoPath)
 qint64 CalibrationService::probeAudioDurationMs(const QString &videoPath)
 {
     return ffprobeStreamDurationMs(videoPath, QStringLiteral("a:0"));
-}
-
-TimeCalibration CalibrationService::fromSinglePoint(qint64 streamMs,
-                                                    qint64 wallMs,
-                                                    TimeCalibration::Source src)
-{
-    TimeCalibration cal;
-    cal.source = src;
-    cal.offsetMs = wallMs - streamMs;
-    cal.rate = 1.0;
-    cal.dateKnown = true;
-    cal.conf = (src == TimeCalibration::Source::Manual) ? 1.0 : 0.8;
-    cal.calibratedAtMs = QDateTime::currentMSecsSinceEpoch();
-    TimeCalibration::Sample s;
-    s.streamMs = streamMs;
-    s.wallMs = wallMs;
-    cal.samples.append(s);
-    return cal;
-}
-
-TimeCalibration CalibrationService::fromAbsStart(qint64 absStartEpochMs)
-{
-    TimeCalibration cal;
-    cal.source = TimeCalibration::Source::AbsStart;
-    cal.offsetMs = absStartEpochMs;
-    cal.rate = 1.0;
-    cal.dateKnown = true;
-    cal.conf = 0.6;
-    cal.calibratedAtMs = QDateTime::currentMSecsSinceEpoch();
-    return cal;
 }
 
 // ---------------------------------------------------------------------------

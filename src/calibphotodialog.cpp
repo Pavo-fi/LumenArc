@@ -15,6 +15,7 @@
 #include <QLabel>
 #include <QMouseEvent>
 #include <QPainter>
+#include <QWheelEvent>
 #include <QPushButton>
 #include <QVBoxLayout>
 
@@ -212,4 +213,219 @@ void CalibPhotoDialog::onMouseRelease(const QPoint &pos)
     m_dragging = QRect();
     refreshHint();
     m_view->update();
+}
+
+// ---------------------------------------------------------------------------
+// ZoomPhotoView（对时确认卡的可缩放图片视图）
+// ---------------------------------------------------------------------------
+ZoomPhotoView::ZoomPhotoView(const QPixmap &pix, const QRect &box1,
+                             const QRect &box2, QWidget *parent)
+    : QWidget(parent), m_pix(pix), m_box1(box1), m_box2(box2)
+{
+    setMinimumSize(400, 300);
+    setMouseTracking(false);
+    setCursor(Qt::OpenHandCursor);
+}
+
+qreal ZoomPhotoView::fitScale() const
+{
+    if (m_pix.isNull() || width() < 10 || height() < 10)
+        return 1.0;
+    return qMin(qreal(width()) / m_pix.width(),
+                qreal(height()) / m_pix.height());
+}
+
+void ZoomPhotoView::resetFit()
+{
+    m_scale = fitScale();
+    m_offset = QPointF((width() - m_pix.width() * m_scale) / 2.0,
+                       (height() - m_pix.height() * m_scale) / 2.0);
+    update();
+}
+
+void ZoomPhotoView::resizeEvent(QResizeEvent *event)
+{
+    QWidget::resizeEvent(event);
+    if (!m_userZoomed)
+        resetFit();
+}
+
+void ZoomPhotoView::wheelEvent(QWheelEvent *event)
+{
+    if (m_pix.isNull())
+        return;
+    const qreal oldScale = m_scale;
+    const qreal factor = event->angleDelta().y() > 0 ? 1.25 : 0.8;
+    m_scale = qBound(fitScale() * 0.5, m_scale * factor, fitScale() * 30.0);
+    // 以光标为锚：光标下的图像点缩放前后不动
+    const QPointF pos = event->position();
+    const QPointF imgPt = (pos - m_offset) / oldScale;
+    m_offset = pos - imgPt * m_scale;
+    m_userZoomed = true;
+    update();
+    event->accept();
+}
+
+void ZoomPhotoView::mousePressEvent(QMouseEvent *event)
+{
+    if (event->button() == Qt::LeftButton) {
+        m_dragging = true;
+        m_dragLast = event->pos();
+        setCursor(Qt::ClosedHandCursor);
+        event->accept();
+    }
+}
+
+void ZoomPhotoView::mouseMoveEvent(QMouseEvent *event)
+{
+    if (m_dragging) {
+        m_offset += event->pos() - m_dragLast;
+        m_dragLast = event->pos();
+        m_userZoomed = true;
+        update();
+        event->accept();
+    }
+}
+
+void ZoomPhotoView::mouseReleaseEvent(QMouseEvent *event)
+{
+    if (event->button() == Qt::LeftButton && m_dragging) {
+        m_dragging = false;
+        setCursor(Qt::OpenHandCursor);
+        event->accept();
+    }
+}
+
+void ZoomPhotoView::mouseDoubleClickEvent(QMouseEvent *event)
+{
+    if (event->button() == Qt::LeftButton) {
+        m_userZoomed = false;
+        resetFit();
+        setCursor(Qt::OpenHandCursor);
+        m_dragging = false;
+        event->accept();
+    }
+}
+
+void ZoomPhotoView::paintEvent(QPaintEvent *)
+{
+    QPainter p(this);
+    p.fillRect(rect(), QColor(0x20, 0x24, 0x2a));
+    if (m_pix.isNull()) {
+        p.setPen(Qt::white);
+        p.drawText(rect(), Qt::AlignCenter,
+                   lang("图片无法读取", "Image unreadable"));
+        return;
+    }
+    p.setRenderHint(QPainter::SmoothPixmapTransform);
+    p.translate(m_offset);
+    p.scale(m_scale, m_scale);
+    p.drawPixmap(0, 0, m_pix);
+    // 两框叠加（线宽随缩放反比，视觉恒定 2px）
+    const qreal penW = 2.0 / m_scale;
+    const auto drawBox = [&p, penW](const QRect &r, const QColor &c,
+                                    const QString &tag, qreal scale) {
+        if (!r.isValid())
+            return;
+        p.setPen(QPen(c, penW, Qt::DashLine));
+        p.drawRect(r);
+        QFont f = p.font();
+        f.setPointSizeF(12.0 / scale);
+        f.setBold(true);
+        p.setFont(f);
+        const QPointF tagPos(r.left(), r.top() - 4.0 / scale);
+        p.setPen(c);
+        p.drawText(tagPos, tag);
+    };
+    drawBox(m_box1, QColor(230, 85, 60), lang("监控主机", "DVR"), m_scale);
+    drawBox(m_box2, QColor(0, 130, 200), lang("北京时间", "Beijing"), m_scale);
+}
+
+// ---------------------------------------------------------------------------
+// TruthPhotoConfirmDialog：图片（左，可缩放）+ 识别结果（右）+ 确认/取消
+// ---------------------------------------------------------------------------
+TruthPhotoConfirmDialog::TruthPhotoConfirmDialog(
+    const QString &imagePath, const QRect &monitorBox, const QRect &beijingBox,
+    const QString &monitorTimeText, const QString &monitorRawText,
+    const QString &beijingTimeText, const QString &beijingRawText,
+    const QString &offsetVerboseText, const QString &crossDayNote,
+    QWidget *parent)
+    : QDialog(parent)
+{
+    setWindowTitle(lang("确认对时偏差", "Confirm offset"));
+    auto *lay = new QHBoxLayout(this);
+
+    QPixmap pix;
+    pix.load(imagePath);
+    auto *view = new ZoomPhotoView(pix, monitorBox, beijingBox, this);
+    lay->addWidget(view, 1);
+
+    auto *right = new QVBoxLayout();
+    auto *title = new QLabel(lang("请核对原文读数（滚轮放大图片、拖动平移、双击复位）",
+                                  "Verify readings (wheel=zoom, drag=pan, "
+                                  "double-click=fit)"), this);
+    title->setWordWrap(true);
+    title->setStyleSheet(QStringLiteral("color:#c90;font-weight:bold;"));
+    right->addWidget(title);
+
+    auto mkRow = [this](const QString &k, const QString &v, bool mono) {
+        auto *row = new QVBoxLayout();
+        auto *kl = new QLabel(k, this);
+        kl->setStyleSheet(QStringLiteral("color:#888;"));
+        auto *vl = new QLabel(v, this);
+        vl->setTextInteractionFlags(Qt::TextSelectableByMouse);
+        vl->setWordWrap(true);
+        if (mono)
+            vl->setStyleSheet(QStringLiteral("font-family:Consolas,monospace;"));
+        row->addWidget(kl);
+        row->addWidget(vl);
+        return row;
+    };
+    right->addLayout(mkRow(lang("监控主机时间：", "Recorder clock:"),
+                           monitorTimeText, false));
+    right->addLayout(mkRow(lang("框 1 原文：", "Box 1 raw:"),
+                           monitorRawText, true));
+    right->addSpacing(6);
+    right->addLayout(mkRow(lang("北京时间：", "Beijing time:"),
+                           beijingTimeText, false));
+    right->addLayout(mkRow(lang("框 2 原文：", "Box 2 raw:"),
+                           beijingRawText, true));
+    right->addSpacing(10);
+
+    auto *offLabel = new QLabel(lang("偏差：监控主机时间比北京时间 %1 %2",
+                                     "Offset: recorder is %1 %2")
+                                    .arg(offsetVerboseText, crossDayNote),
+                                this);
+    offLabel->setWordWrap(true);
+    offLabel->setStyleSheet(QStringLiteral("font-weight:bold; font-size:14px;"));
+    right->addWidget(offLabel);
+
+    auto *warn = new QLabel(lang("OCR 可能误读个别数字（如秒位）。请放大图片核对\n"
+                                 "两个框内读数与上方解析一致后再确认。",
+                                 "OCR may misread digits (e.g. seconds). Zoom in "
+                                 "and verify both boxes before confirming."),
+                            this);
+    warn->setWordWrap(true);
+    warn->setStyleSheet(QStringLiteral("color:#c90;"));
+    right->addWidget(warn);
+    right->addStretch(1);
+
+    auto *useBtn = new QPushButton(lang("✅ 使用此偏差", "✅ Use this offset"),
+                                   this);
+    useBtn->setDefault(true);
+    useBtn->setMinimumHeight(32);
+    auto *cancelBtn = new QPushButton(lang("取消", "Cancel"), this);
+    auto *btnRow = new QHBoxLayout();
+    btnRow->addWidget(useBtn, 1);
+    btnRow->addWidget(cancelBtn);
+    right->addLayout(btnRow);
+    auto *rightW = new QWidget(this);
+    rightW->setLayout(right);
+    rightW->setFixedWidth(360);
+    lay->addWidget(rightW);
+
+    connect(useBtn, &QPushButton::clicked, this, &QDialog::accept);
+    connect(cancelBtn, &QPushButton::clicked, this, &QDialog::reject);
+
+    resize(1120, 640);
 }

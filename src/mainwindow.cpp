@@ -109,7 +109,7 @@ MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent)
 {
     loadLanguage();
-    setWindowTitle(lang("追光者 Lumen Arc v1.12.5", "Lumen Arc v1.12.5") + buildStamp());
+    setWindowTitle(lang("追光者 Lumen Arc v1.12.6", "Lumen Arc v1.12.6") + buildStamp());
     resize(1280, 720);
 
     m_roiModel = new RoiModel(this);   // 统一 ROI 模型（矩形+多边形，v1.5.0 Q-18）
@@ -2186,7 +2186,7 @@ void MainWindow::openVideoFile(const QString &filePath)
 
         // Do NOT overwrite m_currentVideoPath with the .vla path: it is an
         // analysis file, not a playable video, and it keys VideoStateManager.
-        setWindowTitle(windowTitleWithCase("Lumen Arc v1.12.5 - [Loaded: " +
+        setWindowTitle(windowTitleWithCase("Lumen Arc v1.12.6 - [Loaded: " +
                            QFileInfo(filePath).fileName() + "]"));
         } else {
             QMessageBox::critical(this, lang("错误", "Error"),
@@ -2539,7 +2539,7 @@ void MainWindow::onLoadAnalysis()
                 m_guideLineModel->addLine(line);
 
             // Do NOT overwrite m_currentVideoPath with the .vla path (see openVideoFile).
-        setWindowTitle(windowTitleWithCase("Lumen Arc v1.12.5 - [Loaded: " +
+        setWindowTitle(windowTitleWithCase("Lumen Arc v1.12.6 - [Loaded: " +
                        QFileInfo(filePath).fileName() + "]"));
         QMessageBox::information(this, lang("已加载", "Loaded"),
             lang("分析结果加载成功。", "Analysis result loaded successfully."));
@@ -2728,7 +2728,7 @@ void MainWindow::onSetStartTime()
                               .arg(cal.offsetMs / 1000.0, 0, 'f', 1);
                 }
                 showOperationStatus(msg);
-                // v1.12.5 对时图片留档（拍板：存档）：校时图片复制入案件
+                // v1.12.6 对时图片留档（拍板：存档）：校时图片复制入案件
                 // calibration/ 目录（best effort；未入案件则保留原路径引用）
                 if (cal.truthSet
                     && cal.truthSource == QLatin1String("photo")

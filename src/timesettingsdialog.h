@@ -79,13 +79,9 @@ private slots:
     void onReconstructionReady(const QString &videoPath,
                                const TimeCalibration &proposed);
     void onServiceFailed(const QString &videoPath, const QString &error);
-    void onAbsStartReady(const QString &videoPath, qint64 absStartEpochMs);
     void onSampleItemChanged(QTableWidgetItem *item);
     void onUseResult();      ///< 结果区主按钮：应用 GO 候选（三点/重建）
     void onToggleDetails();
-    void onRunReconForce();  ///< 高级区：强制变速重建（绕过预检）
-    void onAdoptAbsStart();
-    void onAdoptManual();
     void onTruthInputChanged();
     void onAdoptTruth();
     void onClearTruth();
@@ -116,7 +112,6 @@ private:
     void maybeAutoApply();                           ///< GO 完成且无异常 → 自动应用
     void setGoBusy(bool busy, const QString &stageText);
     void fillSampleTable(const TimeCalibration &proposed);
-    void fillSegmentTable(const TimeCalibration &proposed);
     static QString fmtWall(qint64 epochMs);
     static QString fmtOffset(qint64 offsetMs);
     /// v1.12.5 拍板表述：「（比北京时间）快/慢 X日X时X分X秒」
@@ -138,7 +133,6 @@ private:
     bool m_detailsVisible = false;      // 结果细节折叠
     bool m_autoApplied = false;         // GO 完成已自动应用（防重启用按钮）
     GoStage m_goStage = GoStage::Idle;
-    qint64 m_absStartMs = 0;
 
     // UI
     QLabel *m_videoLabel = nullptr;
@@ -154,12 +148,6 @@ private:
     QLabel *m_fitWarningLabel = nullptr;
     QPushButton *m_useBtn = nullptr;        // 结果区「使用此结果」
     QCheckBox *m_noDriftCheck = nullptr;
-    // 高级区（折叠）
-    QWidget *m_advancedBox = nullptr;
-    QLabel *m_absLabel = nullptr;
-    QPushButton *m_adoptAbsBtn = nullptr;
-    QDateTimeEdit *m_manualEdit = nullptr;
-    QPushButton *m_adoptManualBtn = nullptr;
     QLabel *m_monitorTimeLabel = nullptr;
     QDateTimeEdit *m_beijingEdit = nullptr;
     QDateTimeEdit *m_monitorEdit = nullptr;   // v1.12.5 手输：监控主机时间
@@ -177,8 +165,5 @@ private:
     QString m_pendingTruthImage;
     QRect   m_pendingTruthBox1;
     QRect   m_pendingTruthBox2;
-    QPushButton *m_reconForceBtn = nullptr; // 强制变速重建
-    QLabel *m_reconSummaryLabel = nullptr;  // 重建状态（高级区）
-    QTableWidget *m_segmentTable = nullptr;
     QLabel *m_sidecarWarnLabel = nullptr;
 };

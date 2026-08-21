@@ -22,10 +22,8 @@
 #include <functional>
 #include "domain/time_calibration.h"
 #include "domain/sort_model.h"
-#include "domain/probe_result.h"
 
 class IAnalysisEngine;
-class MediaProbeEngine;
 class TimestampOcrEngine;
 
 /// 时间重建阶段（两级采样状态机）
@@ -68,14 +66,8 @@ public:
     /// 少于 3 点无法校验返回 false（维持首尾两点旧语义）。
     static bool quickCheckSamplesInconsistent(
         const QVector<TimeCalibration::Sample> &samples);
-    /// absStart（流内绝对起始，DHAV 等）快速候选探测。
-    void probeAbsStart(const QString &videoPath);
     void cancel();
-    bool isRunning() const;    /// 手动校时构造（单点，rate=1.0）
-    static TimeCalibration fromSinglePoint(qint64 streamMs, qint64 wallMs,
-                                           TimeCalibration::Source src);
-    /// absStart 构造（流内 0 点对齐，单点）
-    static TimeCalibration fromAbsStart(qint64 absStartEpochMs);
+    bool isRunning() const;
 
     /// sidecar（<输出>.lumencal.json）继承：读取并构造校时；warning 出参
     /// 携带缺口提示（Q-4：超 2s 容差必须警告，且进报告）。
@@ -120,7 +112,6 @@ signals:
     /// 时间不可信，调用方应拒绝自动路由并提示重新框选）
     void quickCheckReady(const QString &videoPath, double overallRate,
                          bool suspicious, bool ocrSuspect);
-    void absStartReady(const QString &videoPath, qint64 absStartEpochMs);
     /// v1.12.5 校时照片识别完成（转发引擎；ok=false 时 error 可读）
     void calibPhotoFinished(bool ok,
                             const QVector<QPair<QString, double>> &monitorLines,
@@ -131,7 +122,6 @@ signals:
 private slots:
     void onAtPositionsFinished(const QVector<TimeCalibration::Sample> &samples);
     void onAtPositionsFailed(const QString &error);
-    void onProbeFinished(const QVector<ProbeResult> &results);
 
 private:
     void onReconBatchFinished(const QVector<TimeCalibration::Sample> &samples);
@@ -143,11 +133,9 @@ private:
     IAnalysisEngine *m_analysisEngine = nullptr;   // 不持有（引擎中立时长来源）
     std::function<QString(const QString &)> m_evidenceDirResolver;  // v1.3.0 M2
     TimestampOcrEngine *m_ocrEngine = nullptr;     // 自持有（与预处理窗口互不干扰）
-    MediaProbeEngine *m_probeEngine = nullptr;     // 自持有
     QString m_pendingVideo;
     qint64 m_pendingDurationMs = 0;
     QRectF m_roi;                  ///< 用户框选时间戳区域（归一化 0~1）
-    bool m_absPending = false;
 
     // 时间重建状态（两级采样）
     ReconStage m_reconStage = ReconStage::None;
