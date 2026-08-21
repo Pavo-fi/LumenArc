@@ -4321,3 +4321,63 @@ matroska 写头后 time_base 收编 1/1000 需按实际 tb 打点）→ 分析�
 GUI 跑越秀批 → 完成页目检摘要卡（缺口应列 18 条，最大 10.3h 隔夜；修剪
 3 段亚秒级；去重 29 段清单）。
 
+
+# 归档注记（2026-08-21 §66）：第五十二批（§61）由 HANDOVER 移入（R2 限 5 批）
+
+# ============================================================================
+# 工作记录（2026-08-21，第五十二批）——GO 链修复：按 GO 不走 OCR 智能排序（v1.12.2，用户实测实锤）
+# ============================================================================
+
+## 61. 前处理「按 GO 后不走 OCR/智能排序」双根因修复（GUI 接线级，无头驱动漏网）
+
+### 用户反馈（2026-08-21）
+
+前处理按 GO 后不走「识别画面时间 → 智能排序」流程，实际直接拼接。
+
+### 双根因实锤（GUI 接线两级；§59 无头全流程驱动直驱 domain/引擎不经
+协调器链式接线，故漏网）
+
+1. **链式标志被会话复位吞掉**（beginWithAutoSort，bug 自 2c83c87「非强制
+   一键拼接」批引入）：先 `m_autoSortAfterProbe = true` 再调 `begin()`，而
+   begin() 会话复位第一刀 `m_autoSortAfterProbe = false`——探测完成后
+   onTrustedDurationsReady 检标志必为假 → runAutoSort 永不链式触发。
+2. **列表序中间态 evidenceReady 上表面**：探测就绪即发「按导入顺序成组」
+   的 evidenceReady——该组单分组/无警告/估算 0，`canAutoProceed` 恒真 →
+   窗口 onEvidenceReady 直通 startProcessing（文件名自然序盲拼，OCR 从未
+   跑）。症状：GO 与「直接拼接」完全同效（还绕过乱序护栏弹窗）。
+
+### 修复（coordinator 两处，窗口零改动）
+
+- beginWithAutoSort：改先调 begin()、成功（阶段转 Probing）后才挂链式
+  标志；begin 早退（进行中）不挂。
+- onTrustedDurationsReady：GO 链分支不再发中间态——不发 evidenceReady
+  （防窗口误直通）、不发 phaseChanged(UserConfirm)（防中途切校对页闪屏）；
+  静默置 m_phase=UserConfirm（runAutoSort 相位前置）直接衔 runAutoSort。
+  OCR+排序完成后由 runSorting 统一发相位与 evidenceReady——窗口看到的首个
+  结果就是排序终态，可信直通 / 问题卡 B 路径恢复 §58 设计语义。
+  非 GO 链（begin 直拼）行为逐字不变。
+
+### 测试（mw_test 65→78，+13）
+
+testPreprocessGoChain 双链对照（不存在文件：探测快败/OCR 降级均收敛
+runSorting，状态机断言与环境无关，确定性）：
+- GO 链：相位必经 Probing→Ocr→Sorting→UserConfirm（根因①回归）、
+  evidenceReady 恰好一次且在 UserConfirm 发出（根因②回归）、文件全保留入组；
+- 直拼链对照：仅 Probing→UserConfirm、不进 OCR/排序（非强制一键语义不变）。
+- 变异验证：回退修复重跑，准确失败（OCR/排序相位缺失 2 断言）。
+- 踩坑留痕：测试初版 watcher 声明在 coord 之后，作用域结束 watcher 先析构、
+  coord 析构内 cancel() 发信号到死 lambda → 堆损坏（0xC0000374）；
+  调声明序后绿（析构时信号仍发射，监听必须后死）。
+
+### 版本与文档
+
+- 版本 1.12.1 → **1.12.2**（CMake×3/app.rc×4/About/主窗标题×3）。
+- 全回归 14 套绿（mw 78；libav 本机跑 20——caltest 素材缺失跳过，环境项）。
+- 主程序重链（LumenArc.exe 随 ALL 构建刷新）。
+- PENDING：新增 P-62 并勾销。
+
+### 待真机
+
+GUI 复跑含 OSD 批次（如越秀 0~99.mp4）按 GO：应见「OCR n/N」进度 →
+可信直通拼接或停校对页问题卡；不再出现「按 GO 直接拼」。
+

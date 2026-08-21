@@ -25,6 +25,7 @@
 #include <QString>
 #include <functional>
 #include "domain/sync_model.h"
+#include "displayadjust.h"        // DisplayAdjust（瓦片画面调节）
 #include "app/cam_timeline.h"        // CamLane（模式A 条图块位）+ CamInventoryItem
 #include "app/multicam_sync_service.h"
 
@@ -91,6 +92,7 @@ private:
     void rebuildTimelineArea();
     void refreshModeControls();
     void updateTilesOsd();
+    void applyAdjustToTiles();   ///< 画面调节应用到全部瓦片（v1.12.7）
     QString fmtStream(qint64 ms) const;
     QString fmtWall(qint64 wallMs) const;
     QVector<CamLane> currentCamLanes() const;   ///< SyncLaneData → 条图块位
@@ -121,6 +123,10 @@ private:
     QPushButton *m_playBtn = nullptr;
     QPushButton *m_rateBtn = nullptr;
     QPushButton *m_osdBtn = nullptr;
+    QPushButton *m_adjustBtn = nullptr;           ///< 画面调节（v1.12.7）
+    class PlaybackAdjustPanel *m_adjustPanel = nullptr;
+    DisplayAdjust m_adjust;
+    int m_rotation = 0;
     QPushButton *m_alignBtn = nullptr;
     QPushButton *m_alignOkBtn = nullptr;
     QPushButton *m_alignCancelBtn = nullptr;

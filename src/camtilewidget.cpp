@@ -14,6 +14,7 @@
 #include <QMouseEvent>
 #include <QWheelEvent>
 #include <QtMath>
+#include <QTransform>
 
 #include "infrastructure/ivideo_engine.h"
 #include "theme.h"
@@ -36,7 +37,8 @@ void CamTileWidget::setEngine(IVideoEngine *engine)
     if (m_engine) {
         connect(m_engine, &IVideoEngine::frameReady, this,
                 [this](const QImage &img) {
-            m_frame = img;            // COW 浅拷贝；引擎发出后不再改
+            m_raw = img;              // COW 浅拷贝；引擎发出后不再改
+            rebuildDisplay();
             if (m_engine)
                 m_engine->ackFrame(); // 归还配额（引擎有界化丢帧契约）
             update();
@@ -46,8 +48,34 @@ void CamTileWidget::setEngine(IVideoEngine *engine)
 
 void CamTileWidget::clearFrame()
 {
+    m_raw = QImage();
     m_frame = QImage();
     update();
+}
+
+void CamTileWidget::setDisplayAdjust(const DisplayAdjust &adj, int rotationDegrees)
+{
+    const QByteArray lut = adj.buildLut();
+    const int rot = ((rotationDegrees % 360) + 360) % 360;
+    if (m_lut == lut && m_rotation == rot)
+        return;
+    m_lut = lut;
+    m_rotation = rot;
+    rebuildDisplay();
+    update();
+}
+
+void CamTileWidget::rebuildDisplay()
+{
+    if (m_raw.isNull()) {
+        m_frame = QImage();
+        return;
+    }
+    m_frame = m_raw;                       // COW：恒等时零拷贝直通
+    if (m_rotation != 0)
+        m_frame = m_frame.transformed(QTransform().rotate(m_rotation));
+    if (!m_lut.isEmpty())
+        m_frame = applyDisplayLut(m_frame, m_lut);
 }
 
 void CamTileWidget::setOsdLines(const QString &line1, const QString &line2)

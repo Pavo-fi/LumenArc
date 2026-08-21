@@ -13,6 +13,7 @@
 #include "calibphotodialog.h"
 #include "domain/truth_time_parse.h"
 #include "i18n.h"
+#include "theme.h"
 
 #include <QVBoxLayout>
 #include <QHBoxLayout>
@@ -203,16 +204,23 @@ void TimeSettingsDialog::buildUi()
     truthExplain->setStyleSheet(QStringLiteral("color:#666;"));
     gt->addWidget(truthExplain);
 
-    // 方式一：校时图片框选 OCR
+    // 方式一：校时图片框选 OCR（v1.12.7 用户反馈：按钮不够显眼 →
+    // 与 GO 同级强调：大按钮 + 主题强调色）
     auto *photoRow = new QHBoxLayout();
     m_truthPhotoBtn = new QPushButton(
-        lang("📷 从校时图片识别（框选监控主机时间 + 北京时间）…",
-             "📷 From calibration photo (box both clocks)…"), this);
+        lang("📷 从校时图片识别（推荐：框选监控主机时间 + 北京时间）…",
+             "📷 From calibration photo (recommended: box both clocks)…"), this);
+    m_truthPhotoBtn->setMinimumHeight(40);
+    m_truthPhotoBtn->setStyleSheet(QStringLiteral(
+        "QPushButton { font-size:14px; font-weight:bold; "
+        "background:%1; color:#1a1a1a; border-radius:6px; padding:0 14px; }"
+        "QPushButton:hover { background:%2; }"
+        "QPushButton:disabled { background:#555; color:#999; }")
+        .arg(Theme::Accent).arg(Theme::AccentHover));
     m_truthPhotoBtn->setEnabled(m_service != nullptr);
     if (!m_service)
         m_truthPhotoBtn->setToolTip(lang("OCR 引擎不可用", "OCR engine unavailable"));
-    photoRow->addWidget(m_truthPhotoBtn);
-    photoRow->addStretch(1);
+    photoRow->addWidget(m_truthPhotoBtn, 1);
     gt->addLayout(photoRow);
 
     // 方式二：手动输入两个时间（自动算偏差）

@@ -28,6 +28,7 @@
 #include "app/cam_timeline.h"
 #include "app/case_manager.h"
 #include "camtilewidget.h"
+#include "playbackadjustpanel.h"
 #include "multicamview.h"
 #include "i18n.h"
 #include "theme.h"
@@ -376,6 +377,43 @@ void MultiCamPlaybackWindow::buildPlayPage()
     });
     bar->addWidget(m_osdBtn);
 
+    // v1.12.7：画面调节（全部瓦片统一应用，显示链路 LUT/旋转；证据链不变）
+    m_adjustBtn = new QPushButton(lang("画面调节", "Adjust"), this);
+    m_adjustBtn->setCheckable(true);
+    m_adjustBtn->setToolTip(lang("亮度/对比度/伽马/色阶/反色/旋转（仅显示）",
+                                 "Brightness/contrast/gamma/levels/invert/rotate (display only)"));
+    connect(m_adjustBtn, &QPushButton::toggled, this, [this](bool on) {
+        if (on) {
+            if (!m_adjustPanel) {
+                m_adjustPanel = new PlaybackAdjustPanel(this);
+                m_adjustPanel->setFloating(true);
+                m_adjustPanel->setWindowTitle(lang("画面调节（全部机位）",
+                                                   "Adjust (all lanes)"));
+                connect(m_adjustPanel, &PlaybackAdjustPanel::adjustChanged,
+                        this, [this](const DisplayAdjust &adj) {
+                    m_adjust = adj;
+                    applyAdjustToTiles();
+                });
+                connect(m_adjustPanel, &PlaybackAdjustPanel::rotationChanged,
+                        this, [this](int deg) {
+                    m_rotation = deg;
+                    applyAdjustToTiles();
+                });
+                connect(m_adjustPanel, &QDockWidget::visibilityChanged,
+                        this, [this](bool vis) {
+                    if (m_adjustBtn)
+                        m_adjustBtn->setChecked(vis);
+                });
+                m_adjustPanel->resize(300, 420);
+            }
+            m_adjustPanel->show();
+            m_adjustPanel->raise();
+        } else if (m_adjustPanel) {
+            m_adjustPanel->hide();
+        }
+    });
+    bar->addWidget(m_adjustBtn);
+
     m_alignBtn = new QPushButton(lang("对齐…", "Align…"), this);
     m_alignBtn->setVisible(false);
     connect(m_alignBtn, &QPushButton::clicked, this,
@@ -463,6 +501,7 @@ void MultiCamPlaybackWindow::rebuildTiles()
         auto *tile = new CamTileWidget(this);
         tile->setOsdVisible(m_osdOn);
         tile->setAudible(i == m_svc->audibleLane());
+        tile->setDisplayAdjust(m_adjust, m_rotation);   // 画面调节（v1.12.7）
         const int idx = i;
         connect(tile, &CamTileWidget::clicked, this, [this, idx]() {
             // 空槽位点击 = 选视频；已载路点击 = 切听（U-2）
@@ -867,6 +906,13 @@ QString MultiCamPlaybackWindow::fmtWall(qint64 wallMs) const
 {
     return QDateTime::fromMSecsSinceEpoch(wallMs, Qt::LocalTime)
         .toString(QStringLiteral("MM-dd HH:mm:ss"));
+}
+
+void MultiCamPlaybackWindow::applyAdjustToTiles()
+{
+    for (auto *t : m_tiles)
+        if (t)
+            t->setDisplayAdjust(m_adjust, m_rotation);
 }
 
 void MultiCamPlaybackWindow::onClock(qint64 wallMs)

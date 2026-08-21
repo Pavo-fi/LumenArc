@@ -174,6 +174,19 @@ static void testMapping()
     CHECK(syncLaneCovers(a, 100000), "covers: start inclusive");
     CHECK(syncLaneCovers(a, 160000), "covers: end inclusive");
     CHECK(!syncLaneCovers(a, 160001), "covers: after end");
+
+    // v1.12.7（用户实测反馈）：做过北京时间校对的路，多机墙钟轴 = 北京时间
+    // （wallMsOf + truthOffsetMs）；反解/覆盖判定同轴一致；未设 truth 的路不变
+    SyncLaneData bj = makeLane("BJ", 100000);
+    bj.cal.truthSet = true;
+    bj.cal.truthOffsetMs = 834000;   // 监控慢 13 分 54 秒
+    CHECK(syncWallOf(bj, 5000) == 105000 + 834000, "truth wallOf = beijing");
+    CHECK(syncStreamOf(bj, 105000 + 834000) == 5000, "truth streamOf inverse");
+    CHECK(syncLaneWallStart(bj) == 100000 + 834000, "truth wallStart");
+    CHECK(syncLaneWallEnd(bj) == 160000 + 834000, "truth wallEnd");
+    CHECK(syncLaneCovers(bj, 100000 + 834000), "truth covers start");
+    CHECK(!syncLaneCovers(bj, 100000), "truth: osd-axis point not covered");
+    CHECK(syncWallOf(a, 5000) == 105000, "no-truth lane unchanged");
 }
 
 static void testModeDecision()

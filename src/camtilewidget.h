@@ -18,6 +18,7 @@
 #include <QWidget>
 #include <QImage>
 #include <QPointF>
+#include "displayadjust.h"
 
 class IVideoEngine;
 
@@ -41,6 +42,10 @@ public:
     /// 缺口/失败占位（非清空帧——保留最后帧下压暗纹提示）
     void setPlaceholder(const QString &text);   ///< 空串 = 取消占位
 
+    /// v1.12.7：画面调节（显示链路 LUT + 90° 步进旋转，与单路同口径；
+    /// 仅影响本瓦片显示，引擎原始帧/证据链不变）。默认参数零开销直通。
+    void setDisplayAdjust(const DisplayAdjust &adj, int rotationDegrees);
+
     qreal zoom() const { return m_zoom; }
 
 signals:
@@ -60,7 +65,11 @@ private:
     void clampCenter();
 
     IVideoEngine *m_engine = nullptr;
-    QImage m_frame;
+    QImage m_frame;       ///< 显示帧（调节后；恒等时与 m_raw 浅共享）
+    QImage m_raw;         ///< 引擎原始帧（调节输入）
+    QByteArray m_lut;     ///< DisplayAdjust::buildLut；空 = 恒等
+    int m_rotation = 0;   ///< 顺时针 0/90/180/270
+    void rebuildDisplay();
 
     QString m_name;
     QString m_osd1, m_osd2;

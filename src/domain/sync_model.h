@@ -35,10 +35,13 @@ struct SyncLaneData
 };
 
 /// 流内毫秒 → 统一墙钟轴毫秒
+/// v1.12.7：该路做过北京时间校对（truthSet）时，墙钟轴取北京时间口径
+/// （wallMsOf + truthOffsetMs，与单路分析/图表/CSV 的 beijingMsOf 同义）——
+/// 多机合并时间线与瓦片 OSD 此前漏用 truth 偏移（用户实测反馈）。
 inline qint64 syncWallOf(const SyncLaneData &l, qint64 streamMs)
 {
     if (l.calibrated)
-        return l.cal.wallMsOf(streamMs);
+        return l.cal.wallMsOf(streamMs) + l.cal.truthOffsetMs;
     return streamMs + l.tempOffsetMs;
 }
 
@@ -46,7 +49,7 @@ inline qint64 syncWallOf(const SyncLaneData &l, qint64 streamMs)
 inline qint64 syncStreamOf(const SyncLaneData &l, qint64 wallMs)
 {
     if (l.calibrated)
-        return l.cal.streamMsOf(wallMs);
+        return l.cal.streamMsOf(wallMs - l.cal.truthOffsetMs);
     return wallMs - l.tempOffsetMs;
 }
 
