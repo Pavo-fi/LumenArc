@@ -17,6 +17,15 @@
 #include "analysis_snapshot.h"
 #include "guide_line.h"
 #include "time_calibration.h"
+#include "speed_plan.h"
+
+/// A/B 选段区间（P-68 入 .vla，拍板 Q5）
+struct AbRegionData {
+    qint64 a = -1;
+    qint64 b = -1;
+    bool loop = false;
+    bool isValid() const { return a >= 0 && b > a; }
+};
 
 /**
  * @brief Snapshot fusion parameters for VLA persistence.
@@ -85,7 +94,9 @@ public:
                     const QVector<QPolygon> &polygons = {},
                     const QVector<GuideLine> &guideLines = {},
                     const QVector<int> &regionRoiIds = {},
-                    const QVector<int> &polygonRoiIds = {}) const;
+                    const QVector<int> &polygonRoiIds = {},
+                    const AbRegionData &abRegion = AbRegionData(),
+                    const speedplan::SpeedPlan &speedPlan = speedplan::SpeedPlan()) const;
 
     /// Deserialize snapshot from .vla JSON file. Emits dataReplaced() on success.
     /// Output params restore ROI, time calibration, magnifier, labels, pinned, snapshot fusion, polygons, guide lines.
@@ -99,7 +110,9 @@ public:
                       QVector<QPolygon> *polygons = nullptr,
                       QVector<GuideLine> *guideLines = nullptr,
                       QVector<int> *regionRoiIds = nullptr,
-                      QVector<int> *polygonRoiIds = nullptr);
+                      QVector<int> *polygonRoiIds = nullptr,
+                      AbRegionData *abRegion = nullptr,
+                      speedplan::SpeedPlan *speedPlan = nullptr);
 
     /// Serialize spectrogram data to binary .vla.spec file.
     /// Format: [uint32 nFrames][uint32 nFreqBins][float32 sampleRate][uint32 hopLength][float32 data...]

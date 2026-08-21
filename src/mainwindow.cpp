@@ -38,6 +38,9 @@
 #include "pinnedwidget.h"
 #include "videolistpanel.h"
 #include "preprocesswindow.h"
+#include "segmentexportdialog.h"
+#include "infrastructure/segment_export_engine.h"
+#include <QProgressDialog>
 #include "spectrogrampanel_enhanced.h"
 #include "i18n.h"
 #include "aboutdialog.h"
@@ -109,7 +112,7 @@ MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent)
 {
     loadLanguage();
-    setWindowTitle(lang("追光者 Lumen Arc v1.12.9", "Lumen Arc v1.12.9") + buildStamp());
+    setWindowTitle(lang("追光者 Lumen Arc v1.13.0", "Lumen Arc v1.13.0") + buildStamp());
     resize(1280, 720);
 
     m_roiModel = new RoiModel(this);   // 统一 ROI 模型（矩形+多边形，v1.5.0 Q-18）
@@ -487,7 +490,7 @@ MainWindow::MainWindow(QWidget *parent)
         resizeDocks({m_videoListPanel}, {250}, Qt::Horizontal);
     });
 
-    // v1.12.9（用户反馈①）：案件面板同款折叠占位条——打开放大镜时
+    // v1.13.0（用户反馈①）：案件面板同款折叠占位条——打开放大镜时
     // 案件列表与旧版视频列表一样收成细条，点击 ▶ 展开。
     m_casePlaceholder = new QDockWidget(this);
     m_casePlaceholder->setFeatures(QDockWidget::NoDockWidgetFeatures);
@@ -1232,6 +1235,15 @@ void MainWindow::createToolBar()
     toolBar->addSeparator();
     toolBar->addWidget(m_snapshotBtn);
     toolBar->addWidget(m_adjustBtn);
+    // P-68 导出选段视频（A/B 选段存在时可用；分段变速+图表语谱同框）
+    m_exportClipBtn = new QPushButton(lang("导出选段", "Export Clip"), this);
+    m_exportClipBtn->setToolTip(lang("导出 A-B 选段：分段变速 + 亮度曲线/语谱同框合成 MP4",
+                                     "Export A-B selection: variable-speed + chart/spectrogram composite MP4"));
+    m_exportClipBtn->setFixedHeight(32);
+    m_exportClipBtn->setEnabled(false);
+    connect(m_exportClipBtn, &QPushButton::clicked,
+            this, &MainWindow::onExportSegmentClip);
+    toolBar->addWidget(m_exportClipBtn);
     toolBar->addSeparator();
 
     m_timeLabel = new QLabel("00:00 / 00:00", this);
@@ -1456,7 +1468,7 @@ void MainWindow::setupConnections()
             this, &MainWindow::onSnapshotQuick);
     connect(m_adjustBtn, &QPushButton::toggled, this, [this](bool on) {
         if (m_adjustPanel) {
-            // v1.12.9（用户反馈③）：独立浮窗呼出（与多机同步页同款），
+            // v1.13.0（用户反馈③）：独立浮窗呼出（与多机同步页同款），
             // 不挤占 dock 布局；关闭浮窗回写钮态由 visibilityChanged 负责
             if (on)
                 m_adjustPanel->setFloating(true);
@@ -1696,6 +1708,11 @@ void MainWindow::setupConnections()
     // Chart zoom/pan → spectrogram follows
     connect(m_chartPanel, &ChartPanel::xAxisRangeChanged,
             m_spectrogramEnhanced, &SpectrogramPanelEnhanced::onXAxisRangeChanged);
+    // P-68：A/B 选段存在与否驱动「导出选段」使能
+    connect(m_chartPanel, &ChartPanel::abRegionChanged, this, [this]() {
+        if (m_exportClipBtn)
+            m_exportClipBtn->setEnabled(m_chartPanel->isABRegionSet());
+    });
     // Spectrogram zoom → chart follows
     connect(m_spectrogramEnhanced, &SpectrogramPanelEnhanced::xAxisRangeChanged,
             this, [this](qreal xMin, qreal xMax) {
@@ -2243,7 +2260,7 @@ void MainWindow::openVideoFile(const QString &filePath)
 
         // Do NOT overwrite m_currentVideoPath with the .vla path: it is an
         // analysis file, not a playable video, and it keys VideoStateManager.
-        setWindowTitle(windowTitleWithCase("Lumen Arc v1.12.9 - [Loaded: " +
+        setWindowTitle(windowTitleWithCase("Lumen Arc v1.13.0 - [Loaded: " +
                            QFileInfo(filePath).fileName() + "]"));
         } else {
             QMessageBox::critical(this, lang("错误", "Error"),
@@ -2596,7 +2613,7 @@ void MainWindow::onLoadAnalysis()
                 m_guideLineModel->addLine(line);
 
             // Do NOT overwrite m_currentVideoPath with the .vla path (see openVideoFile).
-        setWindowTitle(windowTitleWithCase("Lumen Arc v1.12.9 - [Loaded: " +
+        setWindowTitle(windowTitleWithCase("Lumen Arc v1.13.0 - [Loaded: " +
                        QFileInfo(filePath).fileName() + "]"));
         QMessageBox::information(this, lang("已加载", "Loaded"),
             lang("分析结果加载成功。", "Analysis result loaded successfully."));
@@ -2606,6 +2623,111 @@ void MainWindow::onLoadAnalysis()
             lang("加载分析结果文件失败：\n",
                  "Failed to load analysis result file:\n") + filePath);
     }
+}
+
+// ---------------------------------------------------------------------------
+// P-68 导出选段视频（分段变速 + 图表/语谱同框复合导出）
+// ---------------------------------------------------------------------------
+void MainWindow::onExportSegmentClip()
+{
+    if (!m_chartPanel || !m_chartPanel->isABRegionSet()
+        || m_currentVideoPath.isEmpty()
+        || m_currentVideoPath.endsWith(".vla", Qt::CaseInsensitive))
+        return;
+    if (m_segmentExporter && m_segmentExporter->isRunning()) {
+        showOperationStatus(lang("导出进行中，请稍候", "Export in progress"));
+        return;
+    }
+    const qint64 aMs = m_chartPanel->abPointA();
+    const qint64 bMs = m_chartPanel->abPointB();
+
+    // 初值方案：.vla 恢复的 m_speedPlan 与当前选段吻合则沿用；否则按选段内
+    // 标签（N 键标记 = 关键时刻）自动分段（拍板 Q4 扩展的默认边界来源）
+    speedplan::SpeedPlan plan;
+    if (m_speedPlan.isValid() && m_speedPlan.aMs == aMs && m_speedPlan.bMs == bMs) {
+        plan = m_speedPlan;
+    } else {
+        QVector<qint64> labelTimes;
+        for (const ChartLabel &lb : m_chartPanel->labels())
+            labelTimes.append(lb.timeMs);
+        plan = speedplan::planFromLabels(aMs, bMs, labelTimes);
+    }
+
+    // 建议输出路径：案件模式 = 案内 exports/；独立模式 = 源旁
+    const QString base = QFileInfo(m_currentVideoPath).completeBaseName();
+    const QString name = QStringLiteral("LAClip_%1_%2-%3.mp4")
+                             .arg(base).arg(aMs).arg(bMs);
+    QString dir = QFileInfo(m_currentVideoPath).absolutePath();
+    if (m_caseManager && m_caseManager->isOpen()) {
+        dir = m_caseManager->caseDir() + QStringLiteral("/exports");
+        QDir().mkpath(dir);
+    }
+    const QString suggested = QDir(dir).filePath(name);
+
+    SegmentExportDialog dlg(plan,
+                            m_videoEngine ? m_videoEngine->position() : 0,
+                            suggested, this);
+    if (dlg.exec() != QDialog::Accepted)
+        return;
+    plan = dlg.plan();
+    plan.normalize();
+    m_speedPlan = plan;          // 拍板 Q5：方案随 .vla 持久化
+    saveCurrentVlaAsync();
+
+    // 底图光栅化：X 轴定区间 [A,B]（语谱经 xAxisRangeChanged 联动跟随），
+    // 2x 超采样保清晰度；渲染后恢复视口。无数据面板 = 空图（拍板 Q3 隐藏）。
+    QImage chartBase, specBase;
+    const AnalysisSnapshot snap = m_timelineModel->snapshot();
+    QValueAxis *ax = m_chartPanel->axisX();
+    const qreal oldMin = ax ? ax->min() : 0, oldMax = ax ? ax->max() : 0;
+    m_chartPanel->setXAxisRange(aMs, bMs);
+    if (!snap.timestamps.isEmpty())
+        chartBase = m_chartPanel->renderToImage(QSize(3840, 420));
+    if (snap.audioData().hasSpectrogram())
+        specBase = m_spectrogramEnhanced->renderHeatmapImage(QSize(3840, 400));
+    if (ax)
+        m_chartPanel->setXAxisRange(oldMin, oldMax);
+
+    SegmentExportEngine::Params pp;
+    pp.sourcePath = m_currentVideoPath;
+    pp.outputPath = dlg.outputPath();
+    pp.plan = plan;
+    pp.outFps = (m_videoEngine && m_videoEngine->fps() > 0.0f)
+                    ? double(m_videoEngine->fps()) : 25.0;
+    pp.chartBase = chartBase;
+    pp.specBase = specBase;
+    pp.burnOsd = dlg.burnOsd();
+    pp.caseLabel = (m_caseManager && m_caseManager->isOpen())
+                       ? m_caseManager->meta().caseNo : QString();
+    pp.calibration = m_calibration;
+
+    if (!m_segmentExporter)
+        m_segmentExporter = new SegmentExportEngine(this);
+    SegmentExportEngine *eng = m_segmentExporter;
+    auto *pd = new QProgressDialog(lang("正在导出选段视频…", "Exporting clip…"),
+                                   lang("取消", "Cancel"), 0,
+                                   int(plan.outputFrameCount(pp.outFps)), this);
+    pd->setWindowTitle(lang("导出选段视频", "Export Segment Clip"));
+    pd->setWindowModality(Qt::WindowModal);
+    pd->setMinimumDuration(0);
+    pd->setValue(0);
+    connect(eng, &SegmentExportEngine::progress, pd, &QProgressDialog::setValue);
+    connect(pd, &QProgressDialog::canceled, eng, &SegmentExportEngine::cancel);
+    connect(eng, &SegmentExportEngine::finished, this,
+            [this, pd](bool ok, const QString &msg) {
+                pd->close();
+                pd->deleteLater();
+                if (ok) {
+                    showOperationStatus(lang("选段视频导出完成", "Clip exported"));
+                    QMessageBox::information(this, lang("导出完成", "Export Done"),
+                        lang("已导出：\n", "Exported:\n") + msg);
+                } else if (msg == QStringLiteral("已取消")) {
+                    showOperationStatus(lang("导出已取消", "Export cancelled"));
+                } else {
+                    QMessageBox::warning(this, lang("导出失败", "Export Failed"), msg);
+                }
+            });
+    eng->start(pp);
 }
 
 /// @brief 从外部文件加载图片作为叠加层
@@ -2671,6 +2793,10 @@ ProjectIO::VlaSaveRequest MainWindow::collectVlaSaveRequest()
     req.guideLines = m_guideLineModel->lines();
     req.regionRoiIds = m_roiModel->roiIds();
     req.polygonRoiIds = m_roiModel->polygonRoiIds();
+    req.abRegion.a = m_chartPanel->abPointA();      // P-68 拍板 Q5：入 .vla
+    req.abRegion.b = m_chartPanel->abPointB();
+    req.abRegion.loop = m_chartPanel->isABLoop();
+    req.speedPlan = m_speedPlan;
     return req;
 }
 
@@ -2785,7 +2911,7 @@ void MainWindow::onSetStartTime()
                               .arg(cal.offsetMs / 1000.0, 0, 'f', 1);
                 }
                 showOperationStatus(msg);
-                // v1.12.9 对时图片留档（拍板：存档）：校时图片复制入案件
+                // v1.13.0 对时图片留档（拍板：存档）：校时图片复制入案件
                 // calibration/ 目录（best effort；未入案件则保留原路径引用）
                 if (cal.truthSet
                     && cal.truthSource == QLatin1String("photo")
@@ -3005,7 +3131,7 @@ void MainWindow::createMagnifier()
     m_magnifier->show();
 
     // Auto-layout: 收起左侧列表（案件模式收案件面板，否则收视频列表，
-    // v1.12.9 用户反馈①：案件列表此前不折叠）并显示占位细条
+    // v1.13.0 用户反馈①：案件列表此前不折叠）并显示占位细条
     m_videoListWasExpanded = m_videoListContent->isVisible();
     const bool caseMode = m_caseDock && m_caseDock->isVisible();
     if (caseMode) {
@@ -3018,7 +3144,7 @@ void MainWindow::createMagnifier()
         m_videoListPlaceholder->setVisible(true);
         resizeDocks({m_videoListPlaceholder}, {24}, Qt::Horizontal);
     }
-    // v1.12.9（用户反馈②拍板布局）：放大镜占窗口一半——
+    // v1.13.0（用户反馈②拍板布局）：放大镜占窗口一半——
     // 左半原始画面、右半放大镜，双画面等大并列
     int windowWidth = width();
     resizeDocks({m_magnifier}, {static_cast<int>(windowWidth * 0.5)}, Qt::Horizontal);
@@ -3090,7 +3216,7 @@ void MainWindow::removeMagnifier()
     if (!m_magnifier)
         return;
 
-    // 恢复案件面板（v1.12.9：与视频列表同语义——占位条还亮着说明用户
+    // 恢复案件面板（v1.13.0：与视频列表同语义——占位条还亮着说明用户
     // 没主动展开过，按进入前状态恢复）
     if (m_casePlaceholder && m_casePlaceholder->isVisible()) {
         m_casePlaceholder->setVisible(false);
@@ -3545,6 +3671,13 @@ void MainWindow::applyAnalysisArtifacts(const ProjectIO::LoadedVla &lv)
     m_guideLineModel->clearLines();
     for (const GuideLine &line : lv.guideLines)
         m_guideLineModel->addLine(line);
+    // P-68：A/B 选段与分段变速方案随 .vla 恢复（拍板 Q5）
+    if (lv.abRegion.isValid()) {
+        m_chartPanel->setPointA(lv.abRegion.a);
+        m_chartPanel->setPointB(lv.abRegion.b);
+        m_chartPanel->setABLoop(lv.abRegion.loop);
+    }
+    m_speedPlan = lv.speedPlan;
 }
 
 void MainWindow::restoreAnalysisState(const QVector<QRect> &regions,

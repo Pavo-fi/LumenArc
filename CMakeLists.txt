@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(LumenArc VERSION 1.12.9 LANGUAGES CXX)
+project(LumenArc VERSION 1.13.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -121,6 +121,8 @@ set(SOURCES
     src/infrastructure/timestamp_ocr_engine.cpp
     src/infrastructure/concat_engine.cpp
     src/infrastructure/transcode_engine.cpp
+    src/infrastructure/segment_export_engine.cpp   # P-68 选段分段变速导出
+    src/segmentexportdialog.cpp
     src/resources.qrc
 )
 
@@ -193,6 +195,8 @@ set(HEADERS
     src/infrastructure/timestamp_ocr_engine.h
     src/infrastructure/concat_engine.h
     src/infrastructure/transcode_engine.h
+    src/infrastructure/segment_export_engine.h
+    src/segmentexportdialog.h
 )
 
 # --- Headless engine test harness ---
@@ -562,6 +566,28 @@ target_link_libraries(lumenarc_vla_test PRIVATE
     Qt6::OpenGLWidgets
 )
 
+# --- P-68 选段导出套件（speedplan 纯函数 + 引擎静态函数 + caltest e2e）---
+add_executable(lumenarc_segment_test
+    tests/segment_test_main.cpp
+    src/infrastructure/segment_export_engine.cpp
+    src/domain/time_calibration.cpp
+    src/domain/time_piecewise.cpp
+    src/domain/timeline_model.cpp
+    src/infrastructure/tool_paths.cpp
+    src/i18n.cpp
+)
+target_include_directories(lumenarc_segment_test PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+    ${FFMPEG_INCLUDE_DIR}
+)
+target_link_libraries(lumenarc_segment_test PRIVATE
+    Qt6::Core
+    Qt6::Gui
+    Qt6::Widgets
+    Qt6::Test
+    ${FFMPEG_LIBRARIES}
+)
+
 # --- Case module domain test (v1.3.0) ---
 add_executable(lumenarc_case_test
     tests/case_test_main.cpp
@@ -660,8 +686,8 @@ elseif(APPLE)
         MACOSX_BUNDLE TRUE
         MACOSX_BUNDLE_INFO_PLIST "${CMAKE_CURRENT_SOURCE_DIR}/src/Info.plist"
         MACOSX_BUNDLE_BUNDLE_NAME "LumenArc"
-        MACOSX_BUNDLE_BUNDLE_VERSION "1.12.9"
-        MACOSX_BUNDLE_SHORT_VERSION_STRING "1.12.9"
+        MACOSX_BUNDLE_BUNDLE_VERSION "1.13.0"
+        MACOSX_BUNDLE_SHORT_VERSION_STRING "1.13.0"
         MACOSX_BUNDLE_GUI_IDENTIFIER "com.firetech.lumenarc"
     )
 else()

@@ -248,7 +248,9 @@ bool TimelineModel::saveToFile(const QString &filePath,
                                 const QVector<QPolygon> &polygons,
                                 const QVector<GuideLine> &guideLines,
                                 const QVector<int> &regionRoiIds,
-                                const QVector<int> &polygonRoiIds) const
+                                const QVector<int> &polygonRoiIds,
+                                const AbRegionData &abRegion,
+                                const speedplan::SpeedPlan &speedPlan) const
 {
     QReadLocker lock(&m_lock);
 
@@ -256,7 +258,9 @@ bool TimelineModel::saveToFile(const QString &filePath,
     // ——校时有效即可写（META+空 TMS/LUM 是合法 v10，读端容忍零计数）；
     // 真正全空（无分析且无有效校时，如「清除校时」后）→ 串行区内删除
     // 残留旧文件再返回（清除语义落盘，重开不复活旧校时）
-    if (m_snapshot.isEmpty() && !m_snapshot.hasAudio() && !calibration.isValid()) {
+    // P-68：A/B 选段与分速方案同样是值得持久化的现场——只有它们也全空才走删除
+    if (m_snapshot.isEmpty() && !m_snapshot.hasAudio() && !calibration.isValid()
+        && !abRegion.isValid() && !speedPlan.isValid()) {
         lock.unlock();
         QMutexLocker writeLock(&g_vlaWriteMutex);
         if (QFile::exists(filePath))
@@ -323,6 +327,30 @@ bool TimelineModel::saveToFile(const QString &filePath,
             glArray.append(glObj);
         }
         root["guide_lines"] = glArray;
+    }
+
+    // A/B 选段 + 分段变速方案（P-68，拍板 Q5 入 .vla；旧读者忽略未知 JSON 键）
+    if (abRegion.isValid()) {
+        QJsonObject abObj;
+        abObj["a"] = static_cast<double>(abRegion.a);
+        abObj["b"] = static_cast<double>(abRegion.b);
+        abObj["loop"] = abRegion.loop;
+        root["ab_region"] = abObj;
+    }
+    {
+        speedplan::SpeedPlan sp = speedPlan;
+        sp.normalize();
+        if (sp.isValid()) {
+            QJsonObject spObj;
+            QJsonArray spSplits, spRates;
+            for (qint64 t : sp.splits)
+                spSplits.append(static_cast<double>(t));
+            for (double r : sp.rates)
+                spRates.append(r);
+            spObj["splits"] = spSplits;
+            spObj["rates"] = spRates;
+            root["speed_plan"] = spObj;
+        }
     }
 
     // Magnifier (v3)
@@ -547,7 +575,9 @@ bool TimelineModel::loadFromFile(const QString &filePath,
                                   QVector<QPolygon> *polygons,
                                   QVector<GuideLine> *guideLines,
                                   QVector<int> *regionRoiIds,
-                                  QVector<int> *polygonRoiIds)
+                                  QVector<int> *polygonRoiIds,
+                                  AbRegionData *abRegion,
+                                  speedplan::SpeedPlan *speedPlan)
 {
     QFile file(filePath);
     if (!file.open(QIODevice::ReadOnly))
@@ -715,6 +745,29 @@ bool TimelineModel::loadFromFile(const QString &filePath,
     }
 
     // v5+: guide lines
+    // A/B 选段 + 分段变速方案（P-68，v10 起；无版本门槛——键不在即缺省）
+    if (abRegion && root.contains("ab_region")) {
+        const QJsonObject abObj = root["ab_region"].toObject();
+        abRegion->a = static_cast<qint64>(abObj["a"].toDouble(-1));
+        abRegion->b = static_cast<qint64>(abObj["b"].toDouble(-1));
+        abRegion->loop = abObj["loop"].toBool(false);
+    }
+    if (speedPlan && root.contains("speed_plan")) {
+        const QJsonObject spObj = root["speed_plan"].toObject();
+        speedplan::SpeedPlan sp;
+        // A/B 区间取自 ab_region（同源键）；无 ab_region 则方案无依附，忽略
+        if (abRegion && abRegion->isValid()) {
+            sp.aMs = abRegion->a;
+            sp.bMs = abRegion->b;
+            for (const auto &v : spObj["splits"].toArray())
+                sp.splits.append(static_cast<qint64>(v.toDouble()));
+            for (const auto &v : spObj["rates"].toArray())
+                sp.rates.append(v.toDouble(1.0));
+            sp.normalize();
+            *speedPlan = sp;
+        }
+    }
+
     if (version >= 5 && guideLines && root.contains("guide_lines")) {
         guideLines->clear();
         QJsonArray glArray = root["guide_lines"].toArray();

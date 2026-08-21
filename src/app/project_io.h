@@ -47,6 +47,8 @@ public:
         QVector<GuideLine> guideLines;
         QVector<int> regionRoiIds;
         QVector<int> polygonRoiIds;
+        AbRegionData abRegion;               // P-68 入 .vla（拍板 Q5）
+        speedplan::SpeedPlan speedPlan;
     };
 
     /// .vla 加载结果字段包（还原应用由 UI 层执行）
@@ -61,6 +63,8 @@ public:
         QVector<GuideLine> guideLines;
         QVector<int> regionRoiIds;
         QVector<int> polygonRoiIds;
+        AbRegionData abRegion;
+        speedplan::SpeedPlan speedPlan;
     };
 
     /// 保存默认路径分流（v1.3.0）：空视频 → analysis_result.vla；

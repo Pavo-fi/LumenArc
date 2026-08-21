@@ -50,7 +50,8 @@ bool ProjectIO::saveVlaNow(const QString &path, const VlaSaveRequest &req)
     return model()->saveToFile(path, req.regions, req.calibration,
                                req.magnifierRect, req.labels, req.pinnedRect,
                                req.fusion, req.polygons, req.guideLines,
-                               req.regionRoiIds, req.polygonRoiIds);
+                               req.regionRoiIds, req.polygonRoiIds,
+                               req.abRegion, req.speedPlan);
 }
 
 void ProjectIO::saveVlaAsync(const QString &path, const VlaSaveRequest &req)
@@ -89,7 +90,8 @@ void ProjectIO::runSaveLoop(TimelineModel *m)
                                       req.magnifierRect, req.labels,
                                       req.pinnedRect, req.fusion, req.polygons,
                                       req.guideLines, req.regionRoiIds,
-                                      req.polygonRoiIds);
+                                      req.polygonRoiIds,
+                                      req.abRegion, req.speedPlan);
         emit vlaSaved(path, ok);   // 工作线程发射 → 槽侧自动队列回 UI 线程
     }
 }
@@ -101,7 +103,8 @@ bool ProjectIO::loadVla(const QString &path, LoadedVla *out)
     return model()->loadFromFile(path, &out->regions, &out->calibration,
                                  &out->magnifierRect, &out->labels, &out->pinnedRect,
                                  &out->fusion, &out->polygons, &out->guideLines,
-                                 &out->regionRoiIds, &out->polygonRoiIds);
+                                 &out->regionRoiIds, &out->polygonRoiIds,
+                                 &out->abRegion, &out->speedPlan);
 }
 
 QString ProjectIO::calibrationBadgeSummary(const TimeCalibration &cal)

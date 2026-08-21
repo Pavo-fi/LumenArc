@@ -11,6 +11,7 @@
 #pragma once
 
 #include <QMainWindow>
+#include "domain/speed_plan.h"
 #include <QPointer>
 #include "domain/analysis_snapshot.h"
 #include "domain/timeline_model.h"
@@ -79,6 +80,7 @@ private slots:
     /// 证据快照（2026-08-14）：视频当前帧（所见即所得含画面调节）+
     /// 曲线分析区合成 PNG，OSD 烧录标签/时间码，入案件 snapshots/。
     void onSnapshotQuick();
+    void onExportSegmentClip();   // P-68 导出选段视频（分段变速复合导出）
     void onClearRegions();
     void onClearData();
     void onExportCsv();
@@ -305,6 +307,10 @@ protected:
 
     // v0.3: Multi-video and audio visualization
     VideoListPanel *m_videoListPanel = nullptr;
+    // P-68 选段导出（分段变速方案随 .vla 持久化，拍板 Q5）
+    speedplan::SpeedPlan m_speedPlan;
+    class SegmentExportEngine *m_segmentExporter = nullptr;
+    QPushButton *m_exportClipBtn = nullptr;
     SpectrogramPanelEnhanced *m_spectrogramEnhanced = nullptr;
 
 };
