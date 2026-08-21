@@ -19,6 +19,7 @@ extern "C" {
 #include "domain/speed_plan.h"
 #include "infrastructure/segment_export_engine.h"
 #include "domain/timeline_model.h"
+#include "domain/sync_model.h"
 #include <QTemporaryDir>
 
 using speedplan::SpeedPlan;
@@ -232,6 +233,81 @@ static void testVlaRoundtrip()
     CHECK(sp2.rates == sp.rates, "倍率回环");
 }
 
+// ---------------------------------------------------------------------------
+// 多机模式（P-68 第 10 条）：音频墙钟→流内映射 + 双路 e2e
+// ---------------------------------------------------------------------------
+static SyncLaneData makeTestLane(const QString &path, qint64 offsetMs,
+                                 qint64 durMs)
+{
+    SyncLaneData l;
+    l.path = path;
+    l.displayName = QFileInfo(path).completeBaseName();
+    l.calibrated = true;
+    l.cal.source = TimeCalibration::Source::Manual;
+    l.cal.dateKnown = true;
+    l.cal.offsetMs = offsetMs;
+    l.cal.rate = 1.0;
+    l.cal.rateApplied = false;
+    l.durationMs = durMs;
+    return l;
+}
+
+static void testMultiCamAudioMapping()
+{
+    // 两路：lane0 offset=100000（wall = stream + 100s），lane1 offset=200000
+    const SyncLaneData l0 = makeTestLane("a.mp4", 100000, 60000);
+    const SyncLaneData l1 = makeTestLane("b.mp4", 200000, 60000);
+    // 墙钟选段 105000..125000：lane0 流内 5000..25000，lane1 流内越界(-95000)→不覆盖
+    CHECK(syncStreamOf(l0, 105000) == 5000, "lane0 墙钟→流内");
+    CHECK(syncStreamOf(l0, 125000) == 25000, "lane0 末端");
+    CHECK(!syncLaneCovers(l1, 110000), "lane1 不覆盖该墙钟");
+    CHECK(syncLaneCovers(l0, 110000), "lane0 覆盖");
+    // Ranges 版音频链：显式区间 + 倍率
+    const QString fc = SegmentExportEngine::buildAudioFilterChainRanges(
+        {2.0, 1.0}, {{5000, 15000}, {15000, 25000}}, "1:a");
+    CHECK(fc.contains("atrim=start=5.000:end=15.000"), "映射段0 atrim");
+    CHECK(fc.contains("atrim=start=15.000:end=25.000"), "映射段1 atrim");
+    CHECK(fc.contains("concat=n=2"), "concat n=2");
+}
+
+static void testMultiCamEndToEnd()
+{
+    const QString src = QStringLiteral("build_tmp/caltest/basic.mp4");
+    if (!QFile::exists(src)) {
+        qWarning() << "SKIP multicam e2e: no caltest asset";
+        return;
+    }
+    // 双路同一素材、offset 0（墙钟=流内）：选段 400..1400ms 分速 2x/0.5x
+    SpeedPlan p;
+    p.aMs = 400; p.bMs = 1400; p.splits = {900}; p.rates = {2.0, 0.5};
+    p.normalize();
+    SegmentExportEngine::Params pp;
+    pp.outputPath = QStringLiteral("build_tmp/caltest/mc_export_test.mp4");
+    pp.plan = p;
+    pp.outFps = 5.0;
+    pp.canvas = QSize(640, 480);
+    pp.burnOsd = true;
+    pp.lanes = {makeTestLane(src, 0, 2000), makeTestLane(src, 0, 2000)};
+    pp.audioLane = -1;   // basic.mp4 无音轨
+    QFile::remove(pp.outputPath);
+
+    SegmentExportEngine eng;
+    QSignalSpy spy(&eng, &SegmentExportEngine::finished);
+    eng.start(pp);
+    if (!spy.wait(60000)) { CHECK(false, "多机 e2e 超时"); return; }
+    const QList<QVariant> args = spy.takeFirst();
+    if (!args.at(0).toBool()) {
+        CHECK(false, QStringLiteral("多机 e2e 失败：%1").arg(args.at(1).toString()));
+        return;
+    }
+    bool hasAudio = true;
+    const qint64 dur = probeDurationMs(pp.outputPath, &hasAudio);
+    CHECK(dur > 0 && qAbs(dur - 1250) <= 400,
+          QStringLiteral("多机产物时长≈1250ms（实测 %1）").arg(dur));
+    CHECK(!hasAudio, "无音轨（audioLane=-1）");
+    QFile::remove(pp.outputPath);
+}
+
 int main(int argc, char **argv)
 {
     QApplication app(argc, argv);   // QImage+drawText 需 GUI 应用上下文（字体子系统）
@@ -242,6 +318,8 @@ int main(int argc, char **argv)
     testAudioFilterChain();
     testLayout();
     testVlaRoundtrip();
+    testMultiCamAudioMapping();
+    testMultiCamEndToEnd();
     testEndToEnd();
     qInfo() << "segment_test:" << g_checks << "checks," << g_failures << "failures";
     return g_failures == 0 ? 0 : 1;

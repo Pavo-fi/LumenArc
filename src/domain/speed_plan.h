@@ -141,6 +141,25 @@ struct SpeedPlan {
         return segmentRate(segmentCount() - 1);
     }
 
+    /// 逆映射：源时刻 → 输出时刻（覆盖条/游标定位用；段内线性插值，
+    /// 源时刻越界夹取到端点）
+    double outputMsAtSourceMs(double srcMs) const
+    {
+        if (!isValid() || srcMs <= aMs)
+            return 0.0;
+        double acc = 0.0;
+        for (int i = 0; i < segmentCount(); ++i) {
+            qint64 s, e;
+            segmentBounds(i, &s, &e);
+            if (srcMs < e) {
+                const double u = (e > s) ? (srcMs - s) / double(e - s) : 0.0;
+                return acc + u * double(e - s) / segmentRate(i);
+            }
+            acc += double(e - s) / segmentRate(i);
+        }
+        return outputDurationMs();
+    }
+
     /// 输出总帧数（输出 fps = 源 fps；ceil 保证尾帧覆盖到 bMs）
     qint64 outputFrameCount(double outFps) const
     {

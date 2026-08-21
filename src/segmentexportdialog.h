@@ -23,13 +23,15 @@ public:
     /// @param cursorMs  当前播放位置（「在游标处分段」钮用）
     /// @param suggestedPath 建议输出路径
     SegmentExportDialog(const speedplan::SpeedPlan &plan, qint64 cursorMs,
-                        const QString &suggestedPath, QWidget *parent = nullptr);
+                        const QString &suggestedPath, QWidget *parent = nullptr,
+                        bool wallEpoch = false);   // 多机：时刻按墙钟日历显示
 
     speedplan::SpeedPlan plan() const { return m_plan; }
     bool burnOsd() const;
     QString outputPath() const;
 
     static QString formatMs(qint64 ms);
+    QString fmtTime(qint64 ms) const;   // wallEpoch → 日历时刻；否则流内 h:mm:ss.mmm
 
 private:
     void rebuildTable();
@@ -37,6 +39,7 @@ private:
 
     speedplan::SpeedPlan m_plan;
     qint64 m_cursorMs = 0;
+    bool m_wallEpoch = false;
     QTableWidget *m_table = nullptr;
     QCheckBox *m_osdCheck = nullptr;
     QLineEdit *m_pathEdit = nullptr;

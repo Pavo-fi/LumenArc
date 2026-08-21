@@ -36,6 +36,11 @@ public:
     /// 共享墙钟游标（P-57）：-1 = 不显示
     void setCursorMs(qint64 wallMs);
     qint64 cursorMs() const { return m_cursorMs; }
+    /// A/B 选段（P-68 多机选段导出，墙钟域；-1 清除）
+    void setABRegion(qint64 a, qint64 b) { m_abA = a; m_abB = b; update(); }
+    qint64 abA() const { return m_abA; }
+    qint64 abB() const { return m_abB; }
+    bool hasAB() const { return m_abA >= 0 && m_abB > m_abA; }
 
     QSize sizeHint() const override { return {720, 220}; }
 
@@ -70,6 +75,7 @@ private:
 
     // 游标/拖动（P-57）
     qint64 m_cursorMs = -1;
+    qint64 m_abA = -1, m_abB = -1;
     bool m_scrubbing = false;
     qint64 m_layoutT0 = 0;      // rebuildLayout 记录的轴域（xToWall 用）
     double m_layoutMsPerPx = 1.0;

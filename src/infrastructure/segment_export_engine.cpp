@@ -71,16 +71,31 @@ QStringList SegmentExportEngine::atempoChain(double rate)
 QString SegmentExportEngine::buildAudioFilterChain(const speedplan::SpeedPlan &plan,
                                                    const QString &inputLabel)
 {
-    const int n = plan.segmentCount();
-    QStringList parts;
-    for (int i = 0; i < n; ++i) {
+    QVector<QPair<qint64, qint64>> ranges;
+    QVector<double> rates;
+    for (int i = 0; i < plan.segmentCount(); ++i) {
         qint64 s, e;
         plan.segmentBounds(i, &s, &e);
+        ranges.append({s, e});
+        rates.append(plan.segmentRate(i));
+    }
+    return buildAudioFilterChainRanges(rates, ranges, inputLabel);
+}
+
+QString SegmentExportEngine::buildAudioFilterChainRanges(
+    const QVector<double> &rates,
+    const QVector<QPair<qint64, qint64>> &streamRanges,
+    const QString &inputLabel)
+{
+    const int n = streamRanges.size();
+    QStringList parts;
+    for (int i = 0; i < n; ++i) {
+        const double r = (i < rates.size()) ? rates.at(i) : 1.0;
         QString chain = QStringLiteral("[%1]atrim=start=%2:end=%3,asetpts=PTS-STARTPTS")
                             .arg(inputLabel)
-                            .arg(s / 1000.0, 0, 'f', 3)
-                            .arg(e / 1000.0, 0, 'f', 3);
-        for (const QString &at : atempoChain(plan.segmentRate(i)))
+                            .arg(streamRanges[i].first / 1000.0, 0, 'f', 3)
+                            .arg(streamRanges[i].second / 1000.0, 0, 'f', 3);
+        for (const QString &at : atempoChain(r))
             chain += QLatin1Char(',') + at;
         chain += QStringLiteral("[a%1]").arg(i);
         parts << chain;
@@ -128,7 +143,9 @@ void SegmentExportEngine::start(const Params &p)
         emit finished(false, QLatin1String(kErrPrefix) + QStringLiteral("引擎忙"));
         return;
     }
-    if (!p.plan.isValid() || p.sourcePath.isEmpty() || p.outputPath.isEmpty()
+    // 多机模式 lanes 承载源路径，sourcePath 可为空；单路模式 sourcePath 必填
+    if (!p.plan.isValid() || p.outputPath.isEmpty()
+        || (p.lanes.isEmpty() && p.sourcePath.isEmpty())
         || p.canvas.isEmpty() || p.outFps <= 0.0) {
         emit finished(false, QLatin1String(kErrPrefix)
                          + QStringLiteral("参数非法（选段/路径/画布/帧率）"));
@@ -180,6 +197,10 @@ QImage warpStripByPlan(const QImage &base, const speedplan::SpeedPlan &plan,
 void SegmentExportEngine::run()
 {
     const Params &p = m_params;
+    if (!p.lanes.isEmpty()) {   // P-68 第 10 条：多机模式（墙钟域 plan）
+        runMultiCam();
+        return;
+    }
     auto fail = [this](const QString &msg) {
         emit finished(false, QLatin1String(kErrPrefix) + msg);
     };
@@ -344,7 +365,6 @@ void SegmentExportEngine::run()
             if (!pullNext())
                 break;
         }
-        if (k == 0) { fprintf(stderr, "[eng] first target %.1f curPts %.1f\n", target, curPtsMs); fflush(stderr); }
         if (curFrame.isNull()) {
             if (!pullNext() || curFrame.isNull()) {
                 errMsg = QStringLiteral("源解码失败（选段起点之后无可用帧）");
@@ -458,4 +478,379 @@ void SegmentExportEngine::run()
     }
     emit progress(int(totalFrames), int(totalFrames));
     emit finished(true, p.outputPath);
+}
+
+// =============================================================================
+// 多机模式（P-68 第 10 条）：墙钟域分段变速 + 瓦片宫格 + 覆盖条
+// =============================================================================
+namespace {
+
+/// 单路顺序解码器（多机导出每路一个；只前进不后退——导出映射单调递增）
+struct SeqDecoder {
+    AVFormatContext *fmt = nullptr;
+    AVCodecContext *dec = nullptr;
+    SwsContext *sws = nullptr;
+    AVPacket *pkt = nullptr;
+    AVFrame *fr = nullptr;
+    int vstream = -1;
+    AVRational tb {0, 1};
+    QImage cur;
+    double curPtsMs = -1.0;
+    bool eof = false;
+
+    bool open(const QString &path, qint64 startMs, QString *err)
+    {
+        if (avformat_open_input(&fmt, path.toUtf8().constData(), nullptr, nullptr) < 0) {
+            *err = QStringLiteral("无法打开");
+            return false;
+        }
+        if (avformat_find_stream_info(fmt, nullptr) < 0) {
+            *err = QStringLiteral("流信息失败");
+            return false;
+        }
+        for (unsigned i = 0; i < fmt->nb_streams; ++i)
+            if (fmt->streams[i]->codecpar->codec_type == AVMEDIA_TYPE_VIDEO) {
+                vstream = int(i);
+                break;
+            }
+        if (vstream < 0) { *err = QStringLiteral("无视频流"); return false; }
+        const AVCodec *codec = avcodec_find_decoder(fmt->streams[vstream]->codecpar->codec_id);
+        dec = codec ? avcodec_alloc_context3(codec) : nullptr;
+        if (!dec || avcodec_parameters_to_context(dec, fmt->streams[vstream]->codecpar) < 0
+            || avcodec_open2(dec, codec, nullptr) < 0) {
+            *err = QStringLiteral("解码器失败");
+            return false;
+        }
+        tb = fmt->streams[vstream]->time_base;
+        pkt = av_packet_alloc();
+        fr = av_frame_alloc();
+        if (startMs > 0) {
+            av_seek_frame(fmt, vstream, av_rescale_q(startMs, AV_TIME_BASE_Q, tb),
+                          AVSEEK_FLAG_BACKWARD);
+            avcodec_flush_buffers(dec);
+        }
+        return true;
+    }
+
+    /// 推进解码至覆盖 targetMs（返回 false = 取消）
+    bool pullTo(double targetMs, qint64 discardBeforeMs, volatile bool *cancelled)
+    {
+        while ((curPtsMs < 0.0 || curPtsMs < targetMs - 0.5) && !eof) {
+            if (*cancelled)
+                return false;
+            const int rr = av_read_frame(fmt, pkt);
+            if (rr < 0) {
+                av_packet_unref(pkt);
+                avcodec_send_packet(dec, nullptr);
+                eof = true;
+                break;
+            }
+            if (pkt->stream_index != vstream) { av_packet_unref(pkt); continue; }
+            if (avcodec_send_packet(dec, pkt) < 0) { av_packet_unref(pkt); continue; }
+            av_packet_unref(pkt);
+            while (avcodec_receive_frame(dec, fr) == 0) {
+                const int64_t pts = (fr->best_effort_timestamp != AV_NOPTS_VALUE)
+                                        ? fr->best_effort_timestamp : fr->pts;
+                if (pts == AV_NOPTS_VALUE) { av_frame_unref(fr); continue; }
+                const double ms = double(pts) * tb.num * 1000.0 / tb.den;
+                if (ms < discardBeforeMs - 1.0) { av_frame_unref(fr); continue; }
+                sws = sws_getCachedContext(sws, fr->width, fr->height,
+                                           AVPixelFormat(fr->format),
+                                           fr->width, fr->height, AV_PIX_FMT_RGBA,
+                                           SWS_BILINEAR, nullptr, nullptr, nullptr);
+                if (sws) {
+                    QImage img(fr->width, fr->height, QImage::Format_RGBA8888);
+                    uint8_t *dst[4] = {img.bits(), nullptr, nullptr, nullptr};
+                    int stride[4] = {int(img.bytesPerLine()), 0, 0, 0};
+                    sws_scale(sws, fr->data, fr->linesize, 0, fr->height, dst, stride);
+                    cur = img;
+                    curPtsMs = ms;
+                }
+                av_frame_unref(fr);
+                if (curPtsMs >= targetMs - 0.5)
+                    return true;
+            }
+        }
+        return true;
+    }
+
+    void close()
+    {
+        if (pkt) av_packet_free(&pkt);
+        if (fr) av_frame_free(&fr);
+        if (sws) sws_freeContext(sws);
+        if (dec) avcodec_free_context(&dec);
+        if (fmt) avformat_close_input(&fmt);
+        fmt = nullptr; dec = nullptr; sws = nullptr; pkt = nullptr; fr = nullptr;
+    }
+};
+
+} // namespace
+
+void SegmentExportEngine::runMultiCam()
+{
+    const Params &p = m_params;
+    auto fail = [this](const QString &msg) {
+        emit finished(false, QLatin1String(kErrPrefix) + msg);
+    };
+    const int n = p.lanes.size();
+    // ---- 每路解码器（打不开的路标记但继续——其他路照常，格内画错误占位）----
+    QVector<SeqDecoder *> decs(n, nullptr);
+    QVector<QString> laneErr(n);
+    for (int i = 0; i < n; ++i) {
+        const SyncLaneData &l = p.lanes[i];
+        if (!l.calibrated && !l.temporary) {
+            laneErr[i] = QStringLiteral("未校时");
+            continue;
+        }
+        // 该路选段内首个有画面时刻对应的流内起点
+        const qint64 ws = qMax(syncLaneWallStart(l), p.plan.aMs);
+        const qint64 streamStart = qMax<qint64>(0, syncStreamOf(l, ws));
+        auto *d = new SeqDecoder;
+        QString err;
+        if (!d->open(l.path, streamStart, &err)) {
+            laneErr[i] = err;
+            d->close();
+            delete d;
+            continue;
+        }
+        decs[i] = d;
+    }
+    bool anyOk = false;
+    for (auto *d : decs)
+        if (d) anyOk = true;
+    if (!anyOk) {
+        fail(QStringLiteral("多机：所有机位均无法解码"));
+        return;
+    }
+    // ---- 音轨判定：audioLane 全程覆盖选段才带音 ----
+    bool withAudio = false;
+    QString audioNote;
+    QVector<QPair<qint64, qint64>> audioRanges;
+    QVector<double> audioRates;
+    if (p.audioLane >= 0 && p.audioLane < n && decs[p.audioLane]) {
+        const SyncLaneData &al = p.lanes[p.audioLane];
+        bool covered = true;
+        for (int i = 0; i < p.plan.segmentCount(); ++i) {
+            qint64 ws, we;
+            p.plan.segmentBounds(i, &ws, &we);
+            const qint64 ss = syncStreamOf(al, ws);
+            const qint64 se = syncStreamOf(al, we);
+            if (ss < 0 || se > al.durationMs + 500 || se <= ss) {
+                covered = false;
+                break;
+            }
+            audioRanges.append({ss, se});
+            audioRates.append(p.plan.segmentRate(i));
+        }
+        if (covered)
+            withAudio = true;
+        else
+            audioNote = QStringLiteral("（音轨机位未全程覆盖选段，产物无音轨）");
+    }
+    // ---- ffmpeg 子进程 ----
+    const QString ffmpeg = ToolPaths::findFfmpegPath();
+    QStringList args;
+    args << QStringLiteral("-y")
+         << QStringLiteral("-f") << QStringLiteral("rawvideo")
+         << QStringLiteral("-pix_fmt") << QStringLiteral("rgba")
+         << QStringLiteral("-s") << QStringLiteral("%1x%2").arg(p.canvas.width()).arg(p.canvas.height())
+         << QStringLiteral("-r") << QString::number(p.outFps, 'f', 3)
+         << QStringLiteral("-i") << QStringLiteral("pipe:0");
+    if (withAudio)
+        args << QStringLiteral("-i") << p.lanes[p.audioLane].path;
+    if (withAudio) {
+        args << QStringLiteral("-filter_complex")
+             << buildAudioFilterChainRanges(audioRates, audioRanges, QStringLiteral("1:a"))
+             << QStringLiteral("-map") << QStringLiteral("0:v")
+             << QStringLiteral("-map") << QStringLiteral("[aout]");
+    } else {
+        args << QStringLiteral("-map") << QStringLiteral("0:v");
+    }
+    args << QStringLiteral("-c:v") << QStringLiteral("libx264")
+         << QStringLiteral("-preset") << QStringLiteral("medium")
+         << QStringLiteral("-crf") << QStringLiteral("18")
+         << QStringLiteral("-pix_fmt") << QStringLiteral("yuv420p");
+    if (withAudio)
+        args << QStringLiteral("-c:a") << QStringLiteral("aac")
+             << QStringLiteral("-b:a") << QStringLiteral("128k")
+             << QStringLiteral("-shortest");
+    args << p.outputPath;
+
+    QProcess proc;
+    proc.setProgram(ffmpeg);
+    proc.setArguments(args);
+    proc.start();
+    if (!proc.waitForStarted(10000)) {
+        for (auto *d : decs) { if (d) { d->close(); delete d; } }
+        fail(QStringLiteral("ffmpeg 启动失败：") + proc.errorString());
+        return;
+    }
+    // ---- 布局：上宫格 + 下覆盖条 ----
+    const int W = p.canvas.width(), H = p.canvas.height();
+    const int pad = 8;
+    const int stripH = n * 26 + 44;
+    const QRect gridRect(pad, pad, W - 2 * pad, H - stripH - 2 * pad);
+    const int cols = (n <= 2) ? n : 2;
+    const int rows = (n + cols - 1) / cols;
+    const int cellW = gridRect.width() / cols;
+    const int cellH = gridRect.height() / rows;
+    const QRect stripRect(pad, gridRect.bottom() + 1 + pad, W - 2 * pad, stripH - pad);
+
+    const qint64 totalFrames = p.plan.outputFrameCount(p.outFps);
+    const double outDur = p.plan.outputDurationMs();
+    QString errMsg;
+    bool cancelled = false;
+    qint64 k = 0;
+
+    while (k < totalFrames) {
+        if (m_cancelled) { cancelled = true; break; }
+        const double wall = p.plan.sourceMsAtOutputFrame(k, p.outFps);
+
+        const double outMs = double(k) * 1000.0 / p.outFps;
+
+        QImage canvas(p.canvas, QImage::Format_RGBA8888);
+        canvas.fill(Qt::black);
+        {
+            QPainter painter(&canvas);
+            painter.setRenderHint(QPainter::SmoothPixmapTransform);
+            // ---- 瓦片宫格 ----
+            for (int i = 0; i < n; ++i) {
+                const int cx = gridRect.x() + (i % cols) * cellW;
+                const int cy = gridRect.y() + (i / cols) * cellH;
+                const QRect cell(cx + 2, cy + 2, cellW - 4, cellH - 4);
+                const SyncLaneData &l = p.lanes[i];
+                QImage frame;
+                QString placeholder;
+                if (!laneErr[i].isEmpty()) {
+                    placeholder = laneErr[i];
+                } else {
+                    const qint64 stream = syncStreamOf(l, qint64(wall));
+                    if (!syncLaneCovers(l, qint64(wall))) {
+                        placeholder = QStringLiteral("该时刻无画面");
+                    } else {
+                        SeqDecoder *d = decs[i];
+                        const qint64 discardBefore =
+                            syncStreamOf(l, qMax(syncLaneWallStart(l), p.plan.aMs));
+                        if (d && d->pullTo(stream, discardBefore, &m_cancelled)
+                            && !d->cur.isNull() && d->curPtsMs >= stream - 1500.0)
+                            frame = d->cur;
+                        else
+                            placeholder = QStringLiteral("该时刻无画面");
+                    }
+                }
+                painter.fillRect(cell, QColor(10, 11, 14));
+                if (!frame.isNull()) {
+                    QImage scaled = frame.scaled(cell.size(), Qt::KeepAspectRatio,
+                                                 Qt::SmoothTransformation);
+                    painter.drawImage(cell.x() + (cell.width() - scaled.width()) / 2,
+                                      cell.y() + (cell.height() - scaled.height()) / 2,
+                                      scaled);
+                } else {
+                    painter.setPen(QColor(Theme::TextMuted));
+                    painter.drawText(cell, Qt::AlignCenter, placeholder);
+                }
+                // 机位名角标
+                painter.setPen(Qt::NoPen);
+                painter.setBrush(QColor(0, 0, 0, 140));
+                painter.drawRect(QRect(cell.left(), cell.top(), 110, 22));
+                painter.setPen(Theme::DataPalette[i % Theme::DataPalette.size()]);
+                painter.drawText(QRect(cell.left() + 6, cell.top(), 200, 22),
+                                 Qt::AlignVCenter | Qt::AlignLeft, l.displayName);
+                painter.setPen(QPen(QColor(Theme::Border), 1));
+                painter.setBrush(Qt::NoBrush);
+                painter.drawRect(cell);
+            }
+            // ---- 覆盖条（每路行：色块=该路有画面的墙钟区，随分速 warp）----
+            painter.fillRect(stripRect, QColor(Theme::BgPanel));
+            const int labelW = 110;
+            const int barX = stripRect.x() + labelW;
+            const int barW = stripRect.width() - labelW - 8;
+            for (int i = 0; i < n; ++i) {
+                const int ry = stripRect.y() + 6 + i * 26;
+                const SyncLaneData &l = p.lanes[i];
+                painter.setPen(QColor(Theme::TextSecond));
+                QFont f = painter.font();
+                f.setPixelSize(12);
+                painter.setFont(f);
+                painter.drawText(QRect(stripRect.x() + 4, ry, labelW - 8, 20),
+                                 Qt::AlignVCenter | Qt::AlignLeft, l.displayName);
+                painter.fillRect(QRect(barX, ry + 3, barW, 14), QColor(Theme::BgCard));
+                if (laneErr[i].isEmpty()) {
+                    const qint64 c1 = qMax(syncLaneWallStart(l), p.plan.aMs);
+                    const qint64 c2 = qMin(syncLaneWallEnd(l), p.plan.bMs);
+                    if (c2 > c1 && outDur > 0.0) {
+                        const int x1 = barX + int(p.plan.outputMsAtSourceMs(c1) / outDur * barW);
+                        const int x2 = barX + int(p.plan.outputMsAtSourceMs(c2) / outDur * barW);
+                        painter.fillRect(QRect(x1, ry + 3, qMax(2, x2 - x1), 14),
+                                         Theme::DataPalette[i % Theme::DataPalette.size()]);
+                    }
+                }
+            }
+            // 游标（贯穿宫格+覆盖条）
+            const int cursorX = outDur > 0.0 ? int(outMs / outDur * W) : 0;
+            painter.setPen(QPen(QColor(Theme::Accent), 2));
+            painter.drawLine(cursorX, pad, cursorX, stripRect.bottom());
+            // ---- OSD ----
+            if (p.burnOsd) {
+                const double rate = p.plan.rateAtOutputMs(outMs);
+                QString osd = QStringLiteral("演示副本 · %1x · %2")
+                                  .arg(rate, 0, 'g', 3)
+                                  .arg(QDateTime::fromMSecsSinceEpoch(qint64(wall))
+                                           .toString(QStringLiteral("yyyy-MM-dd HH:mm:ss")));
+                if (!p.caseLabel.isEmpty())
+                    osd += QStringLiteral(" · 案件 %1").arg(p.caseLabel);
+                QFont f = painter.font();
+                f.setPixelSize(22);
+                f.setBold(true);
+                painter.setFont(f);
+                const QRect osdRect(gridRect.left() + 8, gridRect.bottom() - 36,
+                                    gridRect.width() - 16, 30);
+                painter.setPen(Qt::NoPen);
+                painter.setBrush(QColor(0, 0, 0, 140));
+                painter.drawRoundedRect(osdRect.adjusted(-6, -2, 6, 2), 6, 6);
+                painter.setPen(QColor(Theme::Accent));
+                painter.drawText(osdRect, Qt::AlignVCenter | Qt::AlignLeft, osd);
+            }
+        }
+
+        const QByteArray bytes(reinterpret_cast<const char *>(canvas.constBits()),
+                               canvas.sizeInBytes());
+        qint64 written = 0;
+        while (written < bytes.size()) {
+            const qint64 w = proc.write(bytes.constData() + written,
+                                        bytes.size() - written);
+            if (w < 0) { errMsg = QStringLiteral("ffmpeg 管道写入失败"); break; }
+            written += w;
+            if (m_cancelled) break;
+        }
+        if (!errMsg.isEmpty() || m_cancelled)
+            break;
+        ++k;
+        if (k % 5 == 0 || k == totalFrames)
+            emit progress(int(k), int(totalFrames));
+    }
+
+    proc.closeWriteChannel();
+    for (auto *d : decs) { if (d) { d->close(); delete d; } }
+    if (cancelled || m_cancelled) {
+        proc.kill();
+        proc.waitForFinished(3000);
+        QFile::remove(p.outputPath);
+        emit finished(false, QStringLiteral("已取消"));
+        return;
+    }
+    proc.waitForFinished(-1);
+    const bool ok = errMsg.isEmpty()
+        && proc.exitStatus() == QProcess::NormalExit && proc.exitCode() == 0;
+    if (!ok) {
+        if (errMsg.isEmpty())
+            errMsg = QStringLiteral("ffmpeg 编码失败：")
+                     + QString::fromLocal8Bit(proc.readAllStandardError()).right(500);
+        QFile::remove(p.outputPath);
+        fail(errMsg);
+        return;
+    }
+    emit progress(int(totalFrames), int(totalFrames));
+    emit finished(true, p.outputPath + audioNote);
 }

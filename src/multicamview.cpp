@@ -243,6 +243,26 @@ void MultiCamViewWidget::paintEvent(QPaintEvent *)
                    Qt::AlignHCenter | Qt::AlignTop, tk.second);
     }
 
+    // A/B 选段底纹与边界线（P-68：先于游标绘制，游标压顶）
+    if (hasAB() && m_layoutMsPerPx > 0) {
+        const int ax = kLabelW + int((m_abA - m_layoutT0) / m_layoutMsPerPx);
+        const int bx = kLabelW + int((m_abB - m_layoutT0) / m_layoutMsPerPx);
+        const int x1 = qMax(ax, int(kLabelW));
+        const int x2 = qMin(bx, width() - kMarginR);
+        if (x2 > x1) {
+            QColor fill(Theme::Accent);
+            fill.setAlpha(28);
+            p.setPen(Qt::NoPen);
+            p.setBrush(fill);
+            p.drawRect(QRect(x1, kTopMargin - 2, x2 - x1, tickY + 2 - kTopMargin + 2));
+        }
+        p.setPen(QPen(QColor(Theme::Info), 2, Qt::DashLine));
+        if (ax >= kLabelW && ax <= width() - kMarginR)
+            p.drawLine(ax, kTopMargin - 2, ax, tickY + 2);
+        if (bx >= kLabelW && bx <= width() - kMarginR)
+            p.drawLine(bx, kTopMargin - 2, bx, tickY + 2);
+    }
+
     // 共享墙钟游标（P-57 模式A）：跨行竖线 + 顶部时刻标签
     if (m_cursorMs >= 0 && m_layoutMsPerPx > 0) {
         const int cx = kLabelW + int((m_cursorMs - m_layoutT0) / m_layoutMsPerPx);

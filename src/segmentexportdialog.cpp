@@ -13,6 +13,7 @@
 #include <QPushButton>
 #include <QTableWidget>
 #include <QVBoxLayout>
+#include <QDateTime>
 
 #include "i18n.h"
 #include "theme.h"
@@ -20,10 +21,12 @@
 SegmentExportDialog::SegmentExportDialog(const speedplan::SpeedPlan &plan,
                                          qint64 cursorMs,
                                          const QString &suggestedPath,
-                                         QWidget *parent)
+                                         QWidget *parent,
+                                         bool wallEpoch)
     : QDialog(parent)
     , m_plan(plan)
     , m_cursorMs(cursorMs)
+    , m_wallEpoch(wallEpoch)
 {
     m_plan.normalize();
     setWindowTitle(lang("导出选段视频", "Export Segment Clip"));
@@ -136,6 +139,14 @@ QString SegmentExportDialog::formatMs(qint64 ms)
         .arg(ms % 1000, 3, 10, QLatin1Char('0'));
 }
 
+QString SegmentExportDialog::fmtTime(qint64 ms) const
+{
+    if (m_wallEpoch)
+        return QDateTime::fromMSecsSinceEpoch(ms, Qt::LocalTime)
+            .toString(QStringLiteral("MM-dd HH:mm:ss"));
+    return formatMs(ms);
+}
+
 bool SegmentExportDialog::burnOsd() const { return m_osdCheck->isChecked(); }
 QString SegmentExportDialog::outputPath() const { return m_pathEdit->text().trimmed(); }
 
@@ -149,7 +160,7 @@ void SegmentExportDialog::rebuildTable()
         m_plan.segmentBounds(i, &s, &e);
         m_table->setItem(i, 0, new QTableWidgetItem(QString::number(i + 1)));
         m_table->setItem(i, 1, new QTableWidgetItem(
-            formatMs(s) + QStringLiteral(" → ") + formatMs(e)));
+            fmtTime(s) + QStringLiteral(" → ") + fmtTime(e)));
         auto *combo = new QComboBox(m_table);
         for (double r : rates) {
             combo->addItem(QStringLiteral("%1x").arg(r, 0, 'g', 3), r);
@@ -171,7 +182,7 @@ void SegmentExportDialog::updateSummary()
     const double srcSec = (m_plan.bMs - m_plan.aMs) / 1000.0;
     m_summary->setText(lang("选段 %1 → %2（源 %3 秒，导出时长约 %4 秒）",
                             "Selection %1 → %2 (source %3 s, export ~%4 s)")
-                           .arg(formatMs(m_plan.aMs), formatMs(m_plan.bMs))
+                           .arg(fmtTime(m_plan.aMs), fmtTime(m_plan.bMs))
                            .arg(srcSec, 0, 'f', 1)
                            .arg(outSec, 0, 'f', 1));
 }

@@ -17,6 +17,7 @@
 #include <QString>
 #include "domain/speed_plan.h"
 #include "domain/time_calibration.h"
+#include "domain/sync_model.h"
 
 class QThread;
 
@@ -36,6 +37,12 @@ public:
         bool burnOsd = true;           ///< 烧录信息角标（拍板 Q2：可选）
         QString caseLabel;             ///< 案件号（OSD 末段；空=不显示）
         TimeCalibration calibration;   ///< 有效则 OSD 显示区间墙钟（北京时间口径）
+
+        // ---- 多机模式（P-68 第 10 条：多机同步播放同款选段导出）----
+        // lanes 非空 → 多机模式：plan 的 aMs/bMs/splits 全部墙钟域；
+        // 每路按 syncStreamOf 换算取帧，缺席时刻画「无画面」占位。
+        QVector<SyncLaneData> lanes;
+        int audioLane = -1;            ///< 音轨来源路（-1 = 无音轨）
     };
 
     explicit SegmentExportEngine(QObject *parent = nullptr);
@@ -52,6 +59,10 @@ public:
     /// 供单测直验。inputLabel 形如 "1:a"。无音频/单段 1x 仍返回合法链。
     static QString buildAudioFilterChain(const speedplan::SpeedPlan &plan,
                                          const QString &inputLabel);
+    /// 映射版：逐段显式给源流内区间（多机墙钟→该路流内换算后调用）
+    static QString buildAudioFilterChainRanges(const QVector<double> &rates,
+                                               const QVector<QPair<qint64, qint64>> &streamRanges,
+                                               const QString &inputLabel);
     /// atempo 级联分解：rate 拆成 ∈[0.5,2.0] 的因子串（0.25→"0.5,0.5"；8→"2,2,2"）
     static QStringList atempoChain(double rate);
 
@@ -67,6 +78,7 @@ signals:
 
 private:
     void run();   // 工作线程体
+    void runMultiCam();   // 多机模式（lanes 非空；墙钟域 plan）
     Params m_params;
     QThread *m_thread = nullptr;
     volatile bool m_cancelled = false;

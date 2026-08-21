@@ -30,6 +30,13 @@
 #include "camtilewidget.h"
 #include "playbackadjustpanel.h"
 #include "multicamview.h"
+#include "segmentexportdialog.h"
+#include "infrastructure/segment_export_engine.h"
+#include <QProgressDialog>
+#include <QKeyEvent>
+#include <QMessageBox>
+#include <QDir>
+#include <QFileInfo>
 #include "i18n.h"
 #include "theme.h"
 #include "infrastructure/ivideo_engine.h"
@@ -424,6 +431,17 @@ void MultiCamPlaybackWindow::buildPlayPage()
         }
     });
     bar->addWidget(m_adjustBtn);
+
+    // P-68 第 10 条：多机选段导出（与单路同款分段变速逻辑；模式A 可用）
+    m_exportClipBtn = new QPushButton(lang("导出选段", "Export Clip"), this);
+    m_exportClipBtn->setToolTip(lang(
+        "导出 A-B 选段：A/B 键在合并时间线上打点；分段变速 + 全机位宫格同框 MP4",
+        "Export A-B selection: mark with A/B keys on the merged timeline; "
+        "variable-speed multi-cam grid MP4"));
+    m_exportClipBtn->setEnabled(false);
+    connect(m_exportClipBtn, &QPushButton::clicked,
+            this, &MultiCamPlaybackWindow::onExportClip);
+    bar->addWidget(m_exportClipBtn);
 
     m_alignBtn = new QPushButton(lang("对齐…", "Align…"), this);
     m_alignBtn->setVisible(false);
@@ -963,6 +981,7 @@ void MultiCamPlaybackWindow::selectTile(int idx)
 
 void MultiCamPlaybackWindow::onClock(qint64 wallMs)
 {
+    m_lastWallMs = wallMs;   // P-68 A/B 打点用
     // 模式A 游标
     if (m_mergedBar)
         m_mergedBar->setCursorMs(wallMs);
@@ -1041,4 +1060,123 @@ void MultiCamPlaybackWindow::updateTilesOsd()
         else
             tile->setPlaceholder(QString());
     }
+}
+
+// ---------------------------------------------------------------------------
+// P-68 第 10 条：多机选段导出（A/B 打点 + 分段变速 + 宫格合成）
+// ---------------------------------------------------------------------------
+
+void MultiCamPlaybackWindow::keyPressEvent(QKeyEvent *event)
+{
+    // A/B 键在合并时间线当前游标处打点（仅模式A；与单路分析同手感）
+    if (!m_mergedBar || !m_mergedBar->isVisible() || m_lastWallMs < 0) {
+        QDialog::keyPressEvent(event);
+        return;
+    }
+    const auto setPt = [this](qint64 &pt, const QString &cn) {
+        pt = m_lastWallMs;
+        if (m_abA >= 0 && m_abB >= 0 && m_abA > m_abB)
+            qSwap(m_abA, m_abB);
+        m_mergedBar->setABRegion(m_abA, m_abB);
+        if (m_exportClipBtn)
+            m_exportClipBtn->setEnabled(m_mergedBar->hasAB());
+        m_statusLabel->setText(QStringLiteral("%1 %2").arg(cn, fmtWall(m_lastWallMs)));
+    };
+    switch (event->key()) {
+    case Qt::Key_A:
+        if (event->modifiers() & Qt::ControlModifier) {
+            // Ctrl+A：清除选段
+            m_abA = m_abB = -1;
+            m_mergedBar->setABRegion(-1, -1);
+            if (m_exportClipBtn)
+                m_exportClipBtn->setEnabled(false);
+            m_statusLabel->setText(lang("选段已清除", "Selection cleared"));
+            return;
+        }
+        setPt(m_abA, lang("A 点", "A:"));
+        return;
+    case Qt::Key_B:
+        setPt(m_abB, lang("B 点", "B:"));
+        return;
+    default:
+        QDialog::keyPressEvent(event);
+    }
+}
+
+void MultiCamPlaybackWindow::onExportClip()
+{
+    if (!m_mergedBar || !m_mergedBar->hasAB())
+        return;
+    const qint64 aMs = m_mergedBar->abA();
+    const qint64 bMs = m_mergedBar->abB();
+
+    speedplan::SpeedPlan plan;
+    plan.aMs = aMs;
+    plan.bMs = bMs;
+    plan.rates = {1.0};
+    plan.normalize();
+
+    // 建议输出路径：案件模式 = 案内 exports/；独立模式 = 首路源旁
+    const QVector<SyncLaneData> &lanes = m_svc->lanes();
+    QString dir;
+    QString base = QStringLiteral("multicam");
+    if (!lanes.isEmpty())
+        base = QFileInfo(lanes.first().path).completeBaseName() + QStringLiteral("_etc");
+    if (m_case) {
+        dir = m_case->caseDir() + QStringLiteral("/exports");
+        QDir().mkpath(dir);
+    } else if (!lanes.isEmpty()) {
+        dir = QFileInfo(lanes.first().path).absolutePath();
+    }
+    const QString suggested = QDir(dir).filePath(
+        QStringLiteral("LAClip_MC_%1-%2.mp4").arg(aMs).arg(bMs));
+
+    SegmentExportDialog dlg(plan, m_lastWallMs, suggested, this,
+                            /*wallEpoch=*/true);
+    if (dlg.exec() != QDialog::Accepted)
+        return;
+    plan = dlg.plan();
+    plan.normalize();
+
+    SegmentExportEngine::Params pp;
+    pp.outputPath = dlg.outputPath();
+    pp.plan = plan;
+    pp.lanes = lanes;
+    pp.audioLane = m_svc->audibleLane();
+    double fps = 25.0;
+    for (int i = 0; i < m_svc->laneCount(); ++i)
+        if (auto *e = m_svc->engineAt(i))
+            if (e->fps() > 0.0f) { fps = e->fps(); break; }
+    pp.outFps = fps;
+    pp.burnOsd = dlg.burnOsd();
+    pp.caseLabel = m_case ? m_case->meta().caseNo : QString();
+
+    if (!m_segmentExporter)
+        m_segmentExporter = new SegmentExportEngine(this);
+    if (m_segmentExporter->isRunning()) {
+        m_statusLabel->setText(lang("导出进行中", "Export in progress"));
+        return;
+    }
+    SegmentExportEngine *eng = m_segmentExporter;
+    auto *pd = new QProgressDialog(lang("正在导出多机选段…", "Exporting multi-cam clip…"),
+                                   lang("取消", "Cancel"), 0,
+                                   int(plan.outputFrameCount(pp.outFps)), this);
+    pd->setWindowModality(Qt::WindowModal);
+    pd->setMinimumDuration(0);
+    pd->setValue(0);
+    connect(eng, &SegmentExportEngine::progress, pd, &QProgressDialog::setValue);
+    connect(pd, &QProgressDialog::canceled, eng, &SegmentExportEngine::cancel);
+    connect(eng, &SegmentExportEngine::finished, this,
+            [this, pd](bool ok, const QString &msg) {
+                pd->close();
+                pd->deleteLater();
+                if (ok)
+                    QMessageBox::information(this, lang("导出完成", "Export Done"),
+                        lang("已导出：\n", "Exported:\n") + msg);
+                else if (msg == QStringLiteral("已取消"))
+                    m_statusLabel->setText(lang("导出已取消", "Export cancelled"));
+                else
+                    QMessageBox::warning(this, lang("导出失败", "Export Failed"), msg);
+            });
+    eng->start(pp);
 }
