@@ -176,3 +176,10 @@ struct TimeCalibration
     static QString sourceToString(Source s);
     static Source sourceFromString(const QString &s);
 };
+
+/// sidecar（<视频>.lumencal.json）→ 分段校时（v1.12.3 自 app 层下沉 domain：
+/// 供 cam_timeline 等轻量调用方直用；CalibrationService::loadSidecar 同名转发
+/// 本函数，单实现 SSOT）。解析分段锚点 → piecewise 查表校时 + 缺口警告
+/// （"gaps:<数量>:<最大ms>" 类型化前缀，C1）。文件缺失/格式不符 → false。
+bool loadSidecarCalibration(const QString &videoPath, TimeCalibration *out,
+                            QString *warning);

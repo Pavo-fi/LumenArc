@@ -1131,6 +1131,59 @@ void ChartPanel::updateTimeLabels()
         firstLabel -= step;
 
     // --- Major tick labels (regular time labels) ---
+    // v1.12.3（越秀案实测实锤「时间轴不显示校时结果」）：分段模式（拼接产物
+    // 含时间缺口）改流内域等距刻度——墙钟域等距步进在缺口内反解出幻影流内
+    // 位置（旧 streamMsOf 沿前段外推），且大缺口后循环提前 break，真实后段
+    // 完全无标签。流内域刻度每个位置的墙钟由 wallMsOf 逐段锚定（恒真）；
+    // 缺口以红色虚线 + 「缺 H:MM」小字标记上轴（C1 不静默）。
+    const bool pwMode = m_calibration.dateKnown && m_calibration.piecewiseMode();
+    if (pwMode) {
+        const qint64 vMin = static_cast<qint64>(visibleMin);
+        const qint64 vMax = static_cast<qint64>(visibleMax);
+        qint64 t0 = (vMin / step) * step;
+        if (t0 < vMin)
+            t0 += step;
+        for (qint64 tVideo = t0; tVideo <= vMax; tVideo += step) {
+            const QString text = formatDisplayTime(displayMsOf(tVideo));
+            auto *item = new QGraphicsSimpleTextItem(text, m_chart);
+            item->setFont(fontMono(9, QFont::Bold));
+            item->setBrush(QBrush(QColor(0xF5, 0xF0, 0xE8)));
+            item->setZValue(LABEL_Z_VALUE);
+            m_timeLabelItems.append(item);
+            m_labelVideoTimes.append(tVideo);
+
+            if (m_showTickMarks) {
+                auto *tick = new QGraphicsLineItem(m_chart);
+                tick->setPen(QPen(QColor(154, 160, 171), 2));
+                qreal x = mapTimeToX(tVideo);
+                tick->setLine(x, bottom, x, bottom + 10);
+                tick->setZValue(LABEL_Z_VALUE - 1);
+                m_tickMarkItems.append(tick);
+            }
+        }
+        // 缺口标记（红色虚线竖线 + 红色「缺 H:MM」；清理/碰撞/平移随既有流程）
+        const QVector<PiecewiseGap> pwGaps = m_calibration.piecewise.gaps();
+        for (const auto &g : pwGaps) {
+            if (g.streamPosMs <= vMin || g.streamPosMs >= vMax)
+                continue;
+            const qreal x = mapTimeToX(g.streamPosMs);
+            if (m_showTickMarks) {
+                auto *gl = new QGraphicsLineItem(m_chart);
+                gl->setPen(QPen(QColor(0xE0, 0x54, 0x54), 1, Qt::DashLine));
+                gl->setLine(x, plotArea.top(), x, bottom);
+                gl->setZValue(LABEL_Z_VALUE - 3);
+                m_tickMarkItems.append(gl);
+            }
+            auto *gt = new QGraphicsSimpleTextItem(
+                lang("缺 %1", "GAP %1").arg(fmtGapDuration(g.gapWallMs)),
+                m_chart);
+            gt->setFont(fontMono(8, QFont::Bold));
+            gt->setBrush(QBrush(QColor(0xE0, 0x54, 0x54)));
+            gt->setZValue(LABEL_Z_VALUE + 1);
+            m_timeLabelItems.append(gt);
+            m_labelVideoTimes.append(g.streamPosMs);
+        }
+    } else
     for (qint64 tReal = firstLabel; tReal <= dispEnd; tReal += step) {
         qint64 tVideo = streamMsFromDisplay(tReal);
         if (tVideo < static_cast<qint64>(visibleMin))
@@ -1171,6 +1224,23 @@ void ChartPanel::updateTimeLabels()
         int minorDivisions = 4;
         qint64 minorStep = step / minorDivisions;
         if (minorStep >= 1) {
+            if (pwMode) {
+                // 分段模式：次级刻度同样走流内域（防缺口幻影，同主刻度）
+                const qint64 vMin = static_cast<qint64>(visibleMin);
+                const qint64 vMax = static_cast<qint64>(visibleMax);
+                qint64 m0 = (vMin / minorStep) * minorStep;
+                if (m0 < vMin)
+                    m0 += minorStep;
+                for (qint64 tMinorVideo = m0; tMinorVideo <= vMax;
+                     tMinorVideo += minorStep) {
+                    auto *tick = new QGraphicsLineItem(m_chart);
+                    tick->setPen(QPen(QColor(74, 80, 96), 1));
+                    qreal x = mapTimeToX(tMinorVideo);
+                    tick->setLine(x, bottom, x, bottom + 5);
+                    tick->setZValue(LABEL_Z_VALUE - 2);
+                    m_tickMarkItems.append(tick);
+                }
+            } else
             for (qint64 tReal = firstLabel; tReal < dispEnd; tReal += step) {
                 for (int m = 1; m < minorDivisions; ++m) {
                     qint64 tMinor = tReal + m * minorStep;
@@ -1353,6 +1423,20 @@ QString ChartPanel::formatTimeHMS(qint64 ms)
         .arg(hours, 2, 10, QChar('0'))
         .arg(minutes, 2, 10, QChar('0'))
         .arg(seconds, 2, 10, QChar('0'));
+}
+
+QString ChartPanel::fmtGapDuration(qint64 gapMs)
+{
+    // 缺口时长紧凑格式（时间轴缺口小字）：<90s→"42s"；<90min→"31m"；否则 "10.3h"
+    if (gapMs < 0)
+        gapMs = 0;
+    const double s = gapMs / 1000.0;
+    if (s < 90.0)
+        return QStringLiteral("%1s").arg(qRound(s));
+    const double m = s / 60.0;
+    if (m < 90.0)
+        return QStringLiteral("%1m").arg(qRound(m));
+    return QStringLiteral("%1h").arg(m / 60.0, 0, 'f', 1);
 }
 
 /// @brief 更新光标线和时间标签位置

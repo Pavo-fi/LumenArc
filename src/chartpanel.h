@@ -71,6 +71,17 @@ public:
 
     QVector<ChartLabel> labels() const { return m_labels; }
     void setLabels(const QVector<ChartLabel> &l) { m_labels = l; updateLabelItems(); }
+    /// 测试钩子（v1.12.3 缺口刻度回归）：当前时间轴刻度项（流内 ms, 文本），
+    /// 含缺口标记（文本以「缺」/"GAP" 前缀）；碰撞隐藏的项也在列。
+    QVector<QPair<qint64, QString>> axisTickLabelsForTest() const
+    {
+        QVector<QPair<qint64, QString>> out;
+        const int n = qMin(m_timeLabelItems.size(), m_labelVideoTimes.size());
+        for (int i = 0; i < n; ++i)
+            if (m_timeLabelItems[i])
+                out.append({m_labelVideoTimes[i], m_timeLabelItems[i]->text()});
+        return out;
+    }
     /// 当前可见折线数（有数据的亮度曲线 + 音量曲线）——标签文字自动隐藏判定用
     int visibleSeriesCount() const;
 
@@ -145,6 +156,8 @@ private:
     qreal clampX(qreal x) const;
     static QString formatTimeMs(qint64 ms);
     static QString formatTimeHMS(qint64 ms);
+    /// 缺口时长紧凑格式（分段模式时间轴缺口小字）：<90s→"42s"；<90min→"31m"；否则 "10.3h"
+    static QString fmtGapDuration(qint64 gapMs);
     /// 显示域换算：dateKnown=false → 旧日内偏移（行为不变）；true → 北京时间
     qint64 displayMsOf(qint64 streamMs) const;
     /// 显示域 → 流内（刻度对齐逆运算）

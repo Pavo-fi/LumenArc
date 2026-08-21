@@ -33,6 +33,8 @@
 #include <QSlider>
 #include <QCheckBox>
 #include <QPushButton>
+#include <QProcess>
+#include <QEventLoop>
 #include <cstdio>
 
 static int g_checks = 0;
@@ -303,6 +305,85 @@ static void testPreprocessGoChain()
               "plain: single list-order evidenceReady at UserConfirm");
         CHECK(w.filesAtEvidence == files.size(),
               "plain: all files in list-order group");
+    }
+}
+
+// ---------------------------------------------------------------------------
+// P-62 续（v1.12.3）：拼接产物打开即继承分段校时并落盘 .vla（越秀案实测
+// 「播放时间轴不显示校时结果」——产物旁 sidecar 存在而校时未生效）。
+// fixture：ffmpeg lavfi 合成 3s 真小视频 + 带 1h 缺口的 sidecar；
+// openVideoFile → 继承（缺口提示框由 armModalAutoClose 收）→ 异步写 .vla。
+// ---------------------------------------------------------------------------
+static void testSidecarInheritOpen(QApplication &app)
+{
+    QDir tmp(QDir::tempPath() + "/lumenarc_p62_inherit");
+    tmp.removeRecursively();
+    QDir().mkpath(tmp.path());
+    const QString clip = tmp.path() + "/merged_fake.mp4";
+
+    // 合成 3s 可播放小视频（ bundled ffmpeg lavfi；失败则 SKIP 不破坏套件）
+    const QString ffmpeg = QCoreApplication::applicationDirPath()
+        + QStringLiteral("/ffmpeg/ffmpeg.exe");
+    if (!QFile::exists(ffmpeg)) {
+        fprintf(stderr, "[sidecar-inherit] SKIP (bundled ffmpeg not found)\n");
+        return;
+    }
+    QProcess proc;
+    proc.start(ffmpeg, {QStringLiteral("-y"), QStringLiteral("-f"),
+                        QStringLiteral("lavfi"), QStringLiteral("-i"),
+                        QStringLiteral("testsrc=size=320x240:rate=5:duration=3"),
+                        QStringLiteral("-c:v"), QStringLiteral("libx264"),
+                        QStringLiteral("-pix_fmt"), QStringLiteral("yuv420p"),
+                        clip});
+    if (!proc.waitForFinished(30000) || !QFile::exists(clip)) {
+        fprintf(stderr, "[sidecar-inherit] SKIP (clip synth failed)\n");
+        return;
+    }
+
+    // sidecar：2 段 + 1h 缺口（分段锚点，与 writeSidecar 同构）
+    const qint64 base = 1787033483000LL;   // 2026-08-18 14:11:23 本地
+    QFile sc(clip + QStringLiteral(".lumencal.json"));
+    sc.open(QIODevice::WriteOnly);
+    sc.write(QStringLiteral(
+        "{\"version\":1,\"segments\":["
+        "{\"streamStartMs\":0,\"streamEndMs\":1500,\"wallStartMs\":%1,\"rate\":1.0,\"source\":\"ocr\"},"
+        "{\"streamStartMs\":1500,\"streamEndMs\":3000,\"wallStartMs\":%2,\"rate\":1.0,\"source\":\"ocr\"}],"
+        "\"gaps\":[{\"afterStreamMs\":1500,\"gapWallMs\":3600000}]}")
+        .arg(base).arg(base + 3600000 + 1500).toUtf8());
+    sc.close();
+
+    MainWindow mw;
+    mw.resize(1280, 800);
+    mw.show();
+    pump(app);
+    QMetaObject::invokeMethod(&mw, "openVideoFile", Q_ARG(QString, clip));
+
+    // 继承后异步写 .vla：等待落盘（最長 5s；modal 缺口提示由自动回车收）
+    const QString vla = clip + QStringLiteral(".vla");
+    bool landed = false;
+    QElapsedTimer t;
+    t.start();
+    while (t.elapsed() < 5000) {
+        pump(app, 200);
+        if (QFile::exists(vla)) {
+            landed = true;
+            break;
+        }
+    }
+    CHECK(landed, "sidecar-inherit: .vla written after open (piecewise inherit)");
+    if (landed) {
+        TimelineModel m;
+        TimeCalibration cal;
+        CHECK(m.loadFromFile(vla, nullptr, &cal),
+              "sidecar-inherit: .vla loadable");
+        CHECK(cal.piecewiseMode(),
+              "sidecar-inherit: piecewise calibration persisted");
+        CHECK(cal.piecewise.segments.size() == 2,
+              "sidecar-inherit: both segments persisted");
+        CHECK(cal.wallMsOf(0) == base,
+              "sidecar-inherit: stream 0 anchored to first wall start");
+        CHECK(cal.wallMsOf(1500) == base + 3600000 + 1500,
+              "sidecar-inherit: post-gap segment anchored (wall jump)");
     }
 }
 
@@ -769,6 +850,7 @@ int main(int argc, char **argv)
     testProjectIo();
     testSessionPlan();
     testPreprocessGoChain();
+    testSidecarInheritOpen(app);
     testMainWindowBranches(app);
     testMultiCamWindow(app);
     testMultiCamCaseFlow(app);

@@ -197,6 +197,64 @@ static void testJsonRoundTrip()
     }
 }
 
+// ---------------------------------------------------------------------------
+// v1.12.3 缺口语义（越秀案实测实锤：分段拼接产物的缺口外推幻影刻度）
+// 段0 [0,60000) wall 1000000起 rate1.0 → 墙钟终点 1060000
+// 段1 [60000,120000) wall 1720000起 rate1.0（缺口 660s）
+// 段2 [120000,180000] wall 1781000起 rate0.5（缺口 1s，容差内）
+// ---------------------------------------------------------------------------
+static void testGapSemantics()
+{
+    PiecewiseTimeMap pw;
+    pw.streamEndMs = 180000;
+    pw.segments = {{0, 1000000, 1.0},
+                   {60000, 1720000, 1.0},
+                   {120000, 1781000, 0.5}};
+
+    // segmentWallEndMs：段0=1000000+60000×1.0=1060000；段1=1780000；
+    // 末段=1781000+60000×0.5=1811000
+    CHECK(pw.segmentWallEndMs(0) == 1060000);
+    CHECK(pw.segmentWallEndMs(1) == 1780000);
+    CHECK(pw.segmentWallEndMs(2) == 1811000);
+    pw.streamEndMs = 0;
+    CHECK(pw.segmentWallEndMs(2) == -1);   // 末段无右边界 → 无上界
+    pw.streamEndMs = 180000;
+
+    // gaps()：仅 段0→段1 一处（660s）；段1→段2 缝隙 1s 在容差内不报
+    const auto gaps = pw.gaps();
+    CHECK(gaps.size() == 1);
+    if (!gaps.isEmpty()) {
+        CHECK(gaps[0].streamPosMs == 60000);
+        CHECK(gaps[0].wallFromMs == 1060000);
+        CHECK(gaps[0].wallToMs == 1720000);
+        CHECK(gaps[0].gapWallMs == 660000);
+    }
+    CHECK(pw.gaps(700000).isEmpty());   // 容差大过缺口 → 不报
+
+    // inGap：缺口内 true；段内/缺口边界容差带/首段前 false
+    CHECK(pw.inGap(1100000));
+    CHECK(!pw.inGap(1059000));
+    CHECK(!pw.inGap(1060000 + 1500));   // 容差带内（2s）不判缺口
+    CHECK(!pw.inGap(1720000));
+    CHECK(!pw.inGap(999999));
+
+    // streamMsOf 缺口夹取：缺口内墙钟 → 缺口后段起点（跳过没录的）
+    CHECK(pw.streamMsOf(1100000) == 60000);
+    CHECK(pw.streamMsOf(1719999) == 60000);
+    // 段内墙钟正常反解；段边界两侧连续
+    CHECK(pw.streamMsOf(1030000) == 30000);
+    CHECK(pw.streamMsOf(1720000) == 60000);   // 后段起点本身 → 后段
+    CHECK(pw.streamMsOf(1780000) == 120000);
+    // 首段前/末段后：边界外推语义不变
+    CHECK(pw.streamMsOf(990000) == -10000);
+    CHECK(pw.streamMsOf(1821000) == 120000 + qint64((1821000-1781000)/0.5));
+
+    // wallMsOf 不受缺口语义影响（单调跳变即真实）
+    CHECK(pw.wallMsOf(0) == 1000000);
+    CHECK(pw.wallMsOf(59999) < 1060000);
+    CHECK(pw.wallMsOf(60000) == 1720000);
+}
+
 int main(int argc, char **argv)
 {
     QCoreApplication app(argc, argv);
@@ -207,6 +265,7 @@ int main(int argc, char **argv)
     testNoiseNoFalseBoundary();
     testRoundTrip();
     testJsonRoundTrip();
+    testGapSemantics();
     fprintf(stderr, "piecewise_test: %d checks, %d failures\n",
             g_checks, g_failures);
     return g_failures ? 1 : 0;

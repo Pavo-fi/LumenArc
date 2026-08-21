@@ -60,6 +60,15 @@ struct PiecewiseDetectReport
     QVector<int> outlierIdx;        ///< 异常测点在输入 samples 中的索引（留档/UI）
 };
 
+/// 时间缺口（拼接产物监控常态：缺段/关机/漏录；流内连续而墙钟跳变）
+struct PiecewiseGap
+{
+    qint64 streamPosMs = 0;   ///< 流内位置（= 后段起点；缺口本身不占流内时长）
+    qint64 wallFromMs = 0;    ///< 缺口墙钟起点（前段墙钟终点，按前段 rate 推算）
+    qint64 wallToMs = 0;      ///< 缺口墙钟终点（后段墙钟起点，锚定值）
+    qint64 gapWallMs = 0;     ///< 缺口墙钟时长（wallToMs − wallFromMs）
+};
+
 /// 粗采样分析结果（供两级采样编排：边界区间 → 加密取样位置）
 struct CoarseAnalysis
 {
@@ -85,8 +94,18 @@ struct PiecewiseTimeMap
 
     /// 流内位置 → 墙钟（epoch 毫秒）
     qint64 wallMsOf(qint64 streamMs) const;
-    /// 墙钟 → 流内位置（反解；墙钟超出映射范围时夹取边界段）
+    /// 墙钟 → 流内位置（反解；墙钟超出映射范围时夹取边界段；
+    /// v1.12.3 起缺口内墙钟夹取到缺口后一段起点——「跳过没录的」）
     qint64 streamMsOf(qint64 wallMs) const;
+
+    // ---- 缺口语义（v1.12.3：拼接产物分段锚点 + 缺段的显示/反解口径）----
+    /// 段 i 的墙钟终点（按其 rate 推算至下一段流内起点；末段用 streamEndMs，
+    /// streamEndMs<=末段起点时返回 -1 表示无上界）
+    qint64 segmentWallEndMs(int i) const;
+    /// 墙钟是否落在缺口内（无素材区间；toleranceMs 吸收 rate 换算噪声）
+    bool inGap(qint64 wallMs, qint64 toleranceMs = 2000) const;
+    /// 缺口清单：相邻段「前段墙钟终点 + tolerance < 后段墙钟起点」的缝隙
+    QVector<PiecewiseGap> gaps(qint64 toleranceMs = 2000) const;
 
     // ---- 参数（集中定义，便于调优）----
     static constexpr double kRateJumpThreshold = 0.10;   ///< 粗点斜率差判边界

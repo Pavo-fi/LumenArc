@@ -7,6 +7,7 @@
  *   → 事件循环跑 deferred rebuildSeries → 统计曲线数量与数据点
  */
 #include <QApplication>
+#include <QDateTime>
 #include <QElapsedTimer>
 #include <QtConcurrent>
 #include <QThreadPool>
@@ -882,6 +883,73 @@ int main(int argc, char **argv)
         fprintf(stderr, "[snaprender] chart baseline row=%d/420 hits=%d => %s\n",
                 bestRow, bestHits, baselineOk ? "PASS" : "FAIL <<<");
         if (!baselineOk) ++fail;
+    }
+
+    // ---- v1.12.3 分段校时（含时间缺口）时间轴刻度回归（越秀案实测实锤：
+    // 旧墙钟域等距步进在缺口内反解幻影流内位置，大缺口后提前 break 断供）----
+    // fixture 仿越秀：65.5min 流内，3 段、2 处缺口（10.3h 隔夜 + 5000s）
+    {
+        TimelineModel tm;
+        ChartPanel chart;
+        RoiModel rm3;
+        chart.setRegionModel(&rm3);
+        chart.setTimelineModel(&tm);
+        chart.resize(1600, 300);
+        chart.show();
+
+        // 产物刚拼完打开 = 无分析数据（最忠实现场）：setDuration 直走
+        // setRange(0, dur)（有数据但无 ROI 时 onDataReplaced 提前返回不扩轴）
+        const qint64 dur = 3929154;
+        const qint64 base = 1787033483000LL;   // 2026-08-18 14:11:23 本地
+        chart.setDuration(dur);
+
+        TimeCalibration cal;
+        cal.source = TimeCalibration::Source::Inherited;
+        cal.dateKnown = true;
+        cal.offsetMs = base;
+        PiecewiseTimeMap pw;
+        pw.streamEndMs = dur;
+        pw.segments = {{0, base, 1.0},
+                       {240200, base + 240200 + 37181000, 1.0},   // 缺口 10.3h
+                       {3000000, base + 240200 + 37181000
+                            + (3000000 - 240200) + 5000000, 1.0}}; // 缺口 5000s
+        cal.piecewise = pw;
+        cal.piecewiseApplied = true;
+        chart.setCalibration(cal);
+        app.processEvents();
+        fprintf(stderr, "[gaptick] axis [%.0f, %.0f] dur=%lld\n",
+                chart.axisX()->min(), chart.axisX()->max(), (long long)dur);
+
+        const auto ticks = chart.axisTickLabelsForTest();
+        int timeTicks = 0, gapTicks = 0;
+        bool beyondLastGap = false, textAllTrue = true;
+        for (const auto &p : ticks) {
+            if (p.second.startsWith(QStringLiteral("缺"))
+                || p.second.startsWith(QStringLiteral("GAP"))) {
+                ++gapTicks;
+                continue;
+            }
+            ++timeTicks;
+            if (p.first > 3000000)
+                beyondLastGap = true;
+            // 幻影回归：刻度文本必须等于该流内位置的真实墙钟（跨天格式）
+            const QString expect = QDateTime::fromMSecsSinceEpoch(
+                cal.beijingMsOf(p.first)).toString(QStringLiteral("MM-dd HH:mm"));
+            if (p.second != expect) {
+                textAllTrue = false;
+                fprintf(stderr, "[gaptick] phantom: stream=%lld text=%s expect=%s\n",
+                        (long long)p.first, p.second.toUtf8().constData(),
+                        expect.toUtf8().constData());
+            }
+        }
+        fprintf(stderr, "[gaptick] time=%d gap=%d beyondLastGap=%d true=%d => %s\n",
+                timeTicks, gapTicks, int(beyondLastGap), int(textAllTrue),
+                (timeTicks >= 8 && gapTicks == 2 && beyondLastGap && textAllTrue)
+                    ? "PASS" : "FAIL <<<");
+        if (!(timeTicks >= 8)) ++fail;        // 刻度不断供
+        if (!(gapTicks == 2)) ++fail;         // 两处缺口均上轴标记
+        if (!beyondLastGap) ++fail;           // 大缺口后仍有真实刻度（旧 break 断供）
+        if (!textAllTrue) ++fail;             // 无刻度幻影（文本=该位置真实墙钟）
     }
 
     // SpectrogramPanelEnhanced::renderHeatmapImage：纯 CPU 光栅化（不经 GL）。

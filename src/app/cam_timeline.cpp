@@ -93,6 +93,23 @@ QVector<CamInventoryItem> buildCamInventory(const CaseManager &cm)
                 it.lane.durationMs = 0;  // 真实时长由引擎加载后回报（R4）
             }
         }
+        // v1.12.3（越秀案实测）：前处理产物的分段校时先在 sidecar
+        // （.lumencal.json），.vla 可能尚未落盘/已丢失——.vla 无效时回落
+        // sidecar，产物勾选面板不再误报「未校时」（与主窗打开继承同口径）
+        if (!it.calibrated && it.pathExists) {
+            TimeCalibration cal;
+            if (loadSidecarCalibration(it.path, &cal, nullptr)
+                && cal.isValid() && cal.isEffective()) {
+                it.calibrated = true;
+                it.lane.id = v.id;
+                it.lane.path = it.path;
+                it.lane.displayName = it.displayName;
+                it.lane.calibrated = true;
+                it.lane.temporary = false;
+                it.lane.cal = cal;
+                it.lane.durationMs = 0;
+            }
+        }
         out.append(it);
     };
     for (const auto &v : cm.meta().videos)

@@ -311,16 +311,84 @@ qint64 PiecewiseTimeMap::streamMsOf(qint64 wallMs) const
             const TimeSegment &next = segments[i + 1];
             if (wallMs >= next.wallStartMs)
                 continue;
+            const double rate = seg.rate > 0.0 ? seg.rate : 1.0;
+            // v1.12.3 缺口语义（越秀案实测实锤：缺口外推致时间轴幻影刻度——
+            // 缺口内墙钟沿前段斜率外推出「不存在的流内位置」，大缺口后刻度
+            // 循环提前 break，真实后段完全无标签）：墙钟越过本段墙钟终点
+            // （缺口 = 无素材区间）→ 夹取到下一段流内起点（seek 语义
+            // 「跳过没录的」），不再外推。
+            const qint64 wallEnd = seg.wallStartMs + static_cast<qint64>(
+                std::llround(rate * static_cast<double>(
+                    next.streamStartMs - seg.streamStartMs)));
+            if (wallMs > wallEnd)
+                return next.streamStartMs;
+            return seg.streamStartMs + static_cast<qint64>(
+                       std::llround(static_cast<double>(wallMs - seg.wallStartMs)
+                                    / rate));
         }
         const double rate = seg.rate > 0.0 ? seg.rate : 1.0;
         return seg.streamStartMs + static_cast<qint64>(
-                   std::llround(static_cast<double>(wallMs - seg.wallStartMs) / rate));
+                   std::llround(static_cast<double>(wallMs - seg.wallStartMs)
+                                / rate));
     }
     // 超出末段：用末段反算（夹取）
     const TimeSegment &last = segments.last();
     const double rate = last.rate > 0.0 ? last.rate : 1.0;
     return last.streamStartMs + static_cast<qint64>(
                std::llround(static_cast<double>(wallMs - last.wallStartMs) / rate));
+}
+
+qint64 PiecewiseTimeMap::segmentWallEndMs(int i) const
+{
+    if (i < 0 || i >= segments.size())
+        return -1;
+    const TimeSegment &seg = segments[i];
+    const double rate = seg.rate > 0.0 ? seg.rate : 1.0;
+    qint64 streamRight = 0;
+    if (i + 1 < segments.size())
+        streamRight = segments[i + 1].streamStartMs;
+    else if (streamEndMs > seg.streamStartMs)
+        streamRight = streamEndMs;
+    else
+        return -1;   // 末段无右边界：无上界
+    return seg.wallStartMs + static_cast<qint64>(
+               std::llround(rate * static_cast<double>(streamRight - seg.streamStartMs)));
+}
+
+bool PiecewiseTimeMap::inGap(qint64 wallMs, qint64 toleranceMs) const
+{
+    for (int i = 0; i + 1 < segments.size(); ++i) {
+        const qint64 wallEnd = segmentWallEndMs(i);
+        if (wallEnd < 0)
+            continue;
+        const qint64 nextStart = segments[i + 1].wallStartMs;
+        if (nextStart > wallEnd + toleranceMs
+            && wallMs > wallEnd + toleranceMs && wallMs < nextStart)
+            return true;
+        if (wallMs < nextStart)
+            return false;   // 段墙钟起点单调：后续段只会更晚
+    }
+    return false;
+}
+
+QVector<PiecewiseGap> PiecewiseTimeMap::gaps(qint64 toleranceMs) const
+{
+    QVector<PiecewiseGap> out;
+    for (int i = 0; i + 1 < segments.size(); ++i) {
+        const qint64 wallEnd = segmentWallEndMs(i);
+        if (wallEnd < 0)
+            continue;
+        const qint64 nextStart = segments[i + 1].wallStartMs;
+        if (nextStart > wallEnd + toleranceMs) {
+            PiecewiseGap g;
+            g.streamPosMs = segments[i + 1].streamStartMs;
+            g.wallFromMs = wallEnd;
+            g.wallToMs = nextStart;
+            g.gapWallMs = nextStart - wallEnd;
+            out.append(g);
+        }
+    }
+    return out;
 }
 
 // ---------------------------------------------------------------------------
