@@ -82,6 +82,26 @@ public:
                 out.append({m_labelVideoTimes[i], m_timeLabelItems[i]->text()});
         return out;
     }
+    /// 测试钩子（v1.12.4 缺口红字碰撞回归）：与 axisTickLabelsForTest 平行
+    /// 的可见性数组（false = 碰撞隐藏）。
+    QVector<bool> axisTickVisibilityForTest() const
+    {
+        QVector<bool> out;
+        const int n = qMin(m_timeLabelItems.size(), m_labelVideoTimes.size());
+        for (int i = 0; i < n; ++i)
+            out.append(m_timeLabelItems[i] && m_timeLabelItems[i]->isVisible());
+        return out;
+    }
+    /// 测试钩子（v1.12.4）：模拟滚轮缩放——设置轴范围并重建刻度/碰撞布局
+    /// （与 wheelEvent 同调用序）。
+    void zoomToRangeForTest(qreal minMs, qreal maxMs)
+    {
+        if (!m_axisX)
+            return;
+        m_axisX->setRange(minMs, maxMs);
+        updateTimeLabels();
+        updateTimeLabelPositions();
+    }
     /// 当前可见折线数（有数据的亮度曲线 + 音量曲线）——标签文字自动隐藏判定用
     int visibleSeriesCount() const;
 
@@ -205,6 +225,9 @@ private:
     QValueAxis *m_axisYVolume = nullptr;         // v0.3: Right Y-axis for volume
     QVector<QGraphicsSimpleTextItem *> m_timeLabelItems;
     QVector<qint64> m_labelVideoTimes;
+    /// 与 m_timeLabelItems 平行：该项是否为缺口标记（红字「缺 H:MM」）——
+    /// 碰撞隐藏优先级判定用（v1.12.4：刻度优先，缺口红字重叠即隐藏）
+    QVector<bool> m_labelIsGap;
 
     // Y-axis auto range
     bool m_yAxisAutoRange = true;

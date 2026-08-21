@@ -909,10 +909,14 @@ int main(int argc, char **argv)
         cal.offsetMs = base;
         PiecewiseTimeMap pw;
         pw.streamEndMs = dur;
+        // 缺口 1 置于 600200（v1.12.4 碰撞回归的判别性设计：
+        //  ① 全览紧贴稳定可见刻度 600000（200ms≈1px）——新逻辑必判重叠隐藏；
+        //  ② 距轴左端/右端/最右刻度都够远——旧数组序逻辑必然漏判显示；
+        //  ③ %500=200——放大到秒级步进时距两侧刻度 200/300ms≈100px，红字恢复）
         pw.segments = {{0, base, 1.0},
-                       {240200, base + 240200 + 37181000, 1.0},   // 缺口 10.3h
-                       {3000000, base + 240200 + 37181000
-                            + (3000000 - 240200) + 5000000, 1.0}}; // 缺口 5000s
+                       {600200, base + 600200 + 37181000, 1.0},   // 缺口 10.3h
+                       {3000000, base + 600200 + 37181000
+                            + (3000000 - 600200) + 5000000, 1.0}}; // 缺口 5000s
         cal.piecewise = pw;
         cal.piecewiseApplied = true;
         chart.setCalibration(cal);
@@ -950,6 +954,38 @@ int main(int argc, char **argv)
         if (!(gapTicks == 2)) ++fail;         // 两处缺口均上轴标记
         if (!beyondLastGap) ++fail;           // 大缺口后仍有真实刻度（旧 break 断供）
         if (!textAllTrue) ++fail;             // 无刻度幻影（文本=该位置真实墙钟）
+
+        // ---- v1.12.4 缺口红字碰撞隐藏回归（用户实测：红字压时间轴刻度）----
+        // 全览：两缺口红字均与刻度重叠 → 隐藏（刻度优先，红虚线保留）；
+        // 放大到缺口 1 附近（跨度 2.8s，步进 0.5s，缺口距两侧刻度 200/300ms
+        // ≈90+px）→ 不重叠 → 红字恢复显示。
+        {
+            const auto texts = chart.axisTickLabelsForTest();
+            const auto vis = chart.axisTickVisibilityForTest();
+            int gapHidden = 0, gapShown = 0;
+            for (int i = 0; i < texts.size() && i < vis.size(); ++i) {
+                if (!texts[i].second.startsWith(QStringLiteral("缺"))
+                    && !texts[i].second.startsWith(QStringLiteral("GAP")))
+                    continue;
+                if (vis[i]) ++gapShown; else ++gapHidden;
+            }
+            // 跨度 2.4s（步进 0.5s，缺口距两侧刻度 200/300ms≈100px，不重叠）
+            chart.zoomToRangeForTest(600200 - 1200, 600200 + 1200);
+            app.processEvents();
+            const auto texts2 = chart.axisTickLabelsForTest();
+            const auto vis2 = chart.axisTickVisibilityForTest();
+            bool gap1Shown = false;
+            for (int i = 0; i < texts2.size() && i < vis2.size(); ++i)
+                if (texts2[i].first == 600200 && vis2[i])
+                    gap1Shown = true;
+            fprintf(stderr,
+                    "[gapcollide] hidden@full=%d shown@full=%d shown@zoom=%d => %s\n",
+                    gapHidden, gapShown, int(gap1Shown),
+                    (gapHidden == 2 && gapShown == 0 && gap1Shown)
+                        ? "PASS" : "FAIL <<<");
+            if (!(gapHidden == 2 && gapShown == 0)) ++fail;  // 全览：重叠即隐藏红字
+            if (!gap1Shown) ++fail;                          // 放大不重叠即恢复
+        }
     }
 
     // SpectrogramPanelEnhanced::renderHeatmapImage：纯 CPU 光栅化（不经 GL）。

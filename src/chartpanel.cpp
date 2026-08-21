@@ -290,6 +290,7 @@ ChartPanel::~ChartPanel()
     }
     m_timeLabelItems.clear();
     m_labelVideoTimes.clear();
+    m_labelIsGap.clear();
 
     for (auto *item : m_tickMarkItems) {
         if (item->scene()) item->scene()->removeItem(item);
@@ -1080,6 +1081,7 @@ void ChartPanel::updateTimeLabels()
     }
     m_timeLabelItems.clear();
     m_labelVideoTimes.clear();
+    m_labelIsGap.clear();
 
     // Remove old tick marks
     for (auto *item : m_tickMarkItems) {
@@ -1151,6 +1153,7 @@ void ChartPanel::updateTimeLabels()
             item->setZValue(LABEL_Z_VALUE);
             m_timeLabelItems.append(item);
             m_labelVideoTimes.append(tVideo);
+            m_labelIsGap.append(false);
 
             if (m_showTickMarks) {
                 auto *tick = new QGraphicsLineItem(m_chart);
@@ -1182,6 +1185,7 @@ void ChartPanel::updateTimeLabels()
             gt->setZValue(LABEL_Z_VALUE + 1);
             m_timeLabelItems.append(gt);
             m_labelVideoTimes.append(g.streamPosMs);
+            m_labelIsGap.append(true);
         }
     } else
     for (qint64 tReal = firstLabel; tReal <= dispEnd; tReal += step) {
@@ -1198,6 +1202,7 @@ void ChartPanel::updateTimeLabels()
         item->setZValue(LABEL_Z_VALUE);
         m_timeLabelItems.append(item);
         m_labelVideoTimes.append(tVideo);
+        m_labelIsGap.append(false);
 
         // Major tick mark（亮灰，2px）
         if (m_showTickMarks) {
@@ -1327,29 +1332,66 @@ void ChartPanel::updateTimeLabelPositions()
     }
 
     // Position regular time labels, hiding any that collide with start/end labels or adjacent labels
-    QRectF lastVisibleRect;
-    for (int i = 0; i < m_timeLabelItems.size(); ++i) {
-        qreal x = mapTimeToX(m_labelVideoTimes[i]);
-        qreal y = bottom + 10;
+    // v1.12.4（用户实测：缺口红字与时间轴刻度重叠）：两遍法 + 优先级——
+    // 缺口标记追加在刻度项之后，旧按数组序的 lastVisibleRect 假定 x 递增，
+    // 靠左的缺口与左侧刻度永不判碰 → 红字直接压刻度。改为：
+    //   第一遍 非缺口刻度按 x 升序走位（刻度之间互避，与起止标签避让），
+    //          刻度永远优先保留；
+    //   第二遍 缺口红字按 x 升序，与所有已放刻度/起止标签/已放缺口判碰，
+    //          重叠即隐藏文字（红色虚线保留，缺口指示不丢），放大到不重叠
+    //          自动恢复显示。
+    QVector<int> order;
+    order.reserve(m_timeLabelItems.size());
+    for (int i = 0; i < m_timeLabelItems.size(); ++i)
+        order.append(i);
+    std::stable_sort(order.begin(), order.end(), [&](int a, int b) {
+        return m_labelVideoTimes[a] < m_labelVideoTimes[b];
+    });
 
-        QRectF textRect = m_timeLabelItems[i]->boundingRect();
-        QRectF labelRect(x - textRect.width() / 2, y, textRect.width(), textRect.height());
+    QVector<QRectF> placed;   // 已放置（可见）标签矩形
+    if (!startRect.isNull())
+        placed.append(startRect);
+    if (!endRect.isNull())
+        placed.append(endRect);
 
-        // Check collision with start, end, and previous visible label
+    // 第一遍：非缺口刻度
+    for (const int i : order) {
+        if (i < m_labelIsGap.size() && m_labelIsGap[i])
+            continue;
+        const qreal x = mapTimeToX(m_labelVideoTimes[i]);
+        const qreal y = bottom + 10;
+        const QRectF textRect = m_timeLabelItems[i]->boundingRect();
+        const QRectF labelRect(x - textRect.width() / 2, y,
+                               textRect.width(), textRect.height());
         bool collides = false;
-        if (!startRect.isNull() && labelRect.intersects(startRect))
-            collides = true;
-        if (!endRect.isNull() && labelRect.intersects(endRect))
-            collides = true;
-        if (!lastVisibleRect.isNull() && labelRect.intersects(lastVisibleRect))
-            collides = true;
-
+        for (const QRectF &r : placed)
+            if (labelRect.intersects(r)) { collides = true; break; }
         if (collides) {
             m_timeLabelItems[i]->setVisible(false);
         } else {
             m_timeLabelItems[i]->setPos(x - textRect.width() / 2, y);
             m_timeLabelItems[i]->setVisible(true);
-            lastVisibleRect = labelRect;
+            placed.append(labelRect);
+        }
+    }
+    // 第二遍：缺口红字（碰撞即隐藏，刻度不被挤掉）
+    for (const int i : order) {
+        if (i >= m_labelIsGap.size() || !m_labelIsGap[i])
+            continue;
+        const qreal x = mapTimeToX(m_labelVideoTimes[i]);
+        const qreal y = bottom + 10;
+        const QRectF textRect = m_timeLabelItems[i]->boundingRect();
+        const QRectF labelRect(x - textRect.width() / 2, y,
+                               textRect.width(), textRect.height());
+        bool collides = false;
+        for (const QRectF &r : placed)
+            if (labelRect.intersects(r)) { collides = true; break; }
+        if (collides) {
+            m_timeLabelItems[i]->setVisible(false);
+        } else {
+            m_timeLabelItems[i]->setPos(x - textRect.width() / 2, y);
+            m_timeLabelItems[i]->setVisible(true);
+            placed.append(labelRect);
         }
     }
 }
