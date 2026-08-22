@@ -22,6 +22,7 @@
 
 #include <QDialog>
 #include "domain/speed_plan.h"
+#include "domain/event_calib.h"
 #include <QVector>
 #include <QString>
 #include <functional>
@@ -85,6 +86,17 @@ private slots:
     void onExportClip();      ///< P-68 多机选段导出（模式A）
     void startClipExport(const speedplan::SpeedPlan &plan, bool burnOsd,
                          const QString &outPath);
+
+    // ---- P-73 多机同事件间接校时 ----
+    void onEventCalibToggled(bool on);
+    void buildEventCalibPanel();      ///< 懒建右列对时面板
+    void refreshEcPanel();            ///< 下拉/锚点表刷新
+    void onEcAddAnchor();
+    void onEcRemoveAnchor();
+    void onEcFitPreview();
+    void onEcSave();
+    void onEcExit();
+    void ecFrameStep(bool refLane, int dir);  ///< 帧步进（dir=±1）
     void onRefreshPicker();   ///< 勾选面板「刷新清单」（校时后回来刷状态）
 
 private:
@@ -132,6 +144,24 @@ private:
     qint64 m_abA = -1, m_abB = -1;            ///< 选段（墙钟域）
     class SegmentExportEngine *m_segmentExporter = nullptr;
     class SegmentExportDialog *m_exportDlg = nullptr;   // 非模态导出面板
+
+    // ---- P-73 对时模式状态 ----
+    class QPushButton *m_eventCalibBtn = nullptr;
+    bool m_eventCalib = false;
+    QWidget *m_ecHost = nullptr;          ///< 右列宿主（默认隐藏，宽 300）
+    QWidget *m_ecPanel = nullptr;
+    class QComboBox *m_ecRefCombo = nullptr;
+    class QComboBox *m_ecTargetCombo = nullptr;
+    class QLineEdit *m_ecEventName = nullptr;
+    class QListWidget *m_ecAnchorList = nullptr;
+    class QLabel *m_ecStatus = nullptr;
+    class QPushButton *m_ecSaveBtn = nullptr;
+    QVector<eventcalib::EventAnchor> m_ecAnchors;  ///< 目标路锚点（既有+会话）
+    eventcalib::FitResult m_ecFit;                 ///< 最近预览拟合
+    TimeCalibration m_ecCal;                       ///< 预览生成的校时（保存用）
+    bool m_ecPreviewed = false;
+    bool m_ecSaved = false;                        ///< 已保存（退出不提示会话级语义）
+    int m_ecTargetIdx = -1;                        ///< 当前目标路（切路重载锚点表）
     QPushButton *m_osdBtn = nullptr;
     QPushButton *m_adjustBtn = nullptr;           ///< 画面调节（选中瓦片，v1.12.8）
     class PlaybackAdjustPanel *m_adjustPanel = nullptr;

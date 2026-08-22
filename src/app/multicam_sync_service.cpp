@@ -399,6 +399,20 @@ void MultiCamSyncService::applyAudible()
             m_engines[i]->setVolume(i == m_audible ? 100 : 0);
 }
 
+bool MultiCamSyncService::applyLaneCalibration(int idx, const TimeCalibration &cal)
+{
+    if (idx < 0 || idx >= m_lanes.size())
+        return false;
+    m_lanes[idx].cal = cal;
+    m_lanes[idx].calibrated = true;
+    m_lanes[idx].temporary = false;      // 间接校时也是真校时：临时路转正
+    m_lanes[idx].tempOffsetMs = 0;
+    m_laneLinked[idx] = true;
+    recomputeContentRange();
+    emit laneInfoChanged(idx);
+    return true;
+}
+
 void MultiCamSyncService::setLaneOffsetMs(int idx, qint64 offsetMs)
 {
     if (idx < 0 || idx >= m_lanes.size() || !m_lanes[idx].temporary)

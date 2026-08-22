@@ -22,6 +22,7 @@
 #include <QtGlobal>
 #include <cmath>
 #include "time_piecewise.h"
+#include "event_calib.h"
 
 /**
  * @brief 校时数据：仿射时间模型 + 测点证据。
@@ -31,7 +32,8 @@
  */
 struct TimeCalibration
 {
-    enum class Source { None, Manual, Ocr, AbsStart, Inherited };
+    enum class Source { None, Manual, Ocr, AbsStart, Inherited,
+                        CrossCamEvent };  ///< P-73 多机同事件间接校时
 
     Source  source = Source::None;
     qint64  offsetMs = 0;          ///< 流内 0 点对应的墙钟（epoch 毫秒，含日期）
@@ -189,6 +191,9 @@ struct TimeCalibration
     }
 
     // ---- 序列化（.vla v8 META / 未来 case.json 共用，QtCore only）----
+    // ---- P-73 同事件间接校时溯源（source == CrossCamEvent 时有效）----
+    QVector<eventcalib::EventAnchor> eventAnchors;  ///< 本路锚点全表（含参考路/事件名/快照墙钟/容差）
+
     QJsonObject toJson() const;
     static TimeCalibration fromJson(const QJsonObject &o);
     /// source ↔ 字符串（F5：写/读/文档三处同步）

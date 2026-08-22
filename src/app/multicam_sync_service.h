@@ -65,6 +65,9 @@ public:
 
     // ---- 临时对齐（模式B，会话级不落盘）----
     void setLaneOffsetMs(int idx, qint64 offsetMs);
+    /// P-73 同事件校时成果落路：换 cal、转正（calibrated=true/temporary 摘帽）、
+    /// 临时偏移清零、重算区间并广播。返回 false = 越界。
+    bool applyLaneCalibration(int idx, const TimeCalibration &cal);
     /// 模式B 对齐会话收口：以 refIdx 路当前位置墙钟为锚建立 tempIdx 偏移，
     /// 两路转入联动（ref 路同为未联动临时路时一并锚定为基准轴）。
     /// 对齐前：临时路独立播放——不驻停/不纠偏/不随墙钟 seek（墙钟轴无义）。

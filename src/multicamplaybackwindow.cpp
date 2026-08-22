@@ -27,6 +27,11 @@
 
 #include "app/cam_timeline.h"
 #include "app/case_manager.h"
+#include "app/project_io.h"
+#include <QSignalBlocker>
+#include <QLineEdit>
+#include <QListWidget>
+#include <QComboBox>
 #include "camtilewidget.h"
 #include "playbackadjustpanel.h"
 #include "multicamview.h"
@@ -344,7 +349,19 @@ void MultiCamPlaybackWindow::onRefreshPicker()
 // ---- 播放页（原窗口主体：工具行+瓦片网格+时间线区）----
 void MultiCamPlaybackWindow::buildPlayPage()
 {
-    auto *root = new QVBoxLayout(m_playPage);
+    // v1.13.2（P-73）：外包水平层——右列「同事件对时」面板宿主（默认隐藏）
+    auto *outerLay = new QHBoxLayout(m_playPage);
+    outerLay->setContentsMargins(0, 0, 0, 0);
+    outerLay->setSpacing(0);
+    auto *contentCol = new QWidget(m_playPage);
+    auto *root = new QVBoxLayout(contentCol);
+    outerLay->addWidget(contentCol, 1);
+    m_ecHost = new QWidget(m_playPage);
+    m_ecHost->setFixedWidth(310);
+    m_ecHost->setStyleSheet("background: " + Theme::BgPanel
+        + "; border-left: 1px solid " + Theme::Border + ";");
+    m_ecHost->hide();
+    outerLay->addWidget(m_ecHost);
 
     // 工具行：重选机位 · 播放/暂停 · 回起点 · 倍速 · OSD 开关 · 状态
     auto *bar = new QHBoxLayout();
@@ -458,6 +475,19 @@ void MultiCamPlaybackWindow::buildPlayPage()
     connect(m_alignCancelBtn, &QPushButton::clicked, this,
             &MultiCamPlaybackWindow::onCancelAlign);
     bar->addWidget(m_alignCancelBtn);
+
+    // P-73：多机同事件间接校时（≥2 路且至少一路已校时时可见）
+    m_eventCalibBtn = new QPushButton(lang("同事件对时", "Event Sync"), this);
+    m_eventCalibBtn->setCheckable(true);
+    m_eventCalibBtn->setToolTip(lang(
+        "以已校时机位为参考，用同一事件（如：同一辆车压线）给未校时机位"
+        "生成正式校时。间接校准·取证链入报告·事件名必填。",
+        "Cross-camera event sync: calibrate an uncalibrated lane against a "
+        "calibrated one via the same real-world event. Provenance recorded."));
+    m_eventCalibBtn->setVisible(false);
+    connect(m_eventCalibBtn, &QPushButton::toggled, this,
+            &MultiCamPlaybackWindow::onEventCalibToggled);
+    bar->addWidget(m_eventCalibBtn);
 
     bar->addStretch(1);
     m_statusLabel = new QLabel(this);
@@ -598,7 +628,8 @@ void MultiCamPlaybackWindow::rebuildTimelineArea()
     auto *lay = new QVBoxLayout(m_timelineHost);
     lay->setContentsMargins(0, 0, 0, 0);
 
-    if (m_mode == SyncTimelineMode::Merged) {
+    // P-73：对时模式强制每路独立进度条（合并条无法分路定位事件帧）
+    if (m_mode == SyncTimelineMode::Merged && !m_eventCalib) {
         m_mergedBar = new MultiCamViewWidget(m_timelineHost);
         m_mergedBar->setLanes(currentCamLanes());
         connect(m_mergedBar, &MultiCamViewWidget::scrubPreview, this,
@@ -661,8 +692,8 @@ void MultiCamPlaybackWindow::rebuildTimelineArea()
             // 拖动：已联动路 = 墙钟轴同步走带（scrub）；未对齐临时路 = 本路独立
             // 拖拽（引擎 scrub 追逐同手感，不动别路）；对齐模式下 = 独立拖动
             connect(slider, &QSlider::sliderPressed, this, [this, idx]() {
-                if (m_aligning || idx >= m_svc->laneCount())
-                    return;
+                if (m_aligning || m_eventCalib || idx >= m_svc->laneCount())
+                    return;   // 对时模式同对齐：valueChanged 直驱引擎
                 if (m_svc->laneLinked(idx)) {
                     m_svc->beginScrub();
                     m_bars[idx]->setProperty("scrub", 1);
@@ -673,8 +704,8 @@ void MultiCamPlaybackWindow::rebuildTimelineArea()
             });
             connect(slider, &QSlider::sliderMoved, this,
                     [this, idx](int v) {
-                        if (m_aligning)
-                            return;   // 对齐模式：valueChanged 单独处理
+                        if (m_aligning || m_eventCalib)
+                            return;   // 对齐/对时模式：valueChanged 单独处理
                         if (idx >= m_svc->laneCount())
                             return;
                         if (m_bars[idx]->property("scrub").toInt() == 2) {
@@ -685,7 +716,7 @@ void MultiCamPlaybackWindow::rebuildTimelineArea()
                         }
                     });
             connect(slider, &QSlider::sliderReleased, this, [this, idx]() {
-                if (m_aligning) {
+                if (m_aligning || m_eventCalib) {
                     if (idx < m_svc->laneCount()) {
                         if (auto *e = m_svc->engineAt(idx))
                             e->seek(m_bars[idx]->value());
@@ -706,7 +737,8 @@ void MultiCamPlaybackWindow::rebuildTimelineArea()
             // 对齐模式下单路独立拖动（sliderMoved 在拖动时连续发）
             connect(slider, &QSlider::valueChanged, this,
                     [this, idx](int v) {
-                        if (!m_aligning || idx >= m_svc->laneCount())
+                        if ((!m_aligning && !m_eventCalib)
+                            || idx >= m_svc->laneCount())
                             return;
                         if (auto *e = m_svc->engineAt(idx))
                             e->seek(v);
@@ -720,9 +752,18 @@ void MultiCamPlaybackWindow::refreshModeControls()
     const bool sep = (m_mode == SyncTimelineMode::Separate);
     // 对齐按钮：模式B 且两路都已加载
     const bool canAlign = sep && lanesLoaded();
-    m_alignBtn->setVisible(sep && !m_aligning && canAlign);
+    m_alignBtn->setVisible(sep && !m_aligning && canAlign && !m_eventCalib);
     m_alignOkBtn->setVisible(m_aligning);
     m_alignCancelBtn->setVisible(m_aligning);
+    // P-73：≥2 路全载且至少一路已校时（参考路存在）可见；对时中保持可见
+    {
+        bool anyCal = false;
+        for (const auto &l : m_svc->lanes())
+            if (l.calibrated)
+                anyCal = true;
+        m_eventCalibBtn->setVisible(!m_aligning && lanesLoaded()
+            && m_svc->laneCount() >= 2 && anyCal);
+    }
     if (sep) {
         // 操作引导按状态分三档：对齐中 / 有未对齐临时路 / 已对齐联动
         bool hasUnlinkedTemp = false;
@@ -797,8 +838,8 @@ void MultiCamPlaybackWindow::pickVideoForSlot(int slot, const QString &path)
 // ---------------------------------------------------------------------------
 void MultiCamPlaybackWindow::onEnterAlign()
 {
-    if (m_svc->laneCount() != 2)
-        return;
+    if (m_svc->laneCount() != 2 || m_eventCalib)
+        return;   // P-73：对时模式与对齐会话互斥
     m_aligning = true;
     m_savedOffsetBeforeAlign = m_svc->lanes()[1].temporary
         ? m_svc->lanes()[1].tempOffsetMs : m_svc->lanes()[0].tempOffsetMs;
@@ -1188,4 +1229,493 @@ void MultiCamPlaybackWindow::startClipExport(const speedplan::SpeedPlan &planIn,
                     m_exportDlg->setResult(ok, msg);
             }, Qt::UniqueConnection);
     eng->start(pp);
+}
+
+// ---------------------------------------------------------------------------
+// P-73 多机同事件间接校时（拍板：允许多跳+取证链全记录入报告+成环禁止+
+// 事件名必填+累积容差如实呈现；间接校准=相对传递，与绝对校时视觉区分）
+// ---------------------------------------------------------------------------
+void MultiCamPlaybackWindow::onEventCalibToggled(bool on)
+{
+    if (on) {
+        if (m_aligning) {
+            m_statusLabel->setText(lang("对齐会话进行中，先结束对齐",
+                                        "Finish alignment first"));
+            QSignalBlocker b(m_eventCalibBtn);
+            m_eventCalibBtn->setChecked(false);
+            return;
+        }
+        bool anyCal = false;
+        for (const auto &l : m_svc->lanes())
+            if (l.calibrated)
+                anyCal = true;
+        if (!lanesLoaded() || m_svc->laneCount() < 2 || !anyCal) {
+            m_statusLabel->setText(lang(
+                "同事件对时需要：≥2 路已加载，且至少一路已校时（作参考路）",
+                "Need 2+ loaded lanes with at least one calibrated"));
+            QSignalBlocker b(m_eventCalibBtn);
+            m_eventCalibBtn->setChecked(false);
+            return;
+        }
+        m_eventCalib = true;
+        m_ecSaved = false;
+        m_ecPreviewed = false;
+        m_ecTargetIdx = -1;
+        m_ecAnchors.clear();
+        m_svc->pause();
+        rebuildTimelineArea();          // 对时模式强制每路独立进度条
+        for (auto *b : m_bars)
+            if (b)
+                b->setEnabled(true);    // 各条独立拖（valueChanged 直驱引擎）
+        buildEventCalibPanel();
+        refreshEcPanel();
+        m_ecHost->show();
+        refreshModeControls();
+        m_statusLabel->setText(lang(
+            "对时模式：分别拖两路进度条/帧步进，把两路画面对到同一事件",
+            "Event sync: scrub/step each lane to the same event"));
+    } else {
+        onEcExit();
+    }
+}
+
+void MultiCamPlaybackWindow::onEcExit()
+{
+    if (!m_eventCalib && !m_ecHost)
+        return;
+    m_eventCalib = false;
+    m_ecAnchors.clear();
+    if (m_ecHost)
+        m_ecHost->hide();
+    rebuildTimelineArea();              // 恢复合并条/联动条
+    refreshModeControls();
+    if (m_eventCalibBtn) {
+        QSignalBlocker b(m_eventCalibBtn);
+        m_eventCalibBtn->setChecked(false);
+    }
+    if (!m_ecSaved && m_ecPreviewed)
+        m_statusLabel->setText(lang(
+            "对时预览仅本会话生效（未保存，关窗即还原）",
+            "Preview applies to this session only (unsaved)"));
+}
+
+void MultiCamPlaybackWindow::buildEventCalibPanel()
+{
+    if (m_ecPanel)
+        return;
+    auto *lay = new QVBoxLayout(m_ecHost);
+    lay->setContentsMargins(8, 8, 8, 8);
+    m_ecPanel = new QWidget(m_ecHost);
+    lay->addWidget(m_ecPanel);
+    auto *v = new QVBoxLayout(m_ecPanel);
+    v->setContentsMargins(0, 0, 0, 0);
+    v->setSpacing(6);
+
+    auto *title = new QLabel(lang("同事件对时（间接校时）", "Event Sync (indirect)"),
+                             m_ecPanel);
+    QFont tf = title->font();
+    tf.setBold(true);
+    title->setFont(tf);
+    v->addWidget(title);
+
+    auto *hint = new QLabel(
+        lang("① 选参考路（已校时）与目标路；② 分别拖进度条/帧步进，把两路"
+             "画面对到同一现实事件（同帧）；③ 填事件名点「建锚」；"
+             "④ 建议≥2 个远距离锚点；⑤「生成校时并预览」联动试看，"
+             "确认后保存。多跳允许，成环禁止；取证链随校时入案件留档。",
+             "1) Pick reference (calibrated) & target lanes; 2) scrub/step "
+             "both to the same event frame; 3) name the event & add anchor; "
+             "4) 2+ far-apart anchors recommended; 5) fit & preview, then save."),
+        m_ecPanel);
+    hint->setWordWrap(true);
+    hint->setStyleSheet(QStringLiteral("color:%1;").arg(Theme::TextSecond));
+    v->addWidget(hint);
+
+    v->addWidget(new QLabel(lang("参考路（已校时）：", "Reference (calibrated):"),
+                            m_ecPanel));
+    m_ecRefCombo = new QComboBox(m_ecPanel);
+    v->addWidget(m_ecRefCombo);
+    auto *refStep = new QHBoxLayout();
+    auto *refBack = new QPushButton(lang("◀ 帧", "◀f"), m_ecPanel);
+    auto *refFwd = new QPushButton(lang("帧 ▶", "f▶"), m_ecPanel);
+    connect(refBack, &QPushButton::clicked, this, [this]() { ecFrameStep(true, -1); });
+    connect(refFwd, &QPushButton::clicked, this, [this]() { ecFrameStep(true, +1); });
+    refStep->addWidget(refBack);
+    refStep->addWidget(refFwd);
+    v->addLayout(refStep);
+
+    v->addWidget(new QLabel(lang("目标路（待校时）：", "Target:"), m_ecPanel));
+    m_ecTargetCombo = new QComboBox(m_ecPanel);
+    v->addWidget(m_ecTargetCombo);
+    auto *tgtStep = new QHBoxLayout();
+    auto *tgtBack = new QPushButton(lang("◀ 帧", "◀f"), m_ecPanel);
+    auto *tgtFwd = new QPushButton(lang("帧 ▶", "f▶"), m_ecPanel);
+    connect(tgtBack, &QPushButton::clicked, this, [this]() { ecFrameStep(false, -1); });
+    connect(tgtFwd, &QPushButton::clicked, this, [this]() { ecFrameStep(false, +1); });
+    tgtStep->addWidget(tgtBack);
+    tgtStep->addWidget(tgtFwd);
+    v->addLayout(tgtStep);
+
+    m_ecEventName = new QLineEdit(m_ecPanel);
+    m_ecEventName->setPlaceholderText(
+        lang("事件名（必填）：如 黑衣男子推开东门", "Event name (required)"));
+    v->addWidget(m_ecEventName);
+    auto *addBtn = new QPushButton(lang("＋ 建锚（取两路当前帧）", "＋ Add anchor"),
+                                   m_ecPanel);
+    connect(addBtn, &QPushButton::clicked, this,
+            &MultiCamPlaybackWindow::onEcAddAnchor);
+    v->addWidget(addBtn);
+
+    v->addWidget(new QLabel(lang("锚点表：", "Anchors:"), m_ecPanel));
+    m_ecAnchorList = new QListWidget(m_ecPanel);
+    v->addWidget(m_ecAnchorList, 1);
+    auto *delBtn = new QPushButton(lang("删除选中锚点", "Delete selected"), m_ecPanel);
+    connect(delBtn, &QPushButton::clicked, this,
+            &MultiCamPlaybackWindow::onEcRemoveAnchor);
+    v->addWidget(delBtn);
+
+    auto *fitBtn = new QPushButton(lang("生成校时并预览", "Fit && Preview"),
+                                   m_ecPanel);
+    connect(fitBtn, &QPushButton::clicked, this,
+            &MultiCamPlaybackWindow::onEcFitPreview);
+    v->addWidget(fitBtn);
+    m_ecSaveBtn = new QPushButton(lang("保存校时（取证链确认卡）", "Save…"),
+                                  m_ecPanel);
+    m_ecSaveBtn->setEnabled(false);
+    connect(m_ecSaveBtn, &QPushButton::clicked, this,
+            &MultiCamPlaybackWindow::onEcSave);
+    v->addWidget(m_ecSaveBtn);
+    auto *exitBtn = new QPushButton(lang("退出对时", "Exit"), m_ecPanel);
+    connect(exitBtn, &QPushButton::clicked, this,
+            &MultiCamPlaybackWindow::onEcExit);
+    v->addWidget(exitBtn);
+
+    m_ecStatus = new QLabel(m_ecPanel);
+    m_ecStatus->setWordWrap(true);
+    m_ecStatus->setStyleSheet(QStringLiteral("color:%1;").arg(Theme::Accent));
+    v->addWidget(m_ecStatus);
+
+    connect(m_ecRefCombo, &QComboBox::currentIndexChanged, this,
+            [this](int) { refreshEcPanel(); });
+    connect(m_ecTargetCombo, &QComboBox::currentIndexChanged, this,
+            [this](int) { refreshEcPanel(); });
+}
+
+void MultiCamPlaybackWindow::refreshEcPanel()
+{
+    if (!m_ecPanel)
+        return;
+    const auto &lanes = m_svc->lanes();
+    const int keepRef = m_ecRefCombo->currentData().isValid()
+        ? m_ecRefCombo->currentData().toInt() : -1;
+    const int keepTgt = m_ecTargetCombo->currentData().isValid()
+        ? m_ecTargetCombo->currentData().toInt() : -1;
+    {
+        QSignalBlocker b1(m_ecRefCombo), b2(m_ecTargetCombo);
+        m_ecRefCombo->clear();
+        for (int i = 0; i < lanes.size(); ++i) {
+            if (!lanes[i].calibrated)
+                continue;
+            const bool indirect =
+                lanes[i].cal.source == TimeCalibration::Source::CrossCamEvent;
+            m_ecRefCombo->addItem(
+                lanes[i].displayName
+                + (indirect ? lang("（间接）", " (indirect)") : QString()),
+                i);
+        }
+        m_ecTargetCombo->clear();
+        for (int i = 0; i < lanes.size(); ++i) {
+            if (i == m_ecRefCombo->currentData().toInt())
+                continue;   // 参考路不能同时是目标路
+            m_ecTargetCombo->addItem(lanes[i].displayName, i);
+        }
+        const int ri = m_ecRefCombo->findData(keepRef);
+        if (ri >= 0)
+            m_ecRefCombo->setCurrentIndex(ri);
+        const int ti = m_ecTargetCombo->findData(keepTgt);
+        if (ti >= 0)
+            m_ecTargetCombo->setCurrentIndex(ti);
+    }
+    // 目标路切换 → 装载其既有锚点（同事件校时路），否则清空会话表
+    const int tgt = m_ecTargetCombo->count() > 0
+        ? m_ecTargetCombo->currentData().toInt() : -1;
+    if (tgt != m_ecTargetIdx) {
+        m_ecTargetIdx = tgt;
+        m_ecPreviewed = false;
+        m_ecSaved = false;
+        m_ecAnchors.clear();
+        if (tgt >= 0 && tgt < lanes.size()
+            && lanes[tgt].cal.source == TimeCalibration::Source::CrossCamEvent)
+            m_ecAnchors = lanes[tgt].cal.eventAnchors;
+        if (m_ecSaveBtn)
+            m_ecSaveBtn->setEnabled(false);
+    }
+    // 锚点表渲染（残差来自最近预览拟合，仅在预览后显示）
+    m_ecAnchorList->clear();
+    int vi = 0;   // 有效锚点序（残差与之对齐；UI 只收有效锚点，1:1）
+    for (const auto &a : m_ecAnchors) {
+        const QString wall = QDateTime::fromMSecsSinceEpoch(a.refWallMs)
+            .toString(QStringLiteral("MM-dd HH:mm:ss"));
+        const qint64 ts = a.targetStreamMs;
+        QString row = QStringLiteral("%1 | 参考 %2 ↔ 本路 %3:%4")
+            .arg(a.eventName, wall)
+            .arg(ts / 60000).arg((ts % 60000) / 1000, 2, 10, QLatin1Char('0'));
+        if (m_ecPreviewed && vi < m_ecFit.residualsMs.size())
+            row += QStringLiteral(" | 残差 %1ms")
+                .arg(qRound(m_ecFit.residualsMs[vi]));
+        ++vi;
+        m_ecAnchorList->addItem(row);
+    }
+}
+
+void MultiCamPlaybackWindow::ecFrameStep(bool refLane, int dir)
+{
+    if (!m_ecPanel)
+        return;
+    const int idx = refLane ? m_ecRefCombo->currentData().toInt()
+                            : m_ecTargetCombo->currentData().toInt();
+    if (idx < 0 || idx >= m_svc->laneCount())
+        return;
+    auto *e = m_svc->engineAt(idx);
+    if (!e)
+        return;
+    const double fps = e->fps() > 1.0 ? e->fps() : 25.0;
+    qint64 t = e->position() + dir * qRound64(1000.0 / fps);
+    t = qBound<qint64>(0, t, m_svc->lanes()[idx].durationMs);
+    e->seek(t);
+    if (idx < m_bars.size() && m_bars[idx])
+        m_bars[idx]->setValue(int(t));   // 进度条跟随（valueChanged 同值无害）
+}
+
+void MultiCamPlaybackWindow::onEcAddAnchor()
+{
+    if (!m_ecPanel)
+        return;
+    const QString name = m_ecEventName->text().trimmed();
+    if (name.isEmpty()) {   // 拍板②：事件名必填
+        m_ecStatus->setText(lang("事件名必填（取证链入报告的可读性依赖）",
+                                 "Event name is required (provenance)"));
+        m_ecEventName->setFocus();
+        return;
+    }
+    const int ri = m_ecRefCombo->currentData().toInt();
+    const int ti = m_ecTargetCombo->currentData().toInt();
+    const auto &lanes = m_svc->lanes();
+    if (ri < 0 || ti < 0 || ri >= lanes.size() || ti >= lanes.size()
+        || !lanes[ri].calibrated)
+        return;
+    auto *er = m_svc->engineAt(ri);
+    auto *et = m_svc->engineAt(ti);
+    if (!er || !et)
+        return;
+
+    eventcalib::EventAnchor a;
+    a.refLaneId = lanes[ri].id;
+    a.refStreamMs = er->position();
+    // 参考路墙钟快照（含北京时间口径；快照入锚，防参考校时后改链断）
+    a.refWallMs = syncWallOf(lanes[ri], a.refStreamMs);
+    a.targetStreamMs = et->position();
+    a.eventName = name;
+    a.markedAtMs = QDateTime::currentMSecsSinceEpoch();
+    a.toleranceMs = eventcalib::frameToleranceMs(er->fps(), et->fps());
+
+    // 成环守卫（拍板：多跳允许、成环禁止）：目标路锚点集=既有+会话
+    QHash<QString, QVector<eventcalib::EventAnchor>> byLane;
+    for (const auto &l : lanes)
+        if (!l.cal.eventAnchors.isEmpty())
+            byLane.insert(l.id, l.cal.eventAnchors);
+    byLane[lanes[ti].id] = m_ecAnchors;
+    if (eventcalib::wouldCreateCycle(lanes[ti].id, lanes[ri].id, byLane)) {
+        QMessageBox::warning(this, lang("成环禁止", "Cycle rejected"),
+            lang("该校时链会成环（%1 的参考链上游已出现 %2），取证链无法陈述。"
+                 "请改选其他参考路。",
+                 "This link would create a cycle in the provenance chain. "
+                 "Pick another reference lane.")
+                .arg(lanes[ri].displayName, lanes[ti].displayName));
+        return;
+    }
+    m_ecAnchors.append(a);
+    m_ecPreviewed = false;              // 锚点变了须重新拟合
+    m_ecSaveBtn->setEnabled(false);
+    m_ecEventName->clear();
+    refreshEcPanel();
+    m_ecStatus->setText(lang("锚点 %1 已建立：%2", "Anchor %1: %2")
+        .arg(m_ecAnchors.size()).arg(name));
+}
+
+void MultiCamPlaybackWindow::onEcRemoveAnchor()
+{
+    const int row = m_ecAnchorList ? m_ecAnchorList->currentRow() : -1;
+    if (row < 0 || row >= m_ecAnchors.size())
+        return;
+    m_ecAnchors.removeAt(row);
+    m_ecPreviewed = false;
+    m_ecSaveBtn->setEnabled(false);
+    refreshEcPanel();
+}
+
+void MultiCamPlaybackWindow::onEcFitPreview()
+{
+    if (!m_ecPanel || m_ecTargetIdx < 0)
+        return;
+    m_ecFit = eventcalib::fitAnchors(m_ecAnchors);
+    if (!m_ecFit.ok) {
+        m_ecStatus->setText(m_ecFit.error);   // C1：类型化错误原文上屏
+        return;
+    }
+    TimeCalibration cal;
+    cal.source = TimeCalibration::Source::CrossCamEvent;
+    cal.dateKnown = true;
+    cal.calibratedAtMs = QDateTime::currentMSecsSinceEpoch();
+    cal.eventAnchors = m_ecAnchors;           // 溯源链随校时一体入 .vla
+    cal.sigmaRate = m_ecFit.sigmaRate;
+    if (m_ecFit.affine) {
+        cal.rate = m_ecFit.rate;
+        cal.rateApplied = true;
+        cal.offsetMs = qRound64(m_ecFit.interceptMs);
+    } else {
+        cal.rate = 1.0;
+        cal.rateApplied = false;
+        cal.offsetMs = qRound64(m_ecFit.offsetMs);
+    }
+    // 置信度：间接校准天然低一档——单锚 0.6，多锚低残差最多 0.8
+    double conf = 0.6;
+    if (m_ecAnchors.size() >= 2) {
+        double maxRes = 0;
+        for (double r : m_ecFit.residualsMs)
+            maxRes = qMax(maxRes, r);
+        conf = (maxRes <= 200.0) ? 0.8 : 0.7;
+    }
+    cal.conf = conf;
+    m_ecCal = cal;
+    m_svc->applyLaneCalibration(m_ecTargetIdx, cal);   // 预览：播放联动即生效
+    m_ecPreviewed = true;
+    m_ecSaveBtn->setEnabled(true);
+    refreshEcPanel();
+    double maxRes = 0;
+    for (double r : m_ecFit.residualsMs)
+        maxRes = qMax(maxRes, r);
+    m_ecStatus->setText(lang("预览中：%1 · 置信 %2 · 最大残差 %3ms。"
+                             "播放联动试看，确认后「保存校时」。",
+                             "Previewing: %1 · conf %2 · max residual %3ms.")
+        .arg(m_ecFit.affine
+             ? QStringLiteral("rate=%1").arg(m_ecFit.rate, 0, 'f', 5)
+             : lang("恒定偏移", "fixed offset"))
+        .arg(cal.conf, 0, 'f', 2).arg(qRound64(maxRes)));
+}
+
+void MultiCamPlaybackWindow::onEcSave()
+{
+    if (!m_ecPreviewed || m_ecTargetIdx < 0)
+        return;
+    const auto &lanes = m_svc->lanes();
+    const auto &tgt = lanes[m_ecTargetIdx];
+
+    // ---- 取证链展开（确认卡独立小节，拍板③）----
+    QHash<QString, QVector<eventcalib::EventAnchor>> byLane;
+    QSet<QString> absIds;
+    for (const auto &l : lanes) {
+        if (!l.cal.eventAnchors.isEmpty())
+            byLane.insert(l.id, l.cal.eventAnchors);
+        if (l.calibrated
+            && l.cal.source != TimeCalibration::Source::CrossCamEvent)
+            absIds.insert(l.id);
+    }
+    byLane[tgt.id] = m_ecCal.eventAnchors;
+    const auto chain = eventcalib::expandChain(tgt.id, byLane, absIds);
+    const qint64 cumTol = eventcalib::cumulativeToleranceMs(chain);
+
+    auto laneName = [this](const QString &id) {
+        for (const auto &l : m_svc->lanes())
+            if (l.id == id)
+                return l.displayName;
+        return id;
+    };
+    QString chainText;
+    int depth = 0;
+    for (const auto &hop : chain) {
+        const QString indent(depth * 2, QLatin1Char(' '));
+        if (hop.absolute) {
+            chainText += indent + QStringLiteral("■ %1（%2）\n")
+                .arg(laneName(hop.laneId),
+                     lang("绝对校时锚", "absolute calibration"));
+        } else {
+            const auto &a = hop.anchor;
+            chainText += indent + QStringLiteral("● %1（间接，容差 ±%2ms）\n")
+                .arg(laneName(hop.laneId)).arg(a.toleranceMs);
+            chainText += indent + QStringLiteral(
+                "   事件「%1」：本路 %2 ↔ 参考 %3（墙钟 %4）\n")
+                .arg(a.eventName)
+                .arg(QTime(0, 0).addMSecs(a.targetStreamMs)
+                         .toString(QStringLiteral("HH:mm:ss")))
+                .arg(laneName(a.refLaneId))
+                .arg(QDateTime::fromMSecsSinceEpoch(a.refWallMs)
+                         .toString(QStringLiteral("MM-dd HH:mm:ss")));
+        }
+        ++depth;
+    }
+    chainText += QStringLiteral("累积容差：±%1ms（逐跳对帧容差之和，如实声明）")
+        .arg(cumTol);
+
+    double maxRes = 0;
+    for (double r : m_ecFit.residualsMs)
+        maxRes = qMax(maxRes, r);
+    const QString summary = lang(
+        "校时成果（间接校准·CrossCamEvent）\n"
+        "模式：%1\n速率：%2 · 偏移：%3ms · 置信：%4\n锚点：%5 个 · 最大残差：%6ms",
+        "Indirect calibration summary")
+        .arg(m_ecFit.affine ? lang("仿射（多锚点）", "affine")
+                            : lang("恒定偏移（单锚点）", "fixed offset"))
+        .arg(m_ecCal.rate, 0, 'f', 5)
+        .arg(m_ecCal.offsetMs)
+        .arg(m_ecCal.conf, 0, 'f', 2)
+        .arg(m_ecCal.eventAnchors.size())
+        .arg(qRound64(maxRes));
+
+    QMessageBox box(QMessageBox::Question,
+                    lang("确认保存校时", "Confirm save"), summary, QMessageBox::NoButton,
+                    this);
+    auto *chainLabel = new QLabel(chainText, &box);
+    chainLabel->setWordWrap(true);
+    chainLabel->setStyleSheet(
+        QStringLiteral("color:%1; font-family:monospace;").arg(Theme::TextSecond));
+    // 取证链独立小节置于按钮上方
+    if (auto *gl = qobject_cast<QGridLayout *>(box.layout()))
+        gl->addWidget(chainLabel, gl->rowCount(), 0, 1, gl->columnCount());
+    QPushButton *saveBtn = box.addButton(lang("保存入案件/侧车", "Save"),
+                                         QMessageBox::AcceptRole);
+    box.addButton(QMessageBox::Cancel);
+    box.exec();
+    if (box.clickedButton() != saveBtn)
+        return;
+
+    // ---- 落盘：载旧 .vla 全字段 → 仅替换校时 → 写回（保其他分析成果）----
+    ProjectIO io(const_cast<CaseManager *>(m_case), nullptr, this);
+    const QString path = io.suggestSavePath(tgt.path);
+    ProjectIO::VlaSaveRequest req;
+    if (QFile::exists(path)) {
+        ProjectIO::LoadedVla lv;
+        if (io.loadVla(path, &lv)) {
+            req.regions = lv.regions;
+            req.magnifierRect = lv.magnifierRect;
+            req.labels = lv.labels;
+            req.pinnedRect = lv.pinnedRect;
+            req.fusion = lv.fusion;
+            req.polygons = lv.polygons;
+            req.guideLines = lv.guideLines;
+            req.regionRoiIds = lv.regionRoiIds;
+            req.polygonRoiIds = lv.polygonRoiIds;
+            req.abRegion = lv.abRegion;
+            req.speedPlan = lv.speedPlan;
+        }
+    }
+    req.calibration = m_ecCal;
+    if (!io.saveVlaNow(path, req)) {
+        QMessageBox::critical(this, lang("保存失败", "Save failed"),
+            QStringLiteral("EVENTCALIB_SAVE_IO: %1").arg(path));   // C1/C2
+        return;
+    }
+    m_ecSaved = true;
+    m_ecStatus->setText(lang("已保存：%1（取证链随校时入档）", "Saved: %1").arg(path));
+    refreshEcPanel();
 }

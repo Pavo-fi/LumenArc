@@ -127,6 +127,7 @@ QString TimeCalibration::sourceToString(Source s)
     case Source::Ocr:       return QStringLiteral("ocr");
     case Source::AbsStart:  return QStringLiteral("absstart");
     case Source::Inherited: return QStringLiteral("inherited");
+    case Source::CrossCamEvent: return QStringLiteral("crosscamevent");
     case Source::None:      break;
     }
     return QStringLiteral("none");
@@ -138,6 +139,7 @@ TimeCalibration::Source TimeCalibration::sourceFromString(const QString &s)
     if (s == QLatin1String("ocr"))       return Source::Ocr;
     if (s == QLatin1String("absstart"))  return Source::AbsStart;
     if (s == QLatin1String("inherited")) return Source::Inherited;
+    if (s == QLatin1String("crosscamevent")) return Source::CrossCamEvent;
     return Source::None;
 }
 
@@ -152,6 +154,12 @@ QJsonObject TimeCalibration::toJson() const
     o[QStringLiteral("dateKnown")] = dateKnown;
     o[QStringLiteral("sigmaRate")] = sigmaRate;
     o[QStringLiteral("calibratedAtMs")] = static_cast<double>(calibratedAtMs);
+    if (!eventAnchors.isEmpty()) {
+        QJsonArray arr;
+        for (const auto &a : eventAnchors)
+            arr.append(a.toJson());
+        o[QStringLiteral("event_anchors")] = arr;   // P-73 溯源链（老读取端忽略未知键）
+    }
     o[QStringLiteral("truthOffsetMs")] = static_cast<double>(truthOffsetMs);
     o[QStringLiteral("truthSet")] = truthSet;
     o[QStringLiteral("truthCheckedAtMs")] = static_cast<double>(truthCheckedAtMs);
@@ -214,6 +222,9 @@ TimeCalibration TimeCalibration::fromJson(const QJsonObject &o)
     c.dateKnown = o[QStringLiteral("dateKnown")].toBool();
     c.sigmaRate = o[QStringLiteral("sigmaRate")].toDouble();
     c.calibratedAtMs = static_cast<qint64>(o[QStringLiteral("calibratedAtMs")].toDouble());
+    const QJsonArray ea = o[QStringLiteral("event_anchors")].toArray();
+    for (const auto &v : ea)
+        c.eventAnchors.append(eventcalib::EventAnchor::fromJson(v.toObject()));
     c.truthOffsetMs = static_cast<qint64>(o[QStringLiteral("truthOffsetMs")].toDouble());
     c.truthSet = o[QStringLiteral("truthSet")].toBool();
     c.truthCheckedAtMs = static_cast<qint64>(o[QStringLiteral("truthCheckedAtMs")].toDouble());

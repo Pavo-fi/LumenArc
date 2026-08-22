@@ -523,6 +523,175 @@ static void testServiceEngineDies()
     svc.closeAll();
 }
 
+// ---------------------------------------------------------------------------
+// P-73 同事件间接校时域层（event_calib.h 纯函数 + TimeCalibration 序列化）
+// ---------------------------------------------------------------------------
+static eventcalib::EventAnchor mkAnchor(const QString &ref, qint64 refStream,
+                                        qint64 refWall, qint64 tgtStream,
+                                        const QString &name, qint64 tol = 20)
+{
+    eventcalib::EventAnchor a;
+    a.refLaneId = ref;
+    a.refStreamMs = refStream;
+    a.refWallMs = refWall;
+    a.targetStreamMs = tgtStream;
+    a.eventName = name;
+    a.markedAtMs = 1000;
+    a.toleranceMs = tol;
+    return a;
+}
+
+static void testEventCalibFit()
+{
+    // 0 锚点：类型化错误（C1）
+    {
+        const auto r = eventcalib::fitAnchors({});
+        CHECK(!r.ok && r.error.startsWith(QStringLiteral("EVENTCALIB_NO_ANCHOR")),
+              "ecfit: empty anchors rejected with typed error");
+    }
+    // 单锚点：偏移型，rate=1
+    {
+        const auto r = eventcalib::fitAnchors(
+            {mkAnchor(QStringLiteral("A"), 5000, 1000000, 3000,
+                      QStringLiteral("ev1"))});
+        CHECK(r.ok && !r.affine, "ecfit: single anchor → offset mode");
+        CHECK(qAbs(r.offsetMs - (1000000.0 - 3000.0)) < 0.5,
+              "ecfit: offset = refWall - targetStream");
+        CHECK(r.residualsMs.size() == 1 && r.residualsMs[0] == 0.0,
+              "ecfit: single residual zero");
+    }
+    // 双锚点：仿射拟合 rate（DVR 走快 0.1% 场景）
+    {
+        // 目标路流内 0s ↔ 墙钟 1000s；流内 1000s ↔ 墙钟 2001s（率 1.001）
+        const auto r = eventcalib::fitAnchors({
+            mkAnchor(QStringLiteral("A"), 100, 1000000, 0, QStringLiteral("e1")),
+            mkAnchor(QStringLiteral("A"), 200, 2001000, 1000000,
+                     QStringLiteral("e2")),
+        });
+        CHECK(r.ok && r.affine, "ecfit: two anchors → affine");
+        CHECK(qAbs(r.rate - 1.001) < 1e-6,
+              qPrintable(QStringLiteral("ecfit: rate got %1").arg(r.rate)));
+        CHECK(qAbs(r.interceptMs - 1000000.0) < 1.0, "ecfit: intercept");
+        for (double res : r.residualsMs)
+            CHECK(res < 1.0, "ecfit: exact two-point residuals ~0");
+    }
+    // 三锚点带噪：残差如实报告；速率正常
+    {
+        const auto r = eventcalib::fitAnchors({
+            mkAnchor(QStringLiteral("A"), 0, 1000000, 0, QStringLiteral("e1")),
+            mkAnchor(QStringLiteral("A"), 0, 1500100, 500000, QStringLiteral("e2")),
+            mkAnchor(QStringLiteral("A"), 0, 2000000, 1000000, QStringLiteral("e3")),
+        });
+        CHECK(r.ok && r.affine, "ecfit: noisy 3-anchor affine ok");
+        CHECK(qAbs(r.rate - 1.0) < 1e-3, "ecfit: noisy rate ~1");
+        CHECK(r.residualsMs.size() == 3, "ecfit: residuals per anchor");
+        bool anyRes = false;
+        for (double res : r.residualsMs)
+            if (res > 1.0) anyRes = true;
+        CHECK(anyRes, "ecfit: noise shows in residuals (honest)");
+    }
+    // 病态：锚点目标时刻全同 → 退化偏移型（不崩）
+    {
+        const auto r = eventcalib::fitAnchors({
+            mkAnchor(QStringLiteral("A"), 0, 1000000, 5000, QStringLiteral("e1")),
+            mkAnchor(QStringLiteral("A"), 0, 1000100, 5000, QStringLiteral("e2")),
+        });
+        CHECK(r.ok && !r.affine, "ecfit: degenerate → offset fallback");
+    }
+    // 病态：对错事件 → rate 异常拒收（C1 类型化）
+    {
+        const auto r = eventcalib::fitAnchors({
+            mkAnchor(QStringLiteral("A"), 0, 1000000, 0, QStringLiteral("e1")),
+            mkAnchor(QStringLiteral("A"), 0, 3000000, 1000000, QStringLiteral("e2")),
+        });
+        CHECK(!r.ok && r.error.startsWith(QStringLiteral("EVENTCALIB_BAD_RATE")),
+              "ecfit: absurd rate rejected");
+    }
+    // 容差计算：较粗路半帧
+    CHECK(eventcalib::frameToleranceMs(25.0, 20.0) == 25,
+          "ecfit: tolerance = 500/minFps (20fps → 25ms)");
+    CHECK(eventcalib::frameToleranceMs(0.0, 0.0) == 20,
+          "ecfit: tolerance fallback 25fps");
+}
+
+static void testEventCalibCycleAndChain()
+{
+    using eventcalib::EventAnchor;
+    QHash<QString, QVector<EventAnchor>> byLane;
+    // B 参考 A；C 参考 B（多跳允许）
+    byLane[QStringLiteral("B")] = {mkAnchor(QStringLiteral("A"), 0, 1000, 0,
+                                            QStringLiteral("e"))};
+    byLane[QStringLiteral("C")] = {mkAnchor(QStringLiteral("B"), 0, 2000, 0,
+                                            QStringLiteral("e"))};
+    // D 参考 C：不成环 ✓（A→B→C→D 合法多跳）
+    CHECK(!eventcalib::wouldCreateCycle(QStringLiteral("D"), QStringLiteral("C"),
+                                        byLane),
+          "eccycle: multi-hop D←C allowed");
+    // A 参考 C：成环 ✗（A 在 C 的上游）
+    CHECK(eventcalib::wouldCreateCycle(QStringLiteral("A"), QStringLiteral("C"),
+                                       byLane),
+          "eccycle: A←C cycle rejected");
+    // 自参考：成环
+    CHECK(eventcalib::wouldCreateCycle(QStringLiteral("B"), QStringLiteral("B"),
+                                       byLane),
+          "eccycle: self-reference rejected");
+    // B 参考 D（D 无锚点）：不成环
+    CHECK(!eventcalib::wouldCreateCycle(QStringLiteral("B"), QStringLiteral("D"),
+                                        byLane),
+          "eccycle: B←D no cycle");
+
+    // 链展开：C → B → A（A 绝对）
+    QSet<QString> absIds{QStringLiteral("A")};
+    const auto chain = eventcalib::expandChain(QStringLiteral("C"), byLane, absIds);
+    CHECK(chain.size() == 3, "ecchain: C chain has 3 hops");
+    if (chain.size() == 3) {
+        CHECK(chain[0].laneId == QLatin1String("C") && !chain[0].absolute,
+              "ecchain: head = C indirect");
+        CHECK(chain[2].laneId == QLatin1String("A") && chain[2].absolute,
+              "ecchain: tail = A absolute");
+    }
+    // 累积容差 = 间接跳容差之和（20+20；绝对跳不计）
+    CHECK(eventcalib::cumulativeToleranceMs(chain) == 40,
+          "ecchain: cumulative tolerance sums indirect hops");
+}
+
+static void testEventCalibJsonRoundTrip()
+{
+    TimeCalibration cal;
+    cal.source = TimeCalibration::Source::CrossCamEvent;
+    cal.offsetMs = 123456;
+    cal.rate = 1.0003;
+    cal.rateApplied = true;
+    cal.dateKnown = true;
+    cal.eventAnchors = {
+        mkAnchor(QStringLiteral("V001"), 5000, 1700000000000ll, 3000,
+                 QStringLiteral("黑衣男子推开东门"), 20),
+        mkAnchor(QStringLiteral("V001"), 8000, 1700003000000ll, 6000,
+                 QStringLiteral("白色轿车压减速带"), 25),
+    };
+    const auto back = TimeCalibration::fromJson(cal.toJson());
+    CHECK(back.source == TimeCalibration::Source::CrossCamEvent,
+          "ecjson: source round-trip");
+    CHECK(back.eventAnchors.size() == 2, "ecjson: anchors round-trip");
+    if (back.eventAnchors.size() == 2) {
+        CHECK(back.eventAnchors[0].eventName == QStringLiteral("黑衣男子推开东门"),
+              "ecjson: event name preserved (UTF-8)");
+        CHECK(back.eventAnchors[1].toleranceMs == 25,
+              "ecjson: tolerance preserved");
+        CHECK(back.eventAnchors[1].refLaneId == QLatin1String("V001"),
+              "ecjson: ref lane preserved");
+    }
+    // 成果校时换算可用（rate 生效）
+    CHECK(qAbs(back.wallMsOf(1000000) - (123456 + 1.0003 * 1000000)) < 2.0,
+          "ecjson: wallMsOf applies fitted rate");
+    // 老读取端容忍：无 event_anchors 键的 JSON 正常读
+    auto o = cal.toJson();
+    o.remove(QStringLiteral("event_anchors"));
+    const auto legacy = TimeCalibration::fromJson(o);
+    CHECK(legacy.eventAnchors.isEmpty() && legacy.offsetMs == 123456,
+          "ecjson: legacy json without anchors reads fine");
+}
+
 int main(int argc, char **argv)
 {
     QCoreApplication app(argc, argv);
@@ -539,6 +708,9 @@ int main(int argc, char **argv)
     testServicePerfGovernance();
     testServiceGopThreshold();
     testServiceEngineDies();
+    testEventCalibFit();
+    testEventCalibCycleAndChain();
+    testEventCalibJsonRoundTrip();
     fprintf(stderr, "sync_test: %d checks, %d failures\n", g_checks, g_failures);
     return g_failures ? 1 : 0;
 }
