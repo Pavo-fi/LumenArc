@@ -124,6 +124,8 @@ private:
     QWidget *m_playPage = nullptr;
     const CaseManager *m_case = nullptr;     ///< 案件模式（独立模式为空）
     QVector<CamInventoryItem> m_inventory;   ///< 清单快照（勾选行一一对应）
+    QVector<CamMergedGroup> m_mergedGroups;  ///< P-69 合并轨分组（与 m_groupChecks 对齐）
+    QVector<class QCheckBox *> m_groupChecks;///< 组合并轨勾选框
     QVector<QCheckBox *> m_checks;
     QVBoxLayout *m_checkListLay = nullptr;
     QLabel *m_pickHint = nullptr;

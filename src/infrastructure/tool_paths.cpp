@@ -133,3 +133,19 @@ QString ToolPaths::findFfmpegPath()
     // System PATH
     return "ffmpeg";
 }
+
+QString ToolPaths::findFfprobePath()
+{
+    const QString appDir = QCoreApplication::applicationDirPath();
+    const QStringList candidates = {
+        appDir + "/ffmpeg/ffprobe.exe",
+        appDir + "/ffprobe.exe",
+        QFileInfo(findFfmpegPath()).dir().absoluteFilePath("ffprobe.exe"),
+        appDir + "/ffmpeg/ffprobe",
+        appDir + "/ffprobe",
+    };
+    for (const QString &p : candidates)
+        if (QFile::exists(p))
+            return p;
+    return "ffprobe";   // 系统 PATH 兜底
+}

@@ -99,13 +99,45 @@ void MultiCamViewWidget::rebuildLayout()
     m_layoutMsPerPx = msPerPx;
 
     // --- 机位块（行内块位=墙钟、宽∝时长，画法同 ClipTimelineWidget） ---
+    // P-69：合并轨一行多块（逐段），重叠段「先起步者赢」——后被压段重叠区
+    // 记 overlapClips（paint 斜纹+⚠）
     for (int i = 0; i < m_lanes.size(); ++i) {
         const auto &l = m_lanes[i];
         const int y = kTopMargin + i * (kLaneH + kLaneGap);
-        const int x = kLabelW + int((l.wallStartMs - t0) / msPerPx);
-        const int w = qMax(4, int((l.wallEndMs - l.wallStartMs) / msPerPx));
-        m_rects.append({l.videoId,
-                        QRect(x, y, qMin(w, kLabelW + availW - x), kLaneH)});
+        if (l.segs.isEmpty()) {
+            const int x = kLabelW + int((l.wallStartMs - t0) / msPerPx);
+            const int w = qMax(4, int((l.wallEndMs - l.wallStartMs) / msPerPx));
+            BlockRect br;
+            br.videoId = l.videoId;
+            br.row = i;
+            br.rect = QRect(x, y, qMin(w, kLabelW + availW - x), kLaneH);
+            m_rects.append(br);
+            continue;
+        }
+        const int base = m_rects.size();
+        for (const auto &sg : l.segs) {
+            const int x = kLabelW + int((sg.wallStartMs - t0) / msPerPx);
+            const int w = qMax(4, int((sg.wallEndMs - sg.wallStartMs) / msPerPx));
+            BlockRect br;
+            br.videoId = l.videoId;
+            br.row = i;
+            br.segIdx = sg.segIdx;
+            br.merged = true;
+            br.rect = QRect(x, y, qMin(w, kLabelW + availW - x), kLaneH);
+            m_rects.append(br);
+        }
+        // 行内两两重叠：输家（起步晚者）记被压区
+        for (int a = base; a < m_rects.size(); ++a)
+            for (int b = a + 1; b < m_rects.size(); ++b) {
+                const qint64 sa = l.segs[m_rects[a].segIdx].wallStartMs;
+                const qint64 sb = l.segs[m_rects[b].segIdx].wallStartMs;
+                const int loser = (sa == sb) ? qMax(a, b) : (sa < sb ? b : a);
+                const int winner = (loser == a) ? b : a;
+                const QRect ov = m_rects[a].rect.intersected(m_rects[b].rect);
+                if (!ov.isEmpty())
+                    m_rects[loser].overlapClips.append(ov);
+                Q_UNUSED(winner);
+            }
     }
 
     // --- 覆盖率扫掠：≥2 重叠（红）/ 0 缺口（灰纹），跨行竖带 ---
@@ -199,12 +231,10 @@ void MultiCamViewWidget::paintEvent(QPaintEvent *)
         p.drawText(lr, Qt::AlignHCenter | Qt::AlignTop, b.label);
     }
 
-    // 机位行：标签列 + 块
+    // 机位行标签列（块在下一步按条目画——合并轨一行多块）
     for (int i = 0; i < m_lanes.size(); ++i) {
         const auto &l = m_lanes[i];
-        const QRect r = m_rects[i].second;
         const int y = kTopMargin + i * (kLaneH + kLaneGap);
-
         p.setPen(textSec);
         QFont lf = p.font();
         lf.setPixelSize(11);
@@ -212,20 +242,46 @@ void MultiCamViewWidget::paintEvent(QPaintEvent *)
         p.drawText(QRect(4, y, kLabelW - 10, kLaneH),
                    Qt::AlignVCenter | Qt::AlignLeft,
                    QStringLiteral("%1  %2").arg(l.videoId, l.fileName));
+    }
 
-        const QColor fill = Theme::DataPalette[i % Theme::DataPalette.size()];
+    // 机位块（P-69：合并轨逐段多色——同色调按段号明暗交替；被压重叠区斜纹+⚠）
+    for (const auto &br : m_rects) {
+        const QRect r = br.rect;
+        QColor fill = Theme::DataPalette[br.row % Theme::DataPalette.size()];
+        if (br.merged && (br.segIdx % 2) == 1)
+            fill = fill.lighter(125);   // 段号明暗交替（多色块拍板）
         p.setPen(Qt::NoPen);
         p.setBrush(fill);
         p.drawRoundedRect(r, 4, 4);
 
-        // 块内时长标签（宽度足够时）
+        // 「先起步者赢」被压区：斜纹覆盖 + 左缘 ⚠
+        for (const QRect &ov : br.overlapClips) {
+            p.setBrush(QBrush(QColor(Theme::TextMuted), Qt::BDiagPattern));
+            p.drawRect(ov);
+            p.setPen(QColor(Theme::Danger));
+            QFont wf = p.font();
+            wf.setPixelSize(12);
+            wf.setBold(true);
+            p.setFont(wf);
+            p.drawText(QRect(ov.left(), ov.top(), 16, ov.height()),
+                       Qt::AlignLeft | Qt::AlignVCenter, QStringLiteral("⚠"));
+            p.setPen(Qt::NoPen);
+        }
+
+        // 块内标签：单段路=时长；合并轨=段号+时长
         if (r.width() > 48) {
             p.setPen(QColor(Theme::AccentOnDark));
             QFont f = p.font();
             f.setPixelSize(11);
             f.setBold(true);
             p.setFont(f);
-            p.drawText(r, Qt::AlignCenter, fmtSpan(l.streamDurationMs));
+            const auto &l = m_lanes[br.row];
+            const QString txt = br.merged
+                ? QStringLiteral("段%1 %2").arg(br.segIdx + 1)
+                      .arg(fmtSpan(l.segs[br.segIdx].wallEndMs
+                                   - l.segs[br.segIdx].wallStartMs))
+                : fmtSpan(l.streamDurationMs);
+            p.drawText(r, Qt::AlignCenter, txt);
         }
     }
 
@@ -309,8 +365,12 @@ bool MultiCamViewWidget::event(QEvent *e)
     if (e->type() == QEvent::ToolTip) {
         auto *he = static_cast<QHelpEvent *>(e);
         for (int i = 0; i < m_rects.size(); ++i)
-            if (m_rects[i].second.contains(he->pos())) {
-                QToolTip::showText(he->globalPos(), laneTooltip(i), this);
+            if (m_rects[i].rect.contains(he->pos())) {
+                QToolTip::showText(he->globalPos(), laneTooltip(m_rects[i].row)
+                    + (m_rects[i].merged
+                       ? QStringLiteral("\n段 %1（合并轨）").arg(m_rects[i].segIdx + 1)
+                       : QString()),
+                    this);
                 return true;
             }
         QToolTip::hideText();
@@ -321,9 +381,9 @@ bool MultiCamViewWidget::event(QEvent *e)
 
 void MultiCamViewWidget::mouseDoubleClickEvent(QMouseEvent *event)
 {
-    for (const auto &pr : m_rects)
-        if (pr.second.contains(event->pos())) {
-            emit laneActivated(pr.first);   // 回单路分析（U-6）
+    for (const auto &br : m_rects)
+        if (br.rect.contains(event->pos())) {
+            emit laneActivated(br.videoId);   // 回单路分析（U-6）
             return;
         }
     QWidget::mouseDoubleClickEvent(event);

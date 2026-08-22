@@ -69,7 +69,16 @@ private:
     QVector<CamLane> m_lanes;
     qint64 m_tolMs = 2000;
 
-    QVector<QPair<QString, QRect>> m_rects;       // videoId -> 块矩形
+    // P-69：块条目（行+段号+矩形+被压重叠子区）；单段路 segIdx=0
+    struct BlockRect {
+        QString videoId;
+        int row = 0;
+        int segIdx = 0;
+        bool merged = false;
+        QRect rect;
+        QVector<QRect> overlapClips;   ///< 「先起步者赢」被压区（斜纹+⚠）
+    };
+    QVector<BlockRect> m_rects;                   // 机位块（合并轨一行多块）
     QVector<Band> m_bands;                        // 重叠/缺口竖带
     QVector<QPair<int, QString>> m_tickLabels;    // x 像素 -> 刻度文字
 

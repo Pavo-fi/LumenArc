@@ -9,6 +9,7 @@
  * Licensed under the Apache License, Version 2.0
  */
 #include "multicamplaybackwindow.h"
+#include "app/segment_switch_engine.h"
 
 #include <QDateTime>
 #include <QFileDialog>
@@ -171,8 +172,44 @@ void MultiCamPlaybackWindow::refreshInventory()
         delete item;
     }
     m_checks.clear();
+    m_groupChecks.clear();
     m_inventory = m_case ? buildCamInventory(*m_case)
                          : QVector<CamInventoryItem>{};
+    m_mergedGroups = m_case ? buildMergedGroups(m_inventory)
+                            : QVector<CamMergedGroup>{};
+
+    // P-69：合并轨组行置顶（同编号多文件并一路；先起步者赢，重叠 ⚠ 标注）
+    for (int gi = 0; gi < m_mergedGroups.size(); ++gi) {
+        const auto &g = m_mergedGroups[gi];
+        auto *rowW = new QWidget;
+        auto *row = new QHBoxLayout(rowW);
+        row->setContentsMargins(0, 0, 0, 0);
+        auto *cb = new QCheckBox(
+            QStringLiteral("⊞ %1 · %2 段合并轨").arg(g.label).arg(g.memberIdx.size()),
+            rowW);
+        QFont bf = cb->font();
+        bf.setBold(true);
+        cb->setFont(bf);
+        cb->setToolTip(lang(
+            "同编号 %1 个文件并成一路播放（须全部已校时）。重叠时段先起步的段"
+            "赢，时间线上以 ⚠ 标注重叠。",
+            "Merge %1 files of the same camera into one lane (all must be "
+            "calibrated). Overlap: earliest-start segment wins, marked ⚠.")
+            .arg(g.memberIdx.size()));
+        connect(cb, &QCheckBox::toggled, this,
+                &MultiCamPlaybackWindow::updatePickerValidation);
+        row->addWidget(cb, 1);
+        auto *tag = new QLabel(lang("合并轨", "merged"), rowW);
+        tag->setStyleSheet(QStringLiteral("color:%1;").arg(Theme::Success));
+        row->addWidget(tag);
+        m_checkListLay->addWidget(rowW);
+        m_groupChecks.append(cb);
+    }
+    if (!m_mergedGroups.isEmpty()) {
+        auto *h = new QLabel(lang("—— 单文件路 ——", "—— Single-file lanes ——"));
+        h->setStyleSheet(QStringLiteral("color:%1;").arg(Theme::TextMuted));
+        m_checkListLay->addWidget(h);
+    }
 
     // 两来源都有时分组小标题
     bool hasVideo = false, hasPre = false;
@@ -247,14 +284,34 @@ void MultiCamPlaybackWindow::refreshInventory()
 
 void MultiCamPlaybackWindow::updatePickerValidation()
 {
+    // P-69 组-成员互斥：勾选合并轨 → 成员行禁选；反之成员有勾 → 组行禁选
+    QSet<int> groupedMembers;
+    for (int gi = 0; gi < m_mergedGroups.size(); ++gi) {
+        const bool gOn = m_groupChecks[gi]->isChecked();
+        bool memberOn = false;
+        for (int mi : m_mergedGroups[gi].memberIdx)
+            if (mi < m_checks.size() && m_checks[mi]->isChecked())
+                memberOn = true;
+        m_groupChecks[gi]->setEnabled(!memberOn);
+        for (int mi : m_mergedGroups[gi].memberIdx) {
+            if (mi < m_checks.size()) {
+                groupedMembers.insert(mi);
+                if (m_inventory[mi].pathExists)
+                    m_checks[mi]->setEnabled(!gOn);
+            }
+        }
+    }
     int n = 0, uncal = 0;
     for (int i = 0; i < m_checks.size(); ++i) {
-        if (!m_checks[i]->isChecked())
+        if (!m_checks[i]->isChecked() || !m_checks[i]->isEnabled())
             continue;
         ++n;
         if (!m_inventory[i].calibrated)
             ++uncal;
     }
+    for (auto *gc : m_groupChecks)
+        if (gc->isChecked() && gc->isEnabled())
+            ++n;   // 合并轨 = 1 路（成员全部已校时，uncal 不增）
     QString hint;
     bool ok = false;
     if (m_inventory.isEmpty()) {
@@ -296,9 +353,37 @@ void MultiCamPlaybackWindow::onStartSync()
 {
     QVector<SyncLaneData> lanes;
     int uncal = 0;
-    for (int i = 0; i < m_checks.size(); ++i) {
-        if (!m_checks[i]->isChecked())
+    // P-69：合并轨先行装配（成员按墙钟起点升序已在分组时排好）
+    for (int gi = 0; gi < m_mergedGroups.size(); ++gi) {
+        if (!m_groupChecks[gi]->isChecked() || !m_groupChecks[gi]->isEnabled())
             continue;
+        const auto &g = m_mergedGroups[gi];
+        SyncLaneData L;
+        L.id = QStringLiteral("M_") + g.label;
+        L.displayName = g.label + QStringLiteral("（%1 段合并）").arg(g.memberIdx.size());
+        L.calibrated = true;
+        L.temporary = false;
+        qint64 totalDur = 0;
+        for (int mi : g.memberIdx) {
+            const auto &it = m_inventory[mi];
+            SyncSegment seg;
+            seg.path = it.path;
+            seg.srcId = it.id;
+            seg.cal = it.lane.cal;
+            // 段时长：.vla 已分析值优先，缺则 ffprobe 预读（拍板设计）
+            seg.durationMs = it.analyzedDurationMs > 0
+                ? it.analyzedDurationMs : probeMediaDurationMs(it.path);
+            totalDur += seg.durationMs;
+            L.segments.append(seg);
+        }
+        L.durationMs = totalDur;
+        L.path = L.segments.isEmpty() ? QString() : L.segments.first().path;
+        if (L.segments.size() >= 2)
+            lanes.append(L);
+    }
+    for (int i = 0; i < m_checks.size(); ++i) {
+        if (!m_checks[i]->isChecked() || !m_checks[i]->isEnabled())
+            continue;   // P-69：组勾选后成员行禁用，不参与单路
         const auto &it = m_inventory[i];
         if (it.calibrated) {
             lanes.append(it.lane);
@@ -609,6 +694,16 @@ QVector<CamLane> MultiCamPlaybackWindow::currentCamLanes() const
         c.wallStartMs = syncLaneWallStart(l);
         c.wallEndMs = syncLaneWallEnd(l);
         c.streamDurationMs = l.durationMs;
+        // P-69：合并轨逐段块（时间线一行多色块）
+        if (l.isMerged()) {
+            for (int k = 0; k < l.segments.size(); ++k) {
+                CamLane::SegBlock sb;
+                sb.segIdx = k;
+                sb.wallStartMs = l.segments[k].wallStartMs();
+                sb.wallEndMs = l.segments[k].wallEndMs();
+                c.segs.append(sb);
+            }
+        }
         out.append(c);
     }
     return out;
@@ -1066,7 +1161,16 @@ void MultiCamPlaybackWindow::updateTilesOsd()
             continue;
         }
         const auto &l = m_svc->lanes()[i];
-        tile->setLaneName(l.displayName);
+        // P-69：合并轨段标 [k/N]（引擎当前段号）
+        QString lname = l.displayName;
+        if (l.isMerged()) {
+            if (auto *se = qobject_cast<SegmentSwitchEngine *>(m_svc->engineAt(i))) {
+                const int k = se->currentSegment();
+                if (k >= 0)
+                    lname += QStringLiteral(" [%1/%2]").arg(k + 1).arg(l.segments.size());
+            }
+        }
+        tile->setLaneName(lname);
         tile->setTemporaryBadge(l.temporary);
         tile->setLowresBadge(m_svc->laneIsLowres(i));
         auto *e = m_svc->engineAt(i);
@@ -1150,6 +1254,17 @@ void MultiCamPlaybackWindow::onExportClip()
 {
     if (!m_mergedBar || !m_mergedBar->hasAB())
         return;
+    // P-69：合并轨跨段合成导出不支持（本批明文拒导+说明，后续再支持）
+    for (const auto &L : m_svc->lanes())
+        if (L.isMerged()) {
+            QMessageBox::warning(this, lang("导出选段", "Export clip"),
+                lang("本次会话含合并轨（%1）——跨段合成导出不支持（本批暂不落地）。"
+                     "请将各段分别作单路加入会话再导出。",
+                     "Session contains a merged lane (%1) - cross-segment "
+                     "export is not supported yet. Add each segment as a "
+                     "single-file lane to export.").arg(L.displayName));
+            return;
+        }
     const qint64 aMs = m_mergedBar->abA();
     const qint64 bMs = m_mergedBar->abB();
 

@@ -9,6 +9,7 @@
  * Licensed under the Apache License, Version 2.0
  */
 #include "multicam_sync_service.h"
+#include "segment_switch_engine.h"
 
 #include <QTimer>
 #include "infrastructure/ivideo_engine.h"
@@ -74,7 +75,12 @@ bool MultiCamSyncService::loadLanes(const QVector<SyncLaneData> &lanes)
                 finishLoading();
             continue;
         }
-        IVideoEngine *e = m_factory(this);
+        // P-69 合并轨：分段换文件装饰器（虚拟流内轴；真实引擎由工厂内建，
+        // 一路一引擎，N 段不增资源占用——C5）
+        IVideoEngine *e = m_lanes[i].isMerged()
+            ? static_cast<IVideoEngine *>(
+                  new SegmentSwitchEngine(m_factory, m_lanes[i].segments, this))
+            : m_factory(this);
         if (!e) {
             m_engines.append(nullptr);
             m_loadAccounted[i] = true;

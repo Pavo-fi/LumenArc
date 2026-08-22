@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(LumenArc VERSION 1.13.2 LANGUAGES CXX)
+project(LumenArc VERSION 1.13.3 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -110,6 +110,8 @@ set(SOURCES
     src/domain/task_registry.cpp
     src/app/analysis_task_service.cpp
     src/app/multicam_sync_service.cpp
+    src/app/segment_switch_engine.cpp
+    src/app/segment_switch_engine.h
     src/timesettingsdialog.cpp
     src/calibphotodialog.cpp        # v1.12.5 北京时间对时：校时图片两框框选
     src/infrastructure/ffmpeg_video_engine.cpp
@@ -338,6 +340,8 @@ add_executable(lumenarc_sync_test
     tests/sync_test_main.cpp
     src/app/multicam_sync_service.cpp
     src/app/multicam_sync_service.h
+    src/app/segment_switch_engine.cpp
+    src/app/segment_switch_engine.h
     src/domain/sync_model.h
     src/domain/time_calibration.cpp
     src/domain/time_piecewise.cpp
@@ -595,6 +599,7 @@ add_executable(lumenarc_case_test
     src/app/case_manager.cpp
     src/videostatemanager.cpp   # M3 任务13：migrateKey 键迁移测试
     src/app/cam_timeline.cpp    # M3 任务14：buildCamLanes 装配测试
+    src/infrastructure/tool_paths.cpp   # P-69：cam_timeline 引用 findFfprobePath
     src/domain/timeline_model.cpp
     src/domain/time_calibration.cpp
     src/domain/time_piecewise.cpp

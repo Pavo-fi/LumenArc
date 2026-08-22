@@ -17,6 +17,8 @@
 
 #include <QString>
 #include <QVector>
+#include <QHash>
+#include <algorithm>
 #include "domain/case_model.h"
 #include "domain/sync_model.h"
 
@@ -30,6 +32,14 @@ struct CamLane {
     qint64 wallEndMs = 0;         ///< 块位终点（已分析最大流内时刻的墙钟）
     qint64 streamDurationMs = 0;  ///< .vla 已分析时长（块位宽度的数据源）
     QString calibrationSummary;   ///< 校时徽标缓存文案（tooltip 展示）
+
+    /// P-69 合并轨段块（空=单段传统路；非空=合并轨逐段一块，同行多色）
+    struct SegBlock {
+        qint64 wallStartMs = 0;
+        qint64 wallEndMs = 0;
+        int segIdx = 0;
+    };
+    QVector<SegBlock> segs;
 };
 
 /// 装配案件多机时间线：跳过未校时/.vla 缺失/无分析数据的视频；
@@ -46,7 +56,52 @@ struct CamInventoryItem {
     bool pathExists = false;      ///< 源文件在盘（缺失路禁选）
     bool calibrated = false;      ///< 已校时（.vla 实读 SSOT，R5——不看徽标缓存）
     SyncLaneData lane;            ///< calibrated 时已填妥，勾选即可入列
+    qint64 analyzedDurationMs = 0; ///< P-69：.vla 已分析最大流内时刻（段时长首选源）
 };
+
+/// P-69 合并轨分组：同机位标签（displayName）≥2 项且全部已校时+在盘
+struct CamMergedGroup {
+    QString label;                ///< 机位标签
+    QVector<int> memberIdx;       ///< m_inventory 下标（按墙钟起点升序）
+};
+/// 纯函数（内联于头：sync_test 直接编译验证，免链重依赖）
+inline QVector<CamMergedGroup> buildMergedGroups(const QVector<CamInventoryItem> &items)
+{
+    QHash<QString, QVector<int>> byLabel;
+    for (int i = 0; i < items.size(); ++i)
+        if (items[i].pathExists)
+            byLabel[items[i].displayName].append(i);
+    QVector<CamMergedGroup> out;
+    for (auto it = byLabel.constBegin(); it != byLabel.constEnd(); ++it) {
+        if (it.value().size() < 2)
+            continue;
+        // 合并仅模式 A（拍板）：同编号任一文件未校时 → 整组不成立，拒静默
+        // 拼半组（C1）——用户须先补齐校时，成员仍可按单路勾选
+        bool allCal = true;
+        for (int mi : it.value())
+            if (!items[mi].calibrated) { allCal = false; break; }
+        if (!allCal)
+            continue;
+        CamMergedGroup g;
+        g.label = it.key();
+        g.memberIdx = it.value();
+        std::sort(g.memberIdx.begin(), g.memberIdx.end(),
+                  [&](int a, int b) {
+                      return syncLaneWallStart(items[a].lane)
+                             < syncLaneWallStart(items[b].lane);
+                  });
+        out.append(g);
+    }
+    std::sort(out.begin(), out.end(), [&](const CamMergedGroup &a,
+                                          const CamMergedGroup &b) {
+        return syncLaneWallStart(items[a.memberIdx.first()].lane)
+               < syncLaneWallStart(items[b.memberIdx.first()].lane);
+    });
+    return out;
+}
+
+/// P-69 段时长预读：容器总时长（ffprobe format=duration；失败 0）
+qint64 probeMediaDurationMs(const QString &path);
 
 /// 装配机位勾选清单（P-59）：videos[] + preprocessSessions[].outputRefs[]
 /// 全量登记（顺序：视频按入案序，随后前处理产物按会话序）；校时状态逐路

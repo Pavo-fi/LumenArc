@@ -555,17 +555,7 @@ void CalibrationService::onAtPositionsFailed(const QString &error)
 // ---------------------------------------------------------------------------
 static QString findFfprobePath()
 {
-    const QString appDir = QCoreApplication::applicationDirPath();
-    const QStringList candidates = {
-        appDir + QStringLiteral("/ffmpeg/ffprobe.exe"),
-        appDir + QStringLiteral("/ffprobe.exe"),
-        QFileInfo(ToolPaths::findFfmpegPath()).dir()
-            .absoluteFilePath(QStringLiteral("ffprobe.exe")),
-    };
-    for (const QString &p : candidates)
-        if (QFile::exists(p))
-            return p;
-    return QStringLiteral("ffprobe");   // 系统 PATH 兜底
+    return ToolPaths::findFfprobePath();   // v1.13.3：公共实现收敛（P-69 公用）
 }
 
 static qint64 ffprobeStreamDurationMs(const QString &videoPath,

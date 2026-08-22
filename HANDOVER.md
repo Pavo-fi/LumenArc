@@ -5,24 +5,23 @@
 
 ## 表头（每次写完 HANDOVER 与 WORK_HISTORY 后必须同步更新本表头——规则 R2）
 
-- **当前 HEAD**：施工批（2026-08-22 §72 P-73 多机同事件间接校时落地，
-  版本 **v1.13.2**）
+- **当前 HEAD**：施工批（2026-08-22 §73 P-69 编号合并轨落地，
+  版本 **v1.13.3**）
 - **构建**：`cmd //c "build_tmp\build_target.bat ALL"`；测试：`QT_QPA_PLATFORM=offscreen`
   + PATH 含 `C:\code\Qt\6.8.0\msvc2022_64\bin`（配置：`build_tmp\reconfigure.bat`）
-- **全回归基线**（**15 套**，v1.13.2 施工批）：mw 97 / task_registry 41 / case 248 /
+- **全回归基线**（**15 套**，v1.13.3 施工批）：mw 97 / task_registry 41 / case 248 /
   case_e2e 51 / piecewise 129 / preprocess 268 / ui_chain 97 /
   calibration 99 / roi_model 23 /
   vla v10 累计 40 + gaptick 4 + gapcollide 2 / libav 32（无 caltest 素材
-  环境跑 20）/ v17 37 / sync 135（含 P-73 域层 32）/ sidecar 34 / **segment 54**
-  （speedplan 映射+音频链+布局+.vla 回环+单路/双路 caltest e2e）
+  环境跑 20）/ v17 37 / **sync 168（含 P-69 合并轨 33）**/ sidecar 34 / segment 54
 - **当前保留批次**（新→旧，R2 限 5 批）：
+  第六十四批 §73（P-69 编号合并轨，版本→1.13.3）·
   第六十三批 §72（P-73 多机同事件间接校时，版本→1.13.2）·
   第六十二批 §71（放大镜布局重构+案件折叠条+启动比例，版本→1.13.1）·
   第六十一批 §70（P-68 实测返修：导出非模态/背压/编码器回退+真机自检）·
-  第六十批 §69（选段分段变速导出单路+多机，P-68 落地，版本→1.13.0）·
-  第五十九批 §68（界面优化四项，版本→1.12.9）
-- **最近归档动作**：2026-08-22 §72 批——第五十八批（§67）移入 WORK_HISTORY.md 末尾；
-  早前：§71 批——第五十七批（§66）移入；§70 批——第五十六批（§65）移入。
+  第六十批 §69（选段分段变速导出单路+多机，P-68 落地，版本→1.13.0）
+- **最近归档动作**：2026-08-22 §73 批——第五十九批（§68）移入 WORK_HISTORY.md 末尾；
+  早前：§72 批——第五十八批（§67）移入；§71 批——第五十七批（§66）移入。
 - **常用参考导航**（已归档，查 WORK_HISTORY.md）：机位勾选面板（§54）、
   校时落盘双根因修复（§55）、显示旋转 90° 方案 A
   （第三批 §12）、音频时间轴对齐与问题 A/B 定案（深夜批）、项目规则 R1/R2
@@ -34,6 +33,54 @@
 # ============================================================================
 # 工作记录（2026-08-22，第六十三批）——P-73 多机同事件间接校时（v1.13.2）
 # ============================================================================
+
+## 73. P-69 编号合并轨：同机位多文件并一路播放（先起步者赢 + 跨段换文件）
+
+**日期**：2026-08-22｜**版本**：1.13.2 → **1.13.3**｜**性质**：功能批次（P-69 落地，设计 8-22 拍板）
+
+**需求**：同机位编号连续文件（如 D17_001/002/003.mp4）在勾选面板各占一路、
+挤占 4 路上限且时间线分行——用户拍板：同编号并成**一路**播放。
+
+**拍板设计**：重叠段「先起步者赢」+ 时间线 ⚠ 告警；合并仅模式 A（同编号任一
+文件未校时 → 整组不出现，拒静默拼半组 C1）；合并轨会话暂拒导出（明文提示）。
+
+### 落地件
+1. **域层段感知**（`src/domain/sync_model.h`）：`SyncSegment`（path/srcId/段级
+   cal/durationMs + wallStartMs/wallEndMs/coversWall）；`SyncLaneData.segments`
+   + `isMerged()` + `segCumDurations()`（虚拟流内轴前缀和）；`syncSegmentAt`
+   （先起步者赢）、`syncMergedStreamOf`（墙钟→虚拟轴，缺口钉最近段端点）、
+   `syncMergedSegmentOf`（虚拟轴→(段号,段内毫秒)）；`syncWallOf/syncStreamOf/
+   syncLaneWallStart/syncLaneWallEnd/syncLaneCovers` 全部段感知——**服务层既有
+   seek/覆盖逻辑零改动复用**。
+2. **SegmentSwitchEngine**（新 `src/app/segment_switch_engine.{h,cpp}`）：
+   IVideoEngine 装饰器，内置一台工厂真实引擎（C5：N 段不增引擎数）；
+   seek 跨段 → 换文件 + pendingSeek 落点 + 续播意愿；播放至段尾且下一段墙钟
+   紧邻（≤2s）自动顺接换文件（缺口交给服务覆盖逻辑停路）；引擎实测时长
+   回写段时长自修正；`currentSegment()` 供瓦片段标。
+3. **服务**：`loadLanes` 合并轨走装饰器分支，其余路径不变。
+4. **装配层**（`cam_timeline`）：`CamInventoryItem.analyzedDurationMs`（.vla
+   已分析时长，免 ffprobe）；`buildMergedGroups`（**头文件内联纯函数**，sync_test
+   直编验证免链重依赖）；`probeMediaDurationMs`（ffprobe format=duration 兜底）；
+   `ToolPaths::findFfprobePath` 收敛公用（calibration_service 本地副本删除）。
+5. **勾选面板**：合并轨组行置顶「⊞ 标签 · N 段合并轨」+ 组合计 1 路 +
+   组/成员勾选互斥禁用。
+6. **时间线**（multicamview）：`CamLane.segs` 段块；`BlockRect` 条目重构
+   （行+段号+矩形+overlapClips）；合并轨一行多块同色调明暗交替；被压重叠区
+   斜纹 + 左缘 ⚠；tooltip 带段号。
+7. **主窗收尾**：`currentCamLanes` 填段块；`updateTilesOsd` 合并轨段标 [k/N]；
+   `onExportClip` 合并轨拒导提示。
+
+### 验证
+- **sync_test +33 = 168/168 绿**：段映射（赢家/缺口钉段/往返）、服务装载
+  换段（FakeEngine 按路径报时长；跨段 seek → loadCount+1/落点 1500/虚拟轴
+  位置 6500）、分组规则（未校时拒组/排序/单成员不成组）。
+- **变异验证**：赢家规则 `<`→`>` 反转 → 2 断言红；回退复绿。
+- **15 套全回归绿**（mw 97 / case 248 / sync 168 / vla 全 PASS …）。
+- case_test 链 cam_timeline 需 tool_paths.cpp（findFfprobePath）——CMake 已补。
+
+### 遗留
+- 真机待验：增城案 D17 多段并轨（换段无感/重叠⚠/段标）。
+- 合并轨导出合成：后续批次（当前明文拒导）。
 
 ## 72. 同事件对时：以已校时路为参考给未校时路生成正式校时（取证链入档）
 
@@ -264,29 +311,3 @@ Q1 改判**上下布局**（上视频下双图）；Q2 改判 **OSD 角标可选
 # ============================================================================
 # 工作记录（2026-08-21，第五十九批）——界面优化四项（v1.12.9，用户反馈+截图拍板布局）
 # ============================================================================
-
-## 68. 案件列表放大镜折叠 + 放大镜半屏并列 + 调节浮窗化 + 全局字体统一
-
-### 用户反馈（2026-08-21，附 v1.7.0 旧版布局截图拍板②）
-
-①案件系统列表打开放大镜后不折叠（旧版视频列表会）；②打开放大镜后期望
-布局 = 列表折叠 + 左半原始画面/右半放大镜等大并列；③画面调节面板做成
-独立浮窗呼出（与多机同步页一致）；④前端字体不统一，全面美化。
-
-### 施工
-
-- **①**：案件面板同款折叠占位条（m_casePlaceholder，竖排「案件列表」+ ▶
-  展开钮）；createMagnifier 案件模式收 m_caseDock、removeMagnifier 按
-  进入前状态恢复（用户中途主动展开则不打扰）。
-- **②**：放大镜 dock 宽度 40% → **50%** 窗口宽（截图拍板的半屏并列）。
-- **③**：画面调节面板呼出即 setFloating(true) + 定位主窗右侧（320×460），
-  visibilityChanged 回写钮态（既有机制）。
-- **④根因**：全局样式表未设应用默认字体，未显式指定的控件回落平台默认
-  （MS Shell Dlg）混搭。Theme::apply 现设 setFamilies{YaHei UI → YaHei →
-  Segoe UI → PingFang SC} 9pt；全局样式表补 QGroupBox/QTreeWidget/
-  QTableWidget/QHeaderView/QTabWidget 统一观感（圆角、边框、选中、表头）。
-
-### 测试
-
-- 全回归 14 套绿（含几何敏感的 vla gapcollide）；版本 1.12.8 → **1.12.9**。
-

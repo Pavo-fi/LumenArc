@@ -9,6 +9,8 @@
  * Licensed under the Apache License, Version 2.0
  */
 #include "cam_timeline.h"
+#include "infrastructure/tool_paths.h"
+#include <QProcess>
 
 #include <algorithm>
 #include <QDir>
@@ -84,6 +86,10 @@ QVector<CamInventoryItem> buildCamInventory(const CaseManager &cm)
             if (model.loadFromFile(vlaPath, nullptr, &cal)
                 && cal.isValid() && cal.isEffective()) {
                 it.calibrated = true;
+                // P-69：段时长首选源 = .vla 已分析最大流内时刻（免 ffprobe）
+                const auto snap = model.snapshot();
+                if (!snap.isEmpty())
+                    it.analyzedDurationMs = snap.timestamps.last();
                 it.lane.id = v.id;
                 it.lane.path = it.path;
                 it.lane.displayName = it.displayName;
@@ -118,4 +124,29 @@ QVector<CamInventoryItem> buildCamInventory(const CaseManager &cm)
         for (const auto &o : s.outputRefs)
             addRef(o, true);
     return out;
+}
+
+// ---------------------------------------------------------------------------
+// P-69 编号合并轨：分组与段时长预读
+// ---------------------------------------------------------------------------
+// buildMergedGroups：纯函数已内联于 cam_timeline.h（sync_test 直编验证）
+
+qint64 probeMediaDurationMs(const QString &path)
+{
+    const QString ffprobe = ToolPaths::findFfprobePath();
+    if (ffprobe.isEmpty())
+        return 0;
+    QProcess proc;
+    proc.start(ffprobe, {QStringLiteral("-v"), QStringLiteral("error"),
+                         QStringLiteral("-show_entries"),
+                         QStringLiteral("format=duration"),
+                         QStringLiteral("-of"),
+                         QStringLiteral("default=noprint_wrappers=1:nokey=1"),
+                         path});
+    if (!proc.waitForFinished(10000))
+        return 0;   // C1：超时按未知处理（调用方回落）
+    bool ok = false;
+    const double sec = QString::fromUtf8(proc.readAllStandardOutput())
+                           .trimmed().toDouble(&ok);
+    return ok ? qint64(sec * 1000.0 + 0.5) : 0;
 }

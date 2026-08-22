@@ -10,12 +10,15 @@
  *     /游标追逐 beginScrub-scrubTo-endScrub 契约
  */
 #include "app/multicam_sync_service.h"
+#include "app/segment_switch_engine.h"
+#include "app/cam_timeline.h"          // P-69：CamInventoryItem + buildMergedGroups（内联纯函数）
 #include "domain/sync_model.h"
 #include "infrastructure/ivideo_engine.h"
 
 #include <QCoreApplication>
 #include <QEventLoop>
 #include <QTimer>
+#include <QHash>
 #include <cstdio>
 #include <limits>
 
@@ -57,6 +60,7 @@ public:
     QString hwName;               // 非空 = 硬解路
     qint64 gopMs = 0;             // 实测 GOP（纠偏阈值联动测试）
     int loadCount = 0;
+    QHash<QString, qint64> durByPath;   // P-69：按文件路径定制时长（换段测试）
 
     bool load(const QString &p) override
     {
@@ -64,8 +68,8 @@ public:
         ++loadCount;
         if (failLoad)
             return false;
-        QTimer::singleShot(0, this, [this]() {
-            emit durationChanged(dur);
+        QTimer::singleShot(0, this, [this, p]() {
+            emit durationChanged(durByPath.value(p, dur));
             emit stateChanged(PlaybackState::Stopped);
         });
         return true;
@@ -692,6 +696,153 @@ static void testEventCalibJsonRoundTrip()
           "ecjson: legacy json without anchors reads fine");
 }
 
+// ---------------------------------------------------------------------------
+// P-69 编号合并轨：段感知映射（虚拟流内轴 / 先起步者赢 / 缺口钉最近段）
+// ---------------------------------------------------------------------------
+static SyncSegment makeSeg(const QString &path, qint64 wallStart, qint64 durMs)
+{
+    SyncSegment s;
+    s.path = path;
+    s.srcId = path;
+    s.cal = makeCal(wallStart);   // rate=1：wallMsOf(s)=s+wallStart
+    s.durationMs = durMs;
+    return s;
+}
+
+static void testMergedMapping()
+{
+    // 两段有缺口：seg0 [100000,105000)，seg1 [105500,109500)
+    SyncLaneData m;
+    m.id = "M_D17";
+    m.calibrated = true;
+    m.segments = { makeSeg("/fake/a.mp4", 100000, 5000),
+                   makeSeg("/fake/b.mp4", 105500, 4000) };
+    m.durationMs = 9000;
+    m.path = m.segments.first().path;
+    CHECK(m.isMerged(), "merged: isMerged");
+    CHECK(syncLaneWallStart(m) == 100000, "merged: wallStart = earliest seg");
+    CHECK(syncLaneWallEnd(m) == 109500, "merged: wallEnd = latest seg end");
+    CHECK(syncLaneCovers(m, 103000), "merged: covers seg0");
+    CHECK(!syncLaneCovers(m, 105200), "merged: gap not covered");
+    CHECK(syncLaneCovers(m, 107000), "merged: covers seg1");
+
+    // 虚拟轴映射：cum = [0, 5000]
+    CHECK(syncStreamOf(m, 102000) == 2000, "merged: streamOf in seg0");
+    CHECK(syncStreamOf(m, 107000) == 6500, "merged: streamOf in seg1 (cum 5000 + 1500)");
+    CHECK(syncWallOf(m, 6500) == 107000, "merged: wallOf round trip");
+    // 缺口钉最近段（105200 → seg1 起点外推 → 钳 0 → cum[1]+0 = 5000）
+    CHECK(syncStreamOf(m, 105200) == 5000, "merged: gap pins nearest seg start");
+    const auto pr = syncMergedSegmentOf(m, 6500);
+    CHECK(pr.first == 1 && pr.second == 1500, "merged: segmentOf decodes (seg,real)");
+
+    // 先起步者赢：两帧重叠 [104000,105000)
+    SyncLaneData ov;
+    ov.id = "M_OV";
+    ov.calibrated = true;
+    ov.segments = { makeSeg("/fake/a.mp4", 100000, 10000),   // [100000,110000)
+                    makeSeg("/fake/b.mp4", 104000, 4000) };  // [104000,108000)
+    CHECK(syncSegmentAt(ov, 106000) == 0, "merged: earlier-start seg wins overlap");
+    CHECK(syncSegmentAt(ov, 108500) == 0, "merged: only seg0 covers 108500");
+    CHECK(syncSegmentAt(ov, 10000) == -1, "merged: nothing covers before start");
+    // 重叠区取赢者：106000 在 seg0 → real 6000 → 虚拟 6000
+    CHECK(syncStreamOf(ov, 106000) == 6000, "merged: overlap maps via winner");
+}
+
+// P-69：SegmentSwitchEngine 经服务装载——跨段 seek 换文件、位置回报虚拟轴
+static void testMergedServiceSwitch()
+{
+    MultiCamSyncService svc;
+    QVector<FakeEngine *> eng;
+    SyncLaneData m;
+    m.id = "M_D17";
+    m.displayName = "D17";
+    m.calibrated = true;
+    m.segments = { makeSeg("/fake/a.mp4", 100000, 5000),
+                   makeSeg("/fake/b.mp4", 105500, 4000) };
+    m.durationMs = 9000;
+    m.path = m.segments.first().path;
+    // 定制工厂：段时长按路径回报（与段装配一致，验证引擎实测自修正不扰动）
+    svc.setEngineFactory([&eng](QObject *parent) -> IVideoEngine * {
+        auto *e = new FakeEngine(parent);
+        e->durByPath = {{"/fake/a.mp4", 5000}, {"/fake/b.mp4", 4000}};
+        eng.append(e);
+        return e;
+    });
+    bool finished = false;
+    QObject::connect(&svc, &MultiCamSyncService::loadFinished,
+                     [&finished]() { finished = true; });
+    CHECK(svc.loadLanes({m}), "merged svc: loadLanes accepted");
+    pump(50);
+    CHECK(finished, "merged svc: loadFinished emitted");
+
+    CHECK(eng.size() == 1, "merged svc: one real engine (C5 resource bound)");
+    auto *sw = qobject_cast<SegmentSwitchEngine *>(svc.engineAt(0));
+    CHECK(sw != nullptr, "merged svc: lane engine is SegmentSwitchEngine");
+    if (!sw)
+        return;
+    CHECK(eng[0]->path == QLatin1String("/fake/a.mp4"),
+          "merged svc: loads segment 0 first");
+    CHECK(sw->currentSegment() == 0, "merged svc: current segment 0");
+    CHECK(svc.lanes()[0].durationMs == 9000, "merged svc: lane duration = sum");
+
+    // 同段 seek：直接落点，不换文件
+    svc.seekWall(102000);
+    CHECK(eng[0]->lastSeek == 2000, "merged svc: seek in seg0 → real ms");
+    const int loads = eng[0]->loadCount;
+
+    // 跨段 seek：换文件到 seg1
+    svc.seekWall(107000);
+    pump(10);   // 假引擎 durationChanged 是 singleShot(0) 异步
+    CHECK(eng[0]->loadCount == loads + 1, "merged svc: cross-seg seek reloads file");
+    CHECK(eng[0]->path == QLatin1String("/fake/b.mp4"),
+          "merged svc: switched to segment 1 file");
+    CHECK(eng[0]->lastSeek == 1500, "merged svc: pending seek lands in seg1 real ms");
+    CHECK(sw->currentSegment() == 1, "merged svc: current segment 1");
+
+    // 位置回报虚拟轴（cum[1]=5000 + 真实 1500）
+    CHECK(sw->position() == 6500, "merged svc: position on virtual axis");
+    svc.closeAll();
+}
+
+// P-69：buildMergedGroups 分组规则（同标签≥2、全校时、按起点升序）
+static void testMergedGrouping()
+{
+    QVector<CamInventoryItem> items;
+    auto addItem = [&](const QString &label, qint64 wallStart, bool calibrated) {
+        CamInventoryItem it;
+        it.id = QStringLiteral("V%1").arg(items.size() + 1);
+        it.displayName = label;
+        it.path = QStringLiteral("/fake/%1.mp4").arg(it.id);
+        it.pathExists = true;
+        it.calibrated = calibrated;
+        if (calibrated) {
+            it.lane.calibrated = true;
+            it.lane.cal = makeCal(wallStart);
+            it.lane.durationMs = 60000;
+        }
+        items.append(it);
+    };
+    addItem("D17", 300000, true);    // 乱序录入：验证分组内按起点排序
+    addItem("D17", 100000, true);
+    addItem("D17", 200000, false);   // 未校时 → 整组不成立（合并仅模式A）
+    auto groups = buildMergedGroups(items);
+    CHECK(groups.isEmpty(), "grouping: uncalibrated member disqualifies group");
+
+    items[2].calibrated = true;
+    items[2].lane.calibrated = true;
+    items[2].lane.cal = makeCal(200000);
+    items[2].lane.durationMs = 60000;
+    groups = buildMergedGroups(items);
+    CHECK(groups.size() == 1, "grouping: one D17 group");
+    CHECK(groups[0].memberIdx.size() == 3, "grouping: three members");
+    CHECK(groups[0].memberIdx == (QVector<int>{1, 2, 0}),
+          "grouping: members sorted by wallStart asc");
+
+    addItem("D15", 50000, true);     // 另一标签仅 1 个 → 不成组
+    groups = buildMergedGroups(items);
+    CHECK(groups.size() == 1, "grouping: single-member label no group");
+}
+
 int main(int argc, char **argv)
 {
     QCoreApplication app(argc, argv);
@@ -711,6 +862,9 @@ int main(int argc, char **argv)
     testEventCalibFit();
     testEventCalibCycleAndChain();
     testEventCalibJsonRoundTrip();
+    testMergedMapping();
+    testMergedServiceSwitch();
+    testMergedGrouping();
     fprintf(stderr, "sync_test: %d checks, %d failures\n", g_checks, g_failures);
     return g_failures ? 1 : 0;
 }
