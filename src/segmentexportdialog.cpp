@@ -2,18 +2,17 @@
 
 #include <QCheckBox>
 #include <QComboBox>
-#include <QDialogButtonBox>
+#include <QDateTime>
 #include <QFileDialog>
-#include <QFileInfo>
 #include <QHBoxLayout>
 #include <QHeaderView>
 #include <QLabel>
 #include <QLineEdit>
 #include <QMessageBox>
+#include <QProgressBar>
 #include <QPushButton>
 #include <QTableWidget>
 #include <QVBoxLayout>
-#include <QDateTime>
 
 #include "i18n.h"
 #include "theme.h"
@@ -31,6 +30,10 @@ SegmentExportDialog::SegmentExportDialog(const speedplan::SpeedPlan &plan,
     m_plan.normalize();
     setWindowTitle(lang("导出选段视频", "Export Segment Clip"));
     setMinimumWidth(640);
+    // 非模态浮窗（用户反馈②③）：可最小化、不挡主窗口操作
+    setModal(false);
+    setWindowFlags(windowFlags() | Qt::WindowMinimizeButtonHint
+                   | Qt::WindowStaysOnTopHint);
 
     auto *lay = new QVBoxLayout(this);
     lay->setSpacing(8);
@@ -41,9 +44,9 @@ SegmentExportDialog::SegmentExportDialog(const speedplan::SpeedPlan &plan,
 
     auto *hint = new QLabel(
         lang("分段变速：不关键的段调快掠过，关键的段常速或慢放。\n"
-             "初值已按选段内标签自动分段；可再增删。",
+             "初值已按选段内标签自动分段；本窗口不锁播放——边播边分段。",
              "Per-segment speed: skim unimportant parts, keep key parts normal/slow.\n"
-             "Initial splits come from in-selection labels; editable below."),
+             "Initial splits come from in-selection labels; this panel is modeless."),
         this);
     hint->setStyleSheet("color: " + Theme::TextSecond + ";");
     hint->setWordWrap(true);
@@ -52,7 +55,8 @@ SegmentExportDialog::SegmentExportDialog(const speedplan::SpeedPlan &plan,
     m_table = new QTableWidget(this);
     m_table->setColumnCount(3);
     m_table->setHorizontalHeaderLabels({lang("段", "Seg"),
-                                        lang("区间（流内）", "Range (stream)"),
+                                        m_wallEpoch ? lang("区间（墙钟）", "Range (wall)")
+                                                    : lang("区间（流内）", "Range (stream)"),
                                         lang("倍速", "Speed")});
     m_table->horizontalHeader()->setSectionResizeMode(1, QHeaderView::Stretch);
     m_table->verticalHeader()->setVisible(false);
@@ -62,12 +66,13 @@ SegmentExportDialog::SegmentExportDialog(const speedplan::SpeedPlan &plan,
 
     auto *splitRow = new QHBoxLayout();
     auto *splitBtn = new QPushButton(lang("在当前游标处分段", "Split at cursor"), this);
-    splitBtn->setToolTip(lang("以当前播放位置为边界把所在段一分为二",
-                              "Split the segment at current play position"));
+    splitBtn->setToolTip(lang("以当前播放位置为边界把所在段一分为二（游标实时跟随播放）",
+                              "Split the segment at current play position (live cursor)"));
     connect(splitBtn, &QPushButton::clicked, this, [this]() {
         if (m_cursorMs <= m_plan.aMs || m_cursorMs >= m_plan.bMs) {
-            QMessageBox::information(this, lang("分段", "Split"),
-                lang("游标不在选段内，无法分段。", "Cursor is outside the selection."));
+            m_resultLabel->setStyleSheet("color: " + Theme::Accent + ";");
+            m_resultLabel->setText(lang("游标不在选段内，无法分段。",
+                                        "Cursor is outside the selection."));
             return;
         }
         m_plan.splits.append(m_cursorMs);
@@ -111,20 +116,50 @@ SegmentExportDialog::SegmentExportDialog(const speedplan::SpeedPlan &plan,
     pathRow->addWidget(browse);
     lay->addLayout(pathRow);
 
-    auto *buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel,
-                                         this);
-    buttons->button(QDialogButtonBox::Ok)->setText(lang("开始导出", "Export"));
-    buttons->button(QDialogButtonBox::Cancel)->setText(lang("取消", "Cancel"));
-    connect(buttons, &QDialogButtonBox::accepted, this, [this]() {
+    // ---- 进度区（导出中显示；用户反馈③：进度内嵌不阻塞）----
+    m_progressBox = new QWidget(this);
+    auto *pgLay = new QHBoxLayout(m_progressBox);
+    pgLay->setContentsMargins(0, 0, 0, 0);
+    m_progressBar = new QProgressBar(m_progressBox);
+    m_progressBar->setTextVisible(true);
+    pgLay->addWidget(m_progressBar, 1);
+    auto *cancelBtn = new QPushButton(lang("取消导出", "Cancel"), m_progressBox);
+    connect(cancelBtn, &QPushButton::clicked, this,
+            [this]() { emit cancelRequested(); });
+    pgLay->addWidget(cancelBtn);
+    m_progressBox->setVisible(false);
+    lay->addWidget(m_progressBox);
+
+    m_resultLabel = new QLabel(this);
+    m_resultLabel->setWordWrap(true);
+    lay->addWidget(m_resultLabel);
+
+    auto *btnRow = new QHBoxLayout();
+    btnRow->addStretch();
+    m_exportBtn = new QPushButton(lang("开始导出", "Export"), this);
+    m_exportBtn->setStyleSheet(
+        "QPushButton { background: " + Theme::Accent + "; color: " + Theme::AccentOnDark
+        + "; font-weight: bold; padding: 6px 18px; border-radius: 6px; }"
+        "QPushButton:hover { background: " + Theme::AccentHover + "; }"
+        "QPushButton:disabled { background: " + Theme::BgPressed + "; color: "
+        + Theme::TextMuted + "; }");
+    connect(m_exportBtn, &QPushButton::clicked, this, [this]() {
+        if (m_running)
+            return;
         if (m_pathEdit->text().trimmed().isEmpty()) {
-            QMessageBox::warning(this, lang("导出选段视频", "Export Segment Clip"),
-                                 lang("请选择输出路径。", "Please choose an output path."));
+            m_resultLabel->setStyleSheet("color: " + Theme::Accent + ";");
+            m_resultLabel->setText(lang("请选择输出路径。",
+                                        "Please choose an output path."));
             return;
         }
-        accept();
+        emit exportRequested(m_plan, m_osdCheck->isChecked(),
+                             m_pathEdit->text().trimmed());
     });
-    connect(buttons, &QDialogButtonBox::rejected, this, &QDialog::reject);
-    lay->addWidget(buttons);
+    btnRow->addWidget(m_exportBtn);
+    auto *closeBtn = new QPushButton(lang("关闭", "Close"), this);
+    connect(closeBtn, &QPushButton::clicked, this, &QDialog::hide);
+    btnRow->addWidget(closeBtn);
+    lay->addLayout(btnRow);
 
     rebuildTable();
     updateSummary();
@@ -149,6 +184,51 @@ QString SegmentExportDialog::fmtTime(qint64 ms) const
 
 bool SegmentExportDialog::burnOsd() const { return m_osdCheck->isChecked(); }
 QString SegmentExportDialog::outputPath() const { return m_pathEdit->text().trimmed(); }
+
+void SegmentExportDialog::setPlan(const speedplan::SpeedPlan &plan,
+                                  const QString &suggestedPath)
+{
+    m_plan = plan;
+    m_plan.normalize();
+    m_pathEdit->setText(suggestedPath);
+    m_resultLabel->clear();
+    rebuildTable();
+    updateSummary();
+}
+
+void SegmentExportDialog::setExportRunning(bool running, int totalFrames)
+{
+    m_running = running;
+    m_table->setEnabled(!running);
+    m_exportBtn->setEnabled(!running);
+    m_progressBox->setVisible(running);
+    if (running) {
+        m_progressBar->setRange(0, qMax(1, totalFrames));
+        m_progressBar->setValue(0);
+        m_resultLabel->clear();
+    }
+}
+
+void SegmentExportDialog::setProgress(int done, int total)
+{
+    m_progressBar->setRange(0, qMax(1, total));
+    m_progressBar->setValue(done);
+}
+
+void SegmentExportDialog::setResult(bool ok, const QString &msg)
+{
+    setExportRunning(false);
+    if (ok) {
+        m_resultLabel->setStyleSheet("color: " + Theme::Success + ";");
+        m_resultLabel->setText(lang("✅ 已导出：", "✅ Exported: ") + msg);
+    } else if (msg == QStringLiteral("已取消")) {
+        m_resultLabel->setStyleSheet("color: " + Theme::TextSecond + ";");
+        m_resultLabel->setText(lang("已取消。", "Cancelled."));
+    } else {
+        m_resultLabel->setStyleSheet("color: " + Theme::Danger + ";");
+        m_resultLabel->setText(lang("❌ 导出失败：", "❌ Failed: ") + msg);
+    }
+}
 
 void SegmentExportDialog::rebuildTable()
 {

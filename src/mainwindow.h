@@ -81,6 +81,9 @@ private slots:
     /// 曲线分析区合成 PNG，OSD 烧录标签/时间码，入案件 snapshots/。
     void onSnapshotQuick();
     void onExportSegmentClip();   // P-68 导出选段视频（分段变速复合导出）
+    /// P-68：导出面板「开始导出」执行体（底图采集 + 引擎启动）
+    void startSegmentExport(const speedplan::SpeedPlan &plan, bool burnOsd,
+                            const QString &outPath);
     void onClearRegions();
     void onClearData();
     void onExportCsv();
@@ -311,6 +314,7 @@ protected:
     speedplan::SpeedPlan m_speedPlan;
     class SegmentExportEngine *m_segmentExporter = nullptr;
     QPushButton *m_exportClipBtn = nullptr;
+    class SegmentExportDialog *m_exportDlg = nullptr;   // 非模态导出面板（复用）
     SpectrogramPanelEnhanced *m_spectrogramEnhanced = nullptr;
 
 };

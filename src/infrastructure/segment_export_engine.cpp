@@ -26,6 +26,29 @@ extern "C" {
 
 namespace {
 constexpr const char *kErrPrefix = "[SEGMENT_EXPORT] ";
+
+/// 编码器探测（P-68④ 实锤：LGPL 版 ffmpeg 无 libx264；按 ffmpeg 二进制路径缓存）
+/// 优先 libx264（画质/体积最优）→ libopenh264（LGPG 版自带）→ h264_mf（Windows 保底）
+QString pickH264Encoder(const QString &ffmpegPath)
+{
+    static QHash<QString, QString> cache;
+    const auto it = cache.constFind(ffmpegPath);
+    if (it != cache.constEnd())
+        return it.value();
+    QString enc = QStringLiteral("h264_mf");
+    QProcess probe;
+    probe.start(ffmpegPath, {QStringLiteral("-hide_banner"),
+                             QStringLiteral("-encoders")});
+    if (probe.waitForFinished(8000)) {
+        const QString out = QString::fromLocal8Bit(probe.readAllStandardOutput());
+        if (out.contains(QStringLiteral("libx264")))
+            enc = QStringLiteral("libx264");
+        else if (out.contains(QStringLiteral("libopenh264")))
+            enc = QStringLiteral("libopenh264");
+    }
+    cache.insert(ffmpegPath, enc);
+    return enc;
+}
 }
 
 SegmentExportEngine::SegmentExportEngine(QObject *parent)
@@ -281,10 +304,14 @@ void SegmentExportEngine::run()
     } else {
         args << QStringLiteral("-map") << QStringLiteral("0:v");
     }
-    args << QStringLiteral("-c:v") << QStringLiteral("libx264")
-         << QStringLiteral("-preset") << QStringLiteral("medium")
-         << QStringLiteral("-crf") << QStringLiteral("18")
+    const QString encoder = pickH264Encoder(ffmpeg);
+    args << QStringLiteral("-c:v") << encoder
          << QStringLiteral("-pix_fmt") << QStringLiteral("yuv420p");
+    if (encoder == QStringLiteral("libx264"))
+        args << QStringLiteral("-preset") << QStringLiteral("medium")
+             << QStringLiteral("-crf") << QStringLiteral("18");
+    else
+        args << QStringLiteral("-b:v") << QStringLiteral("8M");
     if (hasAudio)
         args << QStringLiteral("-c:a") << QStringLiteral("aac")
              << QStringLiteral("-b:a") << QStringLiteral("128k")
@@ -437,6 +464,13 @@ void SegmentExportEngine::run()
             if (w < 0) { errMsg = QStringLiteral("ffmpeg 管道写入失败"); break; }
             written += w;
             if (m_cancelled) break;
+        }
+        // 背压（P-68④ 实测隐患）：QProcess 写缓冲由管道写入线程异步排空，
+        // 生产者（解码+合成）快于消费者（x264 编码）时缓冲无限膨胀——
+        // 1080p 一帧 8.3MB，长选段可吃光内存。超阈值即等排空。
+        while (proc.bytesToWrite() > 256ll * 1024 * 1024 && !m_cancelled) {
+            if (!proc.waitForBytesWritten(5000))
+                break;
         }
         if (!errMsg.isEmpty() || m_cancelled)
             break;
@@ -667,10 +701,14 @@ void SegmentExportEngine::runMultiCam()
     } else {
         args << QStringLiteral("-map") << QStringLiteral("0:v");
     }
-    args << QStringLiteral("-c:v") << QStringLiteral("libx264")
-         << QStringLiteral("-preset") << QStringLiteral("medium")
-         << QStringLiteral("-crf") << QStringLiteral("18")
+    const QString encoder = pickH264Encoder(ffmpeg);
+    args << QStringLiteral("-c:v") << encoder
          << QStringLiteral("-pix_fmt") << QStringLiteral("yuv420p");
+    if (encoder == QStringLiteral("libx264"))
+        args << QStringLiteral("-preset") << QStringLiteral("medium")
+             << QStringLiteral("-crf") << QStringLiteral("18");
+    else
+        args << QStringLiteral("-b:v") << QStringLiteral("8M");
     if (withAudio)
         args << QStringLiteral("-c:a") << QStringLiteral("aac")
              << QStringLiteral("-b:a") << QStringLiteral("128k")
@@ -823,6 +861,11 @@ void SegmentExportEngine::runMultiCam()
             if (w < 0) { errMsg = QStringLiteral("ffmpeg 管道写入失败"); break; }
             written += w;
             if (m_cancelled) break;
+        }
+        // 背压（同单路版注释：防管道写缓冲无限膨胀）
+        while (proc.bytesToWrite() > 256ll * 1024 * 1024 && !m_cancelled) {
+            if (!proc.waitForBytesWritten(5000))
+                break;
         }
         if (!errMsg.isEmpty() || m_cancelled)
             break;

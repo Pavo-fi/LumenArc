@@ -982,6 +982,8 @@ void MultiCamPlaybackWindow::selectTile(int idx)
 void MultiCamPlaybackWindow::onClock(qint64 wallMs)
 {
     m_lastWallMs = wallMs;   // P-68 A/B 打点用
+    if (m_exportDlg)
+        m_exportDlg->setCursorMs(wallMs);   // 导出面板游标实时跟随（反馈②）
     // 模式A 游标
     if (m_mergedBar)
         m_mergedBar->setCursorMs(wallMs);
@@ -1119,9 +1121,6 @@ void MultiCamPlaybackWindow::onExportClip()
     // 建议输出路径：案件模式 = 案内 exports/；独立模式 = 首路源旁
     const QVector<SyncLaneData> &lanes = m_svc->lanes();
     QString dir;
-    QString base = QStringLiteral("multicam");
-    if (!lanes.isEmpty())
-        base = QFileInfo(lanes.first().path).completeBaseName() + QStringLiteral("_etc");
     if (m_case) {
         dir = m_case->caseDir() + QStringLiteral("/exports");
         QDir().mkpath(dir);
@@ -1131,52 +1130,62 @@ void MultiCamPlaybackWindow::onExportClip()
     const QString suggested = QDir(dir).filePath(
         QStringLiteral("LAClip_MC_%1-%2.mp4").arg(aMs).arg(bMs));
 
-    SegmentExportDialog dlg(plan, m_lastWallMs, suggested, this,
-                            /*wallEpoch=*/true);
-    if (dlg.exec() != QDialog::Accepted)
+    // 非模态浮窗（用户反馈②③：与单路同款，不挡播放/游标）
+    if (!m_exportDlg) {
+        m_exportDlg = new SegmentExportDialog(plan, m_lastWallMs, suggested, this,
+                                              /*wallEpoch=*/true);
+        connect(m_exportDlg, &SegmentExportDialog::exportRequested, this,
+                [this](const speedplan::SpeedPlan &planIn, bool burnOsd,
+                       const QString &outPath) {
+                    startClipExport(planIn, burnOsd, outPath);
+                });
+        connect(m_exportDlg, &SegmentExportDialog::cancelRequested, this, [this]() {
+            if (m_segmentExporter)
+                m_segmentExporter->cancel();
+        });
+    } else {
+        m_exportDlg->setPlan(plan, suggested);
+        m_exportDlg->setCursorMs(m_lastWallMs);
+    }
+    m_exportDlg->show();
+    m_exportDlg->raise();
+    m_exportDlg->activateWindow();
+}
+
+/// P-68 多机：面板「开始导出」执行体
+void MultiCamPlaybackWindow::startClipExport(const speedplan::SpeedPlan &planIn,
+                                             bool burnOsd, const QString &outPath)
+{
+    if (m_segmentExporter && m_segmentExporter->isRunning()) {
+        m_exportDlg->setResult(false, lang("已有导出进行中", "Export already running"));
         return;
-    plan = dlg.plan();
+    }
+    speedplan::SpeedPlan plan = planIn;
     plan.normalize();
 
     SegmentExportEngine::Params pp;
-    pp.outputPath = dlg.outputPath();
+    pp.outputPath = outPath;
     pp.plan = plan;
-    pp.lanes = lanes;
+    pp.lanes = m_svc->lanes();
     pp.audioLane = m_svc->audibleLane();
     double fps = 25.0;
     for (int i = 0; i < m_svc->laneCount(); ++i)
         if (auto *e = m_svc->engineAt(i))
             if (e->fps() > 0.0f) { fps = e->fps(); break; }
     pp.outFps = fps;
-    pp.burnOsd = dlg.burnOsd();
+    pp.burnOsd = burnOsd;
     pp.caseLabel = m_case ? m_case->meta().caseNo : QString();
 
     if (!m_segmentExporter)
         m_segmentExporter = new SegmentExportEngine(this);
-    if (m_segmentExporter->isRunning()) {
-        m_statusLabel->setText(lang("导出进行中", "Export in progress"));
-        return;
-    }
     SegmentExportEngine *eng = m_segmentExporter;
-    auto *pd = new QProgressDialog(lang("正在导出多机选段…", "Exporting multi-cam clip…"),
-                                   lang("取消", "Cancel"), 0,
-                                   int(plan.outputFrameCount(pp.outFps)), this);
-    pd->setWindowModality(Qt::WindowModal);
-    pd->setMinimumDuration(0);
-    pd->setValue(0);
-    connect(eng, &SegmentExportEngine::progress, pd, &QProgressDialog::setValue);
-    connect(pd, &QProgressDialog::canceled, eng, &SegmentExportEngine::cancel);
+    m_exportDlg->setExportRunning(true, int(plan.outputFrameCount(pp.outFps)));
+    connect(eng, &SegmentExportEngine::progress, m_exportDlg,
+            &SegmentExportDialog::setProgress, Qt::UniqueConnection);
     connect(eng, &SegmentExportEngine::finished, this,
-            [this, pd](bool ok, const QString &msg) {
-                pd->close();
-                pd->deleteLater();
-                if (ok)
-                    QMessageBox::information(this, lang("导出完成", "Export Done"),
-                        lang("已导出：\n", "Exported:\n") + msg);
-                else if (msg == QStringLiteral("已取消"))
-                    m_statusLabel->setText(lang("导出已取消", "Export cancelled"));
-                else
-                    QMessageBox::warning(this, lang("导出失败", "Export Failed"), msg);
-            });
+            [this](bool ok, const QString &msg) {
+                if (m_exportDlg)
+                    m_exportDlg->setResult(ok, msg);
+            }, Qt::UniqueConnection);
     eng->start(pp);
 }

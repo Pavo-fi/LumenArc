@@ -2634,10 +2634,6 @@ void MainWindow::onExportSegmentClip()
         || m_currentVideoPath.isEmpty()
         || m_currentVideoPath.endsWith(".vla", Qt::CaseInsensitive))
         return;
-    if (m_segmentExporter && m_segmentExporter->isRunning()) {
-        showOperationStatus(lang("导出进行中，请稍候", "Export in progress"));
-        return;
-    }
     const qint64 aMs = m_chartPanel->abPointA();
     const qint64 bMs = m_chartPanel->abPointB();
 
@@ -2664,12 +2660,41 @@ void MainWindow::onExportSegmentClip()
     }
     const QString suggested = QDir(dir).filePath(name);
 
-    SegmentExportDialog dlg(plan,
-                            m_videoEngine ? m_videoEngine->position() : 0,
-                            suggested, this);
-    if (dlg.exec() != QDialog::Accepted)
+    // 非模态浮窗（用户反馈②③）：打开后可继续播放/拖游标，分段实时取游标；
+    // 进度内嵌面板、可最小化
+    if (!m_exportDlg) {
+        m_exportDlg = new SegmentExportDialog(plan,
+                                              m_videoEngine ? m_videoEngine->position() : 0,
+                                              suggested, this);
+        connect(m_videoEngine, &IVideoEngine::positionChanged,
+                m_exportDlg, &SegmentExportDialog::setCursorMs);
+        connect(m_exportDlg, &SegmentExportDialog::exportRequested, this,
+                [this](const speedplan::SpeedPlan &planIn, bool burnOsd,
+                       const QString &outPath) {
+                    startSegmentExport(planIn, burnOsd, outPath);
+                });
+        connect(m_exportDlg, &SegmentExportDialog::cancelRequested, this, [this]() {
+            if (m_segmentExporter)
+                m_segmentExporter->cancel();
+        });
+    } else {
+        m_exportDlg->setPlan(plan, suggested);
+        m_exportDlg->setCursorMs(m_videoEngine ? m_videoEngine->position() : 0);
+    }
+    m_exportDlg->show();
+    m_exportDlg->raise();
+    m_exportDlg->activateWindow();
+}
+
+/// P-68：面板「开始导出」→ 采集底图 + 引擎启动（进度回报回面板）
+void MainWindow::startSegmentExport(const speedplan::SpeedPlan &planIn,
+                                    bool burnOsd, const QString &outPath)
+{
+    if (m_segmentExporter && m_segmentExporter->isRunning()) {
+        m_exportDlg->setResult(false, lang("已有导出进行中", "Export already running"));
         return;
-    plan = dlg.plan();
+    }
+    speedplan::SpeedPlan plan = planIn;
     plan.normalize();
     m_speedPlan = plan;          // 拍板 Q5：方案随 .vla 持久化
     saveCurrentVlaAsync();
@@ -2680,7 +2705,7 @@ void MainWindow::onExportSegmentClip()
     const AnalysisSnapshot snap = m_timelineModel->snapshot();
     QValueAxis *ax = m_chartPanel->axisX();
     const qreal oldMin = ax ? ax->min() : 0, oldMax = ax ? ax->max() : 0;
-    m_chartPanel->setXAxisRange(aMs, bMs);
+    m_chartPanel->setXAxisRange(plan.aMs, plan.bMs);
     if (!snap.timestamps.isEmpty())
         chartBase = m_chartPanel->renderToImage(QSize(3840, 420));
     if (snap.audioData().hasSpectrogram())
@@ -2690,13 +2715,13 @@ void MainWindow::onExportSegmentClip()
 
     SegmentExportEngine::Params pp;
     pp.sourcePath = m_currentVideoPath;
-    pp.outputPath = dlg.outputPath();
+    pp.outputPath = outPath;
     pp.plan = plan;
     pp.outFps = (m_videoEngine && m_videoEngine->fps() > 0.0f)
                     ? double(m_videoEngine->fps()) : 25.0;
     pp.chartBase = chartBase;
     pp.specBase = specBase;
-    pp.burnOsd = dlg.burnOsd();
+    pp.burnOsd = burnOsd;
     pp.caseLabel = (m_caseManager && m_caseManager->isOpen())
                        ? m_caseManager->meta().caseNo : QString();
     pp.calibration = m_calibration;
@@ -2704,29 +2729,16 @@ void MainWindow::onExportSegmentClip()
     if (!m_segmentExporter)
         m_segmentExporter = new SegmentExportEngine(this);
     SegmentExportEngine *eng = m_segmentExporter;
-    auto *pd = new QProgressDialog(lang("正在导出选段视频…", "Exporting clip…"),
-                                   lang("取消", "Cancel"), 0,
-                                   int(plan.outputFrameCount(pp.outFps)), this);
-    pd->setWindowTitle(lang("导出选段视频", "Export Segment Clip"));
-    pd->setWindowModality(Qt::WindowModal);
-    pd->setMinimumDuration(0);
-    pd->setValue(0);
-    connect(eng, &SegmentExportEngine::progress, pd, &QProgressDialog::setValue);
-    connect(pd, &QProgressDialog::canceled, eng, &SegmentExportEngine::cancel);
+    m_exportDlg->setExportRunning(true, int(plan.outputFrameCount(pp.outFps)));
+    connect(eng, &SegmentExportEngine::progress, m_exportDlg,
+            &SegmentExportDialog::setProgress, Qt::UniqueConnection);
     connect(eng, &SegmentExportEngine::finished, this,
-            [this, pd](bool ok, const QString &msg) {
-                pd->close();
-                pd->deleteLater();
-                if (ok) {
+            [this](bool ok, const QString &msg) {
+                if (m_exportDlg)
+                    m_exportDlg->setResult(ok, msg);
+                if (ok)
                     showOperationStatus(lang("选段视频导出完成", "Clip exported"));
-                    QMessageBox::information(this, lang("导出完成", "Export Done"),
-                        lang("已导出：\n", "Exported:\n") + msg);
-                } else if (msg == QStringLiteral("已取消")) {
-                    showOperationStatus(lang("导出已取消", "Export cancelled"));
-                } else {
-                    QMessageBox::warning(this, lang("导出失败", "Export Failed"), msg);
-                }
-            });
+            }, Qt::UniqueConnection);
     eng->start(pp);
 }
 

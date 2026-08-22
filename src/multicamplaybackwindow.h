@@ -21,6 +21,7 @@
 #pragma once
 
 #include <QDialog>
+#include "domain/speed_plan.h"
 #include <QVector>
 #include <QString>
 #include <functional>
@@ -82,6 +83,8 @@ private slots:
     void onStartSync();       ///< 勾选面板「开始同步播放」（P-59）
     void onBackToPicker();    ///< 工具行「重选机位」
     void onExportClip();      ///< P-68 多机选段导出（模式A）
+    void startClipExport(const speedplan::SpeedPlan &plan, bool burnOsd,
+                         const QString &outPath);
     void onRefreshPicker();   ///< 勾选面板「刷新清单」（校时后回来刷状态）
 
 private:
@@ -128,6 +131,7 @@ private:
     qint64 m_lastWallMs = -1;                 ///< 最近墙钟游标（A/B 打点用）
     qint64 m_abA = -1, m_abB = -1;            ///< 选段（墙钟域）
     class SegmentExportEngine *m_segmentExporter = nullptr;
+    class SegmentExportDialog *m_exportDlg = nullptr;   // 非模态导出面板
     QPushButton *m_osdBtn = nullptr;
     QPushButton *m_adjustBtn = nullptr;           ///< 画面调节（选中瓦片，v1.12.8）
     class PlaybackAdjustPanel *m_adjustPanel = nullptr;
