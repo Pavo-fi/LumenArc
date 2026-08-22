@@ -33,6 +33,7 @@
 #include <QSlider>
 #include <QCheckBox>
 #include <QPushButton>
+#include <QSplitter>
 #include <QProcess>
 #include <QEventLoop>
 #include <cstdio>
@@ -312,6 +313,134 @@ static void testPreprocessGoChain()
 // P-62 续（v1.12.3）：拼接产物打开即继承分段校时并落盘 .vla（越秀案实测
 // 「播放时间轴不显示校时结果」——产物旁 sidecar 存在而校时未生效）。
 // fixture：ffmpeg lavfi 合成 3s 真小视频 + 带 1h 缺口的 sidecar；
+// ---------------------------------------------------------------------------
+// v1.13.1 用户拍板布局（实测反馈①回归网）：
+//   放大镜内嵌右上象限（与视频等大同高，不再贯通整窗）；图表/语谱图全宽；
+//   左列 dock 全高；案件列表有常驻手动折叠钮。
+// ---------------------------------------------------------------------------
+static QWidget *findByClass(QWidget *root, const char *cls)
+{
+    for (QWidget *w : root->findChildren<QWidget *>())
+        if (qstrcmp(w->metaObject()->className(), cls) == 0)
+            return w;
+    return nullptr;
+}
+
+static void testMagnifierLayout(QApplication &app)
+{
+    QDir tmp(QDir::tempPath() + "/lumenarc_maglayout");
+    tmp.removeRecursively();
+    QDir().mkpath(tmp.path());
+    const QString clip = tmp.path() + "/layout.mp4";
+    const QString ffmpeg = QCoreApplication::applicationDirPath()
+        + QStringLiteral("/ffmpeg/ffmpeg.exe");
+    if (!QFile::exists(ffmpeg)) {
+        fprintf(stderr, "[maglayout] SKIP (bundled ffmpeg not found)\n");
+        return;
+    }
+    QProcess proc;
+    proc.start(ffmpeg, {QStringLiteral("-y"), QStringLiteral("-v"), QStringLiteral("error"),
+                        QStringLiteral("-f"), QStringLiteral("lavfi"),
+                        QStringLiteral("-i"),
+                        QStringLiteral("testsrc=duration=2:size=640x360:rate=10"),
+                        clip});
+    proc.waitForFinished(20000);
+    if (!QFile::exists(clip)) {
+        fprintf(stderr, "[maglayout] SKIP (clip synth failed)\n");
+        return;
+    }
+
+    MainWindow mw;
+    mw.resize(1600, 1000);
+    mw.show();
+    pump(app);
+    // offscreen 平台探针：裸控件 show 后 isVisible 是否可信
+    {
+        QWidget probe;
+        probe.show();
+        pump(app, 100);
+        fprintf(stderr, "[maglayout] plain-widget visible=%d (offscreen 若恒 0 则本套件以几何断言为准)\n",
+                probe.isVisible() ? 1 : 0);
+    }
+    QMetaObject::invokeMethod(&mw, "openVideoFile", Q_ARG(QString, clip));
+    pump(app, 2500);   // 异步装载
+    if (!mw.isVisible()) { mw.setVisible(true); pump(app, 300); }
+
+    QWidget *video = findByClass(&mw, "VideoWidget");
+    CHECK(video != nullptr, "maglayout: video widget present");
+    // 呼出放大镜（滚轮路径等价：直调 slot）。
+    // 注意：offscreen 平台 isVisible() 恒 false（裸控件探针实证），
+    // 可见性一律改以「非显式隐藏 + 有几何尺寸 + 父为分割条」断言。
+    const bool inv1 = QMetaObject::invokeMethod(&mw, "onMagnifierWheelZoom",
+                              Q_ARG(int, 120), Q_ARG(QPoint, QPoint(320, 180)));
+    CHECK(inv1, "maglayout: onMagnifierWheelZoom invokable");
+    pump(app, 300);
+
+    QWidget *mag = findByClass(&mw, "MagnifierWidget");
+    CHECK(mag != nullptr && !mag->isHidden() && mag->width() > 100
+          && qobject_cast<QSplitter *>(mag->parentWidget()) != nullptr,
+          "maglayout: magnifier embedded in top-row splitter");
+    if (video && mag) {
+        // ① 同一行：顶对齐 + 同高（±2 容差）
+        CHECK(qAbs(mag->mapTo(&mw, QPoint(0, 0)).y()
+                   - video->mapTo(&mw, QPoint(0, 0)).y()) <= 2,
+              "maglayout: magnifier top-aligned with video (same row)");
+        CHECK(qAbs(mag->height() - video->height()) <= 2,
+              qPrintable(QStringLiteral("maglayout: same height got %1 vs %2")
+                             .arg(mag->height()).arg(video->height())));
+        // ② 左右等宽（±8 容差：均分取整+分割条）
+        CHECK(qAbs(mag->width() - video->width()) <= 8,
+              qPrintable(QStringLiteral("maglayout: equal width got %1 vs %2")
+                             .arg(mag->width()).arg(video->width())));
+        // ③ 图表全宽：ChartPanel 宽 ≈ 视频+放大镜合计（横跨二者之下）
+        QWidget *chart = findByClass(&mw, "ChartPanel");
+        CHECK(chart != nullptr, "maglayout: chart present");
+        if (chart) {
+            const int rowW = video->width() + mag->width();
+            CHECK(chart->width() >= rowW - 20,   // 容差=分割条+边距
+                  qPrintable(QStringLiteral("maglayout: chart full width got %1 expect ~%2")
+                                 .arg(chart->width()).arg(rowW)));
+        }
+        // ④ 左列 dock 全高（视频列表 dock 高 ≈ 中央区总高）
+        QWidget *vl = findByClass(&mw, "VideoListPanel");
+        QWidget *central = mw.centralWidget();
+        if (vl && central)
+            CHECK(qAbs(vl->height() - central->height()) <= 12,
+                  qPrintable(QStringLiteral("maglayout: left dock full height got %1 vs %2")
+                                 .arg(vl->height()).arg(central->height())));
+    }
+    // ⑤ 案件列表常驻折叠钮存在（dock 默认隐藏，按钮仍应建好）
+    bool caseBtnFound = false;
+    for (QPushButton *b : mw.findChildren<QPushButton *>())
+        if (b->toolTip() == QStringLiteral("收起案件列表")
+            || b->toolTip() == QStringLiteral("Collapse case list")) {
+            caseBtnFound = true;
+            break;
+        }
+    CHECK(caseBtnFound, "maglayout: case list manual collapse button exists");
+
+    // 放大镜开启态截图留档（人工目检入口）
+    mw.grab().save(QCoreApplication::applicationDirPath()
+                   + QStringLiteral("/maglayout_shot_open.png"));
+    // ⑥ 关闭放大镜 → 视频恢复整行宽
+    const int rowWBefore = video ? video->width() : 0;
+    const int magW = mag ? mag->width() : 0;
+    QMetaObject::invokeMethod(&mw, "removeMagnifier");
+    pump(app, 300);
+    CHECK(findByClass(&mw, "MagnifierWidget") == nullptr,
+          "maglayout: magnifier removed");
+    if (video && rowWBefore > 0 && magW > 0)
+        CHECK(video->width() >= rowWBefore + magW - 20,
+              qPrintable(QStringLiteral("maglayout: video restores full row width %1 >= %2")
+                             .arg(video->width()).arg(rowWBefore + magW)));
+    // 截图留档（人工目检入口）
+    const QPixmap shot = mw.grab();
+    shot.save(QCoreApplication::applicationDirPath()
+              + QStringLiteral("/maglayout_shot.png"));
+    mw.close();
+    pump(app, 200);
+}
+
 // openVideoFile → 继承（缺口提示框由 armModalAutoClose 收）→ 异步写 .vla。
 // ---------------------------------------------------------------------------
 static void testSidecarInheritOpen(QApplication &app)
@@ -855,6 +984,7 @@ int main(int argc, char **argv)
     testMultiCamWindow(app);
     testMultiCamCaseFlow(app);
     testLumaFullChain(app);
+    testMagnifierLayout(app);
 
     fprintf(stderr, "mw_test: %d checks, %d failures\n", g_checks, g_failures);
     return g_failures == 0 ? 0 : 1;

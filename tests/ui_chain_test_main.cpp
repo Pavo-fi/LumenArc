@@ -420,7 +420,7 @@ static bool runDisplayAdjustScenario()
         gray.fill(qRgb(128, 128, 128));
 
         auto centerGray = [&]() -> int {
-            const QImage g = mag.widget()->grab().toImage();
+            const QImage g = mag.grab().toImage();   // v1.13.1：放大镜改普通 QWidget，直抓
             if (g.isNull()) return -1;
             return qRed(g.convertToFormat(QImage::Format_ARGB32)
                         .pixel(g.width() / 2, g.height() / 2));

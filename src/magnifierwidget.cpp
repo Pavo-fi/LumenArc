@@ -9,6 +9,7 @@
  * Licensed under the Apache License, Version 2.0
  */
 #include "magnifierwidget.h"
+#include "theme.h"
 #include "videowidget.h"
 #include "displayadjust.h"
 #include "domain/roi_model.h"
@@ -17,6 +18,7 @@
 #include "i18n.h"
 
 #include <QPainter>
+#include <QVBoxLayout>
 #include <QResizeEvent>
 #include <QContextMenuEvent>
 #include <QTransform>
@@ -233,18 +235,23 @@ void MagnifierWidget::ContentWidget::contextMenuEvent(QContextMenuEvent *event)
 }
 
 // =============================================================================
-// MagnifierWidget (QDockWidget)
+// MagnifierWidget (QWidget, v1.13.1 起内嵌中央顶行)
 // =============================================================================
 
 /// @brief 构造放大镜：创建内容控件/连接内部Overlay信号
 MagnifierWidget::MagnifierWidget(QWidget *parent)
-    : QDockWidget(lang("放大镜", "Magnifier"), parent)
+    : QWidget(parent)
 {
     m_content = new ContentWidget(this);
     m_overlay = m_content->overlay();
-    setWidget(m_content);
-    setFeatures(QDockWidget::DockWidgetMovable | QDockWidget::DockWidgetFloatable);
-    setMinimumWidth(160);
+    // v1.13.1：普通控件形态，嵌入主窗中央顶行（视频右侧，等宽并列）
+    auto *lay = new QVBoxLayout(this);
+    lay->setContentsMargins(0, 0, 0, 0);
+    lay->setSpacing(0);
+    lay->addWidget(m_content);
+    setMinimumWidth(240);
+    setStyleSheet("background: " + Theme::BgPanel + "; border-left: 1px solid "
+                  + Theme::Border + ";");
 
     // Connect internal overlay signals so magnifier responds to
     // wheel zoom inside its own view. Cursor tracking is NOT connected here —

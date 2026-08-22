@@ -10,7 +10,7 @@
  */
 #pragma once
 
-#include <QDockWidget>
+#include <QWidget>
 #include <QRect>
 #include <QImage>
 #include "displayadjust.h"
@@ -24,11 +24,13 @@ class QWidget;
 /**
  * @brief Magnified view of a sub-region of the video frame (dockable).
  *
- * Implemented as a QDockWidget to avoid reparenting the VideoWidget.
+ * v1.13.1：改为普通 QWidget 嵌入中央布局顶行（[视频|放大镜] 一行、
+ * 图表/语谱图全宽在下）——此前 QDockWidget 形态天生贯通整窗高度，
+ * 挤压图表区且放大画面上下大黑边（用户实测反馈①拍板布局）。
  * Contains an internal content widget that renders the magnified frame
  * and hosts an OverlayWidget for ROI drawing.
  */
-class MagnifierWidget : public QDockWidget
+class MagnifierWidget : public QWidget
 {
     Q_OBJECT
 

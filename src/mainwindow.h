@@ -239,6 +239,8 @@ protected:
     TimelineModel *m_timelineModel = nullptr;
 
     QSplitter *m_splitter = nullptr;
+    QSplitter *m_topRow = nullptr;      ///< v1.13.1 顶行 [视频|放大镜] 水平分割
+    QList<int> m_topRowSavedSizes;      ///< 用户拖过的左右比例（关放大镜时保存）
     QLabel *m_timeLabel = nullptr;
 
     QPushButton *m_playBtn = nullptr;
@@ -295,6 +297,8 @@ protected:
     QWidget *m_videoListContent = nullptr;
     QDockWidget *m_videoListPlaceholder = nullptr;
     QDockWidget *m_casePlaceholder = nullptr;   ///< 案件列表折叠占位条（v1.12.9）
+    QPushButton *m_caseCollapseBtn = nullptr;   ///< 案件列表常驻手动折叠钮（v1.13.1）
+    QWidget *m_caseListContent = nullptr;       ///< 案件列表内容（折叠时隐藏）
     bool m_caseDockWasExpanded = false;
     /// 打开素材转码拼接窗口（v1.2 独立任务窗口）
     void openPreprocessWindow();
