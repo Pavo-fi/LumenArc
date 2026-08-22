@@ -307,6 +307,7 @@ protected:
     QWidget *m_spectrogramContainer = nullptr;
     QWidget *m_spectrogramContent = nullptr;
     QList<int> m_splitterSizes;
+    bool m_initialSplitApplied = false;  ///< v1.13.1 首次 resizeEvent 落地纵向比例
     QList<int> m_chartSavedSizes;
     QList<int> m_spectrogramSavedSizes;
     QRect m_pinnedRect;

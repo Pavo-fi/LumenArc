@@ -86,12 +86,22 @@
   可见性影响）；
 - offscreen 无字体目录 → 截图文字全 tofu，仅看布局不看文字。
 
-### 启动比例二次修正（用户复测反馈）
+### 启动比例二次修正（用户复测反馈，三轮定稿）
 
 首版纯 stretch 因子 7/7/4 被图表/语谱 sizeHint 顶歪（实测启动视频行仅 21%）。
-改：伸缩因子 55/21/15 + 首显 singleShot(0) 按实际高度显式 setSizes 落地一次
-（窗口缩放后续由伸缩因子等比跟随），对齐 v1.7.0 观感（视频行≈55%）。
-mw_test 补「视频行≈55%±8%」断言。
+二版 singleShot(0) 落地——**真机仍无效**：main.cpp 构造 MainWindow 后、
+showMaximized() 前 splash 连续 app.processEvents()，singleShot(0) 被提前
+触发时窗口未 show 高度无效，守卫直接跳过（offscreen 测试 show 先于事件泵
+所以假绿）。三版定稿：伸缩因子 55/21/15 + **resizeEvent 首次有效尺寸**
+（h>200）显式 setSizes 落地一次（一次性，之后用户拖分割条/缩放自理）；
+collapse/expand 基准 {550,230,160}。mw_test 补「视频行≈55%±8%」断言 +
+**构造后先泵事件再 show 的 splash 次序回归网**（旧写法在此次序下必红）。
+
+### 排雷记（真机 vs offscreen 次序差异）
+
+- main.cpp splash 模式：ctor → processEvents×3 → showMaximized——ctor 内
+  singleShot(0) 在 processEvents 即触发，勿用于依赖窗口尺寸的一次性落地；
+  一次性布局落地钩子 = resizeEvent/showEvent 首达。
 
 ### 测试
 

@@ -351,6 +351,10 @@ static void testMagnifierLayout(QApplication &app)
     }
 
     MainWindow mw;
+    // 关键次序：构造后先泵一次事件（模拟 main.cpp splash 的 processEvents——
+    // ctor 里 singleShot(0) 会在此提前触发、窗口未 show 高度无效，v1.13.1
+    // 首版比例落地即死在这里；现改 resizeEvent 首达执行，本次序为回归网）
+    pump(app, 100);
     mw.resize(1600, 1000);
     mw.show();
     pump(app);

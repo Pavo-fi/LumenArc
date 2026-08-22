@@ -304,15 +304,9 @@ MainWindow::MainWindow(QWidget *parent)
     m_splitterSizes = {550, 230, 160};
     m_chartSavedSizes = {550, 230, 160};
     m_spectrogramSavedSizes = {550, 230, 160};
-    // v1.13.1：首显后按实际高度显式落地初始比例（视频55/图表21/语谱15，
-    // 对齐 v1.7.0 观感拍板）——纯 stretch 因子首布被图表/语谱 sizeHint
-    // 顶歪（实测启动视频行仅 21%）；之后窗口缩放由伸缩因子等比跟随。
-    QTimer::singleShot(0, this, [this]() {
-        const int h = m_splitter->height();
-        if (h > 200)
-            m_splitter->setSizes({int(h * 0.55), int(h * 0.21),
-                                  int(h * 0.15)});
-    });
+    // v1.13.1：初始纵向比例落地改在 resizeEvent 首次有效尺寸时执行
+    // （见 m_initialSplitApplied）——ctor 里 singleShot(0) 会被 main.cpp
+    // splash 的 processEvents 提前触发（窗口未 show 高度无效），真机被跳过。
 
     // Chart collapse/expand with splitter size control
     connect(m_chartCollapseBtn, &QPushButton::clicked, this, [this]() {
@@ -2155,6 +2149,14 @@ void MainWindow::centerCaseOpenPanel()
 void MainWindow::resizeEvent(QResizeEvent *event)
 {
     QMainWindow::resizeEvent(event);
+    // v1.13.1：首次有效尺寸落地纵向初始比例（视频55/图表21/语谱15，
+    // 对齐 v1.7.0 观感拍板）；只执行一次，之后用户拖分割条/窗口缩放自理
+    if (!m_initialSplitApplied && m_splitter && m_splitter->height() > 200) {
+        m_initialSplitApplied = true;
+        const int h = m_splitter->height();
+        m_splitter->setSizes({int(h * 0.55), int(h * 0.21),
+                              int(h * 0.15)});
+    }
     if (m_caseOpenPanel && m_caseOpenPanel->isVisible())
         centerCaseOpenPanel();
 }
