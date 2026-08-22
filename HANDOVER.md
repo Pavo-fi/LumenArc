@@ -86,9 +86,16 @@
   可见性影响）；
 - offscreen 无字体目录 → 截图文字全 tofu，仅看布局不看文字。
 
+### 启动比例二次修正（用户复测反馈）
+
+首版纯 stretch 因子 7/7/4 被图表/语谱 sizeHint 顶歪（实测启动视频行仅 21%）。
+改：伸缩因子 55/21/15 + 首显 singleShot(0) 按实际高度显式 setSizes 落地一次
+（窗口缩放后续由伸缩因子等比跟随），对齐 v1.7.0 观感（视频行≈55%）。
+mw_test 补「视频行≈55%±8%」断言。
+
 ### 测试
 
-- mw 96 绿（新增 12 断言）；ui_chain 97（mag.widget()→mag.grab() 适配基类
+- mw 97 绿（新增 13 断言）；ui_chain 97（mag.widget()→mag.grab() 适配基类
   变更）；全回归 15 套绿。
 - 版本 → **v1.13.1**（CMakeLists/app.rc/aboutdialog/mainwindow 四同步）。
 

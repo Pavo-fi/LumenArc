@@ -159,7 +159,7 @@ MainWindow::MainWindow(QWidget *parent)
     m_topRow->addWidget(m_videoWidget);
     m_topRow->setStretchFactor(0, 1);
     m_splitter->addWidget(m_topRow);
-    m_splitter->setStretchFactor(0, 7);  // 44%
+    m_splitter->setStretchFactor(0, 55);  // 视频行 ~55%（v1.13.1 按 v1.7.0 观感拍板）
     setCentralWidget(m_splitter);
 
     // --- Shared styles（主题化）---
@@ -205,7 +205,7 @@ MainWindow::MainWindow(QWidget *parent)
     chartContainerLayout->addWidget(m_chartContent, 1);
 
     m_splitter->addWidget(m_chartContainer);
-    m_splitter->setStretchFactor(1, 7);  // 25%
+    m_splitter->setStretchFactor(1, 21);  // ~21%
 
     // --- Spectrogram container with title bar ---
     m_spectrogramContainer = new QWidget(m_splitter);
@@ -298,12 +298,21 @@ MainWindow::MainWindow(QWidget *parent)
     specContainerLayout->addWidget(m_spectrogramContent, 1);
 
     m_splitter->addWidget(m_spectrogramContainer);
-    m_splitter->setStretchFactor(2, 4);  // 20%
+    m_splitter->setStretchFactor(2, 15);  // ~15%
 
     // Store original splitter sizes for collapse/expand
-    m_splitterSizes = {440, 310, 250};
-    m_chartSavedSizes = {440, 310, 250};
-    m_spectrogramSavedSizes = {440, 310, 250};
+    m_splitterSizes = {550, 230, 160};
+    m_chartSavedSizes = {550, 230, 160};
+    m_spectrogramSavedSizes = {550, 230, 160};
+    // v1.13.1：首显后按实际高度显式落地初始比例（视频55/图表21/语谱15，
+    // 对齐 v1.7.0 观感拍板）——纯 stretch 因子首布被图表/语谱 sizeHint
+    // 顶歪（实测启动视频行仅 21%）；之后窗口缩放由伸缩因子等比跟随。
+    QTimer::singleShot(0, this, [this]() {
+        const int h = m_splitter->height();
+        if (h > 200)
+            m_splitter->setSizes({int(h * 0.55), int(h * 0.21),
+                                  int(h * 0.15)});
+    });
 
     // Chart collapse/expand with splitter size control
     connect(m_chartCollapseBtn, &QPushButton::clicked, this, [this]() {

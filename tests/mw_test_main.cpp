@@ -368,6 +368,14 @@ static void testMagnifierLayout(QApplication &app)
 
     QWidget *video = findByClass(&mw, "VideoWidget");
     CHECK(video != nullptr, "maglayout: video widget present");
+    // ⓪ v1.13.1 拍板比例：视频行 ≈ 中央区 55%（对齐 v1.7.0 观感，容差 ±8%）
+    if (video && video->parentWidget() && mw.centralWidget()) {
+        const double frac = double(video->parentWidget()->height())
+                            / mw.centralWidget()->height();
+        CHECK(frac >= 0.47 && frac <= 0.63,
+              qPrintable(QStringLiteral("maglayout: video row ~55%%, got %1")
+                             .arg(frac, 0, 'f', 3)));
+    }
     // 呼出放大镜（滚轮路径等价：直调 slot）。
     // 注意：offscreen 平台 isVisible() 恒 false（裸控件探针实证），
     // 可见性一律改以「非显式隐藏 + 有几何尺寸 + 父为分割条」断言。
