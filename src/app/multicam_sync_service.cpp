@@ -398,11 +398,27 @@ void MultiCamSyncService::setAudibleLane(int idx)
     applyAudible();
 }
 
+void MultiCamSyncService::setCustomAudible(const QSet<int> &lanes)
+{
+    m_customAudible = lanes;
+    applyAudible();
+}
+
+void MultiCamSyncService::clearCustomAudible()
+{
+    m_customAudible.clear();
+    applyAudible();
+}
+
 void MultiCamSyncService::applyAudible()
 {
-    for (int i = 0; i < m_engines.size(); ++i)
-        if (m_engines[i])
-            m_engines[i]->setVolume(i == m_audible ? 100 : 0);
+    for (int i = 0; i < m_engines.size(); ++i) {
+        if (!m_engines[i])
+            continue;
+        const bool on = m_customAudible.isEmpty()
+            ? (i == m_audible) : m_customAudible.contains(i);
+        m_engines[i]->setVolume(on ? 100 : 0);
+    }
 }
 
 bool MultiCamSyncService::applyLaneCalibration(int idx, const TimeCalibration &cal)

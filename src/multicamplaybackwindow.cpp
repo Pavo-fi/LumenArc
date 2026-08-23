@@ -23,6 +23,7 @@
 #include <QSlider>
 #include <QStackedLayout>
 #include <QVBoxLayout>
+#include <QTimer>
 #include <QCloseEvent>
 #include <algorithm>
 
@@ -999,7 +1000,33 @@ void MultiCamPlaybackWindow::onCancelAlign()
 // ---------------------------------------------------------------------------
 void MultiCamPlaybackWindow::onTogglePlay()
 {
+    if (m_eventCalib) {   // P-73 对时沙盒：自由播放，不经服务联动
+        ecTogglePlay();
+        return;
+    }
     m_svc->togglePlay();
+}
+
+void MultiCamPlaybackWindow::ecTogglePlay()
+{
+    m_ecPlaying = !m_ecPlaying;
+    for (int i = 0; i < m_svc->laneCount(); ++i)
+        if (auto *e = m_svc->engineAt(i))
+            m_ecPlaying ? e->play() : e->pause();
+    m_playBtn->setText(m_ecPlaying ? lang("⏸ 暂停", "⏸ Pause")
+                                   : lang("▶ 播放", "▶ Play"));
+    if (!m_ecTick) {
+        m_ecTick = new QTimer(this);
+        m_ecTick->setInterval(150);
+        connect(m_ecTick, &QTimer::timeout, this, [this]() {
+            updateBarsFromEngines();
+            updateTilesOsd();
+        });
+    }
+    if (m_ecPlaying)
+        m_ecTick->start();
+    else
+        m_ecTick->stop();
 }
 
 void MultiCamPlaybackWindow::onCycleRate()
@@ -1144,7 +1171,13 @@ void MultiCamPlaybackWindow::onClock(qint64 wallMs)
     if (m_mergedBar)
         m_mergedBar->setCursorMs(wallMs);
 
-    // 模式B 进度条（引擎真实位置为口径；拖动中不回写防打架）
+    updateBarsFromEngines();
+    updateTilesOsd();
+}
+
+void MultiCamPlaybackWindow::updateBarsFromEngines()
+{
+    // 模式B/对时 进度条（引擎真实位置为口径；拖动中不回写防打架）
     for (int i = 0; i < m_bars.size() && i < m_svc->laneCount(); ++i) {
         if (m_bars[i]->isSliderDown())
             continue;
@@ -1163,7 +1196,6 @@ void MultiCamPlaybackWindow::onClock(qint64 wallMs)
             m_barLabels[i]->setText(t);
         }
     }
-    updateTilesOsd();
 }
 
 void MultiCamPlaybackWindow::updateTilesOsd()
@@ -1222,7 +1254,8 @@ void MultiCamPlaybackWindow::updateTilesOsd()
         // 缺口/失败占位（laneUsable 涵盖加载失败与运行期暴毙）
         if (!l.path.isEmpty() && !m_svc->laneUsable(i))
             tile->setPlaceholder(lang("加载失败", "load failed"));
-        else if (!l.path.isEmpty() && !m_svc->laneCoversNow(i))
+        else if (!m_eventCalib && !l.path.isEmpty()
+                 && !m_svc->laneCoversNow(i))
             tile->setPlaceholder(lang("无信号（缺口）", "no signal (gap)"));
         else
             tile->setPlaceholder(QString());
@@ -1397,7 +1430,15 @@ void MultiCamPlaybackWindow::onEventCalibToggled(bool on)
         m_ecPreviewed = false;
         m_ecTargetIdx = -1;
         m_ecAnchors.clear();
+        m_ecPlaying = false;            // 沙盒播放态复位（服务保持暂停）
+        if (m_ecBothAudio) {
+            QSignalBlocker b(m_ecBothAudio);
+            m_ecBothAudio->setChecked(false);
+        }
+        m_svc->clearCustomAudible();
         m_svc->pause();
+        m_playBtn->setEnabled(true);
+        m_playBtn->setText(lang("▶ 播放", "▶ Play"));
         rebuildTimelineArea();          // 对时模式强制每路独立进度条
         for (auto *b : m_bars)
             if (b)
@@ -1420,6 +1461,22 @@ void MultiCamPlaybackWindow::onEcExit()
         return;
     m_eventCalib = false;
     m_ecAnchors.clear();
+    // 沙盒收场：停播 + 停跟随定时器 + 还单可听路 + 播放钮回位
+    if (m_ecTick)
+        m_ecTick->stop();
+    if (m_ecPlaying) {
+        m_ecPlaying = false;
+        for (int i = 0; i < m_svc->laneCount(); ++i)
+            if (auto *e = m_svc->engineAt(i))
+                e->pause();
+    }
+    m_playBtn->setText(lang("▶ 播放", "▶ Play"));
+    if (m_svc) {
+        m_svc->clearCustomAudible();
+        for (int k = 0; k < m_tiles.size(); ++k)
+            if (m_tiles[k])
+                m_tiles[k]->setAudible(k == m_svc->audibleLane());
+    }
     if (m_ecHost)
         m_ecHost->hide();
     rebuildTimelineArea();              // 恢复合并条/联动条
@@ -1530,6 +1587,26 @@ void MultiCamPlaybackWindow::buildEventCalibPanel()
     eg->setWordWrap(true);
     eg->setStyleSheet(QStringLiteral("color:%1;").arg(Theme::TextSecond));
     v3->addWidget(eg);
+    m_ecBothAudio = new QCheckBox(
+        lang("🔊 同时听这两路的声音（比对喇叭/轰鸣类声音事件用）",
+             "🔊 Hear both lanes at once (for sound events)"),
+        m_ecStep3);
+    connect(m_ecBothAudio, &QCheckBox::toggled, this, [this](bool on) {
+        const int ri = m_ecRefCombo->currentData().toInt();
+        const int ti = m_ecTargetCombo->currentData().toInt();
+        if (on && ri >= 0 && ti >= 0) {
+            m_svc->setCustomAudible({ri, ti});
+            for (int k = 0; k < m_tiles.size(); ++k)
+                if (m_tiles[k])
+                    m_tiles[k]->setAudible(k == ri || k == ti);
+        } else {
+            m_svc->clearCustomAudible();
+            for (int k = 0; k < m_tiles.size(); ++k)
+                if (m_tiles[k])
+                    m_tiles[k]->setAudible(k == m_svc->audibleLane());
+        }
+    });
+    v3->addWidget(m_ecBothAudio);
     m_ecEventName = new QLineEdit(m_ecStep3);
     m_ecEventName->setPlaceholderText(
         lang("给这件事起个名（必填，报告里要念出来），如：白车过东门",
@@ -1683,6 +1760,17 @@ void MultiCamPlaybackWindow::refreshEcPanel()
         }
         ++vi;
         m_ecAnchorList->addItem(row);
+    }
+    // 「同听两路」勾选中：参考/目标换路 → 可听集合跟随重挂
+    if (m_ecBothAudio && m_ecBothAudio->isChecked()) {
+        const int ri = m_ecRefCombo->currentData().toInt();
+        const int ti = m_ecTargetCombo->currentData().toInt();
+        if (ri >= 0 && ti >= 0) {
+            m_svc->setCustomAudible({ri, ti});
+            for (int k = 0; k < m_tiles.size(); ++k)
+                if (m_tiles[k])
+                    m_tiles[k]->setAudible(k == ri || k == ti);
+        }
     }
     updateEcGuidance();
 }

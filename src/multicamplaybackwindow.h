@@ -164,6 +164,11 @@ private:
     QWidget *m_ecStep4 = nullptr;          ///< ④ 标记表+预览保存段（1 标记解锁）
     class QPushButton *m_ecAddBtn = nullptr;
     class QPushButton *m_ecFitBtn = nullptr;
+    class QCheckBox *m_ecBothAudio = nullptr;  ///< 「同听两路」开关
+    bool m_ecPlaying = false;                  ///< 对时沙盒播放态（不经服务状态机）
+    class QTimer *m_ecTick = nullptr;          ///< 沙盒播放时驱动条/OSD 跟随
+    void ecTogglePlay();                       ///< 沙盒自由播放/暂停
+    void updateBarsFromEngines();              ///< 条值=引擎真实位置（onClock/沙盒共用）
     class QPushButton *m_ecSaveBtn = nullptr;
     QVector<eventcalib::EventAnchor> m_ecAnchors;  ///< 目标路锚点（既有+会话）
     eventcalib::FitResult m_ecFit;                 ///< 最近预览拟合

@@ -916,6 +916,27 @@ static void testEventCalibGuidance()
           "plain: 1h2m slow");
 }
 
+// P-73 对时沙盒：同听两路（自定义可听集合优先于单可听路）
+static void testCustomAudible()
+{
+    MultiCamSyncService svc;
+    QVector<FakeEngine *> eng;
+    SyncLaneData a = makeLane("A", 100000), b = makeLane("B", 100000),
+                     c = makeLane("C", 100000);
+    setupService(svc, eng, {a, b, c});
+
+    svc.setAudibleLane(0);
+    CHECK(eng[0]->vol == 100 && eng[1]->vol == 0 && eng[2]->vol == 0,
+          "audible: single-lane legacy");
+    svc.setCustomAudible({1, 2});
+    CHECK(eng[0]->vol == 0 && eng[1]->vol == 100 && eng[2]->vol == 100,
+          "audible: custom set both lanes");
+    svc.clearCustomAudible();
+    CHECK(eng[0]->vol == 100 && eng[1]->vol == 0 && eng[2]->vol == 0,
+          "audible: clear restores single-lane");
+    svc.closeAll();
+}
+
 int main(int argc, char **argv)
 {
     QCoreApplication app(argc, argv);
@@ -939,6 +960,7 @@ int main(int argc, char **argv)
     testMergedServiceSwitch();
     testMergedGrouping();
     testEventCalibGuidance();
+    testCustomAudible();
     fprintf(stderr, "sync_test: %d checks, %d failures\n", g_checks, g_failures);
     return g_failures ? 1 : 0;
 }

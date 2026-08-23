@@ -61,6 +61,10 @@ public:
 
     // ---- 音频（U-2：单路主听音，随时切听）----
     void setAudibleLane(int idx);
+    /// P-73 对时沙盒：自定义可听集合（空集=回到单可听路 legacy 语义）。
+    /// 同事件对时常需「同听两路」比对声音事件（喇叭/轰鸣），单可听路不够。
+    void setCustomAudible(const QSet<int> &lanes);
+    void clearCustomAudible();
     int audibleLane() const { return m_audible; }
 
     // ---- 临时对齐（模式B，会话级不落盘）----
@@ -122,6 +126,7 @@ private:
     State m_state = State::Idle;
     float m_rate = 1.0f;
     int m_audible = 0;
+    QSet<int> m_customAudible;   ///< 非空时优先于 m_audible（P-73）
     bool m_scrubbing = false;
     bool m_wasPlayingBeforeScrub = false;
 
