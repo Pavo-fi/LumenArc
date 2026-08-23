@@ -112,6 +112,10 @@ set(SOURCES
     src/app/multicam_sync_service.cpp
     src/app/segment_switch_engine.cpp
     src/app/segment_switch_engine.h
+    src/infrastructure/zip_store_writer.cpp
+    src/infrastructure/zip_store_writer.h
+    src/infrastructure/docx_writer.cpp
+    src/infrastructure/docx_writer.h
     src/timesettingsdialog.cpp
     src/calibphotodialog.cpp        # v1.12.5 北京时间对时：校时图片两框框选
     src/infrastructure/ffmpeg_video_engine.cpp
@@ -336,6 +340,21 @@ target_link_libraries(lumenarc_task_registry_test PRIVATE
 )
 
 # --- P-57：多机同步播放（sync_model 纯函数 + 同步服务假引擎对抗） ---
+add_executable(lumenarc_docx_test
+    tests/docx_test_main.cpp
+    src/infrastructure/zip_store_writer.cpp
+    src/infrastructure/zip_store_writer.h
+    src/infrastructure/docx_writer.cpp
+    src/infrastructure/docx_writer.h
+)
+target_include_directories(lumenarc_docx_test PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+)
+target_link_libraries(lumenarc_docx_test PRIVATE
+    Qt6::Core
+    Qt6::Gui
+)
+
 add_executable(lumenarc_sync_test
     tests/sync_test_main.cpp
     src/app/multicam_sync_service.cpp
