@@ -18,6 +18,7 @@
 #include <QString>
 #include <QVector>
 #include <QHash>
+#include <QSet>
 #include <algorithm>
 #include "domain/case_model.h"
 #include "domain/sync_model.h"
@@ -101,6 +102,39 @@ inline QVector<CamMergedGroup> buildMergedGroups(const QVector<CamInventoryItem>
                < syncLaneWallStart(items[b.memberIdx.first()].lane);
     });
     return out;
+}
+
+/// P-69 勾选面板默认勾选决策（纯函数，sync_test 直编验证）：
+/// 合并轨组行优先于成员行默认勾选（否则成员被自动勾上 → 组行互斥禁用变灰，
+/// 用户根本没机会选合并——v1.13.3 第二轮返修）；非组成员的已校时在盘项补足，
+/// 合计不超 cap 路。
+struct PickerDefaults {
+    QSet<int> groups;    ///< 默认勾的组行下标
+    QSet<int> members;   ///< 默认勾的成员（清单项）下标
+};
+inline PickerDefaults pickerDefaultChecks(const QVector<CamInventoryItem> &items,
+                                          const QVector<CamMergedGroup> &groups,
+                                          int cap = 4)
+{
+    PickerDefaults d;
+    QSet<int> grouped;
+    for (const auto &g : groups)
+        for (int mi : g.memberIdx)
+            grouped.insert(mi);
+    int n = 0;
+    for (int gi = 0; gi < groups.size() && n < cap; ++gi) {
+        d.groups.insert(gi);
+        ++n;
+    }
+    for (int i = 0; i < items.size() && n < cap; ++i) {
+        if (grouped.contains(i))
+            continue;
+        if (items[i].calibrated && items[i].pathExists) {
+            d.members.insert(i);
+            ++n;
+        }
+    }
+    return d;
 }
 
 /// P-69 段时长预读：容器总时长（ffprobe format=duration；失败 0）

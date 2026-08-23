@@ -875,6 +875,26 @@ static void testMergedGrouping()
           "grouping: P003 group = {P003,P004}");
     // 交叉污染检查：同名文件名（merged_concat.mp4）不再误入同组
     CHECK(groups[0].label != groups[1].label, "grouping: filename not the key");
+
+    // 默认勾选决策（二轮返修）：组行优先，成员不勾（否则互斥把组行禁用变灰）
+    {
+        const auto d = pickerDefaultChecks(prod, groups);
+        CHECK(d.groups.size() == 2, "defaults: both groups checked");
+        CHECK(d.members.isEmpty(), "defaults: group members not auto-checked");
+    }
+    {
+        // 组 + 非组成员混合：组计 1 路，余项补足，总 cap=4
+        addProd("V9", "D15", 900000);      // 单成员标签不成组 → 作为普通项补足
+        const auto d = pickerDefaultChecks(prod, groups);
+        CHECK(d.groups.size() == 2, "defaults: groups first");
+        CHECK(d.members == (QSet<int>{4}), "defaults: ungrouped calibrated fills");
+        prod[2].calibrated = false;        // P003 变未校时 → 其组整组撤销
+        const auto g2 = buildMergedGroups(prod);
+        const auto d2 = pickerDefaultChecks(prod, g2);
+        CHECK(g2.size() == 1, "defaults: uncal member dissolves P003 group");
+        CHECK(d2.groups == (QSet<int>{0}), "defaults: only P002 group checked");
+        CHECK(d2.members.contains(4), "defaults: ungrouped items fill up");
+    }
 }
 
 int main(int argc, char **argv)

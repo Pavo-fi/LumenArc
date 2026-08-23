@@ -205,6 +205,12 @@ void MultiCamPlaybackWindow::refreshInventory()
         m_checkListLay->addWidget(rowW);
         m_groupChecks.append(cb);
     }
+    // 默认勾选决策（P-69 二轮返修）：组行优先——否则成员先被自动勾上，
+    // 互斥规则把组行禁用变灰，用户根本选不到合并轨
+    const PickerDefaults defaults = pickerDefaultChecks(m_inventory, m_mergedGroups);
+    for (int gi = 0; gi < m_groupChecks.size(); ++gi)
+        if (defaults.groups.contains(gi))
+            m_groupChecks[gi]->setChecked(true);
     if (!m_mergedGroups.isEmpty()) {
         auto *h = new QLabel(lang("—— 单文件路 ——", "—— Single-file lanes ——"));
         h->setStyleSheet(QStringLiteral("color:%1;").arg(Theme::TextMuted));
@@ -238,11 +244,19 @@ void MultiCamPlaybackWindow::refreshInventory()
         auto *rowW = new QWidget;
         auto *row = new QHBoxLayout(rowW);
         row->setContentsMargins(0, 0, 0, 0);
-        auto *cb = new QCheckBox(
-            QStringLiteral("%1  %2").arg(it.id, it.displayName), rowW);
+        // 有标签（groupKey≠id）：标签打头、编号括注——用户按机位标签认路，
+        // 编号打头会误读（「P005 P002」被读成 P005，真机反馈）
+        QString rowText;
+        if (!it.groupKey.isEmpty() && it.groupKey != it.id)
+            rowText = QStringLiteral("%1（%2） %3")
+                          .arg(it.displayName, it.id,
+                               QFileInfo(it.path).fileName());
+        else
+            rowText = QStringLiteral("%1  %2").arg(it.id, it.displayName);
+        auto *cb = new QCheckBox(rowText, rowW);
         cb->setEnabled(it.pathExists);
-        // 默认勾：已校时且在盘，最多 4 路（拍板 2-4）
-        if (it.calibrated && it.pathExists && defaultChecked < 4) {
+        // 默认勾：已校时且在盘，最多 4 路（拍板 2-4）；组成员不勾（组行已代勾）
+        if (defaults.members.contains(i)) {
             cb->setChecked(true);
             ++defaultChecked;
         }
