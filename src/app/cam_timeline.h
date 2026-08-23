@@ -57,6 +57,9 @@ struct CamInventoryItem {
     bool calibrated = false;      ///< 已校时（.vla 实读 SSOT，R5——不看徽标缓存）
     SyncLaneData lane;            ///< calibrated 时已填妥，勾选即可入列
     qint64 analyzedDurationMs = 0; ///< P-69：.vla 已分析最大流内时刻（段时长首选源）
+    QString groupKey;             ///< P-69 归组键：cameraLabel 非空用之，缺省=自身 id
+                                  /// （前处理产物常以「源机位编号」作标签——v1.13.3 返修：
+                                  /// 此前误用 displayName（无标签时退化文件名）致错配/漏配）
 };
 
 /// P-69 合并轨分组：同机位标签（displayName）≥2 项且全部已校时+在盘
@@ -70,7 +73,7 @@ inline QVector<CamMergedGroup> buildMergedGroups(const QVector<CamInventoryItem>
     QHash<QString, QVector<int>> byLabel;
     for (int i = 0; i < items.size(); ++i)
         if (items[i].pathExists)
-            byLabel[items[i].displayName].append(i);
+            byLabel[items[i].groupKey].append(i);
     QVector<CamMergedGroup> out;
     for (auto it = byLabel.constBegin(); it != byLabel.constEnd(); ++it) {
         if (it.value().size() < 2)

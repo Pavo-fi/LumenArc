@@ -71,6 +71,7 @@ QVector<CamInventoryItem> buildCamInventory(const CaseManager &cm)
         it.pathExists = !it.path.isEmpty() && QFile::exists(it.path);
         it.displayName = v.cameraLabel.isEmpty()
             ? QFileInfo(v.originalPath).fileName() : v.cameraLabel;
+        it.groupKey = v.cameraLabel.isEmpty() ? v.id : v.cameraLabel;
         // 校时实读案内 .vla（SSOT，R5；不看徽标缓存）。已校时路顺手填妥
         // SyncLaneData（勾选即可入列，避免开始后二次读盘）。
         // 路径分流与 CaseManager::vlaPathFor 同语义：登记路径优先；
