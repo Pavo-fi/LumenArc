@@ -786,6 +786,12 @@ void MultiCamPlaybackWindow::rebuildTimelineArea()
                                   .arg(i + 1));
             auto *slider = new QSlider(Qt::Horizontal, m_timelineHost);
             slider->setEnabled(false);
+            // P-73 返修：创建即按当前路时长设量程——量程只在 Ready/LaneInfo
+            // 信号里设，重建后的新滑条永远停在默认 0..99，对时模式拖动
+            // seek 只落在前 99ms →「画面没动」（用户真机反馈）
+            const qint64 dur0 = (i < m_svc->laneCount())
+                ? m_svc->lanes()[i].durationMs : 0;
+            slider->setRange(0, int(qMax<qint64>(0, dur0)));
             auto *time = new QLabel(QStringLiteral("--:-- / --:--"),
                                     m_timelineHost);
             time->setStyleSheet(
