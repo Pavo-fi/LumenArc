@@ -42,6 +42,15 @@ void DocxWriter::addHeading(const QString &text, int level)
     m_body += QStringLiteral("</w:p>");
 }
 
+void DocxWriter::addCentered(const QString &text, int halfPt, bool bold)
+{
+    m_body += QStringLiteral(
+        "<w:p><w:pPr><w:jc w:val=\"center\"/>"
+        "<w:spacing w:before=\"120\" w:after=\"120\"/></w:pPr>");
+    m_body += runXml(text, bold, halfPt, QStringLiteral("黑体"));
+    m_body += QStringLiteral("</w:p>");
+}
+
 void DocxWriter::addParagraph(const QString &text, bool bold)
 {
     m_body += QStringLiteral(

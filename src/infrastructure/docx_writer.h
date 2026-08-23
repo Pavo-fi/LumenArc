@@ -23,6 +23,8 @@ class DocxWriter
 {
 public:
     void addHeading(const QString &text, int level);   ///< level 1..3
+    /// 居中文本行（封面用；halfPt=half-points 字号，默认小四 24）
+    void addCentered(const QString &text, int halfPt = 24, bool bold = false);
     void addParagraph(const QString &text, bool bold = false);
     /// rows[r][c]；headerRow=true 时首行表头加底纹加粗。colWidthsPct 归一化
     /// 列宽（空=均分）

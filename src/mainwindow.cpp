@@ -19,6 +19,8 @@
 #include "infrastructure/ianalysis_engine.h"
 #include "infrastructure/ffmpeg_video_engine.h"
 #include "app/calibration_service.h"
+#include "app/report_service.h"
+#include "app/report_docx_builder.h"
 #include "app/case_manager.h"
 #include "app/case_open_panel.h"
 #include "app/analysis_task_service.h"
@@ -112,7 +114,7 @@ MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent)
 {
     loadLanguage();
-    setWindowTitle(lang("追光者 Lumen Arc v1.13.3", "Lumen Arc v1.13.3") + buildStamp());
+    setWindowTitle(lang("追光者 Lumen Arc v1.14.0", "Lumen Arc v1.14.0") + buildStamp());
     resize(1280, 720);
 
     m_roiModel = new RoiModel(this);   // 统一 ROI 模型（矩形+多边形，v1.5.0 Q-18）
@@ -841,6 +843,36 @@ void MainWindow::createMenus()
         lang("案件属性(&P)...", "Case &Properties..."), this,
         &MainWindow::onCaseProperties);
     m_casePropsAction->setEnabled(false);
+    // P-28 报告模块：生成分析报告（草稿→案内 reports/）
+    m_genReportAction = caseMenu->addAction(
+        lang("生成分析报告(&G)...", "&Generate Analysis Report..."), this, [this]() {
+        if (m_caseManager->meta().videos.isEmpty()) {
+            QMessageBox::warning(this, lang("生成分析报告", "Generate Report"),
+                lang("请先打开案件并入案视频。", "Open a case with videos first."));
+            return;
+        }
+        ReportData rd = ReportService::collect(m_caseManager, m_sessionMgr->stateManager());
+        const QString dirPath = m_caseManager->caseDir() + QStringLiteral("/reports");
+        QDir().mkpath(dirPath);
+        const QString out = dirPath + QStringLiteral("/火灾视频分析报告_%1.docx")
+            .arg(QDateTime::currentDateTime().toString(QStringLiteral("yyyyMMdd_HHmmss")));
+        const QString err = ReportDocxBuilder::build(rd, out);
+        if (!err.isEmpty()) {
+            QMessageBox::critical(this, lang("生成分析报告", "Generate Report"), err);
+            return;
+        }
+        qInfo() << "report: docx written" << out;
+        QMessageBox box(this);
+        box.setWindowTitle(lang("生成分析报告", "Generate Report"));
+        box.setText(lang("报告已生成：%1", "Report written: %1").arg(out));
+        box.addButton(QMessageBox::Ok);
+        QPushButton *openBtn = box.addButton(lang("打开文件夹", "Open Folder"),
+                                             QMessageBox::ActionRole);
+        box.exec();
+        if (box.clickedButton() == openBtn)
+            QDesktopServices::openUrl(QUrl::fromLocalFile(dirPath));
+    });
+    m_genReportAction->setEnabled(false);
     // v1.3.0 M3 任务12：导出移交包
     m_exportCaseAction = caseMenu->addAction(
         lang("导出移交包(&E)...", "&Export Handover Package..."), this,
@@ -1756,7 +1788,7 @@ void MainWindow::setupConnections()
                 }
 
                 setWindowTitle(windowTitleWithCase(
-                    lang("追光者 Lumen Arc v1.13.3", "Lumen Arc v1.13.3")));
+                    lang("追光者 Lumen Arc v1.14.0", "Lumen Arc v1.14.0")));
                 updateTimeDisplay();
                 showOperationStatus(lang("已清空视频列表", "Video list cleared"));
             });
@@ -1979,12 +2011,13 @@ void MainWindow::enterCaseMode()
         m_closeCaseAction->setEnabled(true);
     if (m_casePropsAction)
         m_casePropsAction->setEnabled(true);
+        m_genReportAction->setEnabled(true);
     if (m_exportCaseAction)
         m_exportCaseAction->setEnabled(true);
     if (m_batchRelocateAction)
         m_batchRelocateAction->setEnabled(true);
     setWindowTitle(windowTitleWithCase(
-        lang("追光者 Lumen Arc v1.13.3", "Lumen Arc v1.13.3")));
+        lang("追光者 Lumen Arc v1.14.0", "Lumen Arc v1.14.0")));
     showOperationStatus(lang("案件已打开：%1", "Case opened: %1")
                             .arg(m_caseManager->meta().caseNo));
     // 开案批量校时徽标校验（用户实测：旧 vla time_offset=0 误亮 ⏰ 且只在
@@ -2029,11 +2062,12 @@ void MainWindow::exitCaseMode()
         m_closeCaseAction->setEnabled(false);
     if (m_casePropsAction)
         m_casePropsAction->setEnabled(false);
+        m_genReportAction->setEnabled(false);
     if (m_exportCaseAction)
         m_exportCaseAction->setEnabled(false);
     if (m_batchRelocateAction)
         m_batchRelocateAction->setEnabled(false);
-    setWindowTitle(lang("追光者 Lumen Arc v1.13.3", "Lumen Arc v1.13.3"));
+    setWindowTitle(lang("追光者 Lumen Arc v1.14.0", "Lumen Arc v1.14.0"));
     showOperationStatus(lang("案件已关闭", "Case closed"));
 }
 
@@ -2211,7 +2245,7 @@ void MainWindow::onCaseProperties()
     // 名称可能已改：刷新标题/面板/状态栏
     if (m_caseManager->isOpen()) {
         setWindowTitle(windowTitleWithCase(
-            lang("追光者 Lumen Arc v1.13.3", "Lumen Arc v1.13.3")));
+            lang("追光者 Lumen Arc v1.14.0", "Lumen Arc v1.14.0")));
         m_caseDock->refreshTree();
         m_caseStatusBtn->setText(
             QStringLiteral("📁 ") + m_caseManager->meta().caseNo);
@@ -2336,7 +2370,7 @@ void MainWindow::openVideoFile(const QString &filePath)
 
         // Do NOT overwrite m_currentVideoPath with the .vla path: it is an
         // analysis file, not a playable video, and it keys VideoStateManager.
-        setWindowTitle(windowTitleWithCase("Lumen Arc v1.13.3 - [Loaded: " +
+        setWindowTitle(windowTitleWithCase("Lumen Arc v1.14.0 - [Loaded: " +
                            QFileInfo(filePath).fileName() + "]"));
         } else {
             QMessageBox::critical(this, lang("错误", "Error"),
@@ -2689,7 +2723,7 @@ void MainWindow::onLoadAnalysis()
                 m_guideLineModel->addLine(line);
 
             // Do NOT overwrite m_currentVideoPath with the .vla path (see openVideoFile).
-        setWindowTitle(windowTitleWithCase("Lumen Arc v1.13.3 - [Loaded: " +
+        setWindowTitle(windowTitleWithCase("Lumen Arc v1.14.0 - [Loaded: " +
                        QFileInfo(filePath).fileName() + "]"));
         QMessageBox::information(this, lang("已加载", "Loaded"),
             lang("分析结果加载成功。", "Analysis result loaded successfully."));

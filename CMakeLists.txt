@@ -1,5 +1,6 @@
 cmake_minimum_required(VERSION 3.16)
-project(LumenArc VERSION 1.13.3 LANGUAGES CXX)
+project(LumenArc VERSION 1.14.0 LANGUAGES CXX)
+add_compile_definitions(APP_VERSION="${PROJECT_VERSION}")
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -116,6 +117,11 @@ set(SOURCES
     src/infrastructure/zip_store_writer.h
     src/infrastructure/docx_writer.cpp
     src/infrastructure/docx_writer.h
+    src/app/report_service.cpp
+    src/app/report_service.h
+    src/app/report_docx_builder.cpp
+    src/app/report_docx_builder.h
+    src/domain/report_data.h
     src/timesettingsdialog.cpp
     src/calibphotodialog.cpp        # v1.12.5 北京时间对时：校时图片两框框选
     src/infrastructure/ffmpeg_video_engine.cpp
@@ -351,6 +357,23 @@ target_include_directories(lumenarc_docx_test PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src
 )
 target_link_libraries(lumenarc_docx_test PRIVATE
+    Qt6::Core
+    Qt6::Gui
+)
+
+add_executable(lumenarc_report_test
+    tests/report_test_main.cpp
+    src/infrastructure/zip_store_writer.cpp
+    src/infrastructure/zip_store_writer.h
+    src/infrastructure/docx_writer.cpp
+    src/infrastructure/docx_writer.h
+    src/app/report_docx_builder.cpp
+    src/app/report_docx_builder.h
+)
+target_include_directories(lumenarc_report_test PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+)
+target_link_libraries(lumenarc_report_test PRIVATE
     Qt6::Core
     Qt6::Gui
 )
@@ -710,8 +733,8 @@ elseif(APPLE)
         MACOSX_BUNDLE TRUE
         MACOSX_BUNDLE_INFO_PLIST "${CMAKE_CURRENT_SOURCE_DIR}/src/Info.plist"
         MACOSX_BUNDLE_BUNDLE_NAME "LumenArc"
-        MACOSX_BUNDLE_BUNDLE_VERSION "1.13.0"
-        MACOSX_BUNDLE_SHORT_VERSION_STRING "1.13.0"
+        MACOSX_BUNDLE_BUNDLE_VERSION "1.14.0"
+        MACOSX_BUNDLE_SHORT_VERSION_STRING "1.14.0"
         MACOSX_BUNDLE_GUI_IDENTIFIER "com.firetech.lumenarc"
     )
 else()
