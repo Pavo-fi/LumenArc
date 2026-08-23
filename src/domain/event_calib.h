@@ -237,4 +237,39 @@ inline qint64 cumulativeToleranceMs(const QVector<ChainHop> &chain)
     return sum;
 }
 
+/// ---------------------------------------------------------------------------
+/// P-73 UX 重做（v1.13.3）：引导状态机 + 口语化文案（纯函数，可测试）
+/// ---------------------------------------------------------------------------
+
+/// 引导步骤：0=选两路（准钟/要修的钟） 1=打「同一瞬间」标记 2=可预览
+/// （第 2 个标记自愿） 3=预览中（确认后保存）
+inline int guidanceStep(bool lanesPicked, int anchorCount, bool previewed)
+{
+    if (!lanesPicked)
+        return 0;
+    if (anchorCount <= 0)
+        return 1;
+    return previewed ? 3 : 2;
+}
+
+/// 口语化钟差：offsetMs = 准钟墙钟 - 目标流内毫秒（>0 目标的钟慢）
+/// 例：「目标的钟慢 2 分 14 秒」
+inline QString plainClockDeltaText(qint64 offsetMs)
+{
+    const bool slow = offsetMs >= 0;
+    qint64 ms = offsetMs < 0 ? -offsetMs : offsetMs;
+    const qint64 h = ms / 3600000; ms %= 3600000;
+    const qint64 m = ms / 60000;   ms %= 60000;
+    const qint64 s = ms / 1000;
+    QString span;
+    if (h > 0)
+        span = QStringLiteral("%1 小时 %2 分").arg(h).arg(m);
+    else if (m > 0)
+        span = QStringLiteral("%1 分 %2 秒").arg(m).arg(s);
+    else
+        span = QStringLiteral("%1 秒").arg(s + (ms % 1000) / 1000.0, 0, 'f', 1);
+    return slow ? QStringLiteral("目标的钟慢 %1").arg(span)
+                : QStringLiteral("目标的钟快 %1").arg(span);
+}
+
 } // namespace eventcalib

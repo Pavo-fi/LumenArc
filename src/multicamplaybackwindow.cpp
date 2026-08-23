@@ -1401,8 +1401,8 @@ void MultiCamPlaybackWindow::onEventCalibToggled(bool on)
         m_ecHost->show();
         refreshModeControls();
         m_statusLabel->setText(lang(
-            "对时模式：分别拖两路进度条/帧步进，把两路画面对到同一事件",
-            "Event sync: scrub/step each lane to the same event"));
+            "对时模式：跟着右侧面板 ①→④ 走，随时看顶部横幅提示",
+            "Event sync: follow steps 1-4 in the right panel"));
     } else {
         onEcExit();
     }
@@ -1440,80 +1440,155 @@ void MultiCamPlaybackWindow::buildEventCalibPanel()
     v->setContentsMargins(0, 0, 0, 0);
     v->setSpacing(6);
 
-    auto *title = new QLabel(lang("同事件对时（间接校时）", "Event Sync (indirect)"),
-                             m_ecPanel);
+    auto *title = new QLabel(lang("同事件对时", "Event Sync"), m_ecPanel);
     QFont tf = title->font();
     tf.setBold(true);
+    tf.setPointSize(tf.pointSize() + 1);
     title->setFont(tf);
     v->addWidget(title);
-
-    auto *hint = new QLabel(
-        lang("① 选参考路（已校时）与目标路；② 分别拖进度条/帧步进，把两路"
-             "画面对到同一现实事件（同帧）；③ 填事件名点「建锚」；"
-             "④ 建议≥2 个远距离锚点；⑤「生成校时并预览」联动试看，"
-             "确认后保存。多跳允许，成环禁止；取证链随校时入案件留档。",
-             "1) Pick reference (calibrated) & target lanes; 2) scrub/step "
-             "both to the same event frame; 3) name the event & add anchor; "
-             "4) 2+ far-apart anchors recommended; 5) fit & preview, then save."),
+    auto *principle = new QLabel(
+        lang("原理一句话：在两路画面里找到「同一件事的同一瞬间」告诉软件，"
+             "就能算出要修的那路钟差多少。找到 1 次能修整体偏差；找到 2 次"
+             "还能修越走越快/慢（第 2 次自愿，不强制）。",
+             "Mark the same instant of the same event in both videos to "
+             "compute the clock error. 1 mark fixes offset; a 2nd (optional) "
+             "also fixes speed drift."),
         m_ecPanel);
-    hint->setWordWrap(true);
-    hint->setStyleSheet(QStringLiteral("color:%1;").arg(Theme::TextSecond));
-    v->addWidget(hint);
+    principle->setWordWrap(true);
+    principle->setStyleSheet(QStringLiteral("color:%1;").arg(Theme::TextSecond));
+    v->addWidget(principle);
 
-    v->addWidget(new QLabel(lang("参考路（已校时）：", "Reference (calibrated):"),
-                            m_ecPanel));
+    // 状态横幅：永远告诉用户「现在该干嘛」（updateEcGuidance 驱动）
+    m_ecBanner = new QLabel(m_ecPanel);
+    m_ecBanner->setWordWrap(true);
+    m_ecBanner->setStyleSheet(
+        QStringLiteral("background:%1; color:%2; padding:6px; border-radius:4px;")
+            .arg(Theme::Accent, Theme::AccentOnDark));
+    v->addWidget(m_ecBanner);
+
+    // ---- ① 谁的钟是准的 ----
+    auto *s1 = new QLabel(lang("① 谁的钟是准的？（已校时的机位）",
+                               "1) Whose clock is right? (calibrated lane)"),
+                          m_ecPanel);
+    QFont bf = s1->font();
+    bf.setBold(true);
+    s1->setFont(bf);
+    v->addWidget(s1);
     m_ecRefCombo = new QComboBox(m_ecPanel);
     v->addWidget(m_ecRefCombo);
     auto *refStep = new QHBoxLayout();
-    auto *refBack = new QPushButton(lang("◀ 帧", "◀f"), m_ecPanel);
-    auto *refFwd = new QPushButton(lang("帧 ▶", "f▶"), m_ecPanel);
+    refStep->addWidget(new QLabel(lang("微调画面：", "Nudge:"), m_ecPanel));
+    auto *refBack = new QPushButton(lang("◀ 上一帧", "◀ frame"), m_ecPanel);
+    auto *refFwd = new QPushButton(lang("下一帧 ▶", "frame ▶"), m_ecPanel);
     connect(refBack, &QPushButton::clicked, this, [this]() { ecFrameStep(true, -1); });
     connect(refFwd, &QPushButton::clicked, this, [this]() { ecFrameStep(true, +1); });
     refStep->addWidget(refBack);
     refStep->addWidget(refFwd);
     v->addLayout(refStep);
 
-    v->addWidget(new QLabel(lang("目标路（待校时）：", "Target:"), m_ecPanel));
+    // ---- ② 要修谁的钟 ----
+    auto *s2 = new QLabel(lang("② 要修谁的钟？（时间不准的机位）",
+                               "2) Whose clock to fix?"),
+                          m_ecPanel);
+    s2->setFont(bf);
+    v->addWidget(s2);
     m_ecTargetCombo = new QComboBox(m_ecPanel);
     v->addWidget(m_ecTargetCombo);
     auto *tgtStep = new QHBoxLayout();
-    auto *tgtBack = new QPushButton(lang("◀ 帧", "◀f"), m_ecPanel);
-    auto *tgtFwd = new QPushButton(lang("帧 ▶", "f▶"), m_ecPanel);
+    tgtStep->addWidget(new QLabel(lang("微调画面：", "Nudge:"), m_ecPanel));
+    auto *tgtBack = new QPushButton(lang("◀ 上一帧", "◀ frame"), m_ecPanel);
+    auto *tgtFwd = new QPushButton(lang("下一帧 ▶", "frame ▶"), m_ecPanel);
     connect(tgtBack, &QPushButton::clicked, this, [this]() { ecFrameStep(false, -1); });
     connect(tgtFwd, &QPushButton::clicked, this, [this]() { ecFrameStep(false, +1); });
     tgtStep->addWidget(tgtBack);
     tgtStep->addWidget(tgtFwd);
     v->addLayout(tgtStep);
 
-    m_ecEventName = new QLineEdit(m_ecPanel);
+    // ---- ③ 打「同一瞬间」标记（两路选好才解锁）----
+    m_ecStep3 = new QWidget(m_ecPanel);
+    auto *v3 = new QVBoxLayout(m_ecStep3);
+    v3->setContentsMargins(0, 4, 0, 0);
+    v3->setSpacing(4);
+    auto *s3 = new QLabel(lang("③ 找一件两路都看得见的事，把两边都播到那个瞬间",
+                               "3) Find one event visible in both, scrub both "
+                               "to that instant"),
+                          m_ecStep3);
+    s3->setFont(bf);
+    s3->setWordWrap(true);
+    v3->addWidget(s3);
+    auto *eg = new QLabel(
+        lang("例如：同一辆车开过门口 / 同一声喇叭 / 有人挥手 / 灯亮灯灭。"
+             "用上面「微调画面」逐帧对到最准的一瞬。",
+             "e.g. same car passing, same horn, a wave, a light flipping."),
+        m_ecStep3);
+    eg->setWordWrap(true);
+    eg->setStyleSheet(QStringLiteral("color:%1;").arg(Theme::TextSecond));
+    v3->addWidget(eg);
+    m_ecEventName = new QLineEdit(m_ecStep3);
     m_ecEventName->setPlaceholderText(
-        lang("事件名（必填）：如 黑衣男子推开东门", "Event name (required)"));
-    v->addWidget(m_ecEventName);
-    auto *addBtn = new QPushButton(lang("＋ 建锚（取两路当前帧）", "＋ Add anchor"),
-                                   m_ecPanel);
-    connect(addBtn, &QPushButton::clicked, this,
+        lang("给这件事起个名（必填，报告里要念出来），如：白车过东门",
+             "Name the event (required, appears in report)"));
+    v3->addWidget(m_ecEventName);
+    m_ecAddBtn = new QPushButton(lang("📍 就是这一瞬！打标记",
+                                      "📍 This instant! Mark it"),
+                                 m_ecStep3);
+    {
+        QFont f = m_ecAddBtn->font();
+        f.setBold(true);
+        f.setPointSize(f.pointSize() + 1);
+        m_ecAddBtn->setFont(f);
+    }
+    m_ecAddBtn->setStyleSheet(
+        QStringLiteral("background:%1; color:%2; padding:6px;")
+            .arg(Theme::Accent, Theme::AccentOnDark));
+    connect(m_ecAddBtn, &QPushButton::clicked, this,
             &MultiCamPlaybackWindow::onEcAddAnchor);
-    v->addWidget(addBtn);
+    v3->addWidget(m_ecAddBtn);
+    v->addWidget(m_ecStep3);
 
-    v->addWidget(new QLabel(lang("锚点表：", "Anchors:"), m_ecPanel));
-    m_ecAnchorList = new QListWidget(m_ecPanel);
-    v->addWidget(m_ecAnchorList, 1);
-    auto *delBtn = new QPushButton(lang("删除选中锚点", "Delete selected"), m_ecPanel);
+    // ---- ④ 标记列表 + 预览/保存（有 1 个标记即解锁）----
+    m_ecStep4 = new QWidget(m_ecPanel);
+    auto *v4 = new QVBoxLayout(m_ecStep4);
+    v4->setContentsMargins(0, 4, 0, 0);
+    v4->setSpacing(4);
+    auto *s4 = new QLabel(lang("④ 已记下的同一瞬间", "4) Marked instants"),
+                          m_ecStep4);
+    s4->setFont(bf);
+    v4->addWidget(s4);
+    m_ecAnchorList = new QListWidget(m_ecStep4);
+    v4->addWidget(m_ecAnchorList, 1);
+    auto *delBtn = new QPushButton(lang("删除选中的标记", "Delete selected"),
+                                   m_ecStep4);
     connect(delBtn, &QPushButton::clicked, this,
             &MultiCamPlaybackWindow::onEcRemoveAnchor);
-    v->addWidget(delBtn);
-
-    auto *fitBtn = new QPushButton(lang("生成校时并预览", "Fit && Preview"),
-                                   m_ecPanel);
-    connect(fitBtn, &QPushButton::clicked, this,
+    v4->addWidget(delBtn);
+    m_ecHint2 = new QLabel(
+        lang("1 个标记就能修「整体偏差」。如果这路越播越偏（走时快/慢），"
+             "再找一个瞬间打第 2 个标记（自愿）。",
+             "1 mark fixes the overall offset. If this lane drifts over "
+             "time, add a 2nd mark (optional)."),
+        m_ecStep4);
+    m_ecHint2->setWordWrap(true);
+    m_ecHint2->setStyleSheet(QStringLiteral("color:%1;").arg(Theme::Info));
+    v4->addWidget(m_ecHint2);
+    m_ecFitBtn = new QPushButton(lang("▶ 应用预览（播放试看两路是否贴齐）",
+                                      "▶ Apply preview"),
+                                 m_ecStep4);
+    connect(m_ecFitBtn, &QPushButton::clicked, this,
             &MultiCamPlaybackWindow::onEcFitPreview);
-    v->addWidget(fitBtn);
-    m_ecSaveBtn = new QPushButton(lang("保存校时（取证链确认卡）", "Save…"),
-                                  m_ecPanel);
+    v4->addWidget(m_ecFitBtn);
+    m_ecSaveBtn = new QPushButton(lang("💾 看着贴齐了，保存校时",
+                                       "💾 Looks aligned - save"),
+                                  m_ecStep4);
     m_ecSaveBtn->setEnabled(false);
+    m_ecSaveBtn->setStyleSheet(
+        QStringLiteral("background:%1; color:%2; padding:6px;")
+            .arg(Theme::Success, Theme::AccentOnDark));
     connect(m_ecSaveBtn, &QPushButton::clicked, this,
             &MultiCamPlaybackWindow::onEcSave);
-    v->addWidget(m_ecSaveBtn);
+    v4->addWidget(m_ecSaveBtn);
+    v->addWidget(m_ecStep4);
+
     auto *exitBtn = new QPushButton(lang("退出对时", "Exit"), m_ecPanel);
     connect(exitBtn, &QPushButton::clicked, this,
             &MultiCamPlaybackWindow::onEcExit);
@@ -1549,13 +1624,14 @@ void MultiCamPlaybackWindow::refreshEcPanel()
                 lanes[i].cal.source == TimeCalibration::Source::CrossCamEvent;
             m_ecRefCombo->addItem(
                 lanes[i].displayName
-                + (indirect ? lang("（间接）", " (indirect)") : QString()),
+                + (indirect ? lang("（经别的机位接力对过）", " (via relay)")
+                           : QString()),
                 i);
         }
         m_ecTargetCombo->clear();
         for (int i = 0; i < lanes.size(); ++i) {
             if (i == m_ecRefCombo->currentData().toInt())
-                continue;   // 参考路不能同时是目标路
+                continue;   // 准钟不能同时是要修的钟
             m_ecTargetCombo->addItem(lanes[i].displayName, i);
         }
         const int ri = m_ecRefCombo->findData(keepRef);
@@ -1565,7 +1641,7 @@ void MultiCamPlaybackWindow::refreshEcPanel()
         if (ti >= 0)
             m_ecTargetCombo->setCurrentIndex(ti);
     }
-    // 目标路切换 → 装载其既有锚点（同事件校时路），否则清空会话表
+    // 目标路切换 → 装载其既有标记（同事件校时路），否则清空会话表
     const int tgt = m_ecTargetCombo->count() > 0
         ? m_ecTargetCombo->currentData().toInt() : -1;
     if (tgt != m_ecTargetIdx) {
@@ -1579,21 +1655,75 @@ void MultiCamPlaybackWindow::refreshEcPanel()
         if (m_ecSaveBtn)
             m_ecSaveBtn->setEnabled(false);
     }
-    // 锚点表渲染（残差来自最近预览拟合，仅在预览后显示）
+    // 标记列表（口语行；预览后附对时误差，>半秒红字提醒）
     m_ecAnchorList->clear();
-    int vi = 0;   // 有效锚点序（残差与之对齐；UI 只收有效锚点，1:1）
+    int vi = 0;   // 有效标记序（残差与之对齐；UI 只收有效标记，1:1）
     for (const auto &a : m_ecAnchors) {
         const QString wall = QDateTime::fromMSecsSinceEpoch(a.refWallMs)
             .toString(QStringLiteral("MM-dd HH:mm:ss"));
-        const qint64 ts = a.targetStreamMs;
-        QString row = QStringLiteral("%1 | 参考 %2 ↔ 本路 %3:%4")
-            .arg(a.eventName, wall)
-            .arg(ts / 60000).arg((ts % 60000) / 1000, 2, 10, QLatin1Char('0'));
-        if (m_ecPreviewed && vi < m_ecFit.residualsMs.size())
-            row += QStringLiteral(" | 残差 %1ms")
-                .arg(qRound(m_ecFit.residualsMs[vi]));
+        const QString tstream = QTime(0, 0).addMSecs(a.targetStreamMs)
+            .toString(QStringLiteral("HH:mm:ss"));
+        QString row = QStringLiteral("「%1」准钟 %2 ⇄ 目标 %3 → %4")
+            .arg(a.eventName, wall, tstream,
+                 eventcalib::plainClockDeltaText(a.refWallMs
+                                                 - a.targetStreamMs));
+        if (m_ecPreviewed && vi < m_ecFit.residualsMs.size()) {
+            const double res = m_ecFit.residualsMs[vi];
+            row += QStringLiteral("（误差 %1 秒）")
+                .arg(res / 1000.0, 0, 'f', 2);
+            if (res > 500.0)
+                row += lang(" ⚠误差偏大，这对标记可能找错事了",
+                            " ⚠large error - wrong instant?");
+        }
         ++vi;
         m_ecAnchorList->addItem(row);
+    }
+    updateEcGuidance();
+}
+
+void MultiCamPlaybackWindow::updateEcGuidance()
+{
+    if (!m_ecPanel)
+        return;
+    const bool picked = m_ecRefCombo->currentData().isValid()
+        && m_ecRefCombo->currentData().toInt() >= 0
+        && m_ecTargetCombo->currentData().isValid()
+        && m_ecTargetCombo->currentData().toInt() >= 0;
+    const int step = eventcalib::guidanceStep(picked, m_ecAnchors.size(),
+                                              m_ecPreviewed);
+    if (m_ecStep3)
+        m_ecStep3->setEnabled(step >= 1);
+    if (m_ecStep4)
+        m_ecStep4->setEnabled(step >= 2);
+    if (m_ecHint2)
+        m_ecHint2->setVisible(m_ecAnchors.size() == 1 && !m_ecPreviewed);
+    if (m_ecBanner) {
+        QString txt;
+        switch (step) {
+        case 0:
+            txt = lang("🧭 现在：第①②步——上面选好「准钟」和「要修的钟」",
+                       "🧭 Step 1-2: pick the good clock and the one to fix");
+            break;
+        case 1:
+            txt = lang("🧭 现在：第③步——找一件两路都看得见的事，把两边画面"
+                       "都播到那个瞬间，起个名，点「📍 就是这一瞬！」",
+                       "🧭 Step 3: find an event visible in both, scrub to "
+                       "that instant, name it, mark it");
+            break;
+        case 2:
+            txt = lang("🧭 现在：可以点「▶ 应用预览」了。若目标路越播越偏，"
+                       "再找第二个瞬间打标记（自愿）",
+                       "🧭 Ready to preview. Add a 2nd mark only if the "
+                       "lane drifts (optional)");
+            break;
+        default:
+            txt = lang("🧭 预览中：播放试看——两路贴齐了就点「💾 保存校时」；"
+                       "没贴齐可删标记重打",
+                       "🧭 Previewing: if both lanes stick together, save; "
+                       "else delete and re-mark");
+            break;
+        }
+        m_ecBanner->setText(txt);
     }
 }
 
@@ -1622,8 +1752,8 @@ void MultiCamPlaybackWindow::onEcAddAnchor()
         return;
     const QString name = m_ecEventName->text().trimmed();
     if (name.isEmpty()) {   // 拍板②：事件名必填
-        m_ecStatus->setText(lang("事件名必填（取证链入报告的可读性依赖）",
-                                 "Event name is required (provenance)"));
+        m_ecStatus->setText(lang("先给这件事起个名（必填，报告里要念出来）",
+                                 "Name the event first (required)"));
         m_ecEventName->setFocus();
         return;
     }
@@ -1668,7 +1798,8 @@ void MultiCamPlaybackWindow::onEcAddAnchor()
     m_ecSaveBtn->setEnabled(false);
     m_ecEventName->clear();
     refreshEcPanel();
-    m_ecStatus->setText(lang("锚点 %1 已建立：%2", "Anchor %1: %2")
+    m_ecStatus->setText(lang("已记下第 %1 个瞬间：「%2」✅",
+                             "Marked instant #%1: %2")
         .arg(m_ecAnchors.size()).arg(name));
 }
 
@@ -1724,13 +1855,23 @@ void MultiCamPlaybackWindow::onEcFitPreview()
     double maxRes = 0;
     for (double r : m_ecFit.residualsMs)
         maxRes = qMax(maxRes, r);
-    m_ecStatus->setText(lang("预览中：%1 · 置信 %2 · 最大残差 %3ms。"
-                             "播放联动试看，确认后「保存校时」。",
-                             "Previewing: %1 · conf %2 · max residual %3ms.")
-        .arg(m_ecFit.affine
-             ? QStringLiteral("rate=%1").arg(m_ecFit.rate, 0, 'f', 5)
-             : lang("恒定偏移", "fixed offset"))
-        .arg(cal.conf, 0, 'f', 2).arg(qRound64(maxRes)));
+    const qint64 off = qRound64(m_ecFit.affine ? m_ecFit.interceptMs
+                                               : m_ecFit.offsetMs);
+    QString how = eventcalib::plainClockDeltaText(off);
+    if (m_ecFit.affine) {
+        const double pct = (m_ecFit.rate - 1.0) * 100.0;
+        how += lang("，且越走越%1（每 100 秒%2 %3 秒）", " and drifts")
+            .arg(pct >= 0 ? lang("快", "fast") : lang("慢", "slow"))
+            .arg(qAbs(pct), 0, 'f', 3);
+        how += lang("——已按「偏差+快慢」修正", " - fixed offset+rate");
+    } else {
+        how += lang("——已按「整体偏差」修正", " - fixed offset only");
+    }
+    m_ecStatus->setText(lang("预览中：%1。播放试看两路是否贴齐，贴齐就保存。"
+                             "（最大误差 %2 秒 · 可信度 %3，间接对时如实标注）",
+                             "Previewing: %1. max err %2s, conf %3")
+        .arg(how).arg(maxRes / 1000.0, 0, 'f', 2)
+        .arg(cal.conf, 0, 'f', 2));
 }
 
 void MultiCamPlaybackWindow::onEcSave()

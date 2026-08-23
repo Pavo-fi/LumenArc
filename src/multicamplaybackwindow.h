@@ -90,6 +90,7 @@ private slots:
     // ---- P-73 多机同事件间接校时 ----
     void onEventCalibToggled(bool on);
     void buildEventCalibPanel();      ///< 懒建右列对时面板
+    void updateEcGuidance();          ///< 引导状态机（横幅+分段解锁）
     void refreshEcPanel();            ///< 下拉/锚点表刷新
     void onEcAddAnchor();
     void onEcRemoveAnchor();
@@ -157,6 +158,12 @@ private:
     class QLineEdit *m_ecEventName = nullptr;
     class QListWidget *m_ecAnchorList = nullptr;
     class QLabel *m_ecStatus = nullptr;
+    class QLabel *m_ecBanner = nullptr;    ///< 「现在该干嘛」横幅
+    class QLabel *m_ecHint2 = nullptr;     ///< 第 2 标记自愿提示
+    QWidget *m_ecStep3 = nullptr;          ///< ③ 打标记段（选路后解锁）
+    QWidget *m_ecStep4 = nullptr;          ///< ④ 标记表+预览保存段（1 标记解锁）
+    class QPushButton *m_ecAddBtn = nullptr;
+    class QPushButton *m_ecFitBtn = nullptr;
     class QPushButton *m_ecSaveBtn = nullptr;
     QVector<eventcalib::EventAnchor> m_ecAnchors;  ///< 目标路锚点（既有+会话）
     eventcalib::FitResult m_ecFit;                 ///< 最近预览拟合

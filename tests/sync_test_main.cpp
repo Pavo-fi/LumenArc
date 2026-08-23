@@ -897,6 +897,25 @@ static void testMergedGrouping()
     }
 }
 
+// P-73 UX 重做：引导状态机 + 口语化钟差文案
+static void testEventCalibGuidance()
+{
+    using namespace eventcalib;
+    CHECK(guidanceStep(false, 0, false) == 0, "guide: no lanes -> pick");
+    CHECK(guidanceStep(true, 0, false) == 1, "guide: lanes, no mark -> mark");
+    CHECK(guidanceStep(true, 1, false) == 2, "guide: 1 mark -> can preview");
+    CHECK(guidanceStep(true, 2, false) == 2, "guide: 2 marks still pre-preview");
+    CHECK(guidanceStep(true, 1, true) == 3, "guide: previewed -> save");
+    CHECK(guidanceStep(false, 3, true) == 0, "guide: lanes lost dominates");
+
+    CHECK(plainClockDeltaText(134000) == QStringLiteral("目标的钟慢 2 分 14 秒"),
+          "plain: 2m14s slow");
+    CHECK(plainClockDeltaText(-45000) == QStringLiteral("目标的钟快 45.0 秒"),
+          "plain: 45s fast");
+    CHECK(plainClockDeltaText(3723000) == QStringLiteral("目标的钟慢 1 小时 2 分"),
+          "plain: 1h2m slow");
+}
+
 int main(int argc, char **argv)
 {
     QCoreApplication app(argc, argv);
@@ -919,6 +938,7 @@ int main(int argc, char **argv)
     testMergedMapping();
     testMergedServiceSwitch();
     testMergedGrouping();
+    testEventCalibGuidance();
     fprintf(stderr, "sync_test: %d checks, %d failures\n", g_checks, g_failures);
     return g_failures ? 1 : 0;
 }
