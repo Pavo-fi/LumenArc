@@ -9,6 +9,10 @@
 #include <QLabel>
 #include <QLineEdit>
 #include <QMessageBox>
+#include <QProcess>
+#include <QDesktopServices>
+#include <QDir>
+#include <QUrl>
 #include <QProgressBar>
 #include <QPushButton>
 #include <QTableWidget>
@@ -133,6 +137,20 @@ SegmentExportDialog::SegmentExportDialog(const speedplan::SpeedPlan &plan,
     m_resultLabel = new QLabel(this);
     m_resultLabel->setWordWrap(true);
     lay->addWidget(m_resultLabel);
+    // 成功后显示「打开所在文件夹」（真机反馈：导完想立刻定位产物）
+    m_openFolderBtn = new QPushButton(lang("📂 打开所在文件夹",
+                                           "📂 Open containing folder"), this);
+    m_openFolderBtn->setVisible(false);
+    connect(m_openFolderBtn, &QPushButton::clicked, this, [this]() {
+        const QString path = m_openFolderBtn->property("outPath").toString();
+        if (path.isEmpty())
+            return;
+        if (!QProcess::startDetached(QStringLiteral("explorer.exe"),
+                {QStringLiteral("/select,"), QDir::toNativeSeparators(path)}))
+            QDesktopServices::openUrl(QUrl::fromLocalFile(
+                QFileInfo(path).absolutePath()));
+    });
+    lay->addWidget(m_openFolderBtn);
 
     auto *btnRow = new QHBoxLayout();
     btnRow->addStretch();
@@ -199,6 +217,8 @@ void SegmentExportDialog::setPlan(const speedplan::SpeedPlan &plan,
 void SegmentExportDialog::setExportRunning(bool running, int totalFrames)
 {
     m_running = running;
+    if (running && m_openFolderBtn)
+        m_openFolderBtn->setVisible(false);   // 新一轮导出收起旧产物入口
     m_table->setEnabled(!running);
     m_exportBtn->setEnabled(!running);
     m_progressBox->setVisible(running);
@@ -221,6 +241,8 @@ void SegmentExportDialog::setResult(bool ok, const QString &msg)
     if (ok) {
         m_resultLabel->setStyleSheet("color: " + Theme::Success + ";");
         m_resultLabel->setText(lang("✅ 已导出：", "✅ Exported: ") + msg);
+        m_openFolderBtn->setProperty("outPath", msg);
+        m_openFolderBtn->setVisible(true);
     } else if (msg == QStringLiteral("已取消")) {
         m_resultLabel->setStyleSheet("color: " + Theme::TextSecond + ";");
         m_resultLabel->setText(lang("已取消。", "Cancelled."));
@@ -228,6 +250,8 @@ void SegmentExportDialog::setResult(bool ok, const QString &msg)
         m_resultLabel->setStyleSheet("color: " + Theme::Danger + ";");
         m_resultLabel->setText(lang("❌ 导出失败：", "❌ Failed: ") + msg);
     }
+    if (!ok && m_openFolderBtn)
+        m_openFolderBtn->setVisible(false);
 }
 
 void SegmentExportDialog::rebuildTable()

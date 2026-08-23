@@ -2801,6 +2801,13 @@ void MainWindow::startSegmentExport(const speedplan::SpeedPlan &planIn,
     pp.caseLabel = (m_caseManager && m_caseManager->isOpen())
                        ? m_caseManager->meta().caseNo : QString();
     pp.calibration = m_calibration;
+    // 放大镜开着且有取景 → 导出画面右下角 PIP 嵌入放大视图（真机反馈）
+    if (m_magnifier && !m_magnifier->currentSourceRect().isEmpty()) {
+        pp.magnifierPip = true;
+        pp.magnifierSrcRect = m_magnifier->currentSourceRect();
+        pp.magnifierRotation = m_magnifier->displayRotation();
+        pp.magnifierZoom = m_magnifier->zoomLevel();
+    }
 
     if (!m_segmentExporter)
         m_segmentExporter = new SegmentExportEngine(this);

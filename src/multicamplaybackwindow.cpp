@@ -1384,6 +1384,14 @@ void MultiCamPlaybackWindow::startClipExport(const speedplan::SpeedPlan &planIn,
     pp.outFps = fps;
     pp.burnOsd = burnOsd;
     pp.caseLabel = m_case ? m_case->meta().caseNo : QString();
+    // 逐瓦片放大镜快照入导出（真机反馈：导出画面应包含放大镜画面）——
+    // 导出时刻各瓦片的缩放/取景中心随参数冻结入格，格内右下 PIP 呈现
+    pp.laneZooms.resize(pp.lanes.size());
+    for (int i = 0; i < pp.lanes.size() && i < m_tiles.size(); ++i)
+        if (m_tiles[i] && m_tiles[i]->zoom() > 1.0) {
+            pp.laneZooms[i].zoom = m_tiles[i]->zoom();
+            pp.laneZooms[i].center = m_tiles[i]->zoomCenter();
+        }
 
     if (!m_segmentExporter)
         m_segmentExporter = new SegmentExportEngine(this);
@@ -1711,15 +1719,18 @@ void MultiCamPlaybackWindow::refreshEcPanel()
                            : QString()),
                 i);
         }
+        // 先还原参考路选择再填目标下拉——clear() 把参考当前项重置为 0
+        // （第一路），若先填目标会错把第一路永久排除（真机实测「要修的钟
+        // 选不了第一路」根因）
+        const int ri = m_ecRefCombo->findData(keepRef);
+        if (ri >= 0)
+            m_ecRefCombo->setCurrentIndex(ri);
         m_ecTargetCombo->clear();
         for (int i = 0; i < lanes.size(); ++i) {
             if (i == m_ecRefCombo->currentData().toInt())
                 continue;   // 准钟不能同时是要修的钟
             m_ecTargetCombo->addItem(lanes[i].displayName, i);
         }
-        const int ri = m_ecRefCombo->findData(keepRef);
-        if (ri >= 0)
-            m_ecRefCombo->setCurrentIndex(ri);
         const int ti = m_ecTargetCombo->findData(keepTgt);
         if (ti >= 0)
             m_ecTargetCombo->setCurrentIndex(ti);

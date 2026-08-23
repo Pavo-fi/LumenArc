@@ -74,6 +74,7 @@ private:
     QWidget *m_progressBox = nullptr;
     QProgressBar *m_progressBar = nullptr;
     QLabel *m_resultLabel = nullptr;
+    QPushButton *m_openFolderBtn = nullptr;  ///< 成功后「打开所在文件夹」
 };
 
 #endif // SEGMENTEXPORTDIALOG_H

@@ -130,6 +130,38 @@ QString SegmentExportEngine::buildAudioFilterChainRanges(
     return parts.join(QStringLiteral(";"));
 }
 
+/// 放大镜 PIP 绘制（单路/多机共用）：cell 右下角嵌入放大内容（38% 宽，
+/// 上限 45% 高），Accent 描边 + 「放大镜 ×N」角标（真机反馈：导出画面
+/// 应包含放大镜画面）
+static void drawPipImage(QPainter &painter, const QRect &cell,
+                         const QImage &content, qreal zoomForBadge)
+{
+    if (content.isNull() || cell.width() < 120)
+        return;
+    int w = int(cell.width() * 0.38);
+    int h = int(qreal(w) * content.height() / qMax(1, content.width()));
+    const int maxH = int(cell.height() * 0.45);
+    if (h > maxH) {
+        h = maxH;
+        w = int(qreal(h) * content.width() / qMax(1, content.height()));
+    }
+    const QRect dst(cell.right() - w - 8, cell.bottom() - h - 8, w, h);
+    painter.drawImage(dst, content);
+    painter.setPen(QPen(QColor(Theme::Accent), 2));
+    painter.setBrush(Qt::NoBrush);
+    painter.drawRect(dst);
+    painter.setPen(Qt::NoPen);
+    painter.setBrush(QColor(0, 0, 0, 160));
+    painter.drawRect(QRect(dst.left(), dst.top(), 76, 18));
+    painter.setPen(QColor(Theme::Accent));
+    QFont f = painter.font();
+    f.setPixelSize(12);
+    painter.setFont(f);
+    painter.drawText(QRect(dst.left() + 4, dst.top(), 72, 18),
+                     Qt::AlignVCenter | Qt::AlignLeft,
+                     QStringLiteral("放大镜 ×%1").arg(zoomForBadge, 0, 'f', 1));
+}
+
 void SegmentExportEngine::layoutRects(const QSize &canvas, bool hasChart, bool hasSpec,
                                       QRect *videoRect, QRect *chartRect, QRect *specRect)
 {
@@ -410,6 +442,14 @@ void SegmentExportEngine::run()
             const int vx = videoRect.x() + (videoRect.width() - scaled.width()) / 2;
             const int vy = videoRect.y() + (videoRect.height() - scaled.height()) / 2;
             painter.drawImage(vx, vy, scaled);
+            // 放大镜 PIP（单路：导出时刻的放大取景随帧重裁）
+            if (p.magnifierPip && !p.magnifierSrcRect.isNull()) {
+                QImage crop = curFrame.copy(p.magnifierSrcRect.intersected(
+                    QRect(0, 0, curFrame.width(), curFrame.height())));
+                if (p.magnifierRotation != 0)
+                    crop = crop.transformed(QTransform().rotate(p.magnifierRotation));
+                drawPipImage(painter, videoRect, crop, p.magnifierZoom);
+            }
 
             const double outMs = double(k) * 1000.0 / p.outFps;
             const int cursorX = outDur > 0.0
@@ -795,6 +835,20 @@ void SegmentExportEngine::runMultiCam()
                 painter.setPen(Theme::DataPalette[i % Theme::DataPalette.size()]);
                 painter.drawText(QRect(cell.left() + 6, cell.top(), 200, 22),
                                  Qt::AlignVCenter | Qt::AlignLeft, l.displayName);
+                // 逐路放大镜 PIP（瓦片缩放状态随导出快照入格）
+                if (i < p.laneZooms.size() && p.laneZooms[i].zoom > 1.0
+                    && !frame.isNull()) {
+                    const auto &zs = p.laneZooms[i];
+                    const double half = 0.5 / zs.zoom;
+                    const double cx = qBound(half, zs.center.x(), 1.0 - half);
+                    const double cy = qBound(half, zs.center.y(), 1.0 - half);
+                    const QRect src(int((cx - half) * frame.width()),
+                                    int((cy - half) * frame.height()),
+                                    int(2 * half * frame.width()),
+                                    int(2 * half * frame.height()));
+                    drawPipImage(painter, cell,
+                                 frame.copy(src), zs.zoom);
+                }
                 painter.setPen(QPen(QColor(Theme::Border), 1));
                 painter.setBrush(Qt::NoBrush);
                 painter.drawRect(cell);

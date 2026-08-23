@@ -51,6 +51,7 @@ public:
     bool isSelected() const { return m_selected; }
 
     qreal zoom() const { return m_zoom; }
+    QPointF zoomCenter() const { return m_center; }  ///< 归一化源坐标（导出 PIP 快照用）
 
 signals:
     void clicked();          ///< 单击：切听该路（U-2）

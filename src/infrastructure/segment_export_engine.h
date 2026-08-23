@@ -43,6 +43,19 @@ public:
         // 每路按 syncStreamOf 换算取帧，缺席时刻画「无画面」占位。
         QVector<SyncLaneData> lanes;
         int audioLane = -1;            ///< 音轨来源路（-1 = 无音轨）
+
+        // ---- 放大镜 PIP（真机反馈：导出画面应包含放大镜画面）----
+        /// 多机逐路放大（与 lanes 对齐；zoom>1 生效，center 归一化源坐标）
+        struct LaneZoomSpec {
+            qreal zoom = 1.0;
+            QPointF center {0.5, 0.5};
+        };
+        QVector<LaneZoomSpec> laneZooms;
+        /// 单路放大镜（magnifierPip 且 srcRect 非空生效；原视频系裁剪区）
+        bool magnifierPip = false;
+        QRect magnifierSrcRect;
+        int magnifierRotation = 0;
+        qreal magnifierZoom = 1.0;
     };
 
     explicit SegmentExportEngine(QObject *parent = nullptr);
