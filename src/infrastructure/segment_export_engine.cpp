@@ -452,17 +452,43 @@ void SegmentExportEngine::run()
             }
 
             const double outMs = double(k) * 1000.0 / p.outFps;
-            const int cursorX = outDur > 0.0
-                ? int(outMs / outDur * p.canvas.width()) : 0;
+            // 光标对齐图表区坐标（原误按画布全宽算，右端溢出 pad 错位；
+            // 顶部加三角柄读作「光标」——真机反馈误认为静态时间轴）
+            auto drawCursor = [&](const QRect &rc) {
+                const int cx = outDur > 0.0
+                    ? rc.x() + int(outMs / outDur * rc.width()) : rc.x();
+                painter.setPen(QPen(QColor(Theme::Accent), 2));
+                painter.drawLine(cx, rc.top(), cx, rc.bottom());
+                painter.setPen(Qt::NoPen);
+                painter.setBrush(QColor(Theme::Accent));
+                const QPoint tri[3] = { {cx - 6, rc.top()},
+                                        {cx + 6, rc.top()},
+                                        {cx, rc.top() + 8} };
+                painter.drawPolygon(tri, 3);
+            };
             if (!chartStrip.isNull()) {
                 painter.drawImage(chartRect, chartStrip);
-                painter.setPen(QPen(QColor(Theme::Accent), 2));
-                painter.drawLine(cursorX, chartRect.top(), cursorX, chartRect.bottom());
+                // 标签竖标（选段内；输出域位置随变速 warp）
+                for (const auto &lb : p.labels) {
+                    if (lb.timeMs < p.plan.aMs || lb.timeMs > p.plan.bMs)
+                        continue;
+                    const double lo = p.plan.outputMsAtSourceMs(lb.timeMs);
+                    const int lx = chartRect.x()
+                        + int(lo / outDur * chartRect.width());
+                    painter.setPen(QPen(lb.color, 2));
+                    painter.drawLine(lx, chartRect.top(), lx, chartRect.bottom());
+                    painter.setPen(lb.color);
+                    QFont f = painter.font();
+                    f.setPixelSize(11);
+                    painter.setFont(f);
+                    painter.drawText(QRect(lx + 3, chartRect.top() + 2, 200, 14),
+                                     Qt::AlignLeft | Qt::AlignTop, lb.text);
+                }
+                drawCursor(chartRect);
             }
             if (!specStrip.isNull()) {
                 painter.drawImage(specRect, specStrip);
-                painter.setPen(QPen(QColor(Theme::Accent), 2));
-                painter.drawLine(cursorX, specRect.top(), cursorX, specRect.bottom());
+                drawCursor(specRect);
             }
             if (p.burnOsd) {
                 const double rate = p.plan.rateAtOutputMs(outMs);
@@ -482,6 +508,16 @@ void SegmentExportEngine::run()
                                   .arg(rate, 0, 'g', 3).arg(timeStr);
                 if (!p.caseLabel.isEmpty())
                     osd += QStringLiteral(" · 案件 %1").arg(p.caseLabel);
+                // 标签 OSD：播到标签时刻起烧录其内容，显示 5 秒后隐去
+                // （多标签重叠取最新一个）
+                const ChartLabel *activeLb = nullptr;
+                for (const auto &lb : p.labels) {
+                    if (lb.timeMs < p.plan.aMs || lb.timeMs > p.plan.bMs)
+                        continue;
+                    const double lo = p.plan.outputMsAtSourceMs(lb.timeMs);
+                    if (outMs >= lo && outMs < lo + 5000.0)
+                        activeLb = &lb;
+                }
                 QFont f = painter.font();
                 f.setPixelSize(22);
                 f.setBold(true);
@@ -493,6 +529,19 @@ void SegmentExportEngine::run()
                 painter.drawRoundedRect(osdRect.adjusted(-6, -2, 6, 2), 6, 6);
                 painter.setPen(QColor(Theme::Accent));
                 painter.drawText(osdRect, Qt::AlignVCenter | Qt::AlignLeft, osd);
+                // 标签 OSD 行（主行上方，标签色；显示 5 秒隐去）
+                if (activeLb) {
+                    const QRect lbRect(videoRect.left() + 12,
+                                       osdRect.top() - 38,
+                                       videoRect.width() - 24, 30);
+                    painter.setPen(Qt::NoPen);
+                    painter.setBrush(QColor(0, 0, 0, 160));
+                    painter.drawRoundedRect(lbRect.adjusted(-6, -2, 6, 2), 6, 6);
+                    painter.setPen(activeLb->color);
+                    painter.drawText(lbRect, Qt::AlignVCenter | Qt::AlignLeft,
+                                     QStringLiteral("🏷 %1").arg(activeLb->text));
+                    painter.setPen(QColor(Theme::Accent));
+                }
             }
         }
         const QByteArray bytes(reinterpret_cast<const char *>(canvas.constBits()),

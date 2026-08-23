@@ -16,6 +16,7 @@
 #include <QSize>
 #include <QString>
 #include "domain/speed_plan.h"
+#include "domain/analysis_snapshot.h"   // ChartLabel（导出标签竖标+OSD 5s 烧录）
 #include "domain/time_calibration.h"
 #include "domain/sync_model.h"
 
@@ -56,6 +57,10 @@ public:
         QRect magnifierSrcRect;
         int magnifierRotation = 0;
         qreal magnifierZoom = 1.0;
+
+        /// 图表标签（单路模式）：曲线条打竖标 + 播到标签时刻 OSD 烧录
+        /// 内容显示 5 秒隐去（真机反馈拍板）
+        QVector<ChartLabel> labels;
     };
 
     explicit SegmentExportEngine(QObject *parent = nullptr);
