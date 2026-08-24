@@ -22,6 +22,10 @@
 #include "app/report_service.h"
 #include "app/report_docx_builder.h"
 #include "reportpreflightdialog.h"
+#include "sitemapeditordialog.h"
+#include <QProgressDialog>
+#include <QFutureWatcher>
+#include <QtConcurrent/QtConcurrent>
 #include "app/case_manager.h"
 #include "app/case_open_panel.h"
 #include "app/analysis_task_service.h"
@@ -856,17 +860,49 @@ void MainWindow::createMenus()
         ReportPreflightDialog preflight(m_caseManager, m_sessionMgr->stateManager(), this);
         if (preflight.exec() != QDialog::Accepted)
             return;
-        // 终生成：哈希补算（大文件耗时，光标等待提示）
-        setCursor(Qt::WaitCursor);
-        ReportData rd = ReportService::collect(m_caseManager,
-                                               m_sessionMgr->stateManager(),
-                                               /*computeHashes=*/true);
+        // 终生成：哈希补算走工作线程 + 进度对话框（可取消）
+        QProgressDialog prog(lang("正在生成报告…", "Generating report..."),
+                             lang("取消", "Cancel"), 0, 1000, this);
+        prog.setWindowTitle(lang("生成分析报告", "Generate Report"));
+        prog.setWindowModality(Qt::WindowModal);
+        prog.setMinimumDuration(0);
+        prog.setValue(0);
+        std::atomic<bool> cancel{false};
+        connect(&prog, &QProgressDialog::canceled, this, [&] { cancel = true; });
+        auto cb = [&](const QString &stage, double f) -> bool {
+            QMetaObject::invokeMethod(&prog, [&prog, stage, f] {
+                prog.setLabelText(stage);
+                if (f >= 0.0)
+                    prog.setValue(int(f * 1000));
+            }, Qt::QueuedConnection);
+            return !cancel.load();
+        };
+        CaseManager *cm = m_caseManager;
+        VideoStateManager *vsm = m_sessionMgr->stateManager();
+        QFutureWatcher<ReportData> watcher;
+        QEventLoop loop;
+        connect(&watcher, &QFutureWatcher<ReportData>::finished,
+                &loop, &QEventLoop::quit);
+        watcher.setFuture(QtConcurrent::run([cm, vsm, &cb]() {
+            return ReportService::collect(cm, vsm, /*computeHashes=*/true, cb,
+                                          nullptr);
+        }));
+        loop.exec();
+        prog.reset();
+        if (cancel.load())
+            return;
+        ReportData rd = watcher.result();
+        // 图表光栅（GUI 线程离屏渲染）
+        prog.setLabelText(lang("渲染曲线图…", "Rendering charts..."));
+        prog.setRange(0, 0);
+        prog.show();
+        ReportService::renderChartImages(cm, vsm, rd);
+        prog.reset();
         const QString dirPath = m_caseManager->caseDir() + QStringLiteral("/reports");
         QDir().mkpath(dirPath);
         const QString out = dirPath + QStringLiteral("/火灾视频分析报告_%1.docx")
             .arg(QDateTime::currentDateTime().toString(QStringLiteral("yyyyMMdd_HHmmss")));
         const QString err = ReportDocxBuilder::build(rd, out);
-        unsetCursor();
         if (!err.isEmpty()) {
             QMessageBox::critical(this, lang("生成分析报告", "Generate Report"), err);
             return;
@@ -883,6 +919,13 @@ void MainWindow::createMenus()
             QDesktopServices::openUrl(QUrl::fromLocalFile(dirPath));
     });
     m_genReportAction->setEnabled(false);
+    // P-74 点位图编辑器（报告二(三)节成品图来源）
+    m_sitemapAction = caseMenu->addAction(
+        lang("编辑监控点位图(&M)...", "Edit Site &Map..."), this, [this]() {
+        SiteMapEditorDialog dlg(m_caseManager, this);
+        dlg.exec();
+    });
+    m_sitemapAction->setEnabled(false);
     // v1.3.0 M3 任务12：导出移交包
     m_exportCaseAction = caseMenu->addAction(
         lang("导出移交包(&E)...", "&Export Handover Package..."), this,
@@ -2022,6 +2065,7 @@ void MainWindow::enterCaseMode()
     if (m_casePropsAction)
         m_casePropsAction->setEnabled(true);
         m_genReportAction->setEnabled(true);
+        m_sitemapAction->setEnabled(true);
     if (m_exportCaseAction)
         m_exportCaseAction->setEnabled(true);
     if (m_batchRelocateAction)
@@ -2073,6 +2117,7 @@ void MainWindow::exitCaseMode()
     if (m_casePropsAction)
         m_casePropsAction->setEnabled(false);
         m_genReportAction->setEnabled(false);
+        m_sitemapAction->setEnabled(false);
     if (m_exportCaseAction)
         m_exportCaseAction->setEnabled(false);
     if (m_batchRelocateAction)

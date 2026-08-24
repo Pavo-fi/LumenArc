@@ -9,19 +9,19 @@
   版本 **v1.14.0**）
 - **构建**：`cmd //c "build_tmp\build_target.bat ALL"`；测试：`QT_QPA_PLATFORM=offscreen`
   + PATH 含 `C:\code\Qt\6.8.0\msvc2022_64\bin`（配置：`build_tmp\reconfigure.bat`）
-- **全回归基线**（**17 套**，v1.14.0 施工批）：mw 97 / task_registry 41 / case 248 /
+- **全回归基线**（**18 套**，v1.14.0 施工批）：mw 97 / task_registry 41 / case 248 /
   case_e2e 51 / piecewise 129 / preprocess 268 / ui_chain 97 /
   calibration 99 / roi_model 23 /
   vla v10 累计 40 + gaptick 4 + gapcollide 2 / libav 32（无 caltest 素材
-  环境跑 20）/ v17 37 / **sync 193（含 P-69 合并轨 44 + P-73 引导 9/可听集 5）**/ sidecar 34 / segment 54 / **docx 23 + report 49（P-28 批次①②③）**
+  环境跑 20）/ v17 37 / **sync 193（含 P-69 合并轨 44 + P-73 引导 9/可听集 5）**/ sidecar 34 / segment 54 / **docx 23 + report 49 + sitemap 16（P-28 全批+P-74）**
 - **当前保留批次**（新→旧，R2 限 5 批）：
+  第六十七批 §76（P-28 收尾：曲线嵌入+哈希进度+P-74 点位图落地）·
   第六十六批 §75（P-28 批次②：报告聚合+章节映射+生成入口，版本→1.14.0）·
   第六十五批 §74（P-28 报告模块批次①：DOCX 地基 + P-74 点位图方案）·
   第六十四批 §73（P-69 编号合并轨，版本→1.13.3）·
-  第六十三批 §72（P-73 多机同事件间接校时，版本→1.13.2）·
-  第六十二批 §71（放大镜布局重构+案件折叠条+启动比例，版本→1.13.1）。
-- **最近归档动作**：2026-08-23 §75 批——第六十一批（§70）移入 WORK_HISTORY.md 末尾；
-  早前：§74 批——第六十批（§69）移入；
+  第六十三批 §72（P-73 多机同事件间接校时，版本→1.13.2）。
+- **最近归档动作**：2026-08-23 §76 批——第六十二批（§71）移入 WORK_HISTORY.md 末尾；
+  早前：§75 批——第六十一批（§70）移入；
   早前：§72 批——第五十八批（§67）移入。
 - **常用参考导航**（已归档，查 WORK_HISTORY.md）：机位勾选面板（§54）、
   校时落盘双根因修复（§55）、显示旋转 90° 方案 A
@@ -34,6 +34,40 @@
 # ============================================================================
 # 工作记录（2026-08-22，第六十三批）——P-73 多机同事件间接校时（v1.13.2）
 # ============================================================================
+
+## 76. P-28 收尾：曲线光栅嵌入+哈希进度条 + P-74 点位图编辑器落地
+
+**日期**：2026-08-23｜**版本**：1.14.0｜**性质**：功能批次（P-28 收尾 + P-74 落地）
+
+**图表光栅嵌入**：`ReportService::renderChartImages`（GUI 线程离屏）——
+TimelineModel::setSnapshot + ChartPanel::renderToImage(1600×420) 矢量重渲染
+（§14 定论不走 grab）→ 案内 reports/assets/chart_<V###>.png → 报告五（三）
+节逐路嵌入「XX 亮度变化曲线（横轴：北京时间）」。
+
+**哈希进度条**：collect 新增 cb 重载（工作线程安全：仅文件 IO/QProcess，
+QueuedConnection 回投进度）；mainwindow 终生成改 QtConcurrent::run +
+QProgressDialog（可取消，取消即弃稿）+ QEventLoop 等待。
+
+**P-74 点位图编辑器落地**（方案 docs/SITEMAP_EDITOR_DESIGN_CN.md，拍板：
+不画比例尺/扇形扇面可调/一案一张）：
+- `domain/site_map.h`：SiteMapData/Point（归一化坐标+朝向/张角/半径夹取
+  10~180°/3~50%）+ sitemap.json 原子写持久化 + 孤儿点位（机位删了标红
+  「已移除」不自动删，改名跟随最新标签）；
+- `infrastructure/site_map_render`：编辑器画布与成品图**共用** drawPoints
+  （所见即所得）+ renderFramed 标准图框出图（2480×1754 A4@150dpi，双图框+
+  右下标题栏：案件编号/图名/制图/审核/日期/图号 SP-01）；
+- `SiteMapEditorDialog`：工具行（导入底图[复制入案]/适应窗口/删除选中/
+  出图保存）+ 机位侧栏（拖到画布布点，同机位再拖=挪位）+ 画布（空白拖
+  平移/滚轮缩放/滚轮在选中扇面上转朝向/Shift+滚轮调张角）+ 属性条
+  （朝向/张角/半径 spin 即时生效即存盘）；机位色=Theme::DataPalette 与
+  多机时间线同口径；
+- 案件菜单「编辑监控点位图(&M)」（有案使能）；出图存
+  reports/assets/sitemap.png → 报告二（三）节自动嵌入（批次②已留取用）；
+- `sitemap_test` 16 断言（JSON 回环/边界夹取/案内存取/图框成品像素探针：
+  外框墨线/标题栏有墨/扇面橙色可见/无底图不崩）；**测试 17 → 18 套全绿**。
+
+**P-28 报告模块全部拍板项施工完毕**，待用户整体验收（真机：自检→补录→
+生成→Word 版式；点位图编辑器实操；拼接记录核对）。
 
 ## 75. P-28 批次②：报告数据聚合 + 模板章节映射 + 生成入口（草稿版）
 
@@ -279,82 +313,4 @@ reports/assets/sitemap.png）+ sitemap.json 归一化坐标持久化 + 孤儿点
 
 # ============================================================================
 # 工作记录（2026-08-22，第六十二批）——放大镜布局重构（用户标注拍板）v1.13.1
-# ============================================================================
-
-## 71. 放大镜 QDockWidget→QWidget 内嵌顶行 + 案件列表常驻手动折叠条
-
-### 拍板来源
-
-用户两次实测纠偏：①v1.12.9「右 dock 半屏」方向错误——dock 天生贯通整窗高度，
-挤压图表区且放大画面上下大黑边；②本批初案「裁切取景填满 dock」（源区域纵横比
-随视口）被用户否掉（纵向取景收窄不可接受），代码+测试干净回退后，用户以
-**亲手标注截图**拍板目标布局：
-
-```
-┌────────────────────────────────────────────┐
-│ 菜单栏/工具栏                                │
-├──┬───────────────────┬─────────────────────┤
-│视│                   │                     │
-│频│  原视频（左半）    │   放大镜（右半）     │  ← 同一行等大同高
-│列│                   │                     │
-│表│                   │                     │
-│案├───────────────────┴─────────────────────┤
-│件│  图表（量化分析）——右区全宽              │
-│列├─────────────────────────────────────────┤
-│表│  语谱图——右区全宽                        │
-└──┴─────────────────────────────────────────┘
-```
-
-### 施工
-
-1. **MagnifierWidget 基类 QDockWidget→QWidget**：ctor 改 QVBoxLayout 承载
-   ContentWidget（左缘 1px 分隔线）；所有 dock API（addDockWidget/
-   setWindowTitle/setFeatures/resizeDocks 50%）从 MainWindow 清除。
-2. **中央布局**：顶行新增水平 QSplitter m_topRow [m_videoWidget | m_magnifier]，
-   垂直 m_splitter 三行 [m_topRow | 图表 | 语谱图] 不变；左列 dock 天然全高。
-   createMagnifier → m_topRow->addWidget + 首次均分；用户拖过分割条的比例在
-   removeMagnifier 存 m_topRowSavedSizes、下次呼出恢复。
-3. **关闭回排排雷**：QSplitter 子项 deleteLater/摘除后**不自动拉伸剩余子项**
-   （offscreen 截图实证右半空白）——removeMagnifier 显式
-   `setParent(nullptr)` + `setSizes({width()})` 让视频立即吃满整行。
-4. **案件列表常驻手动折叠条**：复刻视频列表模式（28px 竖排细条+◀/▶钮），
-   重排 CaseDock 内容 [细条|内容]；放大镜自动折叠（占位细条）逻辑保留且改为
-   记录真实手动状态——用户本已手动收起的，关放大镜后仍保持收起。
-5. **回归网**：mw_test 新增 testMagnifierLayout（合成 2s 彩条素材 → 开窗 →
-   invoke onMagnifierWheelZoom → 几何断言：同行顶对齐/同高/等宽/图表全宽/
-   左列全高/案件折叠钮存在/关闭后视频吃满整行）+ 开关态截图留档
-   （build/Release/maglayout_shot_open.png 人工目检）。mw 84→96。
-
-### 排雷记（offscreen 平台）
-
-- **offscreen 下 isVisible() 恒 false**（裸 QWidget show() 探针实证），
-  无头可见性断言无效，一律改几何断言；窗口截图用 grab()（强制渲染不受
-  可见性影响）；
-- offscreen 无字体目录 → 截图文字全 tofu，仅看布局不看文字。
-
-### 启动比例二次修正（用户复测反馈，三轮定稿）
-
-首版纯 stretch 因子 7/7/4 被图表/语谱 sizeHint 顶歪（实测启动视频行仅 21%）。
-二版 singleShot(0) 落地——**真机仍无效**：main.cpp 构造 MainWindow 后、
-showMaximized() 前 splash 连续 app.processEvents()，singleShot(0) 被提前
-触发时窗口未 show 高度无效，守卫直接跳过（offscreen 测试 show 先于事件泵
-所以假绿）。三版定稿：伸缩因子 55/21/15 + **resizeEvent 首次有效尺寸**
-（h>200）显式 setSizes 落地一次（一次性，之后用户拖分割条/缩放自理）；
-collapse/expand 基准 {550,230,160}。mw_test 补「视频行≈55%±8%」断言 +
-**构造后先泵事件再 show 的 splash 次序回归网**（旧写法在此次序下必红）。
-
-### 排雷记（真机 vs offscreen 次序差异）
-
-- main.cpp splash 模式：ctor → processEvents×3 → showMaximized——ctor 内
-  singleShot(0) 在 processEvents 即触发，勿用于依赖窗口尺寸的一次性落地；
-  一次性布局落地钩子 = resizeEvent/showEvent 首达。
-
-### 测试
-
-- mw 97 绿（新增 13 断言）；ui_chain 97（mag.widget()→mag.grab() 适配基类
-  变更）；全回归 15 套绿。
-- 版本 → **v1.13.1**（CMakeLists/app.rc/aboutdialog/mainwindow 四同步）。
-
-# ============================================================================
-# 工作记录（2026-08-22，第六十一批）——P-68 实测四项返修（v1.13.0）
 # ============================================================================

@@ -4793,3 +4793,84 @@ Q1 改判**上下布局**（上视频下双图）；Q2 改判 **OSD 角标可选
 # ============================================================================
 # 工作记录（2026-08-21，第六十批）——P-68 选段分段变速复合导出落地（v1.13.0）
 # ============================================================================
+
+
+> 【归档注记】本节原为 HANDOVER.md 第六十二批记录（§71，v1.13.1），
+> 2026-08-23 §76 批按 R2 规则归档移入。
+## 71. 放大镜 QDockWidget→QWidget 内嵌顶行 + 案件列表常驻手动折叠条
+
+### 拍板来源
+
+用户两次实测纠偏：①v1.12.9「右 dock 半屏」方向错误——dock 天生贯通整窗高度，
+挤压图表区且放大画面上下大黑边；②本批初案「裁切取景填满 dock」（源区域纵横比
+随视口）被用户否掉（纵向取景收窄不可接受），代码+测试干净回退后，用户以
+**亲手标注截图**拍板目标布局：
+
+```
+┌────────────────────────────────────────────┐
+│ 菜单栏/工具栏                                │
+├──┬───────────────────┬─────────────────────┤
+│视│                   │                     │
+│频│  原视频（左半）    │   放大镜（右半）     │  ← 同一行等大同高
+│列│                   │                     │
+│表│                   │                     │
+│案├───────────────────┴─────────────────────┤
+│件│  图表（量化分析）——右区全宽              │
+│列├─────────────────────────────────────────┤
+│表│  语谱图——右区全宽                        │
+└──┴─────────────────────────────────────────┘
+```
+
+### 施工
+
+1. **MagnifierWidget 基类 QDockWidget→QWidget**：ctor 改 QVBoxLayout 承载
+   ContentWidget（左缘 1px 分隔线）；所有 dock API（addDockWidget/
+   setWindowTitle/setFeatures/resizeDocks 50%）从 MainWindow 清除。
+2. **中央布局**：顶行新增水平 QSplitter m_topRow [m_videoWidget | m_magnifier]，
+   垂直 m_splitter 三行 [m_topRow | 图表 | 语谱图] 不变；左列 dock 天然全高。
+   createMagnifier → m_topRow->addWidget + 首次均分；用户拖过分割条的比例在
+   removeMagnifier 存 m_topRowSavedSizes、下次呼出恢复。
+3. **关闭回排排雷**：QSplitter 子项 deleteLater/摘除后**不自动拉伸剩余子项**
+   （offscreen 截图实证右半空白）——removeMagnifier 显式
+   `setParent(nullptr)` + `setSizes({width()})` 让视频立即吃满整行。
+4. **案件列表常驻手动折叠条**：复刻视频列表模式（28px 竖排细条+◀/▶钮），
+   重排 CaseDock 内容 [细条|内容]；放大镜自动折叠（占位细条）逻辑保留且改为
+   记录真实手动状态——用户本已手动收起的，关放大镜后仍保持收起。
+5. **回归网**：mw_test 新增 testMagnifierLayout（合成 2s 彩条素材 → 开窗 →
+   invoke onMagnifierWheelZoom → 几何断言：同行顶对齐/同高/等宽/图表全宽/
+   左列全高/案件折叠钮存在/关闭后视频吃满整行）+ 开关态截图留档
+   （build/Release/maglayout_shot_open.png 人工目检）。mw 84→96。
+
+### 排雷记（offscreen 平台）
+
+- **offscreen 下 isVisible() 恒 false**（裸 QWidget show() 探针实证），
+  无头可见性断言无效，一律改几何断言；窗口截图用 grab()（强制渲染不受
+  可见性影响）；
+- offscreen 无字体目录 → 截图文字全 tofu，仅看布局不看文字。
+
+### 启动比例二次修正（用户复测反馈，三轮定稿）
+
+首版纯 stretch 因子 7/7/4 被图表/语谱 sizeHint 顶歪（实测启动视频行仅 21%）。
+二版 singleShot(0) 落地——**真机仍无效**：main.cpp 构造 MainWindow 后、
+showMaximized() 前 splash 连续 app.processEvents()，singleShot(0) 被提前
+触发时窗口未 show 高度无效，守卫直接跳过（offscreen 测试 show 先于事件泵
+所以假绿）。三版定稿：伸缩因子 55/21/15 + **resizeEvent 首次有效尺寸**
+（h>200）显式 setSizes 落地一次（一次性，之后用户拖分割条/缩放自理）；
+collapse/expand 基准 {550,230,160}。mw_test 补「视频行≈55%±8%」断言 +
+**构造后先泵事件再 show 的 splash 次序回归网**（旧写法在此次序下必红）。
+
+### 排雷记（真机 vs offscreen 次序差异）
+
+- main.cpp splash 模式：ctor → processEvents×3 → showMaximized——ctor 内
+  singleShot(0) 在 processEvents 即触发，勿用于依赖窗口尺寸的一次性落地；
+  一次性布局落地钩子 = resizeEvent/showEvent 首达。
+
+### 测试
+
+- mw 97 绿（新增 13 断言）；ui_chain 97（mag.widget()→mag.grab() 适配基类
+  变更）；全回归 15 套绿。
+- 版本 → **v1.13.1**（CMakeLists/app.rc/aboutdialog/mainwindow 四同步）。
+
+# ============================================================================
+# 工作记录（2026-08-22，第六十一批）——P-68 实测四项返修（v1.13.0）
+# ============================================================================

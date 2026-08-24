@@ -250,7 +250,19 @@ QString ReportDocxBuilder::build(const ReportData &rd, const QString &outPath)
     dw.addHeading(QStringLiteral("（三）光亮/烟气分析"), 2);
     dw.addParagraph(QStringLiteral(
         "使用视频分析软件进行光亮曲线分析，标注烟气首次出现位置与扩散方向。"));
-    dw.addParagraph(QStringLiteral("（光亮变化曲线图与关键帧截图见附件）"));
+    {
+        int charts = 0;
+        for (const ReportVideoRow &v : rd.videos)
+            if (!v.chartPng.isEmpty()) {
+                dw.addImage(v.chartPng, IMG_W);
+                dw.addCentered(QStringLiteral("%1 亮度变化曲线（横轴：北京时间）")
+                               .arg(v.cameraLabel), 21);
+                ++charts;
+            }
+        if (charts == 0)
+            dw.addParagraph(QStringLiteral("（无亮度分析数据——请先对视频执行亮度分析）"));
+    }
+    dw.addParagraph(QStringLiteral("（关键帧截图见附件）"));
     dw.addHeading(QStringLiteral("（四）人物/车辆活动情况（如有）"), 2);
     dw.addParagraph(BLANK);
     dw.addHeading(QStringLiteral("（五）起火部位/起火点分析"), 2);

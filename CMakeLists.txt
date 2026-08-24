@@ -125,6 +125,11 @@ set(SOURCES
     src/domain/report_preflight.h
     src/reportpreflightdialog.cpp
     src/reportpreflightdialog.h
+    src/domain/site_map.h
+    src/infrastructure/site_map_render.cpp
+    src/infrastructure/site_map_render.h
+    src/sitemapeditordialog.cpp
+    src/sitemapeditordialog.h
     src/timesettingsdialog.cpp
     src/calibphotodialog.cpp        # v1.12.5 北京时间对时：校时图片两框框选
     src/infrastructure/ffmpeg_video_engine.cpp
@@ -377,6 +382,19 @@ target_include_directories(lumenarc_report_test PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src
 )
 target_link_libraries(lumenarc_report_test PRIVATE
+    Qt6::Core
+    Qt6::Gui
+)
+
+add_executable(lumenarc_sitemap_test
+    tests/sitemap_test_main.cpp
+    src/infrastructure/site_map_render.cpp
+    src/infrastructure/site_map_render.h
+)
+target_include_directories(lumenarc_sitemap_test PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+)
+target_link_libraries(lumenarc_sitemap_test PRIVATE
     Qt6::Core
     Qt6::Gui
 )

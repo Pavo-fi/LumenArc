@@ -60,29 +60,45 @@ static void probeFile(const QString &path, ReportVideoRow &row)
 }
 
 /// MD5+SHA-256 单遍补算（knownSha 非空时只算 MD5）
-static void dualHash(const QString &path, const QString &knownSha,
-                     QString *md5Out, QString *shaOut)
+static bool dualHash(const QString &path, const QString &knownSha,
+                     QString *md5Out, QString *shaOut,
+                     const std::function<bool(double)> &cb = {})
 {
     QCryptographicHash md5(QCryptographicHash::Md5);
     QCryptographicHash sha(QCryptographicHash::Sha256);
     const bool needSha = knownSha.isEmpty();
     QFile f(path);
     if (!f.open(QIODevice::ReadOnly))
-        return;
+        return true;
+    const qint64 total = f.size();
+    qint64 done = 0;
     while (!f.atEnd()) {
         const QByteArray chunk = f.read(4 * 1024 * 1024);
         md5.addData(chunk);
         if (needSha)
             sha.addData(chunk);
+        done += chunk.size();
+        if (cb && !cb(total > 0 ? double(done) / total : 1.0))
+            return false;   // 用户取消
     }
     *md5Out = QString::fromLatin1(md5.result().toHex());
     *shaOut = needSha ? QString::fromLatin1(sha.result().toHex())
                       : knownSha;
+    return true;
 }
 
 ReportData ReportService::collect(CaseManager *cm, VideoStateManager *vsm,
                                   bool computeHashes)
 {
+    return collect(cm, vsm, computeHashes, {}, nullptr);
+}
+
+ReportData ReportService::collect(CaseManager *cm, VideoStateManager *vsm,
+                                  bool computeHashes,
+                                  const std::function<bool(const QString &, double)> &cb,
+                                  bool *cancelled)
+{
+    if (cancelled) *cancelled = false;
     ReportData rd;
     if (!cm)
         return rd;
@@ -117,12 +133,26 @@ ReportData ReportService::collect(CaseManager *cm, VideoStateManager *vsm,
         row.sizeBytes = v.sizeBytes;
 
         row.fileExists = QFile::exists(row.filePath);
+        if (cb && !cb(QStringLiteral("探测 %1").arg(row.fileName), -1.0)) {
+            if (cancelled) *cancelled = true;
+            return rd;
+        }
         if (row.fileExists)
             probeFile(row.filePath, row);
-        if (computeHashes && row.fileExists)
-            dualHash(row.filePath, v.sha256, &row.md5, &row.sha256);
-        else
+        if (computeHashes && row.fileExists) {
+            const qint64 needBytes = v.sha256.isEmpty() ? row.sizeBytes * 1
+                                                        : row.sizeBytes;
+            Q_UNUSED(needBytes);
+            const QString stage = QStringLiteral("哈希 %1").arg(row.fileName);
+            const bool okc = dualHash(row.filePath, v.sha256, &row.md5, &row.sha256,
+                [&](double f) { return cb ? cb(stage, f) : true; });
+            if (!okc) {
+                if (cancelled) *cancelled = true;
+                return rd;
+            }
+        } else {
             row.sha256 = v.sha256;   // 已算过的沿用
+        }
 
         // ---- 校时（.vla SSOT）----
         VideoState st;
@@ -314,4 +344,45 @@ ReportData ReportService::collect(CaseManager *cm, VideoStateManager *vsm,
           size_t(rd.videos.size()), size_t(rd.nodes.size()),
           size_t(rd.chains.size()), size_t(rd.snapshotPaths.size()));
     return rd;
+}
+
+#include "chartpanel.h"
+#include "domain/roi_model.h"
+#include "domain/timeline_model.h"
+
+void ReportService::renderChartImages(CaseManager *cm, VideoStateManager *vsm,
+                                      ReportData &rd)
+{
+    if (!cm || !vsm)
+        return;
+    const QString assetDir = cm->caseDir() + QStringLiteral("/reports/assets");
+    QDir().mkpath(assetDir);
+    for (ReportVideoRow &row : rd.videos) {
+        VideoState st;
+        if (!vsm->restoreState(row.filePath, st) || st.snapshot.isEmpty())
+            continue;
+        // 离屏图表（矢量重渲染，不经 grab——§14 定论）
+        ChartPanel panel;
+        RoiModel roi;
+        TimelineModel tl;
+        panel.setRegionModel(&roi);
+        panel.setPolygonModel(&roi);
+        panel.setTimelineModel(&tl);
+        tl.setSnapshot(st.snapshot);
+        panel.setCalibration(st.calibration);
+        panel.setLabels(st.labels);
+        const qint64 dur = row.durationMs > 0 ? row.durationMs
+            : (st.snapshot.timestamps.isEmpty() ? 0 : st.snapshot.timestamps.last());
+        if (dur > 0)
+            panel.setDuration(dur);
+        const QImage img = panel.renderToImage(QSize(1600, 420));
+        if (img.isNull())
+            continue;
+        const QString out = assetDir + QStringLiteral("/chart_") + row.id
+                            + QStringLiteral(".png");
+        if (img.save(out)) {
+            row.chartPng = out;
+            qInfo() << "report: chart image" << row.id << img.size();
+        }
+    }
 }

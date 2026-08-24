@@ -51,6 +51,7 @@ struct ReportVideoRow {
     QString md5;
     QString sha256;
     // ---- 证据 ----
+    QString chartPng;           ///< 亮度曲线整段光栅图（GUI 线程渲染后填）
     QStringList evidencePhotos; ///< 校准证据帧绝对路径
     QVector<eventcalib::EventAnchor> anchors;   ///< P-73 本路锚点全表
 };

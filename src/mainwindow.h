@@ -218,6 +218,7 @@ protected:
     QAction *m_closeCaseAction = nullptr;    ///< 菜单「关闭案件」(Ctrl+W)
     QAction *m_casePropsAction = nullptr;    ///< 菜单「案件属性」
     QAction *m_genReportAction = nullptr;    ///< P-28 菜单「生成分析报告」
+    QAction *m_sitemapAction = nullptr;      ///< P-74 菜单「编辑监控点位图」
     QAction *m_exportCaseAction = nullptr;   ///< 菜单「导出移交包」(M3)
     QAction *m_batchRelocateAction = nullptr; ///< 菜单「批量重新定位」(M3)
     QAction *m_multiCamAction = nullptr;      ///< 菜单「多机同步播放」(M3/P-57)
