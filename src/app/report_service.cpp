@@ -14,6 +14,7 @@
 #include <QJsonObject>
 #include <QJsonArray>
 #include <QProcess>
+#include <QRegularExpression>
 #include <QVector>
 #include <QPair>
 
@@ -192,6 +193,9 @@ ReportData ReportService::collect(CaseManager *cm, VideoStateManager *vsm,
         // ---- 校时（.vla SSOT）----
         // v1.15.3：机位编号+名（C01 烟酒店东侧）供报告展示；参考路同口径
         auto camText = [&](const QString &fileId) -> QString {
+            // 合并轨引用：锚点可能挂在「M_C02 烟酒店」（=M_+显示名）上
+            if (fileId.startsWith(QStringLiteral("M_")))
+                return fileId.mid(2);
             const QString gid = CaseModel::groupIdOf(meta, fileId);
             if (const CaseCameraGroup *g = gid.isEmpty()
                     ? nullptr : CaseModel::findGroup(meta, gid)) {
@@ -245,14 +249,42 @@ ReportData ReportService::collect(CaseManager *cm, VideoStateManager *vsm,
                 const QString corr = stripDir(diff);
                 if (row.timeDiffText.isEmpty())
                     row.timeDiffText = diff;
-                // v1.15.3：直接对时把「监控↔北京」同框读数对摆出来，差值自明
+                // v1.15.3：直接对时把「监控↔北京」同框读数对摆出来。OCR 原始
+                // 识别可能被确认卡人工修正（实证：OCR 12:25:42 → 修正 12:25:47，
+                // 偏移 834000 与 47 吻合）——报告显示修正后读数，原识别留档标注
+                QString monRaw, bjRaw, corrMon;
+                if (cal.truthSource == QStringLiteral("photo")) {
+                    monRaw = reportfmt::flatTruthText(cal.truthMonitorText);
+                    bjRaw = reportfmt::flatTruthText(cal.truthBeijingText);
+                    QRegularExpression reHms(
+                        QStringLiteral("(\\d{1,2}):(\\d{2}):(\\d{2})"));
+                    const auto mk = reHms.match(cal.truthBeijingText);
+                    if (mk.hasMatch()) {
+                        const qint64 bjMs = (mk.captured(1).toInt() * 3600
+                                             + mk.captured(2).toInt() * 60
+                                             + mk.captured(3).toInt()) * 1000LL;
+                        qint64 monMs = bjMs - truth;   // 监控 = 北京 − 偏移
+                        if (monMs < 0)
+                            monMs += 86400000LL;
+                        const int s = int(monMs / 1000);
+                        corrMon = QStringLiteral("%1:%2:%3")
+                            .arg(s / 3600, 2, 10, QLatin1Char('0'))
+                            .arg((s % 3600) / 60, 2, 10, QLatin1Char('0'))
+                            .arg(s % 60, 2, 10, QLatin1Char('0'));
+                        if (!corrMon.isEmpty())
+                            row.osdSampleText = corrMon;   // 显示列用修正后读数
+                    }
+                }
                 QString pair;
-                if (cal.truthSource == QStringLiteral("photo")
-                    && !cal.truthMonitorText.isEmpty()
-                    && !cal.truthBeijingText.isEmpty())
-                    pair = QStringLiteral("，同框照片：监控显示「%1」↔ 北京时间「%2」")
-                        .arg(reportfmt::flatTruthText(cal.truthMonitorText),
-                             reportfmt::flatTruthText(cal.truthBeijingText));
+                if (!monRaw.isEmpty() && !bjRaw.isEmpty()) {
+                    if (corrMon.isEmpty())
+                        pair = QStringLiteral("，同框照片：监控显示「%1」↔ 北京时间「%2」")
+                            .arg(monRaw, bjRaw);
+                    else
+                        pair = QStringLiteral(
+                            "，同框照片：监控「%1」（OCR 留档）经确认卡人工修正为 %2 ↔ 北京时间「%3」")
+                            .arg(monRaw, corrMon, bjRaw);
+                }
                 row.resultText = QStringLiteral(
                     "监控较北京时间%1%2；采用后：北京时间 = 监控显示时间 + %3")
                     .arg(diff, pair, corr);
@@ -323,6 +355,23 @@ ReportData ReportService::collect(CaseManager *cm, VideoStateManager *vsm,
                             && st2.calibration.source != TimeCalibration::Source::CrossCamEvent)
                             absoluteLaneIds.insert(v2.id);
                     }
+                }
+                // v1.15.3：合并轨别名桥接——C03 的锚点挂在「M_C02 烟酒店」
+                // （=M_+显示名）上，而 C02 的锚点在成员 P01/P02 自身 id 下：
+                // 并入别名后接力链 C03→合并轨→源头→绝对锚 才能在报告完整展开
+                for (const CaseCameraGroup &g2 : meta.cameraGroups) {
+                    if (g2.memberIds.size() < 2 || g2.camNo.isEmpty())
+                        continue;
+                    const QString alias = QStringLiteral("M_")
+                        + (g2.name.isEmpty()
+                               ? g2.camNo
+                               : g2.camNo + QStringLiteral(" ") + g2.name);
+                    for (const QString &mid : g2.memberIds)
+                        for (const auto &a : byLane.value(mid))
+                            byLane[alias] << a;
+                    for (const QString &mid : g2.memberIds)
+                        if (absoluteLaneIds.contains(mid))
+                            absoluteLaneIds.insert(alias);
                 }
                 const auto chain = eventcalib::expandChain(v.id, byLane, absoluteLaneIds);
                 ReportChain rc;
