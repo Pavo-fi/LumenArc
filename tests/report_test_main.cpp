@@ -201,6 +201,10 @@ int main(int argc, char **argv)
     // 校准表
     CHECK(doc.contains("2026-07-22 17:25:28"), "osd sample");
     CHECK(doc.contains("慢 2 分 14.0 秒"), "time diff");
+    // v1.15.3：差值列 + 校时结论小节
+    CHECK(doc.contains("监控较北京时间"), "delta column header");
+    CHECK(doc.contains("慢 2 分 14.0 秒"), "delta value survives");
+    CHECK(doc.contains("（五）校时结论"), "conclusion section");
     // 取证链
     CHECK(doc.contains("接力对时取证链"), "chain section");
     CHECK(doc.contains("爆燃声响"), "chain event name");

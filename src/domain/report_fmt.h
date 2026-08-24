@@ -44,6 +44,18 @@ inline QString fmtSizeMB(qint64 bytes)
     return QStringLiteral("%1 MB").arg(bytes / 1024.0 / 1024, 0, 'f', 1);
 }
 
+/// v1.15.3：OCR 原文展平（多行→单行，空白收敛），报告「监控↔北京」同框对可读
+inline QString flatTruthText(const QString &raw)
+{
+    QStringList out;
+    for (const QString &line : raw.split(QChar(10)))
+        if (!line.trimmed().isEmpty())
+            out << line.trimmed();
+    if (out.isEmpty())
+        return raw;
+    return out.join(QStringLiteral("｜"));
+}
+
 /// 时间差人读：正=监控慢（显示落后北京时间），负=快
 inline QString fmtTimeDiff(qint64 diffMs)
 {

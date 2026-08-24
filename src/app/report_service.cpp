@@ -14,6 +14,40 @@
 #include <QJsonObject>
 #include <QJsonArray>
 #include <QProcess>
+#include <QVector>
+#include <QPair>
+
+/// v1.15.3：间接对时路「源监控较北京差值」——读产物 sidecar（.lumencal.json，
+/// 源录像是 monitor 口径的分段墙钟），在首个锚点处算 参考北京墙钟 − 源墙钟。
+/// 返回 false 表示无 sidecar/解析失败（调用方回退「≈0（依基准）」）。
+static bool crosscamOsdDeltaMs(const QString &filePath,
+                               qint64 refWallMs, qint64 targetStreamMs,
+                               qint64 *outDeltaMs)
+{
+    *outDeltaMs = 0;
+    QFile f(filePath + QStringLiteral(".lumencal.json"));
+    if (!f.open(QIODevice::ReadOnly))
+        return false;
+    const QJsonObject root =
+        QJsonDocument::fromJson(f.readAll()).object();
+    f.close();
+    const QJsonArray segs = root.value(QStringLiteral("segments")).toArray();
+    if (segs.isEmpty())
+        return false;
+    for (const auto &sv : segs) {
+        const QJsonObject s = sv.toObject();
+        const double st = s.value(QStringLiteral("streamStartMs")).toDouble();
+        const double en = s.value(QStringLiteral("streamEndMs")).toDouble();
+        const double rate = s.value(QStringLiteral("rate")).toDouble();
+        const double ws = s.value(QStringLiteral("wallStartMs")).toDouble();
+        if (targetStreamMs >= st && targetStreamMs <= en) {
+            *outDeltaMs = refWallMs -
+                qRound64(ws + rate * (targetStreamMs - st));
+            return true;   // positive = 源监控较北京慢
+        }
+    }
+    return false;
+}
 
 /// report.csv 可信时长（ms 字符串 → 人读）
 static QString fmtDurCsv(const QString &msStr)
@@ -207,23 +241,47 @@ ReportData ReportService::collect(CaseManager *cm, VideoStateManager *vsm,
             };
             if (cal.truthSet) {
                 row.baseRefText = QStringLiteral("标准授时（北京时间）");
-                const QString corr = stripDir(reportfmt::fmtTimeDiff(truth));
+                const QString diff = reportfmt::fmtTimeDiff(truth);
+                const QString corr = stripDir(diff);
                 if (row.timeDiffText.isEmpty())
-                    row.timeDiffText = reportfmt::fmtTimeDiff(truth);
+                    row.timeDiffText = diff;
+                // v1.15.3：直接对时把「监控↔北京」同框读数对摆出来，差值自明
+                QString pair;
+                if (cal.truthSource == QStringLiteral("photo")
+                    && !cal.truthMonitorText.isEmpty()
+                    && !cal.truthBeijingText.isEmpty())
+                    pair = QStringLiteral("，同框照片：监控显示「%1」↔ 北京时间「%2」")
+                        .arg(reportfmt::flatTruthText(cal.truthMonitorText),
+                             reportfmt::flatTruthText(cal.truthBeijingText));
                 row.resultText = QStringLiteral(
-                    "该路监控钟较北京时间%1；"
-                    "采用后：北京时间 = 监控显示时间 + %2")
-                    .arg(reportfmt::fmtTimeDiff(truth), corr);
+                    "监控较北京时间%1%2；采用后：北京时间 = 监控显示时间 + %3")
+                    .arg(diff, pair, corr);
             } else if (cal.source == TimeCalibration::Source::CrossCamEvent) {
                 const QString ref = cal.eventAnchors.isEmpty()
                     ? QStringLiteral("—") : camText(cal.eventAnchors.first().refLaneId);
                 row.baseRefText = ref;
-                if (row.timeDiffText.isEmpty())
-                    row.timeDiffText = QStringLiteral("≈0（依基准）");
+                // 差值：锚点处源监控墙钟 vs 参考北京墙钟（sidecar 可取则取，
+                // 否则用校时那一刻存盘的差值注记；再没有则诚实说「依基准」）
+                QString deltaText;
+                if (!cal.eventAnchors.isEmpty()) {
+                    const auto &a0 = cal.eventAnchors.first();
+                    qint64 dm;
+                    if (crosscamOsdDeltaMs(row.filePath, a0.refWallMs,
+                                           a0.targetStreamMs, &dm)) {
+                        deltaText = reportfmt::fmtTimeDiff(dm);
+                        if (qAbs(dm) < 500)
+                            deltaText = QStringLiteral("一致（±0.5 秒内）");
+                    }
+                }
+                if (deltaText.isEmpty() && !cal.calibNote.isEmpty())
+                    deltaText = cal.calibNote;
+                if (deltaText.isEmpty())
+                    deltaText = QStringLiteral("依基准（见取证链）");
+                row.timeDiffText = deltaText;
                 row.resultText = QStringLiteral(
-                    "以基准路「%1」为坐标：%2 个特征事件逐帧对齐"
-                    "（对帧容差见四（四）），墙钟即基准路（北京时间）口径")
-                    .arg(ref).arg(row.anchorCount);
+                    "以基准路「%1」为坐标：%2 个特征事件逐帧对齐；"
+                    "源监控较北京时间 %3")
+                    .arg(ref).arg(row.anchorCount).arg(deltaText);
             } else if (cal.source == TimeCalibration::Source::Inherited) {
                 row.baseRefText = QStringLiteral("源校时");
                 row.resultText = QStringLiteral("前处理产物，继承源校时时间轴");

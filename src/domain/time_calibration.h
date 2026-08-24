@@ -71,6 +71,9 @@ struct TimeCalibration
     QString truthMonitorText;    ///< 框 1 OCR 原文（留档）
     QString truthBeijingText;    ///< 框 2 OCR 原文（留档）
 
+    // ---- v1.15.3 校时差值注记（间接校时结论存盘，报告读出白话说差值）----
+    QString calibNote;           ///< 校时差值/结论人读（如「目标路的钟原本就基本准<1 秒」）
+
     // ---- 分段重建（v1.2.1 时间重建：变速/抽帧文件查表校时）----
     PiecewiseTimeMap piecewise;   ///< 分段映射表（isValid = 重建产物）
     bool    piecewiseApplied = false; ///< 分段模式是否生效（优先于仿射）

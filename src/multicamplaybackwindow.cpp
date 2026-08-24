@@ -2167,6 +2167,8 @@ void MultiCamPlaybackWindow::onEcSave()
             req.speedPlan = lv.speedPlan;
         }
     }
+    // v1.15.3：差值注记一并入档——报告「四（五）」据此白话说清间接路的差值
+    m_ecCal.calibNote = m_ecCorrText;
     req.calibration = m_ecCal;
     if (!io.saveVlaNow(path, req)) {
         QMessageBox::critical(this, lang("保存失败", "Save failed"),

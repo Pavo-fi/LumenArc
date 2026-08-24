@@ -6,6 +6,12 @@
 #include <QDateTime>
 #include <QFileInfo>
 
+// v1.15.3：空值回退助手（（二）表与（五）结论共用）
+static QString reportTextOr(const QString &s, const QString &fb)
+{
+    return s.isEmpty() ? fb : s;
+}
+
 namespace {
 const QString BLANK = QStringLiteral("____________________");
 const int IMG_W = 5400000;   // 15cm ≈ 版心宽（EMU）
@@ -196,6 +202,7 @@ QString ReportDocxBuilder::build(const ReportData &rd, const QString &outPath)
                                  QStringLiteral("监控显示时间(取样)"),
                                  QStringLiteral("校时方式"),
                                  QStringLiteral("时间基准"),
+                                 QStringLiteral("监控较北京时间"),
                                  QStringLiteral("校准结果")};
         for (const ReportVideoRow &v : rd.videos)
             rows << QVector<QString>{
@@ -204,10 +211,12 @@ QString ReportDocxBuilder::build(const ReportData &rd, const QString &outPath)
                                                          : QStringLiteral("—"),
                 v.hasCalib ? v.calibWayText : QStringLiteral("未校时"),
                 textOr(v.baseRefText, v.hasCalib ? QStringLiteral("—") : QString()),
-                v.hasCalib ? textOr(v.resultText, textOr(v.timeDiffText,
-                                                          v.formulaText))
+                v.hasCalib
+                    ? textOr(v.timeDiffText, v.resultText)
+                    : QStringLiteral("—"),
+                v.hasCalib ? textOr(v.resultText, v.formulaText)
                            : QStringLiteral("未校时")};
-        dw.addTable(rows, true, {14, 22, 14, 18, 32});
+        dw.addTable(rows, true, {12, 22, 13, 16, 16, 21});
     }
     dw.addHeading(QStringLiteral("（三）时间校准截图"), 2);
     {
@@ -233,6 +242,44 @@ QString ReportDocxBuilder::build(const ReportData &rd, const QString &outPath)
                 "结论：本路经 %1 个特征事件锚点与基准路对齐，整链对帧容差 %2；"
                 "墙钟采用基准路（北京时间）口径，逐跳对帧均在校准容差内，"
                 "证据链如上。").arg(c.eventHops).arg(c.totalToleranceText));
+        }
+    }
+
+    // v1.15.3 校时结论：三路口径统一成一段人话（用已算好的差值，不另算）
+    dw.addHeading(QStringLiteral("（五）校时结论"), 2);
+    {
+        bool anyDiff = false;
+        for (const ReportVideoRow &v : rd.videos)
+            if (v.hasCalib && !v.timeDiffText.isEmpty())
+                anyDiff = true;
+        if (!anyDiff) {
+            dw.addParagraph(QStringLiteral("（本案尚无已校时监控）"));
+        } else {
+            dw.addParagraph(QStringLiteral(
+                "综合上述校准，本案各监控墙钟均已统一到北京时间口径后参与分析。"
+                "各路监控显示时间较北京时间的差值为："));
+            for (const ReportVideoRow &v : rd.videos) {
+                if (!v.hasCalib)
+                    continue;
+                dw.addParagraph(QStringLiteral(
+                    "· %1：%2，源监控较北京时间 %3。")
+                    .arg(reportTextOr(v.camNoText, v.cameraLabel),
+                         v.calibWayText,
+                         v.timeDiffText.isEmpty() ? QStringLiteral("—")
+                                                  : v.timeDiffText));
+            }
+            if (!rd.chains.isEmpty()) {
+                const ReportChain &c0 = rd.chains.first();
+                QStringList chainLine;
+                for (const QString &l : c0.hopLines)
+                    if (l.contains(QStringLiteral("← 参考")))
+                        chainLine << l.left(l.indexOf(QStringLiteral("←"))).trimmed();
+                chainLine << QStringLiteral("标准授时（北京时间）");
+                dw.addParagraph(QStringLiteral(
+                    "接力关系：%1（整链对帧容差 %2；各跳锚点见（四））。")
+                    .arg(chainLine.join(QStringLiteral(" → ")),
+                         c0.totalToleranceText));
+            }
         }
     }
 

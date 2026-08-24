@@ -163,6 +163,8 @@ QJsonObject TimeCalibration::toJson() const
     o[QStringLiteral("truthOffsetMs")] = static_cast<double>(truthOffsetMs);
     o[QStringLiteral("truthSet")] = truthSet;
     o[QStringLiteral("truthCheckedAtMs")] = static_cast<double>(truthCheckedAtMs);
+    if (!calibNote.isEmpty())
+        o[QStringLiteral("calib_note")] = calibNote;   // v1.15.3 差值注记（只加不改）
     if (!truthNote.isEmpty())
         o[QStringLiteral("truthNote")] = truthNote;
     // v1.12.5 对时留档（有值才写；老读取端不识新增键，向后兼容）
@@ -229,6 +231,7 @@ TimeCalibration TimeCalibration::fromJson(const QJsonObject &o)
     c.truthSet = o[QStringLiteral("truthSet")].toBool();
     c.truthCheckedAtMs = static_cast<qint64>(o[QStringLiteral("truthCheckedAtMs")].toDouble());
     c.truthNote = o[QStringLiteral("truthNote")].toString();
+    c.calibNote = o[QStringLiteral("calib_note")].toString();   // v1.15.3
     // v1.12.5 对时留档（老文件无此字段 → 空，行为不变）
     c.truthSource = o[QStringLiteral("truthSource")].toString();
     c.truthImagePath = o[QStringLiteral("truthImagePath")].toString();
