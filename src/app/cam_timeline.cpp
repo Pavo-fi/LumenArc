@@ -69,9 +69,14 @@ QVector<CamInventoryItem> buildCamInventory(const CaseManager &cm)
         it.fromPreprocess = fromPreprocess;
         it.path = cm.effectivePathFor(v);
         it.pathExists = !it.path.isEmpty() && QFile::exists(it.path);
-        it.displayName = v.cameraLabel.isEmpty()
-            ? QFileInfo(v.originalPath).fileName() : v.cameraLabel;
-        it.groupKey = v.cameraLabel.isEmpty() ? v.id : v.cameraLabel;
+        // 机位组正式化（2026-08-24 拍板）：同轴键=组 id（稳定），显示名=组名
+        const QString gid = CaseModel::groupIdOf(cm.meta(), v.id);
+        const CaseCameraGroup *g = gid.isEmpty()
+            ? nullptr : CaseModel::findGroup(cm.meta(), gid);
+        it.groupKey = gid.isEmpty() ? v.id : gid;
+        it.displayName = g ? CaseModel::groupDisplayName(*g)
+            : (v.cameraLabel.isEmpty() ? QFileInfo(v.originalPath).fileName()
+                                       : v.cameraLabel);
         // 校时实读案内 .vla（SSOT，R5；不看徽标缓存）。已校时路顺手填妥
         // SyncLaneData（勾选即可入列，避免开始后二次读盘）。
         // 路径分流与 CaseManager::vlaPathFor 同语义：登记路径优先；

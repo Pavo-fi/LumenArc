@@ -63,15 +63,17 @@ private slots:
 
 private:
     QTreeWidgetItem *addGroup(const QString &text);
-    void fillVideos(QTreeWidgetItem *group);
+    void fillCameraGroups(QTreeWidgetItem *group);   // 机位组分层树（拍板B）
+    void fillVideos(QTreeWidgetItem *group);         // （已并入机位组树，保留签名）
     void fillPreprocess(QTreeWidgetItem *group);
+    void moveToGroupFlow(const QString &id);         // 移到机位组▸ 流程
+    void renameGroupFlow(const QString &groupId);    // 组改名
     void fillReports(QTreeWidgetItem *group);
     void fillSnapshots(QTreeWidgetItem *group);
     /// 哈希徽标：✗缺失 ⚠已变更 ⏳待算 ✓一致（同步快判，与 M1 校验语义一致）
     QString hashBadge(const CaseVideoRef &v, QString *tooltip,
                       QColor *color) const;
     void relocateVideo(const QString &id);
-    void setCameraLabelFlow(const QString &id);   // v1.7.1：编号对话框流程
     void deleteVideoFile(const QString &id);   // 删除源文件+案内数据（2026-08）
     void removePreprocessSession(int si);      // 删除会话与文件（2026-08）
     void removePreprocessOutput(int si, int oi);  // 删除输出文件（2026-08）

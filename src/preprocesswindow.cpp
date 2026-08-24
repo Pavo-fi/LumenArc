@@ -43,6 +43,8 @@
 #include <QTimer>
 #include <QDialog>
 #include <QDialogButtonBox>
+#include <QInputDialog>
+#include <QLineEdit>
 #include <QPainter>
 #include <QMouseEvent>
 
@@ -2344,6 +2346,10 @@ void PreprocessWindow::onFinished(const PreprocessReport &report)
                 QString saveErr;
                 if (!m_caseManager->saveCase(&saveErr))
                     regErr = saveErr;
+                // 机位组拍板（2026-08-24）：登记完毕逐产物询问归组——
+                // 「归入已有摄像头 / 创建新摄像头」
+                if (regErr.isEmpty())
+                    promptGroupAssignment(outputs, report.outputChannels);
             }
             caseRegNote = regErr.isEmpty()
                 ? lang("\n已登记案件：%1（sidecar 归类 sidecars/）",
@@ -2817,6 +2823,102 @@ bool PreprocessWindow::eventFilter(QObject *watched, QEvent *event)
 // ---------------------------------------------------------------------------
 // 拖放导入 / 关闭保护
 // ---------------------------------------------------------------------------
+
+/// 前处理产物归组对话框（拍板：产物登记完毕给「归入已有摄像头/创建新摄像头」
+/// 选择；通道名与既有组名匹配时预选）
+void PreprocessWindow::promptGroupAssignment(
+    const QStringList &outputs, const QMap<QString, QString> &outputChannels)
+{
+    if (!m_caseManager || !m_caseManager->isOpen())
+        return;
+    // 收集本次新登记的产物 id
+    struct Row { QString id; QString fileName; QString channel; };
+    QVector<Row> rows;
+    for (const QString &o : outputs) {
+        const CaseVideoRef *v = m_caseManager->videoByPath(o);
+        if (!v)
+            continue;
+        rows.append({v->id, QFileInfo(o).fileName(),
+                     outputChannels.value(o)});
+    }
+    if (rows.isEmpty())
+        return;
+
+    QDialog dlg(this);
+    dlg.setWindowTitle(lang("产物归入机位组", "Assign outputs to camera groups"));
+    auto *lay = new QVBoxLayout(&dlg);
+    lay->addWidget(new QLabel(
+        lang("本次前处理产物请归入机位组（同组的文件才可同轴播放）：",
+             "Assign each output to a camera group (only same-group files share an axis):"),
+        &dlg));
+    const QString NEW_TAG = QStringLiteral("➕ ") +
+        lang("创建新摄像头…", "New camera...");
+    QVector<QComboBox *> combos;
+    for (const Row &r : rows) {
+        auto *rowLay = new QHBoxLayout;
+        rowLay->addWidget(new QLabel(
+            QStringLiteral("%1　%2").arg(r.id, r.fileName), &dlg), 1);
+        auto *combo = new QComboBox(&dlg);
+        int preselect = -1;
+        int gi = 0;
+        for (const CaseCameraGroup &g : m_caseManager->meta().cameraGroups) {
+            combo->addItem(CaseModel::groupDisplayName(g), g.groupId);
+            // 通道名匹配组名 → 预选
+            if (!r.channel.isEmpty() && g.name == r.channel)
+                preselect = gi;
+            ++gi;
+        }
+        combo->addItem(NEW_TAG, QString());
+        if (preselect >= 0)
+            combo->setCurrentIndex(preselect);
+        else
+            combo->setCurrentIndex(combo->count() - 1);   // 默认新建
+        combos << combo;
+        rowLay->addWidget(combo, 1);
+        lay->addLayout(rowLay);
+    }
+    auto *btns = new QDialogButtonBox(QDialogButtonBox::Ok
+                                      | QDialogButtonBox::Cancel, &dlg);
+    btns->button(QDialogButtonBox::Ok)->setText(lang("应用归组", "Apply"));
+    btns->button(QDialogButtonBox::Cancel)->setText(lang("稍后自调", "Later"));
+    connect(btns, &QDialogButtonBox::accepted, &dlg, &QDialog::accept);
+    connect(btns, &QDialogButtonBox::rejected, &dlg, &QDialog::reject);
+    if (dlg.exec() != QDialog::Accepted)
+        return;   // 稍后自调：产物保持未归组（案件树「移到机位组」补）
+
+    bool changedAny = false;
+    for (int i = 0; i < rows.size(); ++i) {
+        QString gid = combos[i]->currentData().toString();
+        QString err;
+        if (gid.isEmpty()) {
+            // 创建新摄像头：默认名=通道名
+            bool ok = false;
+            const QString name = QInputDialog::getText(this,
+                lang("创建新摄像头", "New camera"),
+                lang("机位名称（建议用位置名，如「东门烟酒店」）：",
+                     "Camera location name:"),
+                QLineEdit::Normal, rows[i].channel, &ok);
+            if (!ok)
+                continue;   // 该产物暂不归组
+            gid = m_caseManager->createGroup(name.trimmed(), &err);
+            if (gid.isEmpty()) {
+                QMessageBox::warning(this, lang("创建新摄像头", "New camera"), err);
+                continue;
+            }
+        }
+        if (m_caseManager->assignToGroup(rows[i].id, gid, &err))
+            changedAny = true;
+        else
+            qWarning() << "assign group failed:" << rows[i].id << err;
+    }
+    if (changedAny) {
+        QString err;
+        if (!m_caseManager->saveCase(&err))
+            QMessageBox::warning(this, lang("产物归入机位组", "Assign groups"), err);
+        qInfo() << "preprocess: outputs assigned to camera groups";
+    }
+}
+
 void PreprocessWindow::dragEnterEvent(QDragEnterEvent *event)
 {
     if (event->mimeData()->hasUrls()) {

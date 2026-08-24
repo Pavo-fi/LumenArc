@@ -184,6 +184,13 @@ bool CaseManager::openCase(const QString &dir, QString *error,
         if (renamed)
             m_dirty = true;   // 迁移后随下次保存落盘
     }
+    // 机位组迁移（2026-08-24 拍板，内测期从简）：未归组引用按 cameraLabel
+    // 自动成组；有改动置 dirty 随下次保存落盘
+    if (CaseModel::migrateCameraGroups(m_meta)) {
+        m_dirty = true;
+        qInfo() << "case: camera groups migrated,"
+                << m_meta.cameraGroups.size() << "groups";
+    }
     m_hashAbort.store(false);   // 复位取消标志（上次关案可能置位）
     pushRecent(m_caseDir);
     emit caseOpened(m_caseDir);
@@ -350,6 +357,102 @@ void CaseManager::removeRecent(const QString &dir)
 // ---------------------------------------------------------------------------
 // 视频登记
 // ---------------------------------------------------------------------------
+QString CaseManager::createGroup(const QString &name, QString *error)
+{
+    if (!m_open) {
+        if (error) *error = QStringLiteral("没有打开的案件");
+        return QString();
+    }
+    if (!name.isEmpty()) {
+        for (const auto &g : m_meta.cameraGroups)
+            if (g.name == name) {
+                if (error) *error = QStringLiteral("已存在同名机位组：%1").arg(name);
+                return QString();
+            }
+    }
+    CaseCameraGroup g;
+    g.groupId = QStringLiteral("G%1").arg(m_meta.nextGroupSeq++, 3, 10,
+                                          QLatin1Char('0'));
+    g.name = name;
+    g.createdMs = QDateTime::currentMSecsSinceEpoch();
+    m_meta.cameraGroups.append(g);
+    setModified();
+    return g.groupId;
+}
+
+/// 内部：从所有组摘除引用（不改变动标记；空组不在此清理——新建组
+/// 本就是空的，assign 场景不能误杀）
+static void ungroupRef(CaseMeta &meta, const QString &refId)
+{
+    for (auto &g : meta.cameraGroups)
+        g.memberIds.removeAll(refId);
+}
+
+/// 内部：清理空组（仅移除文件出案路径调用）
+static void pruneEmptyGroups(CaseMeta &meta)
+{
+    for (int i = meta.cameraGroups.size() - 1; i >= 0; --i)
+        if (meta.cameraGroups[i].memberIds.isEmpty())
+            meta.cameraGroups.removeAt(i);
+}
+
+bool CaseManager::assignToGroup(const QString &refId, const QString &groupId,
+                                QString *error)
+{
+    if (!m_open) {
+        if (error) *error = QStringLiteral("没有打开的案件");
+        return false;
+    }
+    CaseCameraGroup *g = CaseModel::findGroup(m_meta, groupId);
+    if (!g) {
+        if (error) *error = QStringLiteral("机位组不存在：%1").arg(groupId);
+        return false;
+    }
+    if (!CaseModel::findRef(m_meta, refId)) {
+        if (error) *error = QStringLiteral("检材不存在：%1").arg(refId);
+        return false;
+    }
+    ungroupRef(m_meta, refId);
+    // 源组被掏空即清（防树上残留 0 文件组）；目标组豁免（新建空组合法）
+    for (int i = m_meta.cameraGroups.size() - 1; i >= 0; --i)
+        if (m_meta.cameraGroups[i].memberIds.isEmpty()
+            && m_meta.cameraGroups[i].groupId != groupId)
+            m_meta.cameraGroups.removeAt(i);
+    g = CaseModel::findGroup(m_meta, groupId);
+    if (!g) {
+        if (error) *error = QStringLiteral("机位组不存在：%1").arg(groupId);
+        return false;
+    }
+    g->memberIds << refId;
+    // cameraLabel 镜像组名（时间线/报告等老读者无缝跟随）
+    if (CaseVideoRef *r = CaseModel::findRef(m_meta, refId))
+        r->cameraLabel = g->name;
+    setModified();
+    return true;
+}
+
+bool CaseManager::renameGroup(const QString &groupId, const QString &name,
+                              QString *error)
+{
+    CaseCameraGroup *g = CaseModel::findGroup(m_meta, groupId);
+    if (!g) {
+        if (error) *error = QStringLiteral("机位组不存在：%1").arg(groupId);
+        return false;
+    }
+    if (!name.isEmpty())
+        for (const auto &o : m_meta.cameraGroups)
+            if (o.groupId != groupId && o.name == name) {
+                if (error) *error = QStringLiteral("已存在同名机位组：%1").arg(name);
+                return false;
+            }
+    g->name = name.trimmed();
+    for (const QString &mid : g->memberIds)
+        if (CaseVideoRef *r = CaseModel::findRef(m_meta, mid))
+            r->cameraLabel = g->name;
+    setModified();
+    return true;
+}
+
 bool CaseManager::setReportExtra(const QString &key, const QString &value,
                                  QString *error)
 {
@@ -387,6 +490,13 @@ QString CaseManager::addVideo(const QString &path, QString *error)
     v.mtimeMs = fi.lastModified().toMSecsSinceEpoch();
     m_meta.videos.append(v);
     setModified();
+    // 机位组拍板（2026-08-24）：入案即自成新组（不打扰，事后可归并）
+    {
+        QString gerr;
+        const QString gid = createGroup(QString(), &gerr);
+        if (!gid.isEmpty())
+            assignToGroup(v.id, gid, &gerr);
+    }
     emit videoAdded(v.id);
     queueVideoHash(v.id);   // Q-9：入案即排队算指纹
     return v.id;
@@ -395,6 +505,8 @@ QString CaseManager::addVideo(const QString &path, QString *error)
 bool CaseManager::removeVideo(const QString &id, bool deleteData,
                               QString *error)
 {
+    ungroupRef(m_meta, id);
+    pruneEmptyGroups(m_meta);
     for (int i = 0; i < m_meta.videos.size(); ++i) {
         if (m_meta.videos[i].id != id)
             continue;
@@ -453,6 +565,8 @@ bool CaseManager::removePreprocessOutput(int sessIdx, int outIdx,
     auto &p = m_meta.preprocessSessions[sessIdx];
     if (deleteFile)
         QFile::remove(p.outputRefs[outIdx].originalPath);
+    ungroupRef(m_meta, p.outputRefs[outIdx].id);
+    pruneEmptyGroups(m_meta);
     p.outputRefs.remove(outIdx);
     setModified();
     return true;

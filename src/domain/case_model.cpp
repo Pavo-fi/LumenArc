@@ -34,6 +34,7 @@ const QSet<QString> &knownRootKeys()
         QStringLiteral("modifiedMs"), QStringLiteral("lastVideoId"),
         QStringLiteral("nextVideoSeq"),
         QStringLiteral("videos"), QStringLiteral("preprocessSessions"),
+        QStringLiteral("cameraGroups"), QStringLiteral("nextGroupSeq"),
         QStringLiteral("reports"), QStringLiteral("extraFields"),
     };
     return keys;
@@ -137,6 +138,27 @@ CasePreprocessRef CasePreprocessRef::fromJson(const QJsonObject &o)
 // ---------------------------------------------------------------------------
 // CaseMeta
 // ---------------------------------------------------------------------------
+QJsonObject CaseCameraGroup::toJson() const
+{
+    return QJsonObject{
+        {QStringLiteral("groupId"), groupId},
+        {QStringLiteral("name"), name},
+        {QStringLiteral("memberIds"), QJsonArray::fromStringList(memberIds)},
+        {QStringLiteral("createdMs"), createdMs},
+    };
+}
+
+CaseCameraGroup CaseCameraGroup::fromJson(const QJsonObject &o)
+{
+    CaseCameraGroup g;
+    g.groupId = o.value(QStringLiteral("groupId")).toString();
+    g.name = o.value(QStringLiteral("name")).toString();
+    for (const auto &v : o.value(QStringLiteral("memberIds")).toArray())
+        g.memberIds << v.toString();
+    g.createdMs = qint64(o.value(QStringLiteral("createdMs")).toDouble());
+    return g;
+}
+
 QJsonObject CaseMeta::toJson() const
 {
     QJsonObject o;
@@ -166,6 +188,12 @@ QJsonObject CaseMeta::toJson() const
     for (const auto &p : preprocessSessions)
         ps.append(p.toJson());
     o[QStringLiteral("preprocessSessions")] = ps;
+    QJsonArray gs;
+    for (const auto &g : cameraGroups)
+        gs.append(g.toJson());
+    if (!gs.isEmpty())
+        o[QStringLiteral("cameraGroups")] = gs;
+    o[QStringLiteral("nextGroupSeq")] = nextGroupSeq;
     QJsonArray rs;
     for (const auto &r : reports)
         rs.append(r);
@@ -260,6 +288,22 @@ bool load(const QString &caseDir, CaseMeta &out, QString *error,
     }
     for (const auto &v : root[QStringLiteral("preprocessSessions")].toArray())
         m.preprocessSessions.append(CasePreprocessRef::fromJson(v.toObject()));
+    for (const auto &v : root[QStringLiteral("cameraGroups")].toArray())
+        m.cameraGroups.append(CaseCameraGroup::fromJson(v.toObject()));
+    m.nextGroupSeq = root[QStringLiteral("nextGroupSeq")].toInt(0);
+    {
+        int maxN = 0;
+        static const QRegularExpression idRe(QStringLiteral("^G(\d+)$"));
+        for (const auto &g : m.cameraGroups) {
+            const auto match = idRe.match(g.groupId);
+            if (match.hasMatch())
+                maxN = qMax(maxN, match.captured(1).toInt());
+        }
+        if (m.nextGroupSeq <= maxN)
+            m.nextGroupSeq = maxN + 1;
+        if (m.nextGroupSeq < 1)
+            m.nextGroupSeq = 1;
+    }
     for (const auto &v : root[QStringLiteral("reports")].toArray())
         m.reports.append(v.toString());
     const QJsonObject ex = root[QStringLiteral("extraFields")].toObject();
@@ -379,6 +423,98 @@ CaseVideoRef *findRef(CaseMeta &meta, const QString &id)
             if (o.id == id)
                 return &o;
     return nullptr;
+}
+
+} // namespace CaseModel
+
+// ---------------------------------------------------------------------------
+// 机位组辅助（2026-08-24 拍板：组为组织轴心）
+// ---------------------------------------------------------------------------
+namespace CaseModel {
+
+const CaseCameraGroup *findGroup(const CaseMeta &meta, const QString &groupId)
+{
+    for (const auto &g : meta.cameraGroups)
+        if (g.groupId == groupId)
+            return &g;
+    return nullptr;
+}
+
+CaseCameraGroup *findGroup(CaseMeta &meta, const QString &groupId)
+{
+    return const_cast<CaseCameraGroup *>(
+        findGroup(const_cast<const CaseMeta &>(meta), groupId));
+}
+
+QString groupIdOf(const CaseMeta &meta, const QString &refId)
+{
+    for (const auto &g : meta.cameraGroups)
+        if (g.memberIds.contains(refId))
+            return g.groupId;
+    return QString();
+}
+
+QString groupDisplayName(const CaseCameraGroup &g)
+{
+    if (!g.name.isEmpty())
+        return g.name;
+    if (!g.memberIds.isEmpty())
+        return g.memberIds.first();
+    return g.groupId;
+}
+
+bool migrateCameraGroups(CaseMeta &meta)
+{
+    bool changed = false;
+    QSet<QString> grouped;
+    for (const auto &g : meta.cameraGroups)
+        for (const QString &id : g.memberIds)
+            grouped.insert(id);
+
+    // 未归组引用按 cameraLabel 聚类
+    QHash<QString, QStringList> byLabel;   // label → ids（保序）
+    QStringList labelOrder;
+    QStringList unlabeled;
+    for (const CaseVideoRef *v : allCaseRefs(meta)) {
+        if (grouped.contains(v->id))
+            continue;
+        if (!v->cameraLabel.isEmpty()) {
+            if (!byLabel.contains(v->cameraLabel))
+                labelOrder << v->cameraLabel;
+            byLabel[v->cameraLabel] << v->id;
+        } else {
+            unlabeled << v->id;
+        }
+    }
+    auto mkGroup = [&](const QString &name, const QStringList &ids) {
+        CaseCameraGroup g;
+        g.groupId = QStringLiteral("G%1").arg(meta.nextGroupSeq++, 3, 10,
+                                              QLatin1Char('0'));
+        g.name = name;
+        g.memberIds = ids;
+        g.createdMs = QDateTime::currentMSecsSinceEpoch();
+        meta.cameraGroups.append(g);
+        changed = true;
+    };
+    // 同标签并组；标签与既有组名相同 → 并入既有组而非新建
+    for (const QString &label : labelOrder) {
+        CaseCameraGroup *existing = nullptr;
+        for (auto &g : meta.cameraGroups)
+            if (!g.name.isEmpty() && g.name == label) {
+                existing = &g;
+                break;
+            }
+        if (existing) {
+            for (const QString &id : byLabel[label])
+                existing->memberIds << id;
+            changed = true;
+        } else {
+            mkGroup(label, byLabel[label]);
+        }
+    }
+    for (const QString &id : unlabeled)
+        mkGroup(QString(), {id});
+    return changed;
 }
 
 } // namespace CaseModel

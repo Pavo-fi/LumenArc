@@ -104,6 +104,10 @@ protected:
     bool eventFilter(QObject *watched, QEvent *event) override;
 
 private:
+    /// 前处理产物归组对话框（2026-08-24 拍板：登记完毕逐产物
+    /// 「归入已有摄像头/创建新摄像头」）
+    void promptGroupAssignment(const QStringList &outputs,
+                               const QMap<QString, QString> &outputChannels);
     QWidget *buildFormatBanner();
     QWidget *buildCaseBanner();
     QWidget *buildPageImport();

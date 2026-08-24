@@ -172,6 +172,75 @@ QString CaseDock::hashBadge(const CaseVideoRef &v, QString *tooltip,
     return QStringLiteral("✓");
 }
 
+/// 机位组分层树（拍板 B，2026-08-24）：组节点 → 成员文件（V###/P###
+/// 同待遇混排）。成员行复用原视频/产物行语义（kind=video/output，
+/// 右键菜单兼容）。
+void CaseDock::fillCameraGroups(QTreeWidgetItem *group)
+{
+    const CaseMeta &meta = m_caseManager->meta();
+    int totalFiles = 0;
+    for (const CaseCameraGroup &g : meta.cameraGroups) {
+        const QString gname = CaseModel::groupDisplayName(g);
+        auto *gIt = new QTreeWidgetItem(group,
+            {QStringLiteral("📷 %1（%2 个文件）")
+                 .arg(gname).arg(g.memberIds.size())});
+        gIt->setData(0, kRoleKind, QStringLiteral("camgroup"));
+        gIt->setData(0, kRoleId, g.groupId);
+        gIt->setData(0, kRolePath, g.groupId);   // 右键菜单非空守卫
+        gIt->setFlags(Qt::ItemIsEnabled | Qt::ItemIsSelectable);
+        gIt->setToolTip(0, g.name.isEmpty()
+            ? lang("未命名机位组 %1——右键「机位组改名」",
+                   "Unnamed camera group %1 — right-click to rename").arg(g.groupId)
+            : QStringLiteral("%1（%2）").arg(g.name, g.groupId));
+        QFont f = gIt->font(0);
+        f.setBold(true);
+        gIt->setFont(0, f);
+        for (const QString &mid : g.memberIds) {
+            const CaseVideoRef *v = m_caseManager->videoById(mid);
+            if (!v)
+                continue;
+            ++totalFiles;
+            QString badgeTip;
+            QColor badgeColor;
+            const QString badge = hashBadge(*v, &badgeTip, &badgeColor);
+            const QString calMark = v->hasCalibration
+                ? QStringLiteral(" ⏰") : QString();
+            const QString eff = m_caseManager->effectivePathFor(*v);
+            const bool bundled = (eff != v->originalPath);
+            const QString name = bundled
+                ? QStringLiteral("📦") + QFileInfo(eff).fileName()
+                : QFileInfo(v->originalPath).fileName();
+            const bool isOutput = mid.startsWith(QLatin1Char('P'));
+            auto *it = new QTreeWidgetItem(gIt,
+                {QStringLiteral("%1  %2%3  %4").arg(v->id, name, calMark, badge)});
+            it->setData(0, kRoleKind, isOutput ? QStringLiteral("output")
+                                               : QStringLiteral("video"));
+            it->setData(0, kRoleId, v->id);
+            it->setData(0, kRolePath, eff);
+            it->setForeground(0, badgeColor);
+            QString tip = v->originalPath
+                + QStringLiteral("\n") + lang("机位组：", "Group: ") + gname
+                + QStringLiteral("\n") + badgeTip;
+            if (v->hasCalibration && !v->calibrationSummary.isEmpty())
+                tip += QStringLiteral("\n") + lang("校时：", "Calibration: ")
+                       + v->calibrationSummary;
+            it->setToolTip(0, tip);
+            // output 行的会话/输出索引（删除输出用）
+            if (isOutput) {
+                const auto &sessions = meta.preprocessSessions;
+                for (int si = 0; si < sessions.size(); ++si)
+                    for (int oi = 0; oi < sessions[si].outputRefs.size(); ++oi)
+                        if (sessions[si].outputRefs[oi].id == mid) {
+                            it->setData(0, kRoleIdx, si);
+                            it->setData(0, kRoleIdx2, oi);
+                        }
+            }
+        }
+    }
+    group->setText(0, lang("机位组（%1 组 / %2 文件）", "Camera groups (%1 / %2 files)")
+                          .arg(meta.cameraGroups.size()).arg(totalFiles));
+}
+
 void CaseDock::fillVideos(QTreeWidgetItem *group)
 {
     for (const auto &v : m_caseManager->meta().videos) {
@@ -225,35 +294,12 @@ void CaseDock::fillPreprocess(QTreeWidgetItem *group)
         sIt->setData(0, kRolePath, caseDir.absoluteFilePath(p.sessionDirRelPath));
         sIt->setData(0, kRoleIdx, si);
         sIt->setToolTip(0, caseDir.absoluteFilePath(p.sessionDirRelPath));
-        for (int oi = 0; oi < p.outputRefs.size(); ++oi) {
-            const auto &o = p.outputRefs[oi];
-            // v1.7.1：产物与视频同待遇——指纹徽标 + 摄像头编号
-            QString badgeTip;
-            QColor badgeColor;
-            const QString badge = hashBadge(o, &badgeTip, &badgeColor);
-            // 用户实测修正：手动编号后显示编号【替换】P001（P001 仅入 tooltip）
-            const QString displayId = o.cameraLabel.isEmpty()
-                ? o.id : QStringLiteral("📷") + o.cameraLabel;
-            const QString calMark = o.hasCalibration
-                ? QStringLiteral(" ⏰") : QString();
-            auto *oIt = new QTreeWidgetItem(sIt,
-                {QStringLiteral("%1  %2%3  %4")
-                     .arg(displayId, QFileInfo(o.originalPath).fileName(),
-                          calMark, badge)});
-            oIt->setData(0, kRoleKind, QStringLiteral("output"));
-            oIt->setData(0, kRoleId, o.id);
-            oIt->setData(0, kRolePath, o.originalPath);
-            oIt->setData(0, kRoleIdx, si);
-            oIt->setData(0, kRoleIdx2, oi);
-            oIt->setToolTip(0, o.originalPath
-                + QStringLiteral("\n登记号：") + o.id
-                + (o.cameraLabel.isEmpty() ? QString()
-                     : QStringLiteral("\n摄像头编号：") + o.cameraLabel)
-                + (o.hasCalibration && !o.calibrationSummary.isEmpty()
-                     ? QStringLiteral("\n校时：") + o.calibrationSummary
-                     : QString())
-                + QStringLiteral("\n") + badgeTip);
-            oIt->setForeground(0, badgeColor);
+        if (!p.outputRefs.isEmpty()) {
+            auto *note = new QTreeWidgetItem(sIt,
+                {lang("↳ 产物已归入机位组（见上方）",
+                      "↳ outputs grouped under camera groups above")});
+            note->setFlags(Qt::ItemIsEnabled);
+            note->setForeground(0, QColor(Theme::TextMuted));
         }
         for (const QString &sc : p.sidecarRelPaths) {
             auto *cIt = new QTreeWidgetItem(sIt,
@@ -315,7 +361,7 @@ void CaseDock::refreshTree()
     setWindowTitle(lang("案件：%1", "Case: %1")
                        .arg(m_caseManager->meta().caseNo));
     m_tree->clear();
-    fillVideos(addGroup(QString()));
+    fillCameraGroups(addGroup(QString()));
     fillPreprocess(addGroup(QString()));
     fillReports(addGroup(QString()));
     fillSnapshots(addGroup(QString()));
@@ -395,33 +441,6 @@ void CaseDock::showInExplorer(const QString &path) const
 #endif
 }
 
-/// v1.7.1：摄像头编号设置（视频/产物通用；空输入=清除编号）
-void CaseDock::setCameraLabelFlow(const QString &id)
-{
-    const auto *v = m_caseManager->videoById(id);
-    bool ok = false;
-    const QString cur = v ? v->cameraLabel : QString();
-    const QString label = QInputDialog::getText(
-        this, lang("摄像头编号", "Camera Label"),
-        lang("编号（如 CAM01 / 食咔咔4时；留空=清除）：",
-             "Label (e.g. CAM01; empty = clear):"),
-        QLineEdit::Normal, cur, &ok);
-    if (!ok)
-        return;
-    QString err;
-    if (!m_caseManager->setCameraLabel(id, label.trimmed(), &err)) {
-        QMessageBox::warning(this, lang("摄像头编号", "Camera Label"),
-                             err.isEmpty() ? QStringLiteral("failed") : err);
-        return;
-    }
-    if (!m_caseManager->saveCase(&err)) {
-        QMessageBox::warning(this, lang("摄像头编号", "Camera Label"),
-            lang("编号已设置但保存案件失败（重启后可能丢失）：\n%1",
-                 "Label set but case save failed (may lose after restart):\n%1")
-                .arg(err));
-    }
-    refreshTree();
-}
 
 void CaseDock::relocateVideo(const QString &id)
 {
@@ -603,9 +622,40 @@ void CaseDock::onContextMenu(const QPoint &pos)
                                        });
         copyAct->setEnabled(v && !v->sha256.isEmpty());
         menu.addSeparator();
-        // v1.7.1：摄像头编号（自定义，视频/产物同待遇）
-        menu.addAction(lang("设置摄像头编号…", "Set camera label…"), this,
-                       [this, id]() { setCameraLabelFlow(id); });
+        // 机位组（2026-08-24 拍板：改名前置案件树；编号制废止）
+        QMenu *gm = menu.addMenu(lang("移到机位组 ▸", "Move to camera group ▸"));
+        for (const CaseCameraGroup &g : m_caseManager->meta().cameraGroups) {
+            const QString gid = g.groupId;
+            gm->addAction(CaseModel::groupDisplayName(g), this,
+                          [this, id, gid]() {
+                              QString err;
+                              if (m_caseManager->assignToGroup(id, gid, &err)) {
+                                  m_caseManager->saveCase(&err);
+                                  refreshTree();
+                              }
+                          });
+        }
+        gm->addSeparator();
+        gm->addAction(lang("新建机位组…", "New group…"), this,
+                      [this, id]() {
+                          bool ok = false;
+                          const QString name = QInputDialog::getText(this,
+                              lang("新建机位组", "New camera group"),
+                              lang("位置名（如「东门烟酒店」；可留空后改）：",
+                                   "Location name:"), QLineEdit::Normal,
+                              QString(), &ok);
+                          if (!ok) return;
+                          QString err;
+                          const QString gid = m_caseManager->createGroup(
+                              name.trimmed(), &err);
+                          if (gid.isEmpty()) {
+                              QMessageBox::warning(this, lang("新建机位组", "New group"), err);
+                              return;
+                          }
+                          m_caseManager->assignToGroup(id, gid, &err);
+                          m_caseManager->saveCase(&err);
+                          refreshTree();
+                      });
         menu.addAction(lang("在资源管理器中显示", "Show in Explorer"), this,
                        [this, path]() { showInExplorer(path); });
     } else if (kind == QLatin1String("output")) {
@@ -628,8 +678,18 @@ void CaseDock::onContextMenu(const QPoint &pos)
                                              o ? o->sha256 : QString());
                                      });
         oCopy->setEnabled(o && !o->sha256.isEmpty());
-        menu.addAction(lang("设置摄像头编号…", "Set camera label…"), this,
-                       [this, id]() { setCameraLabelFlow(id); });
+        QMenu *gm2 = menu.addMenu(lang("移到机位组 ▸", "Move to camera group ▸"));
+        for (const CaseCameraGroup &g : m_caseManager->meta().cameraGroups) {
+            const QString gid = g.groupId;
+            gm2->addAction(CaseModel::groupDisplayName(g), this,
+                           [this, id, gid]() {
+                               QString err;
+                               if (m_caseManager->assignToGroup(id, gid, &err)) {
+                                   m_caseManager->saveCase(&err);
+                                   refreshTree();
+                               }
+                           });
+        }
         menu.addSeparator();
         // v1.7.1：产物与视频同待遇——重定位（缺失时 ✗ → 指回新位置）
         menu.addAction(lang("重新定位…", "Relocate…"), this,
@@ -640,6 +700,21 @@ void CaseDock::onContextMenu(const QPoint &pos)
                            const int oi = item->data(0, kRoleIdx2).toInt();
                            removePreprocessOutput(si, oi);
                        });
+    } else if (kind == QLatin1String("camgroup")) {
+        menu.addAction(lang("机位组改名…", "Rename group…"), this,
+                       [this, id]() { renameGroupFlow(id); });
+        menu.addAction(lang("新建机位组…", "New group…"), this, [this]() {
+            bool ok = false;
+            const QString name = QInputDialog::getText(this,
+                lang("新建机位组", "New camera group"),
+                lang("位置名：", "Location name:"), QLineEdit::Normal,
+                QString(), &ok);
+            if (!ok) return;
+            QString err;
+            m_caseManager->createGroup(name.trimmed(), &err);
+            m_caseManager->saveCase(&err);
+            refreshTree();
+        });
     } else if (kind == QLatin1String("session")) {
         menu.addAction(lang("在资源管理器中显示", "Show in Explorer"), this,
                        [this, path]() { showInExplorer(path); });
@@ -755,4 +830,35 @@ void CaseDock::removeCaseFile(QTreeWidgetItem *item)
     }
     m_caseManager->saveCase(&err);
     refreshTree();
+}
+
+/// 组改名（组节点右键；改名=改组名，键不动，引用零牵连）
+void CaseDock::renameGroupFlow(const QString &groupId)
+{
+    const CaseCameraGroup *g = CaseModel::findGroup(m_caseManager->meta(),
+                                                    groupId);
+    if (!g)
+        return;
+    bool ok = false;
+    const QString name = QInputDialog::getText(this,
+        lang("机位组改名", "Rename group"),
+        lang("机位名称（建议用位置名，如「东门烟酒店」）：\n"
+             "对时间线/点位图/报告全系统生效。",
+             "Camera name (applies system-wide):"),
+        QLineEdit::Normal, g->name, &ok);
+    if (!ok)
+        return;
+    QString err;
+    if (!m_caseManager->renameGroup(groupId, name.trimmed(), &err)) {
+        QMessageBox::warning(this, lang("机位组改名", "Rename group"), err);
+        return;
+    }
+    if (!m_caseManager->saveCase(&err))
+        QMessageBox::warning(this, lang("机位组改名", "Rename group"), err);
+    refreshTree();
+}
+
+void CaseDock::moveToGroupFlow(const QString &id)
+{
+    Q_UNUSED(id);   // 被子菜单内联实现取代（保留槽位防外引）
 }

@@ -56,6 +56,18 @@ struct CasePreprocessRef {
     static CasePreprocessRef fromJson(const QJsonObject &o);
 };
 
+/// 机位组（2026-08-24 拍板：组为案件组织轴心——视频/前处理产物一律归组；
+/// 同组才可同轴播放）。G### 稳定 id 永不复用；name 可改不作键。
+struct CaseCameraGroup {
+    QString groupId;            ///< "G001" 单调递增
+    QString name;               ///< 位置名（可空=未命名；UI 退化显首成员 id）
+    QStringList memberIds;      ///< V###/P###
+    qint64  createdMs = 0;
+
+    QJsonObject toJson() const;
+    static CaseCameraGroup fromJson(const QJsonObject &o);
+};
+
 /// 案件档案（case.json 根）
 struct CaseMeta {
     int     formatVersion = 1;
@@ -72,6 +84,8 @@ struct CaseMeta {
     qint64  modifiedMs = 0;
     QString lastVideoId;        ///< uiState：开案恢复现场
     int     nextVideoSeq = 1;   ///< 视频编号高水位（分配自增，永不回退→V### 不复用）
+    QVector<CaseCameraGroup> cameraGroups;  ///< 机位组（F3：只加不改）
+    int     nextGroupSeq = 1;   ///< 组编号高水位（G### 不复用）
     QVector<CaseVideoRef> videos;
     QVector<CasePreprocessRef> preprocessSessions;
     QStringList reports;        ///< reports/ 相对路径（v1.4.0 登记）
@@ -112,6 +126,17 @@ CaseVideoRef *findVideo(CaseMeta &meta, const QString &id);
 /// 前处理产物 P### 与视频 V### 同待遇：哈希/徽标/编号，v1.7.1）
 const CaseVideoRef *findRef(const CaseMeta &meta, const QString &id);
 CaseVideoRef *findRef(CaseMeta &meta, const QString &id);
+
+/// ---- 机位组辅助 ----
+const CaseCameraGroup *findGroup(const CaseMeta &meta, const QString &groupId);
+CaseCameraGroup *findGroup(CaseMeta &meta, const QString &groupId);
+/// 引用所属组 id（空=未归组——迁移后不应存在）
+QString groupIdOf(const CaseMeta &meta, const QString &refId);
+/// 老案件迁移：把未归组的引用按 cameraLabel 自动建组（同标签一组共用名；
+/// 无标签各自成组）。返回是否有改动（→ 调用方落盘）。幂等。
+bool migrateCameraGroups(CaseMeta &meta);
+/// 组显示名（name 空 → 首成员 id / 组 id 兜底）
+QString groupDisplayName(const CaseCameraGroup &g);
 
 /// 全部检材引用清单（videos + 各前处理会话 outputRefs）——P###/V###
 /// 同待遇场合统一走这里（报告检材清单/点位图机位侧栏等，P-74 返修）

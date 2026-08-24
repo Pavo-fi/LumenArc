@@ -354,6 +354,37 @@ int main(int argc, char **argv)
         cm.updateCalibrationBadge(vid1, true, "OCR 三点 rate=1.000");
         CHECK(cm.videoById(id1)->hasCalibration, "badge updated");
 
+        // ---- 7b. 机位组（2026-08-24 拍板：组为组织轴心）----
+        // addVideo 已自成组：V001→G001、V002→G002
+        CHECK(cm.meta().cameraGroups.size() == 2, "addVideo auto-groups");
+        CHECK(cm.groupIdOf(id1) == QStringLiteral("G001"), "V001 in G001");
+        CHECK(cm.groupIdOf(id2) == QStringLiteral("G002"), "V002 in G002");
+        // 新建组 + 移组
+        const QString gid3 = cm.createGroup(QStringLiteral("东门烟酒店"), &err);
+        CHECK(gid3 == QStringLiteral("G003"), "createGroup → G003");
+        CHECK(cm.createGroup(QStringLiteral("东门烟酒店"), &err).isEmpty(),
+              "dup group name rejected");
+        CHECK(cm.assignToGroup(id2, gid3, &err), "V002 → G003");
+        CHECK(cm.groupIdOf(id2) == gid3, "groupIdOf after assign");
+        CHECK(CaseModel::findGroup(cm.meta(), QStringLiteral("G002")) == nullptr,
+              "empty G002 pruned");
+        // cameraLabel 镜像组名
+        CHECK(cm.videoById(id2)->cameraLabel == QStringLiteral("东门烟酒店"),
+              "assign mirrors cameraLabel");
+        // 组改名（键不动）
+        CHECK(cm.renameGroup(gid3, QStringLiteral("东门烟酒店2"), &err),
+              "renameGroup");
+        CHECK(cm.groupIdOf(id2) == gid3, "rename keeps key");
+        CHECK(cm.videoById(id2)->cameraLabel == QStringLiteral("东门烟酒店2"),
+              "rename mirrors members");
+        CHECK(CaseModel::groupDisplayName(
+                  *CaseModel::findGroup(cm.meta(), gid3)) == QStringLiteral("东门烟酒店2"),
+              "groupDisplayName");
+        // 未命名组显示名退化为首成员 id
+        CHECK(CaseModel::groupDisplayName(
+                  *CaseModel::findGroup(cm.meta(), cm.groupIdOf(id1))) == id1,
+              "unnamed group display = first member id");
+
         // 保存 → dirty 清
         CHECK(cm.saveCase(&err), "saveCase");
         CHECK(!cm.isDirty(), "saved → clean");
@@ -366,6 +397,33 @@ int main(int argc, char **argv)
         cm.closeCase();
         CHECK(!cm.isOpen(), "closed");
         CHECK(!QFile::exists(cdir + "/case.json.lock"), "lock removed on close");
+
+        // ---- 7c. 老案件迁移：同标签聚组/无标签各自成组/幂等 ----
+        {
+            CaseMeta m2;
+            m2.caseNo = QStringLiteral("T");
+            CaseVideoRef a; a.id = QStringLiteral("V001");
+            a.cameraLabel = QStringLiteral("明景");
+            CaseVideoRef b; b.id = QStringLiteral("V002");
+            b.cameraLabel = QStringLiteral("明景");
+            CaseVideoRef c; c.id = QStringLiteral("V003");
+            m2.videos << a << b << c;
+            CasePreprocessRef sess;
+            CaseVideoRef d; d.id = QStringLiteral("P001");
+            d.cameraLabel = QStringLiteral("明景");
+            sess.outputRefs << d;
+            m2.preprocessSessions << sess;
+            m2.nextGroupSeq = 1;
+            CHECK(CaseModel::migrateCameraGroups(m2), "migration changed");
+            CHECK(m2.cameraGroups.size() == 2, "2 groups (label + self)");
+            CHECK(CaseModel::groupIdOf(m2, QStringLiteral("P001"))
+                  == CaseModel::groupIdOf(m2, QStringLiteral("V001")),
+                  "P001 joins same-label group");
+            CHECK(CaseModel::groupIdOf(m2, QStringLiteral("V003"))
+                  != CaseModel::groupIdOf(m2, QStringLiteral("V001")),
+                  "unlabeled own group");
+            CHECK(!CaseModel::migrateCameraGroups(m2), "migration idempotent");
+        }
 
         // 重开：高水位持久化 + 锁不冲突（已正常关闭）
         {

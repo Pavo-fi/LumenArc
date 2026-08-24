@@ -542,22 +542,29 @@ void SiteMapEditorDialog::syncLaneColors()
 void SiteMapEditorDialog::markOrphans()
 {
     for (SiteMapPoint &pt : m_data.points) {
-        // 旧版点位存的是文件 id → 升格为其所属组键（label）
-        bool inGroups = false;
-        for (const CamGroup &g : m_groups) {
-            if (g.key == pt.laneRef) {
-                inGroups = true;
-                break;
-            }
-            if (g.memberIds.contains(pt.laneRef)) {   // 旧引用升格
-                pt.laneRef = g.key;
-                inGroups = true;
-                break;
-            }
+        // 组 id 直接命中
+        if (CaseModel::findGroup(m_cm->meta(), pt.laneRef)) {
+            pt.orphan = false;
+            pt.label = CaseModel::groupDisplayName(
+                *CaseModel::findGroup(m_cm->meta(), pt.laneRef));
+            continue;
         }
-        pt.orphan = !inGroups;
-        if (!pt.orphan)
-            pt.label = pt.laneRef;   // 组键即标签（图上显示=机位名）
+        // 旧版引用升格：文件 id → 所属组；机位标签 → 同名组
+        QString gid = CaseModel::groupIdOf(m_cm->meta(), pt.laneRef);
+        if (gid.isEmpty())
+            for (const CaseCameraGroup &g : m_cm->meta().cameraGroups)
+                if (!g.name.isEmpty() && g.name == pt.laneRef) {
+                    gid = g.groupId;
+                    break;
+                }
+        if (!gid.isEmpty()) {
+            pt.laneRef = gid;
+            pt.orphan = false;
+            pt.label = CaseModel::groupDisplayName(
+                *CaseModel::findGroup(m_cm->meta(), gid));
+        } else {
+            pt.orphan = true;
+        }
     }
 }
 
@@ -632,39 +639,39 @@ void SiteMapEditorDialog::exportFramed()
 
 void SiteMapEditorDialog::rebuildGroups()
 {
+    // 正式机位组（2026-08-24 拍板：组键=G### 稳定 id；显示名=组名）
     m_groups.clear();
-    QHash<QString, int> byKey;
-    for (const CaseVideoRef *v : CaseModel::allCaseRefs(m_cm->meta())) {
-        const QString key = v->cameraLabel.isEmpty() ? v->id : v->cameraLabel;
-        if (!byKey.contains(key)) {
-            byKey[key] = m_groups.size();
-            CamGroup g;
-            g.key = key;
-            m_groups << g;
-        }
-        CamGroup &g = m_groups[byKey[key]];
-        g.memberIds << v->id;
-        g.memberFiles << QFileInfo(m_cm->effectivePathFor(*v)).fileName();
+    for (const CaseCameraGroup &cg : m_cm->meta().cameraGroups) {
+        CamGroup g;
+        g.key = cg.groupId;
+        g.memberIds = cg.memberIds;
+        for (const QString &mid : cg.memberIds)
+            if (const CaseVideoRef *v = m_cm->videoById(mid))
+                g.memberFiles << QFileInfo(m_cm->effectivePathFor(*v)).fileName();
+        // 显示名冗余存 memberFiles 首项前——displayName 由 laneLabels 承载
+        m_groups << g;
     }
-    // 侧栏刷新：一组一行；未自定义名的组附源文件名帮回忆
     m_laneList->clear();
-    for (const CamGroup &g : m_groups) {
-        QString text = g.key;
-        if (g.memberIds.size() > 1)
-            text += QStringLiteral("（%1 个文件）").arg(g.memberIds.size());
-        const bool noCustomName = (g.key == g.memberIds.first());
-        if (noCustomName && !g.memberFiles.isEmpty()) {
-            QString fn = g.memberFiles.first();
-            if (fn.length() > 22)
-                fn = fn.left(22) + QStringLiteral("…");
-            text += QStringLiteral(" ← ") + fn;
-        }
+    for (const CaseCameraGroup &cg : m_cm->meta().cameraGroups) {
+        QString text = CaseModel::groupDisplayName(cg);
+        if (cg.memberIds.size() > 1)
+            text += QStringLiteral("（%1 个文件）").arg(cg.memberIds.size());
+        if (cg.name.isEmpty() && !cg.memberIds.isEmpty())
+            if (const CaseVideoRef *v = m_cm->videoById(cg.memberIds.first())) {
+                QString fn = QFileInfo(m_cm->effectivePathFor(*v)).fileName();
+                if (fn.length() > 22)
+                    fn = fn.left(22) + QStringLiteral("…");
+                text += QStringLiteral(" ← ") + fn;
+            }
         auto *it = new QListWidgetItem(text);
-        it->setData(Qt::UserRole, g.key);
+        it->setData(Qt::UserRole, cg.groupId);
         QStringList tip;
-        for (int i = 0; i < g.memberIds.size(); ++i)
-            tip << QStringLiteral("%1：%2").arg(g.memberIds[i], g.memberFiles[i]);
-        it->setToolTip(tip.join(QStringLiteral("\n")));
+        tip << QStringLiteral("组 %1").arg(cg.groupId);
+        for (const QString &mid : cg.memberIds)
+            if (const CaseVideoRef *v = m_cm->videoById(mid))
+                tip << QStringLiteral("%1：%2").arg(mid,
+                    QFileInfo(m_cm->effectivePathFor(*v)).fileName());
+        it->setToolTip(tip.join(QChar(10)));
         m_laneList->addItem(it);
     }
     syncLaneColors();
@@ -679,43 +686,30 @@ void SiteMapEditorDialog::renameGroup()
             tr("请先在左侧机位列表选中一个机位组。"));
         return;
     }
-    const QString oldKey = it->data(Qt::UserRole).toString();
-    const CamGroup *grp = nullptr;
-    for (const CamGroup &g : m_groups)
-        if (g.key == oldKey) { grp = &g; break; }
-    if (!grp)
+    const QString gid = it->data(Qt::UserRole).toString();
+    const CaseCameraGroup *g = CaseModel::findGroup(m_cm->meta(), gid);
+    if (!g)
         return;
     bool ok = false;
-    const QString name = QInputDialog::getText(this, tr("机位改名"),
-        tr("机位名称（对该组 %1 个文件同时生效；建议用位置名，如「东门烟酒店」）：")
-            .arg(grp->memberIds.size()),
-        QLineEdit::Normal, oldKey, &ok);
-    const QString newKey = name.trimmed();
-    if (!ok || newKey.isEmpty() || newKey == oldKey)
+    const QString prompt = tr("机位名称（建议用位置名，如「东门烟酒店」）：")
+        + QChar(10) + tr("组内 %1 个文件同步跟随。").arg(g->memberIds.size());
+    const QString name = QInputDialog::getText(this, tr("机位改名"), prompt,
+        QLineEdit::Normal, g->name, &ok);
+    if (!ok)
         return;
-    for (const CamGroup &g : m_groups)
-        if (g.key == newKey) {
-            QMessageBox::warning(this, tr("机位改名"),
-                tr("已存在同名机位「%1」——会造成两组混淆，请换个名字。").arg(newKey));
-            return;
-        }
-    for (const QString &id : grp->memberIds) {
-        QString err;
-        if (!m_cm->setCameraLabel(id, newKey, &err))
-            qWarning() << "sitemap rename failed:" << id << err;
+    QString err;
+    if (!m_cm->renameGroup(gid, name.trimmed(), &err)) {
+        QMessageBox::warning(this, tr("机位改名"), err);
+        return;
     }
-    // 既有点位跟随新组键
-    for (SiteMapPoint &pt : m_data.points)
-        if (pt.laneRef == oldKey) {
-            pt.laneRef = newKey;
-            pt.label = newKey;
-        }
+    m_cm->saveCase(&err);
+    // 点位引用稳定组 id——零迁移，仅标签刷新
     rebuildGroups();
     m_canvas->laneColor = m_laneColor;
     m_canvas->laneLabels.clear();
-    for (const CamGroup &g : m_groups)
-        m_canvas->laneLabels[g.key] = g.key;
+    for (const CaseCameraGroup &cg : m_cm->meta().cameraGroups)
+        m_canvas->laneLabels[cg.groupId] = CaseModel::groupDisplayName(cg);
     m_canvas->update();
     saveData();
-    qInfo() << "sitemap: group renamed" << oldKey << "->" << newKey;
 }
+

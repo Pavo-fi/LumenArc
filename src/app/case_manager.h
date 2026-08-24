@@ -80,6 +80,19 @@ public:
     /// 不改）并立即落盘。key 形如 reviewer / approver / video/<id>/direction。
     bool setReportExtra(const QString &key, const QString &value, QString *error);
 
+    // ---- 机位组（2026-08-24 拍板：组为组织轴心；同组才可同轴）----
+    /// 新建组（G### 自动），返回组 id；name 可空（未命名组）。
+    QString createGroup(const QString &name, QString *error);
+    /// 把引用移入组（自动从旧组摘除；空组自动清理）。置 dirty。
+    bool assignToGroup(const QString &refId, const QString &groupId,
+                       QString *error);
+    /// 组改名（同步全部成员 cameraLabel 镜像；不改键）。
+    bool renameGroup(const QString &groupId, const QString &name,
+                     QString *error);
+    /// 引用所属组 id（空=未归组）
+    QString groupIdOf(const QString &refId) const
+    { return CaseModel::groupIdOf(m_meta, refId); }
+
     // ---- 视频登记 ----
     /// 添加视频：分配 V###（高水位不复用）、登记 size/mtime、置 dirty。
     /// 重复路径拒绝（error 说明已有编号）。成功返回新 id，失败返回空串。
