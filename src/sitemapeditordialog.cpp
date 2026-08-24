@@ -11,6 +11,8 @@
 #include <QFileDialog>
 #include <QFileInfo>
 #include <QHBoxLayout>
+#include <QInputDialog>
+#include <QLineEdit>
 #include <QLabel>
 #include <QListWidget>
 #include <QMessageBox>
@@ -388,6 +390,9 @@ private:
 // ---------------------------------------------------------------------------
 // 对话框
 // ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// 对话框
+// ---------------------------------------------------------------------------
 SiteMapEditorDialog::SiteMapEditorDialog(CaseManager *cm, QWidget *parent)
     : QDialog(parent), m_cm(cm)
 {
@@ -399,9 +404,6 @@ SiteMapEditorDialog::SiteMapEditorDialog(CaseManager *cm, QWidget *parent)
         const QString abs = m_cm->caseDir() + '/' + m_data.baseImageRel;
         m_base.load(abs);
     }
-    syncLaneColors();
-    markOrphans();
-
     auto *lay = new QVBoxLayout(this);
 
     // ---- 工具行 ----
@@ -414,6 +416,7 @@ SiteMapEditorDialog::SiteMapEditorDialog(CaseManager *cm, QWidget *parent)
     auto *importBtn = mkBtn(tr("导入底图"));
     auto *fitBtn = mkBtn(tr("适应窗口"));
     m_delBtn = mkBtn(tr("删除选中"));
+    auto *renameBtn = mkBtn(tr("机位改名"));
     auto *exportBtn = mkBtn(tr("出图保存（图框版）"));
     bar->addStretch();
     auto *closeBtn = mkBtn(tr("关闭"));
@@ -426,13 +429,7 @@ SiteMapEditorDialog::SiteMapEditorDialog(CaseManager *cm, QWidget *parent)
     m_laneList = new LaneListWidget(this);
     m_laneList->setDragEnabled(true);
     m_laneList->setMaximumWidth(200);
-    for (const CaseVideoRef *v : CaseModel::allCaseRefs(m_cm->meta())) {
-        const QString label = v->cameraLabel.isEmpty() ? v->id : v->cameraLabel;
-        auto *it = new QListWidgetItem(label + QStringLiteral("（") + v->id
-                                       + QStringLiteral("）"));
-        it->setData(Qt::UserRole, v->id);
-        m_laneList->addItem(it);
-    }
+    rebuildGroups();
     sideBox->addWidget(m_laneList);
     mid->addLayout(sideBox);
 
@@ -440,8 +437,8 @@ SiteMapEditorDialog::SiteMapEditorDialog(CaseManager *cm, QWidget *parent)
     m_canvas->data = &m_data;
     m_canvas->base = m_base;
     m_canvas->laneColor = m_laneColor;
-    for (const CaseVideoRef *v : CaseModel::allCaseRefs(m_cm->meta()))
-        m_canvas->laneLabels[v->id] = v->cameraLabel.isEmpty() ? v->id : v->cameraLabel;
+    for (const CamGroup &g : m_groups)
+        m_canvas->laneLabels[g.key] = g.key;
     mid->addWidget(m_canvas, 1);
     lay->addLayout(mid, 1);
 
@@ -526,6 +523,8 @@ SiteMapEditorDialog::SiteMapEditorDialog(CaseManager *cm, QWidget *parent)
         m_canvas->update();
         saveData();
     });
+    connect(renameBtn, &QPushButton::clicked, this,
+            &SiteMapEditorDialog::renameGroup);
     connect(exportBtn, &QPushButton::clicked, this, &SiteMapEditorDialog::exportFramed);
     connect(closeBtn, &QPushButton::clicked, this, &QDialog::accept);
 }
@@ -534,8 +533,8 @@ void SiteMapEditorDialog::syncLaneColors()
 {
     m_laneColor.clear();
     int i = 0;
-    for (const CaseVideoRef *v : CaseModel::allCaseRefs(m_cm->meta())) {
-        m_laneColor[v->id] = Theme::DataPalette[i % Theme::DataPalette.size()];
+    for (const CamGroup &g : m_groups) {
+        m_laneColor[g.key] = Theme::DataPalette[i % Theme::DataPalette.size()];
         ++i;
     }
 }
@@ -543,13 +542,22 @@ void SiteMapEditorDialog::syncLaneColors()
 void SiteMapEditorDialog::markOrphans()
 {
     for (SiteMapPoint &pt : m_data.points) {
-        pt.orphan = !m_cm->videoById(pt.laneRef);
-        if (!pt.orphan) {
-            // 机位改名跟随（图上标签同步案内最新）
-            const QString label = m_cm->videoById(pt.laneRef)->cameraLabel;
-            if (!label.isEmpty())
-                pt.label = label;
+        // 旧版点位存的是文件 id → 升格为其所属组键（label）
+        bool inGroups = false;
+        for (const CamGroup &g : m_groups) {
+            if (g.key == pt.laneRef) {
+                inGroups = true;
+                break;
+            }
+            if (g.memberIds.contains(pt.laneRef)) {   // 旧引用升格
+                pt.laneRef = g.key;
+                inGroups = true;
+                break;
+            }
         }
+        pt.orphan = !inGroups;
+        if (!pt.orphan)
+            pt.label = pt.laneRef;   // 组键即标签（图上显示=机位名）
     }
 }
 
@@ -620,4 +628,94 @@ void SiteMapEditorDialog::exportFramed()
     QMessageBox::information(this, tr("出图保存"),
         tr("成品图已保存：%1\n\n生成分析报告时将自动嵌入「二（三）监控点位图」。").arg(dst));
     qInfo() << "sitemap: framed exported" << dst;
+}
+
+void SiteMapEditorDialog::rebuildGroups()
+{
+    m_groups.clear();
+    QHash<QString, int> byKey;
+    for (const CaseVideoRef *v : CaseModel::allCaseRefs(m_cm->meta())) {
+        const QString key = v->cameraLabel.isEmpty() ? v->id : v->cameraLabel;
+        if (!byKey.contains(key)) {
+            byKey[key] = m_groups.size();
+            CamGroup g;
+            g.key = key;
+            m_groups << g;
+        }
+        CamGroup &g = m_groups[byKey[key]];
+        g.memberIds << v->id;
+        g.memberFiles << QFileInfo(m_cm->effectivePathFor(*v)).fileName();
+    }
+    // 侧栏刷新：一组一行；未自定义名的组附源文件名帮回忆
+    m_laneList->clear();
+    for (const CamGroup &g : m_groups) {
+        QString text = g.key;
+        if (g.memberIds.size() > 1)
+            text += QStringLiteral("（%1 个文件）").arg(g.memberIds.size());
+        const bool noCustomName = (g.key == g.memberIds.first());
+        if (noCustomName && !g.memberFiles.isEmpty()) {
+            QString fn = g.memberFiles.first();
+            if (fn.length() > 22)
+                fn = fn.left(22) + QStringLiteral("…");
+            text += QStringLiteral(" ← ") + fn;
+        }
+        auto *it = new QListWidgetItem(text);
+        it->setData(Qt::UserRole, g.key);
+        QStringList tip;
+        for (int i = 0; i < g.memberIds.size(); ++i)
+            tip << QStringLiteral("%1：%2").arg(g.memberIds[i], g.memberFiles[i]);
+        it->setToolTip(tip.join(QStringLiteral("\n")));
+        m_laneList->addItem(it);
+    }
+    syncLaneColors();
+    markOrphans();
+}
+
+void SiteMapEditorDialog::renameGroup()
+{
+    QListWidgetItem *it = m_laneList->currentItem();
+    if (!it) {
+        QMessageBox::information(this, tr("机位改名"),
+            tr("请先在左侧机位列表选中一个机位组。"));
+        return;
+    }
+    const QString oldKey = it->data(Qt::UserRole).toString();
+    const CamGroup *grp = nullptr;
+    for (const CamGroup &g : m_groups)
+        if (g.key == oldKey) { grp = &g; break; }
+    if (!grp)
+        return;
+    bool ok = false;
+    const QString name = QInputDialog::getText(this, tr("机位改名"),
+        tr("机位名称（对该组 %1 个文件同时生效；建议用位置名，如「东门烟酒店」）：")
+            .arg(grp->memberIds.size()),
+        QLineEdit::Normal, oldKey, &ok);
+    const QString newKey = name.trimmed();
+    if (!ok || newKey.isEmpty() || newKey == oldKey)
+        return;
+    for (const CamGroup &g : m_groups)
+        if (g.key == newKey) {
+            QMessageBox::warning(this, tr("机位改名"),
+                tr("已存在同名机位「%1」——会造成两组混淆，请换个名字。").arg(newKey));
+            return;
+        }
+    for (const QString &id : grp->memberIds) {
+        QString err;
+        if (!m_cm->setCameraLabel(id, newKey, &err))
+            qWarning() << "sitemap rename failed:" << id << err;
+    }
+    // 既有点位跟随新组键
+    for (SiteMapPoint &pt : m_data.points)
+        if (pt.laneRef == oldKey) {
+            pt.laneRef = newKey;
+            pt.label = newKey;
+        }
+    rebuildGroups();
+    m_canvas->laneColor = m_laneColor;
+    m_canvas->laneLabels.clear();
+    for (const CamGroup &g : m_groups)
+        m_canvas->laneLabels[g.key] = g.key;
+    m_canvas->update();
+    saveData();
+    qInfo() << "sitemap: group renamed" << oldKey << "->" << newKey;
 }

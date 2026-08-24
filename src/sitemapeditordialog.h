@@ -18,8 +18,18 @@
 #include <QImage>
 #include <QColor>
 #include <QHash>
+#include <QStringList>
+#include <QVector>
 
 #include "domain/site_map.h"
+
+/// 物理机位分组（P-74 返修 2026-08-24：机位编号认不出/重复机位重复显示）——
+/// 同机位标签的 V###/P###（原件+各次拼接产物）聚为一个布点单位。
+struct CamGroup {
+    QString key;                 ///< 组键=机位标签（无标签退化为 id）
+    QStringList memberIds;
+    QStringList memberFiles;     ///< 成员文件名（识别提示）
+};
 
 class CaseManager;
 class QListWidget;
@@ -40,6 +50,8 @@ private:
     void syncLaneColors();
     void markOrphans();
     void saveData();
+    void rebuildGroups();        ///< 机位分组重建（侧栏/色板/标签表）
+    void renameGroup();          ///< 机位改名（组内全部成员同改）
 
     CaseManager *m_cm;
     SiteMapData m_data;
@@ -52,4 +64,5 @@ private:
     QDoubleSpinBox *m_radius = nullptr;
     QPushButton *m_delBtn = nullptr;
     QHash<QString, QColor> m_laneColor;
+    QVector<CamGroup> m_groups;
 };
