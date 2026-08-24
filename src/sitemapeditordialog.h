@@ -62,6 +62,7 @@ private:
     QDoubleSpinBox *m_heading = nullptr;
     QDoubleSpinBox *m_spread = nullptr;
     QDoubleSpinBox *m_radius = nullptr;
+    QDoubleSpinBox *m_fontScale = nullptr;   // 标注字号 %（v1.15.3）
     QPushButton *m_delBtn = nullptr;
     QHash<QString, QColor> m_laneColor;
     QVector<CamGroup> m_groups;

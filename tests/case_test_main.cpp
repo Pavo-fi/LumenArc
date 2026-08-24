@@ -206,11 +206,11 @@ int main(int argc, char **argv)
     // ---- 5. 视频编号分配（高水位，移除不复用）----
     {
         CaseMeta m;
-        CHECK(CaseModel::allocateVideoId(m) == "V001", "first video V001");
-        CHECK(CaseModel::allocateVideoId(m) == "V002", "second video V002");
+        CHECK(CaseModel::allocateVideoId(m) == "V01", "first video V01 (两位, v1.15.3)");
+        CHECK(CaseModel::allocateVideoId(m) == "V02", "second video V02");
         // 模拟 V002 移除后：高水位不回退
         m.videos.clear();
-        CHECK(CaseModel::allocateVideoId(m) == "V003", "removed id not reused");
+        CHECK(CaseModel::allocateVideoId(m) == "V03", "removed id not reused");
         // 旧文件无 nextVideoSeq 字段：load 取既有最大+1
         QTemporaryDir dir;
         QFile f(dir.filePath("case.json"));
@@ -222,8 +222,8 @@ int main(int argc, char **argv)
         QString err;
         CHECK(CaseModel::load(dir.path(), loaded, &err), "load legacy case");
         CHECK(loaded.nextVideoSeq == 4, "legacy: nextVideoSeq = max+1");
-        CHECK(CaseModel::allocateVideoId(loaded) == "V004",
-              "legacy: allocates V004");
+        CHECK(CaseModel::allocateVideoId(loaded) == "V04",
+              "legacy: allocates V04");
     }
 
     // ---- 6. findVideo ----
@@ -324,12 +324,12 @@ int main(int argc, char **argv)
 
         // 添加视频
         const QString id1 = cm.addVideo(vid1, &err);
-        CHECK(id1 == "V001", "addVideo → V001");
+        CHECK(id1 == "V01", "addVideo → V01");
         CHECK(cm.isDirty(), "addVideo sets dirty");
         const QString id2 = cm.addVideo(vid2, &err);
-        CHECK(id2 == "V002", "addVideo → V002");
+        CHECK(id2 == "V02", "addVideo → V02");
         QString dup = cm.addVideo(vid1, &err);
-        CHECK(dup.isEmpty() && err.contains("V001"), "duplicate path rejected");
+        CHECK(dup.isEmpty() && err.contains("V01"), "duplicate path rejected");
         CHECK(cm.addVideo(root.filePath("nonexist.mp4"), &err).isEmpty(),
               "missing file rejected");
         // 登记信息
@@ -337,9 +337,9 @@ int main(int argc, char **argv)
         CHECK(v1 && v1->sizeBytes == 1000 && v1->mtimeMs > 0,
               "size/mtime registered");
         // 分流
-        CHECK(cm.vlaPathFor(vid1).contains("videos/V001.vla"),
+        CHECK(cm.vlaPathFor(vid1).contains("videos/V01.vla"),
               "router: case video → case vla");
-        CHECK(cm.evidenceDirFor(vid1).contains("evidence/calibration/V001"),
+        CHECK(cm.evidenceDirFor(vid1).contains("evidence/calibration/V01"),
               "router: case video → case evidence");
         CHECK(cm.vlaPathFor(vid3) == vid3 + ".vla",
               "router: non-case video → side .vla");
@@ -392,7 +392,7 @@ int main(int argc, char **argv)
         // 移除 V002（不删数据）→ 高水位不回退
         CHECK(cm.removeVideo(id2, false, &err), "removeVideo");
         const QString id3 = cm.addVideo(vid3, &err);
-        CHECK(id3 == "V003", "after remove: V003 (no reuse)");
+        CHECK(id3 == "V03", "after remove: V03 (no reuse)");
         cm.saveCase(&err);
         cm.closeCase();
         CHECK(!cm.isOpen(), "closed");
@@ -437,19 +437,19 @@ int main(int argc, char **argv)
             CHECK(cm2.videoById(id1)->hasCalibration,
                   "reopen: badge persisted");
             // 移除并删数据
-            QFile vlaFile(cdir + "/videos/V001.vla");
+            QFile vlaFile(cdir + "/videos/V01.vla");
             vlaFile.open(QIODevice::WriteOnly);
             vlaFile.write("{}");
             vlaFile.close();
-            QDir().mkpath(cdir + "/evidence/calibration/V001");
-            QFile ev(cdir + "/evidence/calibration/V001/at_1.png");
+            QDir().mkpath(cdir + "/evidence/calibration/V01");
+            QFile ev(cdir + "/evidence/calibration/V01/at_1.png");
             ev.open(QIODevice::WriteOnly);
             ev.write("x");
             ev.close();
             CHECK(cm2.removeVideo(id1, true, &err), "removeVideo deleteData");
-            CHECK(!QFile::exists(cdir + "/videos/V001.vla"),
+            CHECK(!QFile::exists(cdir + "/videos/V01.vla"),
                   "deleteData: vla removed");
-            CHECK(!QDir(cdir + "/evidence/calibration/V001").exists(),
+            CHECK(!QDir(cdir + "/evidence/calibration/V01").exists(),
                   "deleteData: evidence removed");
             cm2.closeCase();
         }
@@ -841,9 +841,9 @@ int main(int argc, char **argv)
               "pps: reportCsvRelPath (nested evidence dir)");
         CHECK(p.outputRefs.size() == 2, "pps: 2 outputs (missing skipped)");
         if (p.outputRefs.size() == 2) {
-            CHECK(p.outputRefs[0].id == QStringLiteral("P001")
-                  && p.outputRefs[1].id == QStringLiteral("P002"),
-                  "pps: P### ids");
+            CHECK(p.outputRefs[0].id == QStringLiteral("P01")
+                  && p.outputRefs[1].id == QStringLiteral("P02"),
+                  "pps: P## ids（两位，v1.15.3）");
             CHECK(p.outputRefs[0].sizeBytes == 4096
                   && p.outputRefs[0].mtimeMs > 0
                   && p.outputRefs[0].sha256.isEmpty(),
@@ -863,7 +863,7 @@ int main(int argc, char **argv)
         // v1.7.1：摄像头编号自动继承通道名 + 自定义往返
         {
             const CaseVideoRef *pRef = CaseModel::findRef(
-                cm.meta(), QStringLiteral("P001"));
+                cm.meta(), QStringLiteral("P01"));
             CHECK(pRef && pRef->cameraLabel == QStringLiteral("CAM01"),
                   "pps: camera label inherited from channel");
             // v1.7.1：产物与视频同待遇——vla 路径/入案判定/框选记忆/
@@ -881,7 +881,7 @@ int main(int argc, char **argv)
             CHECK(cm.calibratedVideoCount() >= 1,
                   "pps: calibratedVideoCount includes output");
             QString e2;
-            CHECK(cm.setCameraLabel(QStringLiteral("P001"),
+            CHECK(cm.setCameraLabel(QStringLiteral("P01"),
                                     QStringLiteral("食咔咔4时"), &e2),
                   "pps: setCameraLabel");
         }
@@ -900,14 +900,14 @@ int main(int argc, char **argv)
             CHECK(cm.addPreprocessSession(s2, QString(), {out2}, {}, {}, &err),
                   "pps: second session");
             const CaseVideoRef *first = CaseModel::findRef(
-                cm.meta(), QStringLiteral("P001"));
+                cm.meta(), QStringLiteral("P01"));
             const CaseVideoRef *second = nullptr;
             for (const auto &s : cm.meta().preprocessSessions)
                 for (const auto &o : s.outputRefs)
                     if (o.originalPath == out2)
                         second = &o;
             CHECK(second && second->id != first->id
-                  && second->id != QStringLiteral("P001"),
+                  && second->id != QStringLiteral("P01"),
                   "pps: global unique P id across sessions");
         }
 
@@ -922,7 +922,7 @@ int main(int argc, char **argv)
                   && cm2.meta().preprocessSessions.first().outputRefs.size() == 2,
                   "pps: sessions persisted across reopen");
             const CaseVideoRef *p2 = CaseModel::findRef(
-                cm2.meta(), QStringLiteral("P001"));
+                cm2.meta(), QStringLiteral("P01"));
             CHECK(p2 && p2->cameraLabel == QStringLiteral("食咔咔4时"),
                   "pps: camera label roundtrip across reopen");
             cm2.closeCase();
@@ -1088,7 +1088,7 @@ int main(int argc, char **argv)
         // 案内小文件（videos/.vla + evidence）
         QDir().mkpath(cm.caseDir() + QStringLiteral("/videos"));
         {
-            QFile f(cm.caseDir() + QStringLiteral("/videos/V001.vla"));
+            QFile f(cm.caseDir() + QStringLiteral("/videos/V01.vla"));
             f.open(QIODevice::WriteOnly);
             f.write("{\"vla\":1}");
             f.close();
@@ -1134,12 +1134,12 @@ int main(int argc, char **argv)
         CHECK(QFile::exists(pkgDir + "/manifest.json"), "exp: package manifest");
         CHECK(QFile::exists(pkgDir + "/README.txt"), "exp: README");
         CHECK(!QFile::exists(pkgDir + "/case.json.lock"), "exp: no lock in package");
-        CHECK(QFile::exists(pkgDir + "/sources/V001__a.mp4")
-              && QFile::exists(pkgDir + "/sources/V002__b.mp4"),
+        CHECK(QFile::exists(pkgDir + "/sources/V01__a.mp4")
+              && QFile::exists(pkgDir + "/sources/V02__b.mp4"),
               "exp: sources copies");
-        CHECK(QFile::exists(pkgDir + "/videos/V001.vla"), "exp: vla copied");
+        CHECK(QFile::exists(pkgDir + "/videos/V01.vla"), "exp: vla copied");
         {
-            QFile f(pkgDir + "/sources/V001__a.mp4");
+            QFile f(pkgDir + "/sources/V01__a.mp4");
             f.open(QIODevice::ReadOnly);
             CHECK(f.readAll() == QByteArray(3000, 'a'), "exp: copy content intact");
             QFile rf(pkgDir + "/README.txt");
@@ -1165,10 +1165,10 @@ int main(int argc, char **argv)
             CHECK(rv && !rv->bundledRelPath.isEmpty(),
                   "exp: bundledRelPath in package");
             const QString eff = recv.effectivePathFor(*rv);
-            CHECK(eff.contains("sources/V001__a.mp4"),
+            CHECK(eff.contains("sources/V01__a.mp4"),
                   "exp: effectivePathFor → bundled");
             CHECK(recv.isCaseVideo(eff), "exp: bundled path matches videoByPath");
-            CHECK(recv.vlaPathFor(eff).contains("videos/V001.vla"),
+            CHECK(recv.vlaPathFor(eff).contains("videos/V01.vla"),
                   "exp: vlaPathFor hits via bundled path");
             QVector<CaseIntegrityItem> report;
             QObject::connect(&recv, &CaseManager::integrityReportReady,

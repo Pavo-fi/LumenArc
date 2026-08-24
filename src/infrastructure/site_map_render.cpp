@@ -39,7 +39,7 @@ void drawPoints(QPainter &p, const SiteMapData &d, const QRectF &baseRect,
 
         // 标签（拍板 2026-08-23：不要框框，字色=扇形/圆点色，白描边保可读）
         QFont f = p.font();
-        f.setPointSizeF(qMax(11.0, shortSide * 0.028));
+        f.setPointSizeF(qMax(8.0, shortSide * 0.028 * pt.labelScale));
         f.setBold(true);
         const QString text = pt.orphan
             ? pt.label + QStringLiteral("（已移除）") : pt.label;

@@ -384,7 +384,8 @@ QString allocateVideoId(CaseMeta &meta)
 {
     if (meta.nextVideoSeq < 1)
         meta.nextVideoSeq = 1;
-    return QStringLiteral("V%1").arg(meta.nextVideoSeq++, 3, 10, QChar(u'0'));
+    // v1.15.3 用户拍板：两位数字够用了（实际案件机位 << 100），超 99 自动扩位
+    return QStringLiteral("V%1").arg(meta.nextVideoSeq++, 2, 10, QChar(u'0'));
 }
 
 const CaseVideoRef *findVideo(const CaseMeta &meta, const QString &id)

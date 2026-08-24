@@ -47,6 +47,8 @@ int main(int argc, char **argv)
     CHECK(qAbs(back.points[0].x - 0.32) < 1e-9, "roundtrip x");
     CHECK(qAbs(back.points[0].headingDeg - 215) < 1e-9, "roundtrip heading");
     CHECK(back.points[1].spreadDeg == 60, "default spread");
+    CHECK(qAbs(back.points[0].labelScale - 1.0) < 1e-9,
+          "labelScale default (字段缺省=1.0)");
 
     // ---- 边界夹取 ----
     {
@@ -56,6 +58,23 @@ int main(int argc, char **argv)
         CHECK(p.x == 1.0 && p.y == 0.0, "xy clamped");
         CHECK(p.spreadDeg == 180.0, "spread clamped");
         CHECK(p.radiusPct == 3.0, "radius clamped");
+        o["labelScale"] = 9.0;
+        CHECK(qAbs(SiteMapPoint::fromJson(o).labelScale - 3.0) < 1e-9,
+              "labelScale clamped high");
+        o["labelScale"] = 0.1;
+        CHECK(qAbs(SiteMapPoint::fromJson(o).labelScale - 0.5) < 1e-9,
+              "labelScale clamped low");
+    }
+
+    // ---- labelScale 非默认才落字段（F3 只加不改）+ 回环 ----
+    {
+        SiteMapPoint q;
+        q.laneRef = QStringLiteral("V01");
+        CHECK(!q.toJson().contains(QStringLiteral("labelScale")),
+              "default labelScale omitted from JSON");
+        q.labelScale = 1.6;
+        const SiteMapPoint qb = SiteMapPoint::fromJson(q.toJson());
+        CHECK(qAbs(qb.labelScale - 1.6) < 1e-9, "labelScale roundtrip");
     }
 
     // ---- 案内存取 ----

@@ -174,7 +174,7 @@ bool CaseManager::openCase(const QString &dir, QString *error,
         for (auto &s : m_meta.preprocessSessions) {
             for (auto &o : s.outputRefs) {
                 const QString want = QStringLiteral("P%1")
-                    .arg(seq++, 3, 10, QLatin1Char('0'));
+                    .arg(seq++, 2, 10, QLatin1Char('0'));
                 if (o.id != want) {
                     o.id = want;
                     renamed = true;
@@ -965,7 +965,7 @@ bool CaseManager::addPreprocessSession(const QString &sessionDirAbs,
         if (!fi.exists() || !fi.isFile())
             continue;   // 产物缺失不入册（部分失败场景 C2：日志已在协调器留痕）
         CaseVideoRef out;
-        out.id = QStringLiteral("P%1").arg(outSeq++, 3, 10, QLatin1Char('0'));
+        out.id = QStringLiteral("P%1").arg(outSeq++, 2, 10, QLatin1Char('0'));
         out.originalPath = fi.absoluteFilePath();
         out.sizeBytes = fi.size();
         out.mtimeMs = fi.lastModified().toMSecsSinceEpoch();

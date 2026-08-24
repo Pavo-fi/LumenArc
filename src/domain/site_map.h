@@ -29,11 +29,12 @@ struct SiteMapPoint {
     double headingDeg = 0;  ///< 朝向（0=右，屏幕顺时针为正）
     double spreadDeg = 60;  ///< 扇面张角（10~180）
     double radiusPct = 15;  ///< 扇面半径（相对底图短边 %）
+    double labelScale = 1.0; ///< 标注字号倍率（0.5~3.0；v1.15.3 拍板：大小可调）
     bool   orphan = false;  ///< 载入时计算：机位已不在案（不入 JSON）
 
     QJsonObject toJson() const
     {
-        return QJsonObject{
+        QJsonObject o{
             {QStringLiteral("laneRef"), laneRef},
             {QStringLiteral("label"), label},
             {QStringLiteral("x"), x}, {QStringLiteral("y"), y},
@@ -41,6 +42,9 @@ struct SiteMapPoint {
             {QStringLiteral("spreadDeg"), spreadDeg},
             {QStringLiteral("radiusPct"), radiusPct},
         };
+        if (labelScale != 1.0)   // F3 只加不改：默认不写字段
+            o.insert(QStringLiteral("labelScale"), labelScale);
+        return o;
     }
     static SiteMapPoint fromJson(const QJsonObject &o)
     {
@@ -52,6 +56,7 @@ struct SiteMapPoint {
         p.headingDeg = o.value(QStringLiteral("headingDeg")).toDouble(0.0);
         p.spreadDeg = qBound(10.0, o.value(QStringLiteral("spreadDeg")).toDouble(60.0), 180.0);
         p.radiusPct = qBound(3.0, o.value(QStringLiteral("radiusPct")).toDouble(15.0), 50.0);
+        p.labelScale = qBound(0.5, o.value(QStringLiteral("labelScale")).toDouble(1.0), 3.0);
         return p;
     }
 };

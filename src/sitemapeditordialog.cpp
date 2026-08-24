@@ -317,7 +317,11 @@ protected:
                 * qMin(r.width(), r.height());
             if (QLineF(c, e->position()).length() <= radiusPx + 16) {
                 const double step = e->angleDelta().y() > 0 ? 5.0 : -5.0;
-                if (e->modifiers() & Qt::ShiftModifier)
+                if (e->modifiers() & Qt::AltModifier)
+                    data->points[selected].labelScale =
+                        qBound(0.5, data->points[selected].labelScale
+                               + (step > 0 ? 0.1 : -0.1), 3.0);
+                else if (e->modifiers() & Qt::ShiftModifier)
                     data->points[selected].spreadDeg =
                         qBound(10.0, data->points[selected].spreadDeg + step, 180.0);
                 else
@@ -437,8 +441,9 @@ SiteMapEditorDialog::SiteMapEditorDialog(CaseManager *cm, QWidget *parent)
     m_canvas->data = &m_data;
     m_canvas->base = m_base;
     m_canvas->laneColor = m_laneColor;
+    // v1.15.3 拍板：图上标注 = 机位编号串（V01+P02），不是助记名
     for (const CamGroup &g : m_groups)
-        m_canvas->laneLabels[g.key] = g.key;
+        m_canvas->laneLabels[g.key] = g.memberIds.join(QLatin1Char('+'));
     mid->addWidget(m_canvas, 1);
     lay->addLayout(mid, 1);
 
@@ -454,10 +459,16 @@ SiteMapEditorDialog::SiteMapEditorDialog(CaseManager *cm, QWidget *parent)
     m_radius = new QDoubleSpinBox(this);
     m_radius->setRange(3, 50);
     m_radius->setSuffix(QStringLiteral(" %半径"));
+    m_fontScale = new QDoubleSpinBox(this);
+    m_fontScale->setRange(50, 300);
+    m_fontScale->setSingleStep(10);
+    m_fontScale->setSuffix(QStringLiteral(" %字号"));
+    m_fontScale->setValue(100);
     prop->addWidget(m_heading);
     prop->addWidget(m_spread);
     prop->addWidget(m_radius);
-    m_hint = new QLabel(tr("💡 选中点位后：滚轮=转朝向　Shift+滚轮=调张角　或直接在此精确输入"), this);
+    prop->addWidget(m_fontScale);
+    m_hint = new QLabel(tr("💡 选中点位后：滚轮=转朝向　Shift+滚轮=张角　Alt+滚轮=字号　或直接在此精确输入"), this);
     m_hint->setStyleSheet(QStringLiteral(
         "QLabel { color: #8a5a00; background: #fff3d6; border: 1px solid #e0b060;"
         " border-radius: 4px; padding: 4px 8px; font-weight: bold; }"));
@@ -468,6 +479,7 @@ SiteMapEditorDialog::SiteMapEditorDialog(CaseManager *cm, QWidget *parent)
         m_heading->setEnabled(on);
         m_spread->setEnabled(on);
         m_radius->setEnabled(on);
+        m_fontScale->setEnabled(on);
         m_delBtn->setEnabled(on);
     };
     setPropEnabled(false);
@@ -477,16 +489,17 @@ SiteMapEditorDialog::SiteMapEditorDialog(CaseManager *cm, QWidget *parent)
         if (idx < 0)
             return;
         const SiteMapPoint &pt = m_data.points[idx];
-        for (QDoubleSpinBox *sp : {m_heading, m_spread, m_radius})
+        for (QDoubleSpinBox *sp : {m_heading, m_spread, m_radius, m_fontScale})
             sp->blockSignals(true);
         m_heading->setValue(pt.headingDeg);
         m_spread->setValue(pt.spreadDeg);
         m_radius->setValue(pt.radiusPct);
-        for (QDoubleSpinBox *sp : {m_heading, m_spread, m_radius})
+        m_fontScale->setValue(pt.labelScale * 100.0);
+        for (QDoubleSpinBox *sp : {m_heading, m_spread, m_radius, m_fontScale})
             sp->blockSignals(false);
         m_hint->setText(pt.orphan
             ? tr("⚠️ 该机位已不在案件（孤儿点位，可删除）")
-            : tr("💡 选中点位后：滚轮=转朝向　Shift+滚轮=调张角　或直接在此精确输入"));
+            : tr("💡 选中点位后：滚轮=转朝向　Shift+滚轮=张角　Alt+滚轮=字号　或直接在此精确输入"));
     };
     m_canvas->onChanged = [this]() { saveData(); };
 
@@ -507,6 +520,10 @@ SiteMapEditorDialog::SiteMapEditorDialog(CaseManager *cm, QWidget *parent)
     connect(m_radius, QOverload<double>::of(&QDoubleSpinBox::valueChanged), this,
             [this, applyTo](double v) {
                 applyTo([v](SiteMapPoint &p) { p.radiusPct = v; }); });
+    connect(m_fontScale, QOverload<double>::of(&QDoubleSpinBox::valueChanged), this,
+            [this, applyTo](double v) {
+                applyTo([v](SiteMapPoint &p) {
+                    p.labelScale = qBound(0.5, v / 100.0, 3.0); }); });
 
     connect(importBtn, &QPushButton::clicked, this, &SiteMapEditorDialog::importBase);
     connect(fitBtn, &QPushButton::clicked, this, [this]() { m_canvas->fitView(); });
@@ -545,8 +562,8 @@ void SiteMapEditorDialog::markOrphans()
         // 组 id 直接命中
         if (CaseModel::findGroup(m_cm->meta(), pt.laneRef)) {
             pt.orphan = false;
-            pt.label = CaseModel::groupDisplayName(
-                *CaseModel::findGroup(m_cm->meta(), pt.laneRef));
+            pt.label = CaseModel::findGroup(m_cm->meta(), pt.laneRef)
+                           ->memberIds.join(QLatin1Char('+'));   // 标注=编号串
             continue;
         }
         // 旧版引用升格：文件 id → 所属组；机位标签 → 同名组
@@ -560,8 +577,8 @@ void SiteMapEditorDialog::markOrphans()
         if (!gid.isEmpty()) {
             pt.laneRef = gid;
             pt.orphan = false;
-            pt.label = CaseModel::groupDisplayName(
-                *CaseModel::findGroup(m_cm->meta(), gid));
+            pt.label = CaseModel::findGroup(m_cm->meta(), gid)
+                           ->memberIds.join(QLatin1Char('+'));
         } else {
             pt.orphan = true;
         }
@@ -708,7 +725,7 @@ void SiteMapEditorDialog::renameGroup()
     m_canvas->laneColor = m_laneColor;
     m_canvas->laneLabels.clear();
     for (const CaseCameraGroup &cg : m_cm->meta().cameraGroups)
-        m_canvas->laneLabels[cg.groupId] = CaseModel::groupDisplayName(cg);
+        m_canvas->laneLabels[cg.groupId] = cg.memberIds.join(QLatin1Char('+'));
     m_canvas->update();
     saveData();
 }
