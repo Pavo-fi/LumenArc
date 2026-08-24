@@ -2004,8 +2004,9 @@ void MultiCamPlaybackWindow::onEcFitPreview()
             .arg(qAbs(driftDay), 0, 'f', 1);
     }
     m_ecStatus->setText(lang("预览中：%1。播放试看两路是否贴齐，贴齐就保存。"
-                             "（最大误差 %2 秒 · 可信度 %3，间接对时如实标注）",
-                             "Previewing: %1. max err %2s, conf %3")
+                             "（最大误差 %2 秒 · 可信度 %3，间接对时如实标注）\n"
+                             "注：画面烧录时间是主机原始读数不会变，对齐看底部墙钟。",
+                             "Previewing: %1. max err %2s, conf %3"),
         .arg(how).arg(maxRes / 1000.0, 0, 'f', 2)
         .arg(cal.conf, 0, 'f', 2));
 }
@@ -2119,9 +2120,15 @@ void MultiCamPlaybackWindow::onEcSave()
         .arg(m_ecCorrText);
     summary += lang("标记瞬间的对齐误差：最大 %1 秒\n", "Max residual: %1 s\n")
         .arg(maxRes / 1000.0, 0, 'f', 2);
-    summary += lang("可信度：%1（间接对时如实降一档）",
-                    "Confidence: %1 (indirect)")
+    summary += lang("可信度：%1（间接对时如实降一档）\n",
+                    "Confidence: %1 (indirect)\n")
         .arg(m_ecCal.conf, 0, 'f', 2);
+    // v1.15.3 用户实测误解：拿画面烧录的 OSD 数字当对齐判据。
+    // 固定口径注记（OSD=主机原始钟烧死在像素里永不变；对齐看墙钟/内容）
+    summary += lang("注：画面里烧录的时间是监控主机原始读数（不会变）；\n"
+                    "对没对齐请看底部「墙钟」和同一物体是否同现。",
+                    "Note: burned-in OSD never changes; judge by wall clock "
+                    "and scene content.");
 
     QMessageBox box(QMessageBox::Question,
                     lang("确认保存校时", "Confirm save"), summary, QMessageBox::NoButton,
