@@ -1757,10 +1757,8 @@ void MultiCamPlaybackWindow::refreshEcPanel()
             .toString(QStringLiteral("MM-dd HH:mm:ss"));
         const QString tstream = QTime(0, 0).addMSecs(a.targetStreamMs)
             .toString(QStringLiteral("HH:mm:ss"));
-        QString row = QStringLiteral("「%1」准钟 %2 ⇄ 目标 %3 → %4")
-            .arg(a.eventName, wall, tstream,
-                 eventcalib::plainClockDeltaText(a.refWallMs
-                                                 - a.targetStreamMs));
+        QString row = QStringLiteral("「%1」准钟墙钟 %2 ⇄ 本路画面 %3")
+            .arg(a.eventName, wall, tstream);
         if (m_ecPreviewed && vi < m_ecFit.residualsMs.size()) {
             const double res = m_ecFit.residualsMs[vi];
             row += QStringLiteral("（误差 %1 秒）")
@@ -1928,6 +1926,11 @@ void MultiCamPlaybackWindow::onEcFitPreview()
         m_ecStatus->setText(m_ecFit.error);   // C1：类型化错误原文上屏
         return;
     }
+    // v1.15.3：应用前抓目标路旧校时——修正量要跟旧钟比（旧 bug 把 epoch
+    // 毫秒偏移当钟差念：目标路已有校时时会出现「慢 495740 小时」疯话）
+    const TimeCalibration oldCal =
+        (m_ecTargetIdx < m_svc->lanes().size())
+            ? m_svc->lanes()[m_ecTargetIdx].cal : TimeCalibration();
     TimeCalibration cal;
     cal.source = TimeCalibration::Source::CrossCamEvent;
     cal.dateKnown = true;
@@ -1954,23 +1957,51 @@ void MultiCamPlaybackWindow::onEcFitPreview()
     cal.conf = conf;
     m_ecCal = cal;
     m_svc->applyLaneCalibration(m_ecTargetIdx, cal);   // 预览：播放联动即生效
+    // 修正量人话口径：与旧校时在首个标记瞬间的墙钟差；原先无有效校时则
+    // 如实说「按参考路对齐」（不能编钟差）
+    {
+        const auto &a0 = m_ecAnchors.first();
+        const qint64 newWall = cal.wallMsOf(a0.targetStreamMs);
+        if (oldCal.isValid() && oldCal.dateKnown) {
+            const qint64 delta = newWall - oldCal.beijingMsOf(a0.targetStreamMs);
+            if (qAbs(delta) < 1000) {
+                m_ecCorrText = lang("目标路的钟原本就基本准（差不到 1 秒），已对齐",
+                                    "lane clock was already within 1s, aligned");
+            } else {
+                m_ecCorrText = lang("目标的钟原来%1，已按此修正",
+                                    "lane clock was off by %1, fixed")
+                    .arg(eventcalib::plainClockDeltaText(delta)
+                             .replace(QStringLiteral("目标的钟"),
+                                      QStringLiteral("")));
+            }
+        } else {
+            m_ecCorrText = lang("目标路原先没有有效校时——已按参考路对齐到墙钟 %1",
+                                "no prior calibration; aligned to ref clock %1")
+                .arg(QDateTime::fromMSecsSinceEpoch(newWall)
+                         .toString(QStringLiteral("MM-dd HH:mm:ss")));
+        }
+    }
+    // 预览即所见（用户实测「点完没反应」）：两路立即跳到同一墙钟瞬间，
+    // 暂停中也当场看到贴齐与否
+    {
+        const int ri = m_ecRefCombo->currentData().toInt();
+        if (ri >= 0 && ri < m_svc->lanes().size())
+            if (auto *er = m_svc->engineAt(ri))
+                m_svc->seekWall(syncWallOf(m_svc->lanes()[ri], er->position()));
+    }
     m_ecPreviewed = true;
     updateEcSaveBtn();
     refreshEcPanel();
     double maxRes = 0;
     for (double r : m_ecFit.residualsMs)
         maxRes = qMax(maxRes, r);
-    const qint64 off = qRound64(m_ecFit.affine ? m_ecFit.interceptMs
-                                               : m_ecFit.offsetMs);
-    QString how = eventcalib::plainClockDeltaText(off);
+    QString how = m_ecCorrText;
     if (m_ecFit.affine) {
-        const double pct = (m_ecFit.rate - 1.0) * 100.0;
-        how += lang("，且越走越%1（每 100 秒%2 %3 秒）", " and drifts")
-            .arg(pct >= 0 ? lang("快", "fast") : lang("慢", "slow"))
-            .arg(qAbs(pct), 0, 'f', 3);
-        how += lang("——已按「偏差+快慢」修正", " - fixed offset+rate");
-    } else {
-        how += lang("——已按「整体偏差」修正", " - fixed offset only");
+        const double driftDay = (m_ecFit.rate - 1.0) * 86400.0;
+        how += lang("；快慢：每 1 天%1约 %2 秒，已一并修正",
+                    "; drift %1 s/day, fixed")
+            .arg(driftDay >= 0 ? lang("快", "fast") : lang("慢", "slow"))
+            .arg(qAbs(driftDay), 0, 'f', 1);
     }
     m_ecStatus->setText(lang("预览中：%1。播放试看两路是否贴齐，贴齐就保存。"
                              "（最大误差 %2 秒 · 可信度 %3，间接对时如实标注）",
@@ -2084,8 +2115,8 @@ void MultiCamPlaybackWindow::onEcSave()
         summary += lang("方式：整体平移（1 个标记，不改快慢）\n",
                         "Mode: fixed shift (1 mark)\n");
     }
-    summary += lang("修正量：%1，已按此对齐\n", "Correction: %1\n")
-        .arg(eventcalib::plainClockDeltaText(m_ecCal.offsetMs));
+    summary += lang("修正量：%1\n", "Correction: %1\n")
+        .arg(m_ecCorrText);
     summary += lang("标记瞬间的对齐误差：最大 %1 秒\n", "Max residual: %1 s\n")
         .arg(maxRes / 1000.0, 0, 'f', 2);
     summary += lang("可信度：%1（间接对时如实降一档）",

@@ -179,6 +179,7 @@ private:
     eventcalib::FitResult m_ecFit;                 ///< 最近预览拟合
     TimeCalibration m_ecCal;                       ///< 预览生成的校时（保存用）
     bool m_ecPreviewed = false;
+    QString m_ecCorrText;                          ///< 修正量人话（v1.15.3：与旧校时的真实钟差）
     bool m_ecSaved = false;                        ///< 已保存（退出不提示会话级语义）
     int m_ecTargetIdx = -1;                        ///< 当前目标路（切路重载锚点表）
     QPushButton *m_osdBtn = nullptr;

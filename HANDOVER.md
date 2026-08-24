@@ -55,6 +55,15 @@ beijingMsOf=wallMsOf+0，轴/快照/多机全口径"不生效"；.vla 留痕照�
 onCalibPhotoFinished 调之；ui_chain +6 断言直驱锁死（offset 834000 管道/
 留痕字段/人工修正注记/beijingMsOf 反映）。18 套全绿。
 
+**补记 5（v1.15.3 续，用户截图实锤两 bug）**：①「应用预览点完没反应」——
+applyLaneCalibration 只改模型不挪画面，暂停中零视觉反馈；修：预览即
+seekWall 到参考路当前墙钟，两路当场跳齐。②「慢 495740 小时」疯话——
+plainClockDeltaText(refWall-targetStream) 把 epoch 偏移当钟差，目标路已有
+校时时必现（P-73 原生口径 bug）；修：修正量=与目标路**旧校时**在标记瞬间的
+真实墙钟差（无旧校时则如实说「按参考路对齐到墙钟 X」），<1s 说「原本就基本
+准」；锚点列表行尾假 delta 删除（只留 准钟墙钟⇄本路画面 映射）；预览状态条/
+确认卡统一走 m_ecCorrText。
+
 **补记 4（v1.15.3 续，用户实测"退出多机后主页面没打通"）**：onCaseDataChanged
 回调带视频路径——多机窗保存的同事件校时若正中主视口当前视频，主窗重读 .vla
 校时同步 m_calibration+时间轴（peekCalibrationFromVla 轻量只解 META chunk）。
