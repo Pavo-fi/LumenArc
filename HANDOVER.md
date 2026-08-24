@@ -55,6 +55,15 @@ beijingMsOf=wallMsOf+0，轴/快照/多机全口径"不生效"；.vla 留痕照�
 onCalibPhotoFinished 调之；ui_chain +6 断言直驱锁死（offset 834000 管道/
 留痕字段/人工修正注记/beijingMsOf 反映）。18 套全绿。
 
+**补记 7（v1.15.3 续，机位独立编号 C 方案拍板）**：用户纠正"多文件组标注
+V01+P02"的信息错位——机位应有**独立编号体系**：CaseCameraGroup 新增 camNo
+（C01/C02 自动排序、高位水位不复用、改名不动；CaseMeta.nextCamSeq 入档+
+载入高水位自愈）；G### 退居纯内部稳定键（点位/同轴引用零迁移）；
+groupDisplayName=「C01 烟酒店」（无名组=「C01」，编号是机位永远存在的身份）；
+点位图标注只显 C01；侧栏/案件树=编号+助记名；迁移：存量组按 createdMs+组 id
+确定性回填（用户当前案件的组自动获得 C01…）。case_test 270（+camNo 断言）。
+18 套全绿。
+
 **补记 6（v1.15.3 续，点位图三拍板）**：①标注大小可调——SiteMapPoint 新增
 labelScale（0.5~3.0，默认不落字段 F3），属性条「%字号」spin + Alt+滚轮快捷，
 渲染字号=短边×0.028×倍率；②图上标注文字=机位编号串（memberIds 以 "+" 连，

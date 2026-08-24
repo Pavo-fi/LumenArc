@@ -35,6 +35,7 @@ const QSet<QString> &knownRootKeys()
         QStringLiteral("nextVideoSeq"),
         QStringLiteral("videos"), QStringLiteral("preprocessSessions"),
         QStringLiteral("cameraGroups"), QStringLiteral("nextGroupSeq"),
+        QStringLiteral("nextCamSeq"),
         QStringLiteral("reports"), QStringLiteral("extraFields"),
     };
     return keys;
@@ -142,6 +143,7 @@ QJsonObject CaseCameraGroup::toJson() const
 {
     return QJsonObject{
         {QStringLiteral("groupId"), groupId},
+        {QStringLiteral("camNo"), camNo},
         {QStringLiteral("name"), name},
         {QStringLiteral("memberIds"), QJsonArray::fromStringList(memberIds)},
         {QStringLiteral("createdMs"), createdMs},
@@ -152,6 +154,7 @@ CaseCameraGroup CaseCameraGroup::fromJson(const QJsonObject &o)
 {
     CaseCameraGroup g;
     g.groupId = o.value(QStringLiteral("groupId")).toString();
+    g.camNo = o.value(QStringLiteral("camNo")).toString();
     g.name = o.value(QStringLiteral("name")).toString();
     for (const auto &v : o.value(QStringLiteral("memberIds")).toArray())
         g.memberIds << v.toString();
@@ -194,6 +197,7 @@ QJsonObject CaseMeta::toJson() const
     if (!gs.isEmpty())
         o[QStringLiteral("cameraGroups")] = gs;
     o[QStringLiteral("nextGroupSeq")] = nextGroupSeq;
+    o[QStringLiteral("nextCamSeq")] = nextCamSeq;
     QJsonArray rs;
     for (const auto &r : reports)
         rs.append(r);
@@ -291,6 +295,7 @@ bool load(const QString &caseDir, CaseMeta &out, QString *error,
     for (const auto &v : root[QStringLiteral("cameraGroups")].toArray())
         m.cameraGroups.append(CaseCameraGroup::fromJson(v.toObject()));
     m.nextGroupSeq = root[QStringLiteral("nextGroupSeq")].toInt(0);
+    m.nextCamSeq = root[QStringLiteral("nextCamSeq")].toInt(0);
     {
         int maxN = 0;
         static const QRegularExpression idRe(QStringLiteral("^G(\d+)$"));
@@ -303,6 +308,18 @@ bool load(const QString &caseDir, CaseMeta &out, QString *error,
             m.nextGroupSeq = maxN + 1;
         if (m.nextGroupSeq < 1)
             m.nextGroupSeq = 1;
+        // C## 机位编号高水位自愈（同 G### 口径）
+        int maxC = 0;
+        for (const auto &g : m.cameraGroups) {
+            bool okc = false;
+            const int n = g.camNo.mid(1).toInt(&okc);
+            if (okc && g.camNo.startsWith(QLatin1Char('C')) && n > maxC)
+                maxC = n;
+        }
+        if (m.nextCamSeq <= maxC)
+            m.nextCamSeq = maxC + 1;
+        if (m.nextCamSeq < 1)
+            m.nextCamSeq = 1;
     }
     for (const auto &v : root[QStringLiteral("reports")].toArray())
         m.reports.append(v.toString());
@@ -457,11 +474,12 @@ QString groupIdOf(const CaseMeta &meta, const QString &refId)
 
 QString groupDisplayName(const CaseCameraGroup &g)
 {
-    if (!g.name.isEmpty())
-        return g.name;
-    if (!g.memberIds.isEmpty())
-        return g.memberIds.first();
-    return g.groupId;
+    // v1.15.3 拍板：机位编号是身份的面部——「C01 烟酒店」，无名组就「C01」
+    QString head = g.camNo;
+    if (head.isEmpty())
+        head = g.groupId;   // 未迁移的老数据兜底（迁移后不会发生）
+    return g.name.isEmpty() ? head
+                            : head + QStringLiteral(" ") + g.name;
 }
 
 bool migrateCameraGroups(CaseMeta &meta)
@@ -487,10 +505,31 @@ bool migrateCameraGroups(CaseMeta &meta)
             unlabeled << v->id;
         }
     }
+    // 存量组 camNo 回填（v1.15.0~v1.15.2 的组没有机位编号）：
+    // 按创建时刻+组 id 确定性排序补号
+    {
+        QVector<CaseCameraGroup *> un;
+        for (auto &g : meta.cameraGroups)
+            if (g.camNo.isEmpty())
+                un << &g;
+        std::sort(un.begin(), un.end(), [](const CaseCameraGroup *a,
+                                           const CaseCameraGroup *b) {
+            if (a->createdMs != b->createdMs)
+                return a->createdMs < b->createdMs;
+            return a->groupId < b->groupId;
+        });
+        for (CaseCameraGroup *g : un) {
+            g->camNo = QStringLiteral("C%1").arg(meta.nextCamSeq++, 2, 10,
+                                                 QLatin1Char('0'));
+            changed = true;
+        }
+    }
     auto mkGroup = [&](const QString &name, const QStringList &ids) {
         CaseCameraGroup g;
         g.groupId = QStringLiteral("G%1").arg(meta.nextGroupSeq++, 3, 10,
                                               QLatin1Char('0'));
+        g.camNo = QStringLiteral("C%1").arg(meta.nextCamSeq++, 2, 10,
+                                            QLatin1Char('0'));
         g.name = name;
         g.memberIds = ids;
         g.createdMs = QDateTime::currentMSecsSinceEpoch();

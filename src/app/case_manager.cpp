@@ -373,6 +373,8 @@ QString CaseManager::createGroup(const QString &name, QString *error)
     CaseCameraGroup g;
     g.groupId = QStringLiteral("G%1").arg(m_meta.nextGroupSeq++, 3, 10,
                                           QLatin1Char('0'));
+    g.camNo = QStringLiteral("C%1").arg(m_meta.nextCamSeq++, 2, 10,
+                                        QLatin1Char('0'));
     g.name = name;
     g.createdMs = QDateTime::currentMSecsSinceEpoch();
     m_meta.cameraGroups.append(g);

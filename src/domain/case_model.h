@@ -59,8 +59,10 @@ struct CasePreprocessRef {
 /// 机位组（2026-08-24 拍板：组为案件组织轴心——视频/前处理产物一律归组；
 /// 同组才可同轴播放）。G### 稳定 id 永不复用；name 可改不作键。
 struct CaseCameraGroup {
-    QString groupId;            ///< "G001" 单调递增
-    QString name;               ///< 位置名（可空=未命名；UI 退化显首成员 id）
+    QString groupId;            ///< "G001" 单调递增（纯内部稳定键，不露面）
+    QString camNo;              ///< "C01" 机位编号（v1.15.3 拍板：机位独立编号
+                                ///< 体系，创建自动排序，高位水位不复用，改名不动）
+    QString name;               ///< 助记位置名（可空=未命名；可改，不作键）
     QStringList memberIds;      ///< V###/P###
     qint64  createdMs = 0;
 
@@ -86,6 +88,7 @@ struct CaseMeta {
     int     nextVideoSeq = 1;   ///< 视频编号高水位（分配自增，永不回退→V### 不复用）
     QVector<CaseCameraGroup> cameraGroups;  ///< 机位组（F3：只加不改）
     int     nextGroupSeq = 1;   ///< 组编号高水位（G### 不复用）
+    int     nextCamSeq = 1;     ///< 机位编号高水位（C## 不复用）
     QVector<CaseVideoRef> videos;
     QVector<CasePreprocessRef> preprocessSessions;
     QStringList reports;        ///< reports/ 相对路径（v1.4.0 登记）

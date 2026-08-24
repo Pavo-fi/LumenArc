@@ -27,6 +27,7 @@
 /// 同机位标签的 V###/P###（原件+各次拼接产物）聚为一个布点单位。
 struct CamGroup {
     QString key;                 ///< 组键=机位标签（无标签退化为 id）
+    QString camNo;               // 机位编号 C01（图上标注）
     QStringList memberIds;
     QStringList memberFiles;     ///< 成员文件名（识别提示）
 };

@@ -441,9 +441,9 @@ SiteMapEditorDialog::SiteMapEditorDialog(CaseManager *cm, QWidget *parent)
     m_canvas->data = &m_data;
     m_canvas->base = m_base;
     m_canvas->laneColor = m_laneColor;
-    // v1.15.3 拍板：图上标注 = 机位编号串（V01+P02），不是助记名
+    // v1.15.3 拍板 C 方案：图上标注 = 机位编号（C01），不显示助记名
     for (const CamGroup &g : m_groups)
-        m_canvas->laneLabels[g.key] = g.memberIds.join(QLatin1Char('+'));
+        m_canvas->laneLabels[g.key] = g.camNo;
     mid->addWidget(m_canvas, 1);
     lay->addLayout(mid, 1);
 
@@ -563,7 +563,7 @@ void SiteMapEditorDialog::markOrphans()
         if (CaseModel::findGroup(m_cm->meta(), pt.laneRef)) {
             pt.orphan = false;
             pt.label = CaseModel::findGroup(m_cm->meta(), pt.laneRef)
-                           ->memberIds.join(QLatin1Char('+'));   // 标注=编号串
+                           ->camNo;   // 图上标注=机位编号（C01）
             continue;
         }
         // 旧版引用升格：文件 id → 所属组；机位标签 → 同名组
@@ -578,7 +578,7 @@ void SiteMapEditorDialog::markOrphans()
             pt.laneRef = gid;
             pt.orphan = false;
             pt.label = CaseModel::findGroup(m_cm->meta(), gid)
-                           ->memberIds.join(QLatin1Char('+'));
+                           ->camNo;
         } else {
             pt.orphan = true;
         }
@@ -661,6 +661,7 @@ void SiteMapEditorDialog::rebuildGroups()
     for (const CaseCameraGroup &cg : m_cm->meta().cameraGroups) {
         CamGroup g;
         g.key = cg.groupId;
+        g.camNo = cg.camNo;
         g.memberIds = cg.memberIds;
         for (const QString &mid : cg.memberIds)
             if (const CaseVideoRef *v = m_cm->videoById(mid))
@@ -725,7 +726,7 @@ void SiteMapEditorDialog::renameGroup()
     m_canvas->laneColor = m_laneColor;
     m_canvas->laneLabels.clear();
     for (const CaseCameraGroup &cg : m_cm->meta().cameraGroups)
-        m_canvas->laneLabels[cg.groupId] = cg.memberIds.join(QLatin1Char('+'));
+        m_canvas->laneLabels[cg.groupId] = cg.camNo;
     m_canvas->update();
     saveData();
 }

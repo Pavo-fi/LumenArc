@@ -377,13 +377,18 @@ int main(int argc, char **argv)
         CHECK(cm.groupIdOf(id2) == gid3, "rename keeps key");
         CHECK(cm.videoById(id2)->cameraLabel == QStringLiteral("东门烟酒店2"),
               "rename mirrors members");
+        // v1.15.3 C 方案：显示名=机位编号领衔「C03 东门烟酒店2」
         CHECK(CaseModel::groupDisplayName(
-                  *CaseModel::findGroup(cm.meta(), gid3)) == QStringLiteral("东门烟酒店2"),
-              "groupDisplayName");
-        // 未命名组显示名退化为首成员 id
+                  *CaseModel::findGroup(cm.meta(), gid3))
+              == QStringLiteral("C03 东门烟酒店2"),
+              "groupDisplayName = camNo + name");
+        CHECK(CaseModel::findGroup(cm.meta(), gid3)->camNo
+              == QStringLiteral("C03"), "createGroup auto camNo C03");
+        // 未命名组显示名=机位编号（编号是机位永远存在的身份）
         CHECK(CaseModel::groupDisplayName(
-                  *CaseModel::findGroup(cm.meta(), cm.groupIdOf(id1))) == id1,
-              "unnamed group display = first member id");
+                  *CaseModel::findGroup(cm.meta(), cm.groupIdOf(id1)))
+              == QStringLiteral("C01"),
+              "unnamed group display = camNo");
 
         // 保存 → dirty 清
         CHECK(cm.saveCase(&err), "saveCase");
@@ -422,6 +427,10 @@ int main(int argc, char **argv)
             CHECK(CaseModel::groupIdOf(m2, QStringLiteral("V003"))
                   != CaseModel::groupIdOf(m2, QStringLiteral("V001")),
                   "unlabeled own group");
+            CHECK(m2.cameraGroups[0].camNo == QStringLiteral("C01")
+                  && m2.cameraGroups[1].camNo == QStringLiteral("C02"),
+                  "migration assigns camNo C01/C02");
+            CHECK(m2.nextCamSeq == 3, "nextCamSeq high-water");
             CHECK(!CaseModel::migrateCameraGroups(m2), "migration idempotent");
         }
 
