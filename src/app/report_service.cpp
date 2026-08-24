@@ -156,13 +156,28 @@ ReportData ReportService::collect(CaseManager *cm, VideoStateManager *vsm,
         }
 
         // ---- 校时（.vla SSOT）----
+        // v1.15.3：机位编号+名（C01 烟酒店东侧）供报告展示；参考路同口径
+        auto camText = [&](const QString &fileId) -> QString {
+            const QString gid = CaseModel::groupIdOf(meta, fileId);
+            if (const CaseCameraGroup *g = gid.isEmpty()
+                    ? nullptr : CaseModel::findGroup(meta, gid)) {
+                if (!g->camNo.isEmpty())
+                    return g->name.isEmpty()
+                        ? g->camNo : g->camNo + QStringLiteral(" ") + g->name;
+                if (!g->name.isEmpty())
+                    return g->name;
+            }
+            return fileId;
+        };
         VideoState st;
         if (vsm && vsm->restoreState(row.filePath, st) && st.calibration.isValid()) {
             const TimeCalibration &cal = st.calibration;
             row.hasCalib = true;
             row.calibWayText = reportfmt::calibWayText(cal.source);
+            row.camNoText = camText(v.id);
             row.conf = cal.conf;
             row.anchors = cal.eventAnchors;
+            row.anchorCount = cal.eventAnchors.size();
             const qint64 truth = cal.truthSet ? cal.truthOffsetMs : 0;
             row.wallStartMs = cal.wallMsOf(0) + truth;
             row.wallEndMs = cal.wallMsOf(row.durationMs > 0 ? row.durationMs : 0) + truth;
@@ -183,6 +198,41 @@ ReportData ReportService::collect(CaseManager *cm, VideoStateManager *vsm,
                 }
             if (row.timeDiffText.isEmpty() && truth != 0)
                 row.timeDiffText = reportfmt::fmtTimeDiff(truth);
+            // v1.15.3 报告模板：时间基准 + 校准结果白话（讲清换算逻辑）
+            // 直接对时（照片/手动）→ 基准=标准授时；时差=修正量；结果为换算公式
+            auto stripDir = [](const QString &s) {   // 「慢 13 分 54 秒」→「13 分 54 秒」
+                return s.startsWith(QStringLiteral("慢 "))
+                           || s.startsWith(QStringLiteral("快 "))
+                       ? s.mid(1).trimmed() : s;
+            };
+            if (cal.truthSet) {
+                row.baseRefText = QStringLiteral("标准授时（北京时间）");
+                const QString corr = stripDir(reportfmt::fmtTimeDiff(truth));
+                if (row.timeDiffText.isEmpty())
+                    row.timeDiffText = reportfmt::fmtTimeDiff(truth);
+                row.resultText = QStringLiteral(
+                    "该路监控钟较北京时间%1；"
+                    "采用后：北京时间 = 监控显示时间 + %2")
+                    .arg(reportfmt::fmtTimeDiff(truth), corr);
+            } else if (cal.source == TimeCalibration::Source::CrossCamEvent) {
+                const QString ref = cal.eventAnchors.isEmpty()
+                    ? QStringLiteral("—") : camText(cal.eventAnchors.first().refLaneId);
+                row.baseRefText = ref;
+                if (row.timeDiffText.isEmpty())
+                    row.timeDiffText = QStringLiteral("≈0（依基准）");
+                row.resultText = QStringLiteral(
+                    "以基准路「%1」为坐标：%2 个特征事件逐帧对齐"
+                    "（对帧容差见四（四）），墙钟即基准路（北京时间）口径")
+                    .arg(ref).arg(row.anchorCount);
+            } else if (cal.source == TimeCalibration::Source::Inherited) {
+                row.baseRefText = QStringLiteral("源校时");
+                row.resultText = QStringLiteral("前处理产物，继承源校时时间轴");
+            } else if (cal.dateKnown) {
+                row.baseRefText = QStringLiteral("—");
+                row.resultText = QStringLiteral(
+                    "已建立监控时间轴（OCR 拟合，取样 %1 点），未与北京时间比对")
+                    .arg(cal.samples.size());
+            }
             // P-48：错读点 → 局限性
             int suspicious = 0;
             for (const auto &sp : cal.samples)
@@ -218,21 +268,19 @@ ReportData ReportService::collect(CaseManager *cm, VideoStateManager *vsm,
                 }
                 const auto chain = eventcalib::expandChain(v.id, byLane, absoluteLaneIds);
                 ReportChain rc;
-                rc.laneLabel = row.cameraLabel;
+                rc.laneLabel = row.camNoText.isEmpty()
+                    ? row.cameraLabel : row.camNoText;
                 qint64 cumTol = 0;
                 for (const auto &hop : chain) {
                     cumTol += hop.anchor.toleranceMs;
-                    QString laneName = hop.laneId;
-                    for (const CaseVideoRef &v3 : meta.videos)
-                        if (v3.id == hop.laneId && !v3.cameraLabel.isEmpty()) {
-                            laneName = v3.cameraLabel;
-                            break;
-                        }
+                    if (!hop.absolute)
+                        ++rc.eventHops;
+                    const QString laneName = camText(hop.laneId);
                     rc.hopLines << (hop.absolute
                         ? QStringLiteral("%1：绝对校时锚（本路独立校时）")
                               .arg(laneName)
                         : QStringLiteral("%1 ← 参考「%2」（事件：%3，本跳容差 ±%4 ms）")
-                              .arg(laneName, hop.anchor.refLaneId,
+                              .arg(laneName, camText(hop.anchor.refLaneId),
                                    hop.anchor.eventName)
                               .arg(hop.anchor.toleranceMs));
                 }

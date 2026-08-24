@@ -24,6 +24,7 @@
 struct ReportVideoRow {
     QString id;                 ///< V###/P###（检材编号）
     QString cameraLabel;        ///< 监控点位（机位标签）
+    QString camNoText;          ///< 机位编号+名（如「C01 烟酒店东侧」；v1.15.3 报告展示）
     QString shootDir;           ///< 拍摄方向（补录，可空）
     QString extractMethod;      ///< 提取方式（补录，可空）
     QString storageMedium;      ///< 存储介质（补录，可空）
@@ -47,6 +48,9 @@ struct ReportVideoRow {
     QString osdSampleText;      ///< 监控显示时间取样（OCR 原文/推算）
     QString formulaText;        ///< 校准公式（人读）
     QString timeDiffText;       ///< 时间差（人读：快/慢 X）
+    QString baseRefText;        ///< 时间基准（直接对时=标准授时；间接=参考机位；v1.15.3）
+    QString resultText;         ///< 校准结果白话（v1.15.3：讲清换算逻辑）
+    int     anchorCount = 0;    ///< 间接对时的事件锚点数
     // ---- 哈希 ----
     QString md5;
     QString sha256;
@@ -68,6 +72,7 @@ struct ReportChain {
     QString laneLabel;          ///< 被校时路
     QStringList hopLines;       ///< 逐跳人读行（含事件名/容差）
     QString totalToleranceText; ///< 累积容差人读
+    int     eventHops = 0;      ///< 非绝对锚跳数（特征事件锚点数，v1.15.3 结论用）
 };
 
 /// 前处理拼接记录（证据——拍板 2026-08-23：前处理文件也是分析文件，

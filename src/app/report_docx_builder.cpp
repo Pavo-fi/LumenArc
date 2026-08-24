@@ -171,22 +171,43 @@ QString ReportDocxBuilder::build(const ReportData &rd, const QString &outPath)
     dw.addPageBreak();
     dw.addHeading(QStringLiteral("四、时间校准"), 1);
     dw.addHeading(QStringLiteral("（一）校准方法"), 2);
-    for (const QString &t : {QStringLiteral("与标准北京时间比对"),
-                             QStringLiteral("多监控之间特征事件同步比对（接力对时）")})
+    // v1.15.3 模板改版：先把校准逻辑用白话讲清楚（读者不必懂术语）
+    for (const QString &t : {
+        QStringLiteral("监控画面内烧录的显示时间是录像机自身时钟的读数，存在快慢偏差，"
+                       "不能直接作为北京时间使用。本系统对每路监控建立校准关系"
+                       "（下称「墙钟」），将画面时刻统一换算为北京时间口径后方用于分析。"),
+        QStringLiteral("① 直接对时（与国家标准时间比对）：拍摄一张「监控主机显示时间"
+                       "与标准授时时间同框」的照片，读出两者读数求偏差，一次留档可查。"
+                       "偏差即本路监控钟较北京时间快/慢的量，此后取其监控显示时间加/减该量"
+                       "即得北京时间（见（二）校准结果「校准结果」列）。"),
+        QStringLiteral("② 间接对时（多机同事件比对，接力对时）：当某路监控无法直接获得"
+                       "北京时间基准时，以已校时的路为基准，利用两路画面中同一特征事件瞬间"
+                       "逐帧对齐，将该路墙钟钉到基准路的北京时间轴上（见（二）「时间基准」"
+                       "列与（四）接力对时取证链）。间接对时读出的不是「快/慢多少秒」，而是"
+                       "「两路此刻画面内容同步」这一证据。")})
         dw.addParagraph(t);
     dw.addHeading(QStringLiteral("（二）各校准结果"), 2);
     {
+        auto textOr = [](const QString &s, const QString &fb) {
+            return s.isEmpty() ? fb : s;
+        };
         QVector<QVector<QString>> rows;
-        rows << QVector<QString>{QStringLiteral("监控编号"), QStringLiteral("监控显示时间"),
-                                 QStringLiteral("校时方式"), QStringLiteral("时间差"),
-                                 QStringLiteral("校准公式")};
+        rows << QVector<QString>{QStringLiteral("监控编号"),
+                                 QStringLiteral("监控显示时间(取样)"),
+                                 QStringLiteral("校时方式"),
+                                 QStringLiteral("时间基准"),
+                                 QStringLiteral("校准结果")};
         for (const ReportVideoRow &v : rd.videos)
-            rows << QVector<QString>{v.cameraLabel,
-                                     v.hasCalib ? v.osdSampleText : QStringLiteral("—"),
-                                     v.calibWayText,
-                                     v.hasCalib ? v.timeDiffText : QStringLiteral("未校时"),
-                                     v.hasCalib ? v.formulaText : QStringLiteral("—")};
-        dw.addTable(rows, true, {14, 22, 18, 18, 28});
+            rows << QVector<QString>{
+                textOr(v.camNoText, v.cameraLabel),
+                v.hasCalib && !v.osdSampleText.isEmpty() ? v.osdSampleText
+                                                         : QStringLiteral("—"),
+                v.hasCalib ? v.calibWayText : QStringLiteral("未校时"),
+                textOr(v.baseRefText, v.hasCalib ? QStringLiteral("—") : QString()),
+                v.hasCalib ? textOr(v.resultText, textOr(v.timeDiffText,
+                                                          v.formulaText))
+                           : QStringLiteral("未校时")};
+        dw.addTable(rows, true, {14, 22, 14, 18, 32});
     }
     dw.addHeading(QStringLiteral("（三）时间校准截图"), 2);
     {
@@ -209,8 +230,9 @@ QString ReportDocxBuilder::build(const ReportData &rd, const QString &outPath)
             for (const QString &line : c.hopLines)
                 dw.addParagraph(line);
             dw.addParagraph(QStringLiteral(
-                "声明：经逐跳校准确认，上述各跳对帧均在标注容差范围内；"
-                "整条链的累积容差 %1 已如实呈现。").arg(c.totalToleranceText));
+                "结论：本路经 %1 个特征事件锚点与基准路对齐，整链对帧容差 %2；"
+                "墙钟采用基准路（北京时间）口径，逐跳对帧均在校准容差内，"
+                "证据链如上。").arg(c.eventHops).arg(c.totalToleranceText));
         }
     }
 
