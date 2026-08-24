@@ -2877,12 +2877,29 @@ void PreprocessWindow::promptGroupAssignment(
         rowLay->addWidget(combo, 1);
         lay->addLayout(rowLay);
     }
+    lay->addSpacing(6);
+    lay->addWidget(new QLabel(
+        lang("选「稍后自调」可跳过——产物暂不归组，事后在案件树右键\n"
+             "「移到机位组」补归。",
+             "\"Later\" skips grouping; you can re-assign via case tree "
+             "context menu."),
+        &dlg));
+    lay->addSpacing(4);
     auto *btns = new QDialogButtonBox(QDialogButtonBox::Ok
                                       | QDialogButtonBox::Cancel, &dlg);
-    btns->button(QDialogButtonBox::Ok)->setText(lang("应用归组", "Apply"));
-    btns->button(QDialogButtonBox::Cancel)->setText(lang("稍后自调", "Later"));
+    QPushButton *okBtn = btns->button(QDialogButtonBox::Ok);
+    QPushButton *cancelBtn = btns->button(QDialogButtonBox::Cancel);
+    okBtn->setText(lang("✔ 应用归组", "✔ Apply grouping"));
+    cancelBtn->setText(lang("稍后自调", "Later"));
+    // v1.15.1 用户实测：按钮未入布局 → 飘在左上被裁成碎片无法辨认；
+    // 入布局 + 统一最小尺寸防再犯
+    okBtn->setMinimumSize(140, 36);
+    cancelBtn->setMinimumSize(110, 36);
+    okBtn->setDefault(true);
+    lay->addWidget(btns);
     connect(btns, &QDialogButtonBox::accepted, &dlg, &QDialog::accept);
     connect(btns, &QDialogButtonBox::rejected, &dlg, &QDialog::reject);
+    dlg.setMinimumWidth(720);
     if (dlg.exec() != QDialog::Accepted)
         return;   // 稍后自调：产物保持未归组（案件树「移到机位组」补）
 

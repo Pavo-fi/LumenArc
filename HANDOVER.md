@@ -55,6 +55,10 @@ beijingMsOf=wallMsOf+0，轴/快照/多机全口径"不生效"；.vla 留痕照�
 onCalibPhotoFinished 调之；ui_chain +6 断言直驱锁死（offset 834000 管道/
 留痕字段/人工修正注记/beijingMsOf 反映）。18 套全绿。
 
+**补记（v1.15.2 随批）**：归组对话框 QDialogButtonBox 漏 addWidget——
+按钮成自由子控件飘左上、裁成 90px 碎片（用户盲点"稍后自调"致 P001 未归组）。
+已入布局+最小尺寸 140×36+说明行（"稍后自调"语义写明案件树补归路径）。
+
 **⚠️ 用户侧影响**：v1.12.6~1.15.0 期间做过识图对时的视频，.vla 里存的是
 truthSet=true+truthOffsetMs=0——**需对每个受影响视频重做一次第 2 步**
 （图片/手动均可），无法用旧数据自动修复（偏移值从未落盘）。
