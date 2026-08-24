@@ -113,4 +113,17 @@ CaseVideoRef *findVideo(CaseMeta &meta, const QString &id);
 const CaseVideoRef *findRef(const CaseMeta &meta, const QString &id);
 CaseVideoRef *findRef(CaseMeta &meta, const QString &id);
 
+/// 全部检材引用清单（videos + 各前处理会话 outputRefs）——P###/V###
+/// 同待遇场合统一走这里（报告检材清单/点位图机位侧栏等，P-74 返修）
+inline QVector<const CaseVideoRef *> allCaseRefs(const CaseMeta &meta)
+{
+    QVector<const CaseVideoRef *> out;
+    for (const CaseVideoRef &v : meta.videos)
+        out << &v;
+    for (const CasePreprocessRef &sess : meta.preprocessSessions)
+        for (const CaseVideoRef &v : sess.outputRefs)
+            out << &v;
+    return out;
+}
+
 } // namespace CaseModel

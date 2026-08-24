@@ -1,6 +1,7 @@
 #include "site_map_render.h"
 
 #include <QFont>
+#include <QPainterPath>
 #include <QtMath>
 
 namespace sitemaprender {
@@ -36,22 +37,22 @@ void drawPoints(QPainter &p, const SiteMapData &d, const QRectF &baseRect,
         p.setPen(QPen(Qt::white, 2));
         p.drawEllipse(c, dot, dot);
 
-        // 标签（白底描边黑字）
+        // 标签（拍板 2026-08-23：不要框框，字色=扇形/圆点色，白描边保可读）
         QFont f = p.font();
-        f.setPointSizeF(qMax(10.0, shortSide * 0.026));
+        f.setPointSizeF(qMax(11.0, shortSide * 0.028));
         f.setBold(true);
-        p.setFont(f);
         const QString text = pt.orphan
             ? pt.label + QStringLiteral("（已移除）") : pt.label;
         const QFontMetricsF fm(f);
         const QRectF tr = fm.boundingRect(text);
-        QRectF box(c.x() - tr.width() / 2 - 6, c.y() + dot + 4,
-                   tr.width() + 12, tr.height() + 6);
-        p.setPen(QPen(col, 2));
-        p.setBrush(QColor(255, 255, 255, 225));
-        p.drawRect(box);
-        p.setPen(Qt::black);
-        p.drawText(box, Qt::AlignCenter, text);
+        QPainterPath tp;
+        tp.addText(c.x() - tr.width() / 2, c.y() + dot + 4 + fm.ascent(),
+                   f, text);
+        p.setPen(QPen(Qt::white, qMax(3.0, shortSide * 0.006),
+                      Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+        p.setBrush(Qt::NoBrush);
+        p.drawPath(tp);          // 白色描边晕
+        p.fillPath(tp, col);     // 机位色填充
 
         // 选中框
         if (i == selected) {

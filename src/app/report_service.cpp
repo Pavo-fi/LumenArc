@@ -118,7 +118,8 @@ ReportData ReportService::collect(CaseManager *cm, VideoStateManager *vsm,
 
     const QString caseDir = cm->caseDir();
 
-    for (const CaseVideoRef &v : meta.videos) {
+    for (const CaseVideoRef *vp : CaseModel::allCaseRefs(meta)) {
+        const CaseVideoRef &v = *vp;
         ReportVideoRow row;
         row.id = v.id;
         row.cameraLabel = v.cameraLabel.isEmpty() ? v.id : v.cameraLabel;
@@ -203,7 +204,8 @@ ReportData ReportService::collect(CaseManager *cm, VideoStateManager *vsm,
             if (!cal.eventAnchors.isEmpty()) {
                 QHash<QString, QVector<eventcalib::EventAnchor>> byLane;
                 QSet<QString> absoluteLaneIds;
-                for (const CaseVideoRef &v2 : meta.videos) {
+                for (const CaseVideoRef *v2p : CaseModel::allCaseRefs(meta)) {
+                    const CaseVideoRef &v2 = *v2p;
                     VideoState st2;
                     const QString p2 = cm->effectivePathFor(v2);
                     if (vsm->restoreState(p2, st2)) {
@@ -291,10 +293,10 @@ ReportData ReportService::collect(CaseManager *cm, VideoStateManager *vsm,
                 rec.sessionTs = sess.fileName();
                 rec.productFile = outFile;
                 rec.evidenceDir = evDir;
-                for (const CaseVideoRef &v : meta.videos)
-                    if (QFileInfo(cm->effectivePathFor(v)).fileName() == outFile
-                        && cm->effectivePathFor(v).contains(sess.fileName())) {
-                        rec.productId = v.id;
+                for (const CaseVideoRef *v3 : CaseModel::allCaseRefs(meta))
+                    if (QFileInfo(cm->effectivePathFor(*v3)).fileName() == outFile
+                        && cm->effectivePathFor(*v3).contains(sess.fileName())) {
+                        rec.productId = v3->id;
                         break;
                     }
                 rd.concatRecords << rec;

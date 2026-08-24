@@ -1,6 +1,7 @@
 #include "sitemapeditordialog.h"
 
 #include "app/case_manager.h"
+#include <QDialogButtonBox>
 #include "infrastructure/site_map_render.h"
 #include "theme.h"
 
@@ -20,6 +21,134 @@
 #include <QPushButton>
 #include <QVBoxLayout>
 #include <QWheelEvent>
+
+// ---------------------------------------------------------------------------
+// 导入裁切对话框（拍板：导入底图后给一次裁切机会，确认后固定不再移动）
+// ---------------------------------------------------------------------------
+class ImageCropDialog : public QDialog
+{
+public:
+    ImageCropDialog(const QImage &img, QWidget *parent = nullptr)
+        : QDialog(parent), m_img(img)
+    {
+        setWindowTitle(tr("裁切底图（拖出保留区域；不裁切直接点「整张使用」）"));
+        resize(900, 640);
+        auto *lay = new QVBoxLayout(this);
+        m_view = new CropView(this);
+        m_view->setImage(m_img);
+        lay->addWidget(m_view, 1);
+        auto *row = new QHBoxLayout;
+        row->addWidget(new QLabel(tr("提示：框选监控覆盖的有效区域，去掉无关黑边/桌面边角。"), this));
+        row->addStretch();
+        auto *wholeBtn = new QPushButton(tr("整张使用"), this);
+        auto *cropBtn = new QPushButton(tr("确认裁切"), this);
+        cropBtn->setDefault(true);
+        cropBtn->setEnabled(false);
+        m_view->onSel = [cropBtn](bool has) { cropBtn->setEnabled(has); };
+        connect(wholeBtn, &QPushButton::clicked, this, [this]() {
+            m_crop = QRect();   // 空=整张
+            accept();
+        });
+        connect(cropBtn, &QPushButton::clicked, this, [this]() {
+            m_crop = m_view->selectionImageRect();
+            accept();
+        });
+        auto *cancelBtn = new QPushButton(tr("取消"), this);
+        connect(cancelBtn, &QPushButton::clicked, this, &QDialog::reject);
+        row->addWidget(wholeBtn);
+        row->addWidget(cropBtn);
+        row->addWidget(cancelBtn);
+        lay->addLayout(row);
+    }
+    /// 空 rect = 整张使用
+    QRect cropRect() const { return m_crop; }
+
+private:
+    class CropView : public QWidget
+    {
+    public:
+        std::function<void(bool)> onSel;
+        explicit CropView(QWidget *p) : QWidget(p) { setMinimumSize(400, 300); }
+        void setImage(const QImage &img) { m_img = img; update(); }
+        QRect selectionImageRect() const
+        {
+            if (m_sel.isNull())
+                return {};
+            const QRectF r = imgRect();
+            const double sx = m_img.width() / r.width();
+            const double sy = m_img.height() / r.height();
+            const QRectF inImg((m_sel.left() - r.left()) * sx,
+                               (m_sel.top() - r.top()) * sy,
+                               m_sel.width() * sx, m_sel.height() * sy);
+            return inImg.toAlignedRect().intersected(m_img.rect());
+        }
+
+    protected:
+        QRectF imgRect() const
+        {
+            const double s = qMin((width() - 20) / double(m_img.width()),
+                                  (height() - 20) / double(m_img.height()));
+            const double w = m_img.width() * s, h = m_img.height() * s;
+            return QRectF((width() - w) / 2, (height() - h) / 2, w, h);
+        }
+        void paintEvent(QPaintEvent *) override
+        {
+            QPainter p(this);
+            p.fillRect(rect(), QColor(46, 46, 52));
+            const QRectF r = imgRect();
+            p.drawImage(r, m_img);
+            // 选区外压暗
+            if (!m_sel.isNull()) {
+                QRegion outside(QRect(0, 0, width(), height()));
+                outside = outside.subtracted(QRegion(m_sel.toRect()));
+                p.setClipRegion(outside);
+                p.fillRect(rect(), QColor(0, 0, 0, 150));
+                p.setClipping(false);
+                p.setPen(QPen(QColor(255, 210, 60), 2, Qt::DashLine));
+                p.setBrush(Qt::NoBrush);
+                p.drawRect(m_sel);
+            }
+        }
+        void mousePressEvent(QMouseEvent *e) override
+        {
+            if (e->button() == Qt::LeftButton && imgRect().contains(e->pos())) {
+                m_anchor = e->pos();
+                m_sel = QRectF(m_anchor, QSizeF(1, 1));
+                m_dragging = true;
+            }
+        }
+        void mouseMoveEvent(QMouseEvent *e) override
+        {
+            if (m_dragging) {
+                m_sel = QRectF(m_anchor, e->pos()).normalized()
+                            .intersected(imgRect());
+                update();
+            }
+        }
+        void mouseReleaseEvent(QMouseEvent *) override
+        {
+            if (m_dragging) {
+                m_dragging = false;
+                if (m_sel.width() < 8 || m_sel.height() < 8)
+                    m_sel = QRectF();   // 误点=清选区
+                if (onSel)
+                    onSel(!m_sel.isNull());
+                update();
+            }
+        }
+
+    private:
+        QImage m_img;
+        QRectF m_sel;
+        QPointF m_anchor;
+        bool m_dragging = false;
+        friend class ImageCropDialog;
+    };
+
+    QImage m_img;
+    QRect m_crop;
+    CropView *m_view = nullptr;
+};
 
 // ---------------------------------------------------------------------------
 // 机位侧栏（拖拽源：mime = 机位 id）
@@ -65,12 +194,7 @@ public:
         setMouseTracking(false);
     }
 
-    void fitView()
-    {
-        m_zoom = 1.0;
-        m_pan = QPointF(0, 0);
-        update();
-    }
+    void fitView() { update(); }   // 底图固定适配（拍板：裁切确认后不再移动）
 
 protected:
     // 视图（像素）→ 图像（像素）
@@ -79,10 +203,9 @@ protected:
         if (base.isNull())
             return {};
         const double s = qMin(width() / double(base.width()),
-                              height() / double(base.height())) * m_zoom;
+                              height() / double(base.height()));
         const double w = base.width() * s, h = base.height() * s;
-        return QRectF((width() - w) / 2 + m_pan.x(),
-                      (height() - h) / 2 + m_pan.y(), w, h);
+        return QRectF((width() - w) / 2, (height() - h) / 2, w, h);
     }
     QPointF viewToNorm(const QPointF &v) const
     {
@@ -124,6 +247,23 @@ protected:
         p.drawImage(r, base);
         if (data)
             sitemaprender::drawPoints(p, *data, r, laneColor, selected);
+        // 扇面操作提示横幅（拍板：更显眼）——选中点位时画布底部常驻
+        if (selected >= 0) {
+            const QString hint = tr("🖱 滚轮 = 转朝向     Shift+滚轮 = 调张角     下方属性条可精确输入");
+            QFont f = p.font();
+            f.setPixelSize(16);
+            f.setBold(true);
+            p.setFont(f);
+            const QFontMetrics fm(f);
+            const QRectF tr = fm.boundingRect(hint);
+            QRectF band((width() - tr.width()) / 2 - 18, height() - tr.height() - 26,
+                        tr.width() + 36, tr.height() + 16);
+            p.setPen(Qt::NoPen);
+            p.setBrush(QColor(30, 30, 34, 215));
+            p.drawRoundedRect(band, 8, 8);
+            p.setPen(QColor(255, 210, 60));
+            p.drawText(band, Qt::AlignCenter, hint);
+        }
     }
 
     void mousePressEvent(QMouseEvent *e) override
@@ -138,13 +278,10 @@ protected:
                 if (onSelected)
                     onSelected(hit);
             } else {
-                selected = -1;
-                m_panning = true;
-                m_pressPos = e->pos();
+                selected = -1;   // 点空白=取消选中（底图固定不可拖）
                 if (onSelected)
                     onSelected(-1);
             }
-            setCursor(m_panning ? Qt::ClosedHandCursor : Qt::ArrowCursor);
             update();
         }
         QWidget::mousePressEvent(e);
@@ -159,18 +296,13 @@ protected:
             if (onChanged)
                 onChanged();
             update();
-        } else if (m_panning) {
-            m_pan += e->pos() - m_pressPos;
-            m_pressPos = e->pos();
-            update();
         }
         QWidget::mouseMoveEvent(e);
     }
     void mouseReleaseEvent(QMouseEvent *) override
     {
-        m_dragging = m_panning = false;
+        m_dragging = false;
         m_moved = false;
-        setCursor(Qt::ArrowCursor);
     }
     void wheelEvent(QWheelEvent *e) override
     {
@@ -198,10 +330,7 @@ protected:
                 return;
             }
         }
-        const double factor = e->angleDelta().y() > 0 ? 1.15 : 1.0 / 1.15;
-        m_zoom = qBound(0.2, m_zoom * factor, 8.0);
-        update();
-        e->accept();
+        e->ignore();   // 底图固定：未选中扇面时滚轮无操作
     }
 
     void dragEnterEvent(QDragEnterEvent *e) override
@@ -251,10 +380,7 @@ public:
     QHash<QString, QString> laneLabels;
 
 private:
-    double m_zoom = 1.0;
-    QPointF m_pan{0, 0};
     bool m_dragging = false;
-    bool m_panning = false;
     bool m_moved = false;
     QPointF m_pressPos;
 };
@@ -300,11 +426,11 @@ SiteMapEditorDialog::SiteMapEditorDialog(CaseManager *cm, QWidget *parent)
     m_laneList = new LaneListWidget(this);
     m_laneList->setDragEnabled(true);
     m_laneList->setMaximumWidth(200);
-    for (const CaseVideoRef &v : m_cm->meta().videos) {
-        const QString label = v.cameraLabel.isEmpty() ? v.id : v.cameraLabel;
-        auto *it = new QListWidgetItem(label + QStringLiteral("（") + v.id
+    for (const CaseVideoRef *v : CaseModel::allCaseRefs(m_cm->meta())) {
+        const QString label = v->cameraLabel.isEmpty() ? v->id : v->cameraLabel;
+        auto *it = new QListWidgetItem(label + QStringLiteral("（") + v->id
                                        + QStringLiteral("）"));
-        it->setData(Qt::UserRole, v.id);
+        it->setData(Qt::UserRole, v->id);
         m_laneList->addItem(it);
     }
     sideBox->addWidget(m_laneList);
@@ -314,8 +440,8 @@ SiteMapEditorDialog::SiteMapEditorDialog(CaseManager *cm, QWidget *parent)
     m_canvas->data = &m_data;
     m_canvas->base = m_base;
     m_canvas->laneColor = m_laneColor;
-    for (const CaseVideoRef &v : m_cm->meta().videos)
-        m_canvas->laneLabels[v.id] = v.cameraLabel.isEmpty() ? v.id : v.cameraLabel;
+    for (const CaseVideoRef *v : CaseModel::allCaseRefs(m_cm->meta()))
+        m_canvas->laneLabels[v->id] = v->cameraLabel.isEmpty() ? v->id : v->cameraLabel;
     mid->addWidget(m_canvas, 1);
     lay->addLayout(mid, 1);
 
@@ -334,7 +460,10 @@ SiteMapEditorDialog::SiteMapEditorDialog(CaseManager *cm, QWidget *parent)
     prop->addWidget(m_heading);
     prop->addWidget(m_spread);
     prop->addWidget(m_radius);
-    m_hint = new QLabel(tr("滚轮在选中扇面上=转朝向；Shift+滚轮=调张角"), this);
+    m_hint = new QLabel(tr("💡 选中点位后：滚轮=转朝向　Shift+滚轮=调张角　或直接在此精确输入"), this);
+    m_hint->setStyleSheet(QStringLiteral(
+        "QLabel { color: #8a5a00; background: #fff3d6; border: 1px solid #e0b060;"
+        " border-radius: 4px; padding: 4px 8px; font-weight: bold; }"));
     prop->addWidget(m_hint, 1);
     lay->addLayout(prop);
 
@@ -360,7 +489,7 @@ SiteMapEditorDialog::SiteMapEditorDialog(CaseManager *cm, QWidget *parent)
             sp->blockSignals(false);
         m_hint->setText(pt.orphan
             ? tr("⚠️ 该机位已不在案件（孤儿点位，可删除）")
-            : tr("滚轮在选中扇面上=转朝向；Shift+滚轮=调张角"));
+            : tr("💡 选中点位后：滚轮=转朝向　Shift+滚轮=调张角　或直接在此精确输入"));
     };
     m_canvas->onChanged = [this]() { saveData(); };
 
@@ -405,8 +534,8 @@ void SiteMapEditorDialog::syncLaneColors()
 {
     m_laneColor.clear();
     int i = 0;
-    for (const CaseVideoRef &v : m_cm->meta().videos) {
-        m_laneColor[v.id] = Theme::DataPalette[i % Theme::DataPalette.size()];
+    for (const CaseVideoRef *v : CaseModel::allCaseRefs(m_cm->meta())) {
+        m_laneColor[v->id] = Theme::DataPalette[i % Theme::DataPalette.size()];
         ++i;
     }
 }
@@ -441,14 +570,22 @@ void SiteMapEditorDialog::importBase()
         QMessageBox::warning(this, tr("导入底图"), tr("图片无法读取：%1").arg(src));
         return;
     }
-    const QString rel = QStringLiteral("reports/assets/sitemap_base.")
-                        + QFileInfo(src).suffix().toLower();
+    // 拍板：导入后给一次裁切机会，确认后固定适配不再移动
+    {
+        ImageCropDialog cropDlg(img, this);
+        if (cropDlg.exec() != QDialog::Accepted)
+            return;   // 取消=放弃导入
+        const QRect cr = cropDlg.cropRect();
+        if (!cr.isNull() && cr.width() > 4 && cr.height() > 4)
+            img = img.copy(cr);
+    }
+    const QString rel = QStringLiteral("reports/assets/sitemap_base.png");
     const QString dst = m_cm->caseDir() + '/' + rel;
     QDir().mkpath(QFileInfo(dst).absolutePath());
     if (QFile::exists(dst))
         QFile::remove(dst);
-    if (!QFile::copy(src, dst)) {
-        QMessageBox::warning(this, tr("导入底图"), tr("复制入案件失败：%1").arg(dst));
+    if (!img.save(dst)) {   // 裁切后统一 PNG 存案（无损+格式归一）
+        QMessageBox::warning(this, tr("导入底图"), tr("保存入案件失败：%1").arg(dst));
         return;
     }
     m_data.baseImageRel = rel;
