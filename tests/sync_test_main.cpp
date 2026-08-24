@@ -848,11 +848,13 @@ static void testMergedGrouping()
     // 真机数据形态（天河案返修）：无标签产物以自身 id 为键，另一产物标签
     // 指向该 id → 同组（P002 无标签 + P005 标签="P002"）
     QVector<CamInventoryItem> prod;
-    auto addProd = [&](const QString &id, const QString &label, qint64 ws) {
+    auto addProd = [&](const QString &id, const QString &label, qint64 ws,
+                       const QString &dn = QString()) {
         CamInventoryItem it;
-        it.id = id;
+        // v1.15.3：displayName=机位显示名（C01 等），groupKey=稳定组键
+        it.displayName = dn.isEmpty()
+            ? (label.isEmpty() ? id + QStringLiteral(".mp4") : label) : dn;
         it.groupKey = label.isEmpty() ? id : label;
-        it.displayName = label.isEmpty() ? QStringLiteral("merged_concat.mp4") : label;
         it.path = "/fake/" + id;
         it.pathExists = true;
         it.calibrated = true;
@@ -861,20 +863,50 @@ static void testMergedGrouping()
         it.lane.durationMs = 60000;
         prod.append(it);
     };
-    addProd("P002", QString(), 100000);   // 无标签 → 键=自身 id
-    addProd("P005", "P002", 500000);      // 标签指向 P002 → 同组
-    addProd("P003", QString(), 200000);   // 另一个无标签产物 → 键=P003，单成员
-    addProd("P004", "P003", 300000);      // → 与 P003 同组
+    addProd("P002", QString(), 100000, QStringLiteral("C01")); // 无标签→键=自身
+    addProd("P005", QStringLiteral("P002"), 500000, QStringLiteral("C01"));
+    addProd("P003", QString(), 200000, QStringLiteral("C02"));
+    addProd("P004", QStringLiteral("P003"), 300000, QStringLiteral("C02"));
     groups = buildMergedGroups(prod);
     CHECK(groups.size() == 2, "grouping: label-to-id yields two product groups");
-    CHECK(groups[0].label == QLatin1String("P002")
+    CHECK(groups[0].label == QStringLiteral("C01")
           && groups[0].memberIdx == (QVector<int>{0, 1}),
-          "grouping: P002 group = {P002,P005} by wallStart");
-    CHECK(groups[1].label == QLatin1String("P003")
+          "grouping: C01 group = {P002,P005} by wallStart");
+    CHECK(groups[1].label == QStringLiteral("C02")
           && groups[1].memberIdx == (QVector<int>{2, 3}),
-          "grouping: P003 group = {P003,P004}");
-    // 交叉污染检查：同名文件名（merged_concat.mp4）不再误入同组
-    CHECK(groups[0].label != groups[1].label, "grouping: filename not the key");
+          "grouping: C02 group = {P003,P004}");
+    // 交叉污染检查：旧实现用组键（P002/P003）当标签，两组各行其道；
+    // 新实现用显示名（C01/C02）——组间必须仍不同名
+    CHECK(groups[0].label != groups[1].label, "grouping: group labels distinct");
+
+    // v1.15.3 回归锁：组键=groupId "G002"、显示名="C02 烟酒店" 时
+    // 合并轨标签必须用显示名（用户截图实锤：参考路显示 G002 而非 C02）
+    {
+        QVector<CamInventoryItem> ci;
+        auto add = [&](const QString &id, const QString &gkey,
+                       const QString &dn, qint64 ws) {
+            CamInventoryItem it;
+            it.id = id;
+            it.displayName = dn;
+            it.groupKey = gkey;
+            it.path = "/fake/" + id + ".mp4";
+            it.pathExists = true;
+            it.calibrated = true;
+            it.lane.calibrated = true;
+            it.lane.cal = makeCal(ws);
+            it.lane.durationMs = 60000;
+            ci.append(it);
+        };
+        add(QStringLiteral("P01"), QStringLiteral("G002"),
+            QStringLiteral("C02 烟酒店"), 100000);
+        add(QStringLiteral("P02"), QStringLiteral("G002"),
+            QStringLiteral("C02 烟酒店"), 300000);
+        const auto gg = buildMergedGroups(ci);
+        CHECK(gg.size() == 1, "merged: camNo era group forms");
+        CHECK(gg[0].label == QStringLiteral("C02 烟酒店")
+              && gg[0].label != QStringLiteral("G002"),
+              "merged: label = displayName, not groupId key");
+    }
 
     // 默认勾选决策（二轮返修）：组行优先，成员不勾（否则互斥把组行禁用变灰）
     {

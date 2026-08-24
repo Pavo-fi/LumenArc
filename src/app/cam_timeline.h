@@ -87,7 +87,10 @@ inline QVector<CamMergedGroup> buildMergedGroups(const QVector<CamInventoryItem>
         if (!allCal)
             continue;
         CamMergedGroup g;
-        g.label = it.key();
+        // v1.15.3 修：label 取成员显示名（机位编号+助记名，如「C02 烟酒店」）——
+        // 旧实现用归组键（groupId "G002"）当标签，camNo 落地后显示名成了
+        // C02 而合并轨仍叫 G002（用户实测截图实锤）
+        g.label = items[it.value().first()].displayName;
         g.memberIdx = it.value();
         std::sort(g.memberIdx.begin(), g.memberIdx.end(),
                   [&](int a, int b) {

@@ -55,6 +55,14 @@ beijingMsOf=wallMsOf+0，轴/快照/多机全口径"不生效"；.vla 留痕照�
 onCalibPhotoFinished 调之；ui_chain +6 断言直驱锁死（offset 834000 管道/
 留痕字段/人工修正注记/beijingMsOf 反映）。18 套全绿。
 
+**补记 8（v1.15.3 续，截图追查两个事实）**：①「快 8 秒」是误读——实读增城案
+案内 .vla（V001）北京时间对时留档：truthOffsetMs=+834000（慢 13 分 54 秒，
+12:25:42 vs 12:39:41 人工修正）；镜像 OSD 反字看花。②顺藤摸到真 bug：
+`buildMergedGroups` 合并轨 label 用归组键（groupId "G002"）而非显示名——
+camNo 落地后显示名已是「C02 烟酒店」而合并轨仍叫 G002（用户截图参考路
+实锤）。修 label=首成员 displayName；sync_test 重构夹具（displayName/groupKey
+分离）+2 回归断言（195→197 口径，实测 195 断言 0 失败）。18 套全绿。
+
 **补记 7（v1.15.3 续，机位独立编号 C 方案拍板）**：用户纠正"多文件组标注
 V01+P02"的信息错位——机位应有**独立编号体系**：CaseCameraGroup 新增 camNo
 （C01/C02 自动排序、高位水位不复用、改名不动；CaseMeta.nextCamSeq 入档+
