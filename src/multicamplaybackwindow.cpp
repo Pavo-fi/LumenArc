@@ -2041,15 +2041,14 @@ void MultiCamPlaybackWindow::onEcSave()
     for (const auto &hop : chain) {
         const QString indent(depth * 2, QLatin1Char(' '));
         if (hop.absolute) {
-            chainText += indent + QStringLiteral("■ %1（%2）\n")
-                .arg(laneName(hop.laneId),
-                     lang("绝对校时锚", "absolute calibration"));
+            chainText += indent + QStringLiteral("■ %1（基准：本机已直接对时）\n")
+                .arg(laneName(hop.laneId));
         } else {
             const auto &a = hop.anchor;
-            chainText += indent + QStringLiteral("● %1（间接，容差 ±%2ms）\n")
-                .arg(laneName(hop.laneId)).arg(a.toleranceMs);
+            chainText += indent + QStringLiteral("● %1（间接对时，对表误差 ±%2 秒）\n")
+                .arg(laneName(hop.laneId)).arg(a.toleranceMs / 1000.0, 0, 'f', 2);
             chainText += indent + QStringLiteral(
-                "   事件「%1」：本路 %2 ↔ 参考 %3（墙钟 %4）\n")
+                "   事件「%1」：本路画面 %2 ↔ 参考 %3（墙钟 %4）\n")
                 .arg(a.eventName)
                 .arg(QTime(0, 0).addMSecs(a.targetStreamMs)
                          .toString(QStringLiteral("HH:mm:ss")))
@@ -2059,23 +2058,39 @@ void MultiCamPlaybackWindow::onEcSave()
         }
         ++depth;
     }
-    chainText += QStringLiteral("累积容差：±%1ms（逐跳对帧容差之和，如实声明）")
-        .arg(cumTol);
+    chainText += QStringLiteral("本次对时最大可能误差：±%1 秒（逐跳对帧容差如实累加）")
+        .arg(cumTol / 1000.0, 0, 'f', 2);
 
+    // v1.15.3 用户拍板：确认卡改大白话（旧：速率 0.99980/偏移 epoch 毫秒
+    // 原值/置信 0.80 看不懂）。单锚点明确「整体平移」，多锚点「平移+快慢」。
     double maxRes = 0;
     for (double r : m_ecFit.residualsMs)
         maxRes = qMax(maxRes, r);
-    const QString summary = lang(
-        "校时成果（间接校准·CrossCamEvent）\n"
-        "模式：%1\n速率：%2 · 偏移：%3ms · 置信：%4\n锚点：%5 个 · 最大残差：%6ms",
-        "Indirect calibration summary")
-        .arg(m_ecFit.affine ? lang("仿射（多锚点）", "affine")
-                            : lang("恒定偏移（单锚点）", "fixed offset"))
-        .arg(m_ecCal.rate, 0, 'f', 5)
-        .arg(m_ecCal.offsetMs)
-        .arg(m_ecCal.conf, 0, 'f', 2)
-        .arg(m_ecCal.eventAnchors.size())
-        .arg(qRound64(maxRes));
+    const QString refName = !m_ecCal.eventAnchors.isEmpty()
+        ? laneName(m_ecCal.eventAnchors.first().refLaneId) : QString();
+    QString summary = lang("「%1」将按「%2」对时（间接对时）\n",
+                           "Lane %1 aligns to %2 (indirect)\n")
+        .arg(tgt.displayName, refName);
+    if (m_ecFit.affine) {
+        const double driftDay = (m_ecCal.rate - 1.0) * 86400.0;
+        summary += lang("方式：平移 + 快慢修正（%1 个标记）\n",
+                        "Mode: shift + rate (%1 marks)\n")
+            .arg(m_ecCal.eventAnchors.size());
+        summary += lang("快慢：目标的钟每 1 天%1约 %2 秒，已一并修正\n",
+                        "Drift: %1 s/day, corrected\n")
+            .arg(driftDay >= 0 ? lang("快", "fast") : lang("慢", "slow"))
+            .arg(qAbs(driftDay), 0, 'f', 1);
+    } else {
+        summary += lang("方式：整体平移（1 个标记，不改快慢）\n",
+                        "Mode: fixed shift (1 mark)\n");
+    }
+    summary += lang("修正量：%1，已按此对齐\n", "Correction: %1\n")
+        .arg(eventcalib::plainClockDeltaText(m_ecCal.offsetMs));
+    summary += lang("标记瞬间的对齐误差：最大 %1 秒\n", "Max residual: %1 s\n")
+        .arg(maxRes / 1000.0, 0, 'f', 2);
+    summary += lang("可信度：%1（间接对时如实降一档）",
+                    "Confidence: %1 (indirect)")
+        .arg(m_ecCal.conf, 0, 'f', 2);
 
     QMessageBox box(QMessageBox::Question,
                     lang("确认保存校时", "Confirm save"), summary, QMessageBox::NoButton,
