@@ -2006,7 +2006,7 @@ void MultiCamPlaybackWindow::onEcFitPreview()
     m_ecStatus->setText(lang("预览中：%1。播放试看两路是否贴齐，贴齐就保存。"
                              "（最大误差 %2 秒 · 可信度 %3，间接对时如实标注）\n"
                              "注：画面烧录时间是主机原始读数不会变，对齐看底部墙钟。",
-                             "Previewing: %1. max err %2s, conf %3"),
+                             "Previewing: %1. max err %2s, conf %3")
         .arg(how).arg(maxRes / 1000.0, 0, 'f', 2)
         .arg(cal.conf, 0, 'f', 2));
 }
