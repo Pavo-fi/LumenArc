@@ -55,6 +55,13 @@ beijingMsOf=wallMsOf+0，轴/快照/多机全口径"不生效"；.vla 留痕照�
 onCalibPhotoFinished 调之；ui_chain +6 断言直驱锁死（offset 834000 管道/
 留痕字段/人工修正注记/beijingMsOf 反映）。18 套全绿。
 
+**补记 2（v1.15.3 随批，用户实测）**：同事件对时「💾 保存校时」点了无反应
+——根因是样式表绿底不随 setEnabled(false) 变灰，禁用态看着能点、点击零反馈。
+三修：①保存钮常可点，未预览点击出①②③步骤指引（守卫不再静默），样式随
+预览态灰/绿切换（updateEcSaveBtn 单点）；②保存成功强反馈——成功弹窗（目标路
++累积容差）+ 案件树 ⏰ 徽标即同步（updateCalibrationBadge）+ 主窗回调
+onCaseDataChanged 刷新案件树；③两创建点接线。sync 193 绿，18 套全绿。
+
 **补记（v1.15.2 随批）**：归组对话框 QDialogButtonBox 漏 addWidget——
 按钮成自由子控件飘左上、裁成 90px 碎片（用户盲点"稍后自调"致 P001 未归组）。
 已入布局+最小尺寸 140×36+说明行（"稍后自调"语义写明案件树补归路径）。

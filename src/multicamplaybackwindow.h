@@ -60,6 +60,8 @@ public:
 
     /// 双击瓦片回单路分析（U-6）
     std::function<void(const QString &path)> onOpenVideo;
+    /// 案件数据被本窗口改写（如同事件对时保存校时）→ 主窗口刷新案件树徽标
+    std::function<void()> onCaseDataChanged;
 
     /// 为槽位装载视频（onPickVideo 的对话框后段；测试通道：绕过文件框直喂路径）
     void pickVideoForSlot(int slot, const QString &path);
@@ -92,6 +94,7 @@ private slots:
     void buildEventCalibPanel();      ///< 懒建右列对时面板
     void updateEcGuidance();          ///< 引导状态机（横幅+分段解锁）
     void refreshEcPanel();            ///< 下拉/锚点表刷新
+    void updateEcSaveBtn();           ///< 保存钮样式随预览态（常可点，v1.15.3）
     void onEcAddAnchor();
     void onEcRemoveAnchor();
     void onEcFitPreview();

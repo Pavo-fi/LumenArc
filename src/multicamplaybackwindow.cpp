@@ -1671,10 +1671,10 @@ void MultiCamPlaybackWindow::buildEventCalibPanel()
     m_ecSaveBtn = new QPushButton(lang("💾 看着贴齐了，保存校时",
                                        "💾 Looks aligned - save"),
                                   m_ecStep4);
-    m_ecSaveBtn->setEnabled(false);
-    m_ecSaveBtn->setStyleSheet(
-        QStringLiteral("background:%1; color:%2; padding:6px;")
-            .arg(Theme::Success, Theme::AccentOnDark));
+    // v1.15.3 用户实测：旧实现 setEnabled(false) 但样式表绿底不随禁用态
+    // 变化——按钮看着能点、点了无反应。改常可点：未预览时点击出指引，
+    // 样式随预览态灰/绿切换（updateEcSaveBtn）。
+    updateEcSaveBtn();
     connect(m_ecSaveBtn, &QPushButton::clicked, this,
             &MultiCamPlaybackWindow::onEcSave);
     v4->addWidget(m_ecSaveBtn);
@@ -1747,7 +1747,7 @@ void MultiCamPlaybackWindow::refreshEcPanel()
             && lanes[tgt].cal.source == TimeCalibration::Source::CrossCamEvent)
             m_ecAnchors = lanes[tgt].cal.eventAnchors;
         if (m_ecSaveBtn)
-            m_ecSaveBtn->setEnabled(false);
+            updateEcSaveBtn();
     }
     // 标记列表（口语行；预览后附对时误差，>半秒红字提醒）
     m_ecAnchorList->clear();
@@ -1900,7 +1900,7 @@ void MultiCamPlaybackWindow::onEcAddAnchor()
     }
     m_ecAnchors.append(a);
     m_ecPreviewed = false;              // 锚点变了须重新拟合
-    m_ecSaveBtn->setEnabled(false);
+    updateEcSaveBtn();
     m_ecEventName->clear();
     refreshEcPanel();
     m_ecStatus->setText(lang("已记下第 %1 个瞬间：「%2」✅",
@@ -1915,7 +1915,7 @@ void MultiCamPlaybackWindow::onEcRemoveAnchor()
         return;
     m_ecAnchors.removeAt(row);
     m_ecPreviewed = false;
-    m_ecSaveBtn->setEnabled(false);
+    updateEcSaveBtn();
     refreshEcPanel();
 }
 
@@ -1955,7 +1955,7 @@ void MultiCamPlaybackWindow::onEcFitPreview()
     m_ecCal = cal;
     m_svc->applyLaneCalibration(m_ecTargetIdx, cal);   // 预览：播放联动即生效
     m_ecPreviewed = true;
-    m_ecSaveBtn->setEnabled(true);
+    updateEcSaveBtn();
     refreshEcPanel();
     double maxRes = 0;
     for (double r : m_ecFit.residualsMs)
@@ -1979,10 +1979,40 @@ void MultiCamPlaybackWindow::onEcFitPreview()
         .arg(cal.conf, 0, 'f', 2));
 }
 
+void MultiCamPlaybackWindow::updateEcSaveBtn()
+{
+    if (!m_ecSaveBtn)
+        return;
+    if (m_ecPreviewed) {
+        m_ecSaveBtn->setStyleSheet(
+            QStringLiteral("background:%1; color:%2; padding:6px; "
+                           "font-weight:bold;")
+                .arg(Theme::Success, Theme::AccentOnDark));
+    } else {
+        m_ecSaveBtn->setStyleSheet(
+            QStringLiteral("background:%1; color:%2; padding:6px;")
+                .arg(Theme::BgPanel, Theme::TextSecond));
+    }
+}
+
 void MultiCamPlaybackWindow::onEcSave()
 {
-    if (!m_ecPreviewed || m_ecTargetIdx < 0)
+    // v1.15.3：守卫不再静默——按步骤指引（旧：禁用态点击零反馈，用户困惑）
+    if (m_ecTargetIdx < 0) {
+        m_ecStatus->setText(lang("先在上面选好「要修的钟」（目标路）",
+                                 "Pick the target lane first"));
         return;
+    }
+    if (!m_ecPreviewed) {
+        QMessageBox::information(this, lang("还不能保存", "Not ready"),
+            lang(QStringLiteral("保存前请先完成：\n"
+                 "① 上面选好「准钟」与「要修的钟」\n"
+                 "② 两路都停在同一事件瞬间，点「记下这个瞬间」\n"
+                 "③ 点「▶ 应用预览」，播放试看两路是否贴齐\n"
+                 "贴齐后再点本按钮保存。"),
+                 "Mark the instant first, then Apply Preview, then save."));
+        return;
+    }
     const auto &lanes = m_svc->lanes();
     const auto &tgt = lanes[m_ecTargetIdx];
 
@@ -2092,5 +2122,19 @@ void MultiCamPlaybackWindow::onEcSave()
     }
     m_ecSaved = true;
     m_ecStatus->setText(lang("已保存：%1（取证链随校时入档）", "Saved: %1").arg(path));
+    // v1.15.3 用户实测：保存成功零反馈，"出去了也不知道成没成"。
+    // 三件补救：案件树 ⏰ 徽标即同步 + 成功弹窗 + 主窗回调刷新
+    if (m_case) {
+        auto *cm = const_cast<CaseManager *>(m_case);
+        cm->updateCalibrationBadge(
+            tgt.path, true, ProjectIO::calibrationBadgeSummary(m_ecCal));
+    }
+    if (onCaseDataChanged)
+        onCaseDataChanged();
+    QMessageBox::information(this, lang("校时已保存", "Calibration saved"),
+        lang(QStringLiteral("目标路「%1」的同事件校时已保存入案件/侧车。\n"
+             "累积容差 ±%2ms 已如实随档（取证链可查）。"),
+             "Calibration saved for lane %1. cumulative tolerance %2ms.")
+            .arg(tgt.displayName).arg(cumTol));
     refreshEcPanel();
 }
