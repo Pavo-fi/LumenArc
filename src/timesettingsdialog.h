@@ -56,6 +56,14 @@ public:
     bool applied() const { return m_applied; }
     TimeCalibration calibration() const { return m_working; }
 
+    /// 校时图片确认卡「采用」落账（v1.15.1 从 onCalibPhotoFinished 抽出，
+    /// 回归测试直驱——本函数曾漏写 truthOffsetMs 赋值，v1.12.6~1.15.0
+    /// 识图校时"流程全绿但偏移恒 0"即此因）
+    void adoptPhotoTruth(qint64 offsetMs, const QString &imagePath,
+                         const QRect &monitorBox, const QRect &beijingBox,
+                         const QString &monitorText, const QString &beijingText,
+                         bool userEdited);
+
 signals:
     /// 校时已应用（非模态：主窗口收到后更新图表与状态栏）
     void calibrationApplied(const TimeCalibration &cal);

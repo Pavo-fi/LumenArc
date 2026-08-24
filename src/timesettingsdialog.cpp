@@ -1141,18 +1141,30 @@ void TimeSettingsDialog::onCalibPhotoFinished(
         crossDayNote, this);
     if (confirmDlg.exec() != QDialog::Accepted)
         return;
-    const qint64 offset = confirmDlg.offsetMs();
+    // v1.15.1 热修：v1.12.6 确认卡改可编辑重构时漏了 truthOffsetMs 赋值
+    // （offset 算出后无人使用）——抽成 adoptPhotoTruth 由回归测试直驱锁死
+    adoptPhotoTruth(confirmDlg.offsetMs(), m_pendingTruthImage,
+                    m_pendingTruthBox1, m_pendingTruthBox2,
+                    mon.matchedText, bj.matchedText, confirmDlg.userEdited());
+}
+
+void TimeSettingsDialog::adoptPhotoTruth(
+    qint64 offsetMs, const QString &imagePath,
+    const QRect &monitorBox, const QRect &beijingBox,
+    const QString &monitorText, const QString &beijingText, bool userEdited)
+{
+    m_working.truthOffsetMs = offsetMs;   // ← v1.12.6~1.15.0 漏掉的赋值
     m_working.truthSet = true;
     m_working.truthCheckedAtMs = QDateTime::currentMSecsSinceEpoch();
     m_working.truthSource = QStringLiteral("photo");
-    m_working.truthImagePath = m_pendingTruthImage;
-    m_working.truthMonitorBox = m_pendingTruthBox1;
-    m_working.truthBeijingBox = m_pendingTruthBox2;
-    m_working.truthMonitorText = mon.matchedText;
-    m_working.truthBeijingText = bj.matchedText;
+    m_working.truthImagePath = imagePath;
+    m_working.truthMonitorBox = monitorBox;
+    m_working.truthBeijingBox = beijingBox;
+    m_working.truthMonitorText = monitorText;
+    m_working.truthBeijingText = beijingText;
     if (m_working.truthNote.isEmpty())
         m_working.truthNote = lang("校时图片对时", "Photo time check");
-    if (confirmDlg.userEdited())
+    if (userEdited)
         m_working.truthNote += lang("（确认卡人工修正读数）",
                                     " (readings hand-corrected in confirm card)");
     m_applied = true;

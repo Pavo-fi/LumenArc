@@ -799,6 +799,52 @@ int main(int argc, char **argv)
               "truth-ui: clear resets all truth fields");
     }
 
+    // ---- v1.15.1 回归锁：识图校时确认卡「采用」必须把偏差写进 truthOffsetMs
+    // （v1.12.6~1.15.0 曾漏赋值：truthSet=true 而偏移恒 0，主视口永不更新）----
+    {
+        TimeCalibration base;
+        base.source = TimeCalibration::Source::Ocr;
+        base.offsetMs = QDateTime(QDate(2026, 7, 22), QTime(6, 0, 2),
+                                  Qt::LocalTime).toMSecsSinceEpoch();
+        base.dateKnown = true;
+
+        TimeSettingsDialog dlg(QStringLiteral("dummy.mp4"), 0, 30000, base,
+                               QString(), &service, nullptr);
+        TimeCalibration applied;
+        int appliedCount = 0;
+        QObject::connect(&dlg, &TimeSettingsDialog::calibrationApplied,
+                         [&](const TimeCalibration &cc) {
+                             applied = cc;
+                             ++appliedCount;
+                         });
+        dlg.adoptPhotoTruth(834000, QStringLiteral("photo.jpg"),
+                            QRect(10, 10, 300, 40), QRect(500, 600, 300, 40),
+                            QStringLiteral("2026-07-22 12:25:47"),
+                            QStringLiteral("12:39:41"), false);
+        CHECK(appliedCount == 1, "photo-truth: applied emitted");
+        CHECK(applied.truthSet && applied.truthOffsetMs == 834000,
+              "photo-truth: offsetMs plumbed (v1.12.6 regression guard)");
+        CHECK(applied.truthSource == QLatin1String("photo")
+              && applied.truthImagePath == QStringLiteral("photo.jpg")
+              && applied.truthMonitorBox == QRect(10, 10, 300, 40)
+              && applied.truthBeijingBox == QRect(500, 600, 300, 40)
+              && !applied.truthMonitorText.isEmpty()
+              && !applied.truthBeijingText.isEmpty()
+              && applied.truthCheckedAtMs > 0,
+              "photo-truth: trace fields recorded");
+        CHECK(applied.truthNote.contains(QStringLiteral("校时图片对时"))
+              && !applied.truthNote.contains(QStringLiteral("人工修正")),
+              "photo-truth: note w/o hand-edit tag");
+        CHECK(applied.beijingMsOf(0) == applied.wallMsOf(0) + 834000,
+              "photo-truth: beijingMsOf reflects offset");
+        // 人工修正注记分支
+        dlg.adoptPhotoTruth(-60000, QString(), QRect(), QRect(),
+                            QString(), QString(), true);
+        CHECK(appliedCount == 2 && applied.truthOffsetMs == -60000
+              && applied.truthNote.contains(QStringLiteral("人工修正")),
+              "photo-truth: hand-edited note appended");
+    }
+
     fprintf(stderr, "ui_chain_v3: %d checks, %d failures\n", g_checks, g_failures);
     return g_failures ? 1 : 0;
 }
