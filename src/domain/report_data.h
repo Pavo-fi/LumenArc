@@ -24,8 +24,12 @@
 struct ReportVideoRow {
     QString id;                 ///< V###/P###（检材编号）
     QString cameraLabel;        ///< 监控点位（机位标签）
+    QString shootDir;           ///< 拍摄方向（补录，可空）
+    QString extractMethod;      ///< 提取方式（补录，可空）
+    QString storageMedium;      ///< 存储介质（补录，可空）
     QString fileName;
     QString filePath;           ///< 有效绝对路径
+    bool    fileExists = true;  ///< 源文件在位（自检❌项）
     // ---- 物理属性（ffprobe）----
     QString format;             ///< 容器格式
     QString codec;              ///< 视频编码
@@ -65,6 +69,17 @@ struct ReportChain {
     QString totalToleranceText; ///< 累积容差人读
 };
 
+/// 前处理拼接记录（证据——拍板 2026-08-23：前处理文件也是分析文件，
+/// 拼接记录列为证据）
+struct ReportConcatRecord {
+    QString sessionTs;          ///< 前处理会话时间戳目录名
+    QString productFile;        ///< 产物文件名（merged_concat.mp4…）
+    QString productId;          ///< 案内编号（P###；未登记为空）
+    QString evidenceDir;        ///< 证据目录绝对路径（report.csv/operations.log）
+    QStringList logHighlights;  ///< operations.log 关键决策行（素材统计/转码原因…）
+    QVector<QVector<QString>> sourceRows;  ///< report.csv 行：[序号/源文件/时长/处理动作]
+};
+
 /// 报告聚合数据（渲染器唯一输入）
 struct ReportData {
     // ---- 封面/基本情况（CaseMeta + 报告扩展位）----
@@ -81,6 +96,7 @@ struct ReportData {
     QVector<ReportVideoRow> videos;
     QVector<ReportNodeRow>  nodes;         ///< 全案件标签（按墙钟升序）
     QVector<ReportChain>    chains;
+    QVector<ReportConcatRecord> concatRecords;
     QStringList snapshotPaths;             ///< 案内快照图（关键帧）
     QStringList exportClips;               ///< 案内 exports/ 导出片段名
     QString     sitemapPng;                ///< P-74 点位图成品（空=未绘制）

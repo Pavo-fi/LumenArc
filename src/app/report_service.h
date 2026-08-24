@@ -19,7 +19,9 @@ class VideoStateManager;
 class ReportService
 {
 public:
-    /// 从案件 + 视频状态聚合报告数据（哈希单遍补算 MD5+SHA-256，同步带日志）
-    static ReportData collect(CaseManager *cm, VideoStateManager *vsm);
+    /// 从案件 + 视频状态聚合报告数据。computeHashes=false 跳过哈希补算
+    /// （自检/补录对话框快开）；最终生成传 true（MD5+SHA-256 单遍同步算）。
+    static ReportData collect(CaseManager *cm, VideoStateManager *vsm,
+                              bool computeHashes = true);
 
 };

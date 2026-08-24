@@ -11,6 +11,7 @@
 
 #include "app/report_docx_builder.h"
 #include "domain/report_fmt.h"
+#include "domain/report_preflight.h"
 
 #include <QCoreApplication>
 #include <QFile>
@@ -65,6 +66,51 @@ int main(int argc, char **argv)
     CHECK(reportfmt::calibWayText(TimeCalibration::Source::CrossCamEvent)
               == QStringLiteral("多机同事件间接校时"), "calibWayText crosscam");
 
+    // ---- 自检（preflight）----
+    {
+        ReportData empty;
+        const auto items = reportPreflight(empty);
+        CHECK(reportPreflightBlocked(items), "empty case blocks");
+    }
+    {
+        ReportData d;
+        ReportVideoRow v;
+        v.id = QStringLiteral("V001");
+        v.cameraLabel = QStringLiteral("明景");
+        v.hasCalib = false;
+        d.videos << v;
+        const auto items = reportPreflight(d);
+        CHECK(reportPreflightBlocked(items), "all uncalibrated blocks");
+        bool sawUncal = false, sawReviewer = false, sawSitemap = false,
+             sawNoNodes = false, sawNoConcat = false;
+        for (const auto &it : items) {
+            sawUncal |= it.text.contains(QStringLiteral("未校时"));
+            sawReviewer |= it.text.contains(QStringLiteral("审核人未填"));
+            sawSitemap |= it.text.contains(QStringLiteral("点位图未绘制"));
+            sawNoNodes |= it.text.contains(QStringLiteral("无关键节点标签"));
+            sawNoConcat |= it.text.contains(QStringLiteral("无前处理拼接产物"));
+        }
+        CHECK(sawUncal && sawReviewer && sawSitemap && sawNoNodes && sawNoConcat,
+              "warn items complete");
+    }
+    {
+        ReportData d;
+        ReportVideoRow v;
+        v.id = QStringLiteral("V001");
+        v.cameraLabel = QStringLiteral("明景");
+        v.hasCalib = true;
+        v.shootDir = QStringLiteral("朝东");
+        v.evidencePhotos << QStringLiteral("/tmp/x.png");
+        d.videos << v;
+        d.extraFields[QStringLiteral("report/reviewer")] = QStringLiteral("李四");
+        d.extraFields[QStringLiteral("report/approver")] = QStringLiteral("王五");
+        d.sitemapPng = QStringLiteral("/tmp/map.png");
+        d.nodes << ReportNodeRow{1, QStringLiteral("明景"), QStringLiteral("烟气")};
+        d.concatRecords << ReportConcatRecord{};
+        const auto items = reportPreflight(d);
+        CHECK(!reportPreflightBlocked(items), "complete case passes");
+    }
+
     // 合成 ReportData
     ReportData rd;
     rd.caseNo = QStringLiteral("20270813-广州天河-a");
@@ -89,6 +135,7 @@ int main(int argc, char **argv)
     v1.hasCalib = true;
     v1.calibWayText = QStringLiteral("OCR 自动识别");
     v1.osdSampleText = QStringLiteral("2026-07-22 17:25:28");
+    v1.shootDir = QStringLiteral("朝东南");
     v1.timeDiffText = QStringLiteral("慢 2 分 14.0 秒");
     v1.formulaText = QStringLiteral("标准时间 = 录像时间 × 1.0 + 偏移 134.0 秒");
     v1.md5 = QStringLiteral("d41d8cd98f00b204e9800998ecf8427e");
@@ -113,6 +160,18 @@ int main(int argc, char **argv)
     c.totalToleranceText = QStringLiteral("±25 ms");
     rd.chains << c;
     rd.limitationNotes << QStringLiteral("明景 路存在 2 处 OSD 疑似错读点（时间不可信），校时已自动剔除");
+
+    ReportConcatRecord rec;
+    rec.sessionTs = QStringLiteral("20260814_083710");
+    rec.productFile = QStringLiteral("merged_concat.mp4");
+    rec.productId = QStringLiteral("P002");
+    rec.evidenceDir = QStringLiteral("D:/case/preprocess/20260814_083710/LumenArc_Evidence_X");
+    rec.logHighlights << QStringLiteral("素材统计：49 段 | 编码：hevc×49");
+    rec.sourceRows << QVector<QString>{QStringLiteral("1"), QStringLiteral("00M38S_1784206838.mp4"),
+                                       QStringLiteral("1 分 0 秒"), QStringLiteral("转码")}
+                   << QVector<QString>{QStringLiteral("2"), QStringLiteral("01M38S_1784206898.mp4"),
+                                       QStringLiteral("1 分 0 秒"), QStringLiteral("转码")};
+    rd.concatRecords << rec;
 
     QTemporaryDir tmp;
     CHECK(tmp.isValid(), "tmp dir");
@@ -160,6 +219,16 @@ int main(int argc, char **argv)
     CHECK(doc.contains("追光者火灾调查音视频分析系统 V1.14.0"), "app version");
     // 点位图占位
     CHECK(doc.contains("监控点位平面示意图待绘制"), "sitemap placeholder");
+    // 前处理拼接记录（证据）
+    CHECK(doc.contains("前处理拼接记录"), "concat section");
+    CHECK(doc.contains("merged_concat.mp4"), "concat product");
+    CHECK(doc.contains("P002"), "concat product id");
+    CHECK(doc.contains("00M38S_1784206838.mp4"), "concat source row");
+    CHECK(doc.contains("素材统计：49 段"), "concat log highlight");
+    CHECK(doc.contains("report.csv"), "concat evidence ref");
+    // 补录列（拍摄方向/提取方式）
+    CHECK(doc.contains("拍摄方向"), "shoot dir column");
+    CHECK(doc.contains("朝东南"), "shoot dir value in table");
 
     fprintf(stderr, "report_test: %d checks, %d failures\n", g_checks, g_failures);
     return g_failures ? 1 : 0;

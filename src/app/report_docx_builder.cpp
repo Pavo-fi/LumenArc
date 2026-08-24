@@ -89,7 +89,7 @@ QString ReportDocxBuilder::build(const ReportData &rd, const QString &outPath)
         int i = 1;
         for (const ReportVideoRow &v : rd.videos)
             rows << QVector<QString>{QString::number(i++), v.cameraLabel, v.id,
-                                     QString(), QString(), v.fileName};
+                                     v.shootDir, v.extractMethod, v.fileName};
         dw.addTable(rows, true, {8, 20, 14, 16, 16, 26});
     }
     dw.addHeading(QStringLiteral("（二）视频物理属性"), 2);
@@ -121,6 +121,30 @@ QString ReportDocxBuilder::build(const ReportData &rd, const QString &outPath)
     } else {
         dw.addParagraph(QStringLiteral(
             "（监控点位平面示意图待绘制——案件菜单「编辑监控点位图」，绘制后重新生成报告自动嵌入）"));
+    }
+
+    dw.addHeading(QStringLiteral("（四）前处理拼接记录"), 2);
+    if (rd.concatRecords.isEmpty()) {
+        dw.addParagraph(QStringLiteral("（本案无前处理拼接产物）"));
+    } else {
+        for (const ReportConcatRecord &rec : rd.concatRecords) {
+            dw.addParagraph(QStringLiteral("产物：%1%2（会话 %3）")
+                .arg(rec.productFile,
+                     rec.productId.isEmpty() ? QString()
+                         : QStringLiteral("，案内编号 %1").arg(rec.productId),
+                     rec.sessionTs), true);
+            for (const QString &h : rec.logHighlights)
+                dw.addParagraph(h);
+            QVector<QVector<QString>> rows;
+            rows << QVector<QString>{QStringLiteral("序号"), QStringLiteral("源文件"),
+                                     QStringLiteral("时长"), QStringLiteral("处理动作")};
+            for (const auto &r : rec.sourceRows)
+                rows << r;
+            dw.addTable(rows, true, {10, 52, 18, 20});
+            dw.addParagraph(QStringLiteral(
+                "拼接证据原件：%1（report.csv / operations.log / concat_list）")
+                .arg(rec.evidenceDir));
+        }
     }
 
     // ================= 三、分析依据与方法 =================
@@ -273,8 +297,11 @@ QString ReportDocxBuilder::build(const ReportData &rd, const QString &outPath)
             ++shown;
         }
     }
-    dw.addParagraph(QStringLiteral("5. 光亮/烟气分析曲线图（待补）"));
-    dw.addParagraph(QStringLiteral("6. 视频片段："));
+    dw.addParagraph(QStringLiteral("5. 前处理拼接记录原件（report.csv/operations.log，见案内 preprocess/ 目录）") +
+                    (rd.concatRecords.isEmpty() ? QStringLiteral("（本案无）")
+                                                : QStringLiteral("")));
+    dw.addParagraph(QStringLiteral("6. 光亮/烟气分析曲线图（待补）"));
+    dw.addParagraph(QStringLiteral("7. 视频片段："));
     if (rd.exportClips.isEmpty())
         dw.addParagraph(QStringLiteral("（无导出片段）"));
     else

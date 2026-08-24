@@ -76,6 +76,9 @@ public:
     bool updateCaseInfo(const QString &title, const QString &investigator,
                         const QString &unit, const QString &locationDetail,
                         const QString &description, QString *error);
+    /// P-28 批次③：报告补录信息写入 extraFields["report/<key>"]（F3 只加
+    /// 不改）并立即落盘。key 形如 reviewer / approver / video/<id>/direction。
+    bool setReportExtra(const QString &key, const QString &value, QString *error);
 
     // ---- 视频登记 ----
     /// 添加视频：分配 V###（高水位不复用）、登记 size/mtime、置 dirty。

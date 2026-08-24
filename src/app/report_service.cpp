@@ -15,6 +15,17 @@
 #include <QJsonArray>
 #include <QProcess>
 
+/// report.csv 可信时长（ms 字符串 → 人读）
+static QString fmtDurCsv(const QString &msStr)
+{
+    bool ok = false;
+    const qint64 ms = msStr.toLongLong(&ok);
+    if (!ok || ms <= 0)
+        return msStr;
+    const qint64 sec = ms / 1000;
+    return QStringLiteral("%1 分 %2 秒").arg(sec / 60).arg(sec % 60);
+}
+
 /// ffprobe 取物理属性（同步，单文件超时 15s）
 static void probeFile(const QString &path, ReportVideoRow &row)
 {
@@ -69,7 +80,8 @@ static void dualHash(const QString &path, const QString &knownSha,
                       : knownSha;
 }
 
-ReportData ReportService::collect(CaseManager *cm, VideoStateManager *vsm)
+ReportData ReportService::collect(CaseManager *cm, VideoStateManager *vsm,
+                                  bool computeHashes)
 {
     ReportData rd;
     if (!cm)
@@ -94,12 +106,23 @@ ReportData ReportService::collect(CaseManager *cm, VideoStateManager *vsm)
         ReportVideoRow row;
         row.id = v.id;
         row.cameraLabel = v.cameraLabel.isEmpty() ? v.id : v.cameraLabel;
+        row.shootDir = meta.extraFields.value(
+            QStringLiteral("report/video/") + v.id + QStringLiteral("/direction"));
+        row.extractMethod = meta.extraFields.value(
+            QStringLiteral("report/video/") + v.id + QStringLiteral("/method"));
+        row.storageMedium = meta.extraFields.value(
+            QStringLiteral("report/video/") + v.id + QStringLiteral("/medium"));
         row.filePath = cm->effectivePathFor(v);
         row.fileName = QFileInfo(row.filePath).fileName();
         row.sizeBytes = v.sizeBytes;
 
-        probeFile(row.filePath, row);
-        dualHash(row.filePath, v.sha256, &row.md5, &row.sha256);
+        row.fileExists = QFile::exists(row.filePath);
+        if (row.fileExists)
+            probeFile(row.filePath, row);
+        if (computeHashes && row.fileExists)
+            dualHash(row.filePath, v.sha256, &row.md5, &row.sha256);
+        else
+            row.sha256 = v.sha256;   // 已算过的沿用
 
         // ---- 校时（.vla SSOT）----
         VideoState st;
@@ -203,6 +226,76 @@ ReportData ReportService::collect(CaseManager *cm, VideoStateManager *vsm)
               [](const ReportNodeRow &a, const ReportNodeRow &b) {
                   return a.wallMs < b.wallMs;
               });
+
+    // ---- 前处理拼接记录（证据；拍板 2026-08-23）----
+    const QDir ppRoot(caseDir + QStringLiteral("/preprocess"));
+    for (const auto &sess : ppRoot.entryInfoList(QDir::Dirs | QDir::NoDotAndDotDot,
+                                                 QDir::Name)) {
+        const QDir sdir(sess.absoluteFilePath());
+        // 证据目录：LumenArc_Evidence_*
+        QStringList evDirs = sdir.entryList({QStringLiteral("LumenArc_Evidence_*")},
+                                            QDir::Dirs);
+        if (evDirs.isEmpty())
+            continue;
+        const QString evDir = sess.absoluteFilePath() + '/' + evDirs.first();
+        const QString csvPath = evDir + QStringLiteral("/report.csv");
+        QFile csv(csvPath);
+        if (!csv.open(QIODevice::ReadOnly | QIODevice::Text))
+            continue;
+        // 输出文件 → 记录（一会话可多产物，按输出分组）
+        QHash<QString, int> recIdx;   // 输出文件名 → rd.concatRecords 下标
+        QTextStream in(&csv);
+        in.setEncoding(QStringConverter::Utf8);
+        bool firstLine = true;
+        while (!in.atEnd()) {
+            const QString line = in.readLine();
+            if (firstLine) { firstLine = false; continue; }   // 表头
+            const QStringList f = line.split(',');
+            if (f.size() < 23)
+                continue;   // C1：列不齐整行跳过并留日志
+            const QString outFile = QFileInfo(f[22]).fileName();
+            if (outFile.isEmpty())
+                continue;
+            if (!recIdx.contains(outFile)) {
+                ReportConcatRecord rec;
+                rec.sessionTs = sess.fileName();
+                rec.productFile = outFile;
+                rec.evidenceDir = evDir;
+                for (const CaseVideoRef &v : meta.videos)
+                    if (QFileInfo(cm->effectivePathFor(v)).fileName() == outFile
+                        && cm->effectivePathFor(v).contains(sess.fileName())) {
+                        rec.productId = v.id;
+                        break;
+                    }
+                rd.concatRecords << rec;
+                recIdx[outFile] = rd.concatRecords.size() - 1;
+            }
+            ReportConcatRecord &rec = rd.concatRecords[recIdx[outFile]];
+            rec.sourceRows << QVector<QString>{
+                f[0], QFileInfo(f[1]).fileName(),
+                fmtDurCsv(f[19]), f[21]};
+        }
+        // operations.log 关键行
+        QFile log(evDir + QStringLiteral("/operations.log"));
+        if (log.open(QIODevice::ReadOnly | QIODevice::Text)) {
+            QTextStream lin(&log);
+            lin.setEncoding(QStringConverter::Utf8);
+            while (!lin.atEnd()) {
+                const QString l = lin.readLine();
+                if ((l.contains(QStringLiteral("素材统计"))
+                     || l.contains(QStringLiteral("帧率不统一"))
+                     || l.contains(QStringLiteral("重编码"))
+                     || l.contains(QStringLiteral("拼接完成"))
+                     || l.contains(QStringLiteral("失败")))
+                    && rd.concatRecords.size() > 0) {
+                    for (int idx : recIdx)
+                        if (rd.concatRecords[idx].logHighlights.size() < 5
+                            && !rd.concatRecords[idx].logHighlights.contains(l))
+                            rd.concatRecords[idx].logHighlights << l.mid(12).trimmed();
+                }
+            }
+        }
+    }
 
     // 快照 / 导出片段 / 点位图
     const QDir snapDir(caseDir + QStringLiteral("/snapshots"));

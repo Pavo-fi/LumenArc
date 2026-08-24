@@ -21,6 +21,7 @@
 #include "app/calibration_service.h"
 #include "app/report_service.h"
 #include "app/report_docx_builder.h"
+#include "reportpreflightdialog.h"
 #include "app/case_manager.h"
 #include "app/case_open_panel.h"
 #include "app/analysis_task_service.h"
@@ -851,12 +852,21 @@ void MainWindow::createMenus()
                 lang("请先打开案件并入案视频。", "Open a case with videos first."));
             return;
         }
-        ReportData rd = ReportService::collect(m_caseManager, m_sessionMgr->stateManager());
+        // P-28 批次③：自检 + 补录闸门（❌阻断/⚠️放行；补录落 extraFields）
+        ReportPreflightDialog preflight(m_caseManager, m_sessionMgr->stateManager(), this);
+        if (preflight.exec() != QDialog::Accepted)
+            return;
+        // 终生成：哈希补算（大文件耗时，光标等待提示）
+        setCursor(Qt::WaitCursor);
+        ReportData rd = ReportService::collect(m_caseManager,
+                                               m_sessionMgr->stateManager(),
+                                               /*computeHashes=*/true);
         const QString dirPath = m_caseManager->caseDir() + QStringLiteral("/reports");
         QDir().mkpath(dirPath);
         const QString out = dirPath + QStringLiteral("/火灾视频分析报告_%1.docx")
             .arg(QDateTime::currentDateTime().toString(QStringLiteral("yyyyMMdd_HHmmss")));
         const QString err = ReportDocxBuilder::build(rd, out);
+        unsetCursor();
         if (!err.isEmpty()) {
             QMessageBox::critical(this, lang("生成分析报告", "Generate Report"), err);
             return;

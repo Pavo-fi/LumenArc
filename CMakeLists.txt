@@ -122,6 +122,9 @@ set(SOURCES
     src/app/report_docx_builder.cpp
     src/app/report_docx_builder.h
     src/domain/report_data.h
+    src/domain/report_preflight.h
+    src/reportpreflightdialog.cpp
+    src/reportpreflightdialog.h
     src/timesettingsdialog.cpp
     src/calibphotodialog.cpp        # v1.12.5 北京时间对时：校时图片两框框选
     src/infrastructure/ffmpeg_video_engine.cpp

@@ -34,7 +34,7 @@ P-20 2GB 尾帧 seek（已通过）· P-21 DVR 字体抽检（已通过）· P-2
 
 | # | 版本 | 内容 | 前置 | 状态 |
 |---|---|---|---|---|
-| P-28 | v1.4.0 | 分析报告模块（DOCX：案件信息/时间基准/哈希清单/逐视频章节/签署盖章位）——**2026-08-23 拍板启动**：只出 DOCX（MD5+SHA256 双列/静态目录无页码/向导入口/章节一~七重排）；远期 HTML 渲染器接口预留。模板=用户《火灾视频分析报告模板.md》。批次①DOCX 地基已落（ZipStoreWriter 手写 store zip + DocxWriter 极简 OPC：标题/段落/表格/图片/分页，docx_test 23 断言） | 校时+案件 ✅ | 🔨 施工中——批次②✅ v1.14.0（ReportData 聚合+章节映射+案件菜单生成入口，report_test 37 断言）；批次③待续：向导+元数据补录+进度条+图表光栅嵌入 |
+| P-28 | v1.4.0 | 分析报告模块（DOCX：案件信息/时间基准/哈希清单/逐视频章节/签署盖章位）——**2026-08-23 拍板启动**：只出 DOCX（MD5+SHA256 双列/静态目录无页码/向导入口/章节一~七重排）；远期 HTML 渲染器接口预留。模板=用户《火灾视频分析报告模板.md》。批次①DOCX 地基已落（ZipStoreWriter 手写 store zip + DocxWriter 极简 OPC：标题/段落/表格/图片/分页，docx_test 23 断言） | 校时+案件 ✅ | 🔨 施工中——批次②③✅ v1.14.0（聚合+章节映射+生成入口+自检/补录闸门+拼接记录证据，report_test 49 断言）；待续：图表光栅嵌入+哈希进度条+P-74 点位图 |
 | P-29 | v1.6.0 | GPU 显示管线 Stage 1（QOpenGLWidget 纹理缩放，消 uiDrops）；Stage 2 已砍 | 独立 | ☐ 方案已拍板 2026-08-17（DEVELOPMENT_PLAN_V1.6_CN.md） |
 | P-30 | v1.8.0 | P1a/P1b 任务化+通道化（TaskRegistry / 通道字典 / **.vla v10**）+ Python 引擎退役 | v1.5 ✅ | ✅ 2026-08-17 已实施（任务化+通道化+v10+退役全落地，待真机点检 RELEASE_CHECKLIST_V1.8） |
 | P-31 | v1.9.0 | P2 MainWindow 拆分（AnalysisController/VideoSessionManager/ProjectIO/UiState；收口 R2/R3/R5） | 前序全部 | ✅ 2026-08-17 已实施（四组件落地+时长 SSOT+R3 收口；待真机点检 RELEASE_CHECKLIST_V1.9） |

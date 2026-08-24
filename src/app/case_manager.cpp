@@ -350,6 +350,18 @@ void CaseManager::removeRecent(const QString &dir)
 // ---------------------------------------------------------------------------
 // 视频登记
 // ---------------------------------------------------------------------------
+bool CaseManager::setReportExtra(const QString &key, const QString &value,
+                                 QString *error)
+{
+    if (m_meta.caseNo.isEmpty()) {
+        if (error) *error = QStringLiteral("无打开的案件");
+        return false;
+    }
+    m_meta.extraFields[QStringLiteral("report/") + key] = value;
+    m_meta.modifiedMs = QDateTime::currentMSecsSinceEpoch();
+    return saveCase(error);
+}
+
 QString CaseManager::addVideo(const QString &path, QString *error)
 {
     if (!m_open) {
