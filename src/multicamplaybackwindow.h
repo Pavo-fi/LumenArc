@@ -60,8 +60,10 @@ public:
 
     /// 双击瓦片回单路分析（U-6）
     std::function<void(const QString &path)> onOpenVideo;
-    /// 案件数据被本窗口改写（如同事件对时保存校时）→ 主窗口刷新案件树徽标
-    std::function<void()> onCaseDataChanged;
+    /// 案件数据被本窗口改写（如同事件对时保存校时）→ 主窗口刷新案件树徽标；
+    /// 参数=被保存校时的视频路径（主视口若正开着它需同步内存校时，
+    /// 防旧值回写覆盖 .vla——v1.15.3 用户实测"退出多机后主页面没更新"）
+    std::function<void(const QString &videoPath)> onCaseDataChanged;
 
     /// 为槽位装载视频（onPickVideo 的对话框后段；测试通道：绕过文件框直喂路径）
     void pickVideoForSlot(int slot, const QString &path);

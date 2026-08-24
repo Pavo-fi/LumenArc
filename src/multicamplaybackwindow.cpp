@@ -2145,7 +2145,7 @@ void MultiCamPlaybackWindow::onEcSave()
             tgt.path, true, ProjectIO::calibrationBadgeSummary(m_ecCal));
     }
     if (onCaseDataChanged)
-        onCaseDataChanged();
+        onCaseDataChanged(tgt.path);
     QMessageBox::information(this, lang("校时已保存", "Calibration saved"),
         lang(QStringLiteral("目标路「%1」的同事件校时已保存入案件/侧车。\n"
              "累积容差 ±%2ms 已如实随档（取证链可查）。"),

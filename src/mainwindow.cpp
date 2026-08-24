@@ -2370,10 +2370,25 @@ void MainWindow::onMultiCamView()
         return e;
     });
     win->onOpenVideo = [this](const QString &path) { openVideoFile(path); };
-    // v1.15.3：多机窗保存校时/改案数据 → 案件树徽标即刷新
-    win->onCaseDataChanged = [this]() {
+    // v1.15.3：多机窗保存校时/改案数据 → 案件树徽标即刷新；
+    // 若正中主视口当前视频：同步内存+时间轴，防旧值回写覆盖 .vla
+    win->onCaseDataChanged = [this](const QString &path) {
         if (m_caseDock)
             m_caseDock->refreshTree();
+        if (!path.isEmpty() && !m_currentVideoPath.isEmpty()
+            && QString::compare(QDir::cleanPath(path),
+                                QDir::cleanPath(m_currentVideoPath),
+                                Qt::CaseInsensitive) == 0) {
+            const TimeCalibration cal = TimelineModel::peekCalibrationFromVla(
+                m_caseManager->vlaPathFor(path));
+            if (cal.isValid()) {
+                m_calibration = cal;
+                m_chartPanel->setCalibration(m_calibration);
+                showOperationStatus(lang(
+                    "主视口校时已与多机窗口同步（同事件对时）",
+                    "Main view calibration synced from multicam"));
+            }
+        }
     };
     if (!win->openCaseLanes(*m_caseManager)) {
         delete win;
@@ -2403,9 +2418,25 @@ void MainWindow::onMultiCamStandalone()
         return e;
     });
     win->onOpenVideo = [this](const QString &path) { openVideoFile(path); };
-    win->onCaseDataChanged = [this]() {
+    win->onCaseDataChanged = [this](const QString &path) {
         if (m_caseDock)
             m_caseDock->refreshTree();
+        // 多机窗保存的校时若正中主视口当前视频：同步内存+时间轴，
+        // 防主窗旧 m_calibration 后续自动存盘回写覆盖 .vla 新校时
+        if (!path.isEmpty() && !m_currentVideoPath.isEmpty()
+            && QString::compare(QDir::cleanPath(path),
+                                QDir::cleanPath(m_currentVideoPath),
+                                Qt::CaseInsensitive) == 0) {
+            const TimeCalibration cal = TimelineModel::peekCalibrationFromVla(
+                m_caseManager->vlaPathFor(path));
+            if (cal.isValid()) {
+                m_calibration = cal;
+                m_chartPanel->setCalibration(m_calibration);
+                showOperationStatus(lang(
+                    "主视口校时已与多机窗口同步（同事件对时）",
+                    "Main view calibration synced from multicam"));
+            }
+        }
     };
     win->openStandalone();
     win->setAttribute(Qt::WA_DeleteOnClose);
