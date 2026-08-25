@@ -55,6 +55,13 @@ beijingMsOf=wallMsOf+0，轴/快照/多机全口径"不生效"；.vla 留痕照�
 onCalibPhotoFinished 调之；ui_chain +6 断言直驱锁死（offset 834000 管道/
 留痕字段/人工修正注记/beijingMsOf 反映）。18 套全绿。
 
+**补记 16（v1.15.3 续，导出完成弹窗带「打开所在文件夹」+ 连环弹窗卡死修）**：
+①用户要完成弹窗里直接有打开所在文件夹——QMessageBox 实例化+ActionRole 按钮，
+点击 explorer /select 定位产物（面板内 📂 按钮保留）。②「导出一次后卡住」真凶：
+startSegmentExport 每次导出都 connect finished（UniqueConnection 对 lambda
+无效，每次新地址）→ 槽堆叠，第 N 次完成弹 N 个模态窗堵死界面；改连接只在
+exporter 创建时建一次，产物路径经 m_lastExportPath 传递。18 套全绿。
+
 **补记 15（v1.15.3 续，放大镜导出改主界面同款左右 50% 并列）**：用户拍板——
 带放大镜导出不再右下角小窗：画布左半边原图（源区域金色四角括号+倍率徽章，
 样式复制 OverlayWidget::drawMagnifierIndicator，引擎层自绘不依赖 widget）、

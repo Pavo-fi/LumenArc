@@ -2944,25 +2944,40 @@ void MainWindow::startSegmentExport(const speedplan::SpeedPlan &planIn,
         pp.magnifierZoom = m_magnifier->zoomLevel();
     }
 
-    if (!m_segmentExporter)
+    if (!m_segmentExporter) {
         m_segmentExporter = new SegmentExportEngine(this);
+        // v1.15.3 卡死修：连接只在创建时建一次——旧代码每次导出都 connect，
+        // Qt::UniqueConnection 对 lambda 无效（每次新地址），finished 槽逐次
+        // 堆叠：第一次完成弹 1 窗、第二次 2 窗……模态窗堵死界面=“不能再导出”。
+        connect(m_segmentExporter, &SegmentExportEngine::progress, m_exportDlg,
+                &SegmentExportDialog::setProgress);
+        connect(m_segmentExporter, &SegmentExportEngine::finished, this,
+                [this](bool ok, const QString &msg) {
+                    if (m_exportDlg)
+                        m_exportDlg->setResult(ok, msg);
+                    if (ok) {
+                        showOperationStatus(lang("选段视频导出完成", "Clip exported"));
+                        // 完成弹窗：含路径 + 「打开所在文件夹」（用户拍板）
+                        QMessageBox box(QMessageBox::Information,
+                            lang("导出完成", "Export done"),
+                            lang("选段视频导出完成：\n%1", "Clip exported:\n%1")
+                                .arg(m_lastExportPath),
+                            QMessageBox::Ok, this);
+                        auto *openBtn = box.addButton(
+                            lang("打开所在文件夹", "Open containing folder"),
+                            QMessageBox::ActionRole);
+                        box.exec();
+                        if (box.clickedButton() == openBtn
+                            && !m_lastExportPath.isEmpty())
+                            QProcess::startDetached(QStringLiteral("explorer.exe"),
+                                {QStringLiteral("/select,"),
+                                 QDir::toNativeSeparators(m_lastExportPath)});
+                    }
+                });
+    }
+    m_lastExportPath = outPath;   // 供一次性 finished 槽取本次产物路径
     SegmentExportEngine *eng = m_segmentExporter;
     m_exportDlg->setExportRunning(true, int(plan.outputFrameCount(pp.outFps)));
-    connect(eng, &SegmentExportEngine::progress, m_exportDlg,
-            &SegmentExportDialog::setProgress, Qt::UniqueConnection);
-    connect(eng, &SegmentExportEngine::finished, this,
-            [this, outPath](bool ok, const QString &msg) {
-                if (m_exportDlg)
-                    m_exportDlg->setResult(ok, msg);
-                if (ok) {
-                    showOperationStatus(lang("选段视频导出完成", "Clip exported"));
-                    // v1.15.3 用户实测：导出完毕没有提示——完成弹窗（含路径）
-                    QMessageBox::information(this,
-                        lang("导出完成", "Export done"),
-                        lang("选段视频导出完成：\n%1", "Clip exported:\n%1")
-                            .arg(outPath));
-                }
-            }, Qt::UniqueConnection);
     eng->start(pp);
 }
 
