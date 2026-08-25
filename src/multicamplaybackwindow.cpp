@@ -1958,27 +1958,30 @@ void MultiCamPlaybackWindow::onEcFitPreview()
     m_ecCal = cal;
     m_svc->applyLaneCalibration(m_ecTargetIdx, cal);   // 预览：播放联动即生效
     // 修正量人话口径：与旧校时在首个标记瞬间的墙钟差；原先无有效校时则
-    // 如实说「按参考路对齐」（不能编钟差）
+    // 如实说「按参考路对齐」（不能编钟差）。v1.15.3 追加：旧校时本身也是
+    // 间接校时（叠加校准时）不判“基本准”——两点钉在同一锚点必然差 0，
+    // 那个判定无信息量还误导（用户实测“看不懂”）
     {
         const auto &a0 = m_ecAnchors.first();
         const qint64 newWall = cal.wallMsOf(a0.targetStreamMs);
-        if (oldCal.isValid() && oldCal.dateKnown) {
+        if (oldCal.isValid() && oldCal.dateKnown
+            && oldCal.source != TimeCalibration::Source::CrossCamEvent) {
             const qint64 delta = newWall - oldCal.beijingMsOf(a0.targetStreamMs);
             if (qAbs(delta) < 1000) {
-                m_ecCorrText = lang("目标路的钟原本就基本准（差不到 1 秒），已对齐",
-                                    "lane clock was already within 1s, aligned");
+                m_ecCorrText = lang("标记瞬间：与基准路差不到 1 秒（基本准）",
+                                    "within 1s at the mark");
             } else {
-                m_ecCorrText = lang("目标的钟原来%1，已按此修正",
+                m_ecCorrText = lang("标记瞬间：目标的钟原来%1，已按此修正",
                                     "lane clock was off by %1, fixed")
                     .arg(eventcalib::plainClockDeltaText(delta)
                              .replace(QStringLiteral("目标的钟"),
                                       QStringLiteral("")));
             }
         } else {
-            m_ecCorrText = lang("目标路原先没有有效校时——已按参考路对齐到墙钟 %1",
-                                "no prior calibration; aligned to ref clock %1")
-                .arg(QDateTime::fromMSecsSinceEpoch(newWall)
-                         .toString(QStringLiteral("MM-dd HH:mm:ss")));
+            // v1.15.3：旧校时也是间接校时（叠加校准）或无校时——
+            // 只陈述“标记瞬间对齐”这个事实，不编“基本准”
+            m_ecCorrText = lang("标记瞬间已与基准路对齐（锚点强制）",
+                                "aligned at the mark (anchored)");
         }
     }
     // 预览即所见（用户实测「点完没反应」）：两路立即跳到同一墙钟瞬间，
@@ -1997,11 +2000,21 @@ void MultiCamPlaybackWindow::onEcFitPreview()
         maxRes = qMax(maxRes, r);
     QString how = m_ecCorrText;
     if (m_ecFit.affine) {
-        const double driftDay = (m_ecFit.rate - 1.0) * 86400.0;
-        how += lang("；快慢：每 1 天%1约 %2 秒，已一并修正",
-                    "; drift %1 s/day, fixed")
-            .arg(driftDay >= 0 ? lang("快", "fast") : lang("慢", "slow"))
-            .arg(qAbs(driftDay), 0, 'f', 1);
+        // v1.15.3：速率人话——不再说「每 1 天快 X 秒」（吓人且概念错：
+        // 不是表走快，是画面时间轴与真实时间的比例关系）
+        const double per100 = (m_ecFit.rate - 1.0) * 100.0;   // 画面每 100 秒真实多/少走的秒
+        const double hourBias = qAbs(m_ecFit.rate - 1.0) * 3600.0;
+        how += lang("；全程速率：画面每走 100 秒，真实约走 %1 秒"
+                     "（画面相对真实%2 %3%），已按此修正"
+                     "——否则离标记越远偏得越多（每 1 小时约偏 %4 秒）",
+                     "; rate: real %1 s per 100 s of video, fixed")
+            .arg(100.0 + per100, 0, 'f', 2)
+            .arg(per100 >= 0 ? lang("慢", "slow") : lang("快", "fast"))
+            .arg(qAbs(per100), 0, 'f', 2)
+            .arg(hourBias, 0, 'f', 1);
+        if (qAbs(m_ecFit.rate - 1.0) > 0.002)
+            how += lang(" ⚠速率偏差较大，请确认该文件不是变速/抽帧录制",
+                        " (large rate bias - check if VFR/time-lapse)");
     }
     m_ecStatus->setText(lang("预览中：%1。播放试看两路是否贴齐，贴齐就保存。"
                              "（最大误差 %2 秒 · 可信度 %3，间接对时如实标注）\n"
@@ -2104,14 +2117,23 @@ void MultiCamPlaybackWindow::onEcSave()
                            "Lane %1 aligns to %2 (indirect)\n")
         .arg(tgt.displayName, refName);
     if (m_ecFit.affine) {
-        const double driftDay = (m_ecCal.rate - 1.0) * 86400.0;
         summary += lang("方式：平移 + 快慢修正（%1 个标记）\n",
                         "Mode: shift + rate (%1 marks)\n")
             .arg(m_ecCal.eventAnchors.size());
-        summary += lang("快慢：目标的钟每 1 天%1约 %2 秒，已一并修正\n",
-                        "Drift: %1 s/day, corrected\n")
-            .arg(driftDay >= 0 ? lang("快", "fast") : lang("慢", "slow"))
-            .arg(qAbs(driftDay), 0, 'f', 1);
+        // v1.15.3：速率人话（同预览口径）
+        const double per100 = (m_ecCal.rate - 1.0) * 100.0;
+        const double hourBias = qAbs(m_ecCal.rate - 1.0) * 3600.0;
+        summary += lang("全程速率：画面每走 100 秒，真实约走 %1 秒"
+                        "（画面相对真实%2 %3%），已按此修正"
+                        "——否则离标记越远偏得越多（每 1 小时约偏 %4 秒）\n",
+                        "Rate: real %1 s per 100 s of video, fixed\n")
+            .arg(100.0 + per100, 0, 'f', 2)
+            .arg(per100 >= 0 ? lang("慢", "slow") : lang("快", "fast"))
+            .arg(qAbs(per100), 0, 'f', 2)
+            .arg(hourBias, 0, 'f', 1);
+        if (qAbs(m_ecCal.rate - 1.0) > 0.002)
+            summary += lang("⚠ 速率偏差较大，请确认该文件不是变速/抽帧录制\n",
+                            "! large rate bias - VFR/time-lapse?\n");
     } else {
         summary += lang("方式：整体平移（1 个标记，不改快慢）\n",
                         "Mode: fixed shift (1 mark)\n");
