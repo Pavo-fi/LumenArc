@@ -2965,7 +2965,7 @@ void MainWindow::startSegmentExport(const speedplan::SpeedPlan &planIn,
                             QMessageBox::Ok, this);
                         auto *openBtn = box.addButton(
                             lang("打开所在文件夹", "Open containing folder"),
-                            QMessageBox::ActionRole);
+                            QMessageBox::AcceptRole);   // AcceptRole：点击即关闭
                         box.exec();
                         if (box.clickedButton() == openBtn
                             && !m_lastExportPath.isEmpty())
