@@ -55,6 +55,12 @@ beijingMsOf=wallMsOf+0，轴/快照/多机全口径"不生效"；.vla 留痕照�
 onCalibPhotoFinished 调之；ui_chain +6 断言直驱锁死（offset 834000 管道/
 留痕字段/人工修正注记/beijingMsOf 反映）。18 套全绿。
 
+**补记 15（v1.15.3 续，放大镜导出改主界面同款左右 50% 并列）**：用户拍板——
+带放大镜导出不再右下角小窗：画布左半边原图（源区域金色四角括号+倍率徽章，
+样式复制 OverlayWidget::drawMagnifierIndicator，引擎层自绘不依赖 widget）、
+右半边放大视图（源裁剪→旋转→等比填满，等大同高=主界面观感）；drawPipImage
+保留供多机 laneZooms 用。18 套全绿。
+
 **补记 14（v1.15.3 续，选段导出冻结根因修复——湛江遂溪 D15 实测）**：
 产物画面静止（42.56s 全首帧）。排查链：CLI ffmpeg 抽帧全同误导两次（bash
 select 转义坑抽到前 4 帧）→ engine_test 加软解抽帧钩子证明内嵌解码正常 →

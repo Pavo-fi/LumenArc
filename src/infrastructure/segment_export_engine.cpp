@@ -133,6 +133,49 @@ QString SegmentExportEngine::buildAudioFilterChainRanges(
 /// 放大镜 PIP 绘制（单路/多机共用）：cell 右下角嵌入放大内容（38% 宽，
 /// 上限 45% 高），Accent 描边 + 「放大镜 ×N」角标（真机反馈：导出画面
 /// 应包含放大镜画面）
+/// v1.15.3 主界面同款放大镜源区域标记：金色四角括号（衬影+主体）+ 倍率徽章。
+/// 样式复制自 OverlayWidget::drawMagnifierIndicator（引擎层不依赖 widget）。
+static void drawMagnifierBrackets(QPainter &painter, const QRect &rect,
+                                  qreal zoom, int penWidth, int fontPx)
+{
+    if (!rect.isValid() || rect.isEmpty())
+        return;
+    painter.save();
+    painter.setRenderHint(QPainter::Antialiasing, false);
+    const QColor accent(Theme::Accent);
+    const int arm = qBound(8, qMin(rect.width(), rect.height()) / 4, 40);
+    const int w = qMax(1, penWidth);
+    auto brackets = [&](const QPoint &off, const QColor &color, int width) {
+        painter.setPen(QPen(color, width, Qt::SolidLine, Qt::SquareCap));
+        const int l = rect.left() + off.x(), t = rect.top() + off.y();
+        const int r = rect.right() + off.x(), b = rect.bottom() + off.y();
+        painter.drawLine(l, t, l + arm, t);
+        painter.drawLine(l, t, l, t + arm);
+        painter.drawLine(r, t, r - arm, t);
+        painter.drawLine(r, t, r, t + arm);
+        painter.drawLine(l, b, l + arm, b);
+        painter.drawLine(l, b, l, b - arm);
+        painter.drawLine(r, b, r - arm, b);
+        painter.drawLine(r, b, r, b - arm);
+    };
+    brackets(QPoint(w, w), QColor(0, 0, 0, 160), w);
+    brackets(QPoint(0, 0), accent, w);
+    if (zoom > 0.0) {
+        painter.setPen(Qt::NoPen);
+        painter.setBrush(QColor(0, 0, 0, 160));
+        painter.drawRect(QRect(rect.left(), rect.top(), 64, 18));
+        painter.setPen(accent);
+        QFont f = painter.font();
+        f.setPixelSize(qMax(10, fontPx));
+        f.setBold(true);
+        painter.setFont(f);
+        painter.drawText(QRect(rect.left() + 2, rect.top(), 60, 18),
+                         Qt::AlignVCenter | Qt::AlignLeft,
+                         QStringLiteral("×%1").arg(zoom, 0, 'f', 1));
+    }
+    painter.restore();
+}
+
 static void drawPipImage(QPainter &painter, const QRect &cell,
                          const QImage &content, qreal zoomForBadge)
 {
@@ -459,14 +502,57 @@ void SegmentExportEngine::run()
                                             Qt::SmoothTransformation);
             const int vx = videoRect.x() + (videoRect.width() - scaled.width()) / 2;
             const int vy = videoRect.y() + (videoRect.height() - scaled.height()) / 2;
-            painter.drawImage(vx, vy, scaled);
-            // 放大镜 PIP（单路：导出时刻的放大取景随帧重裁）
-            if (p.magnifierPip && !p.magnifierSrcRect.isNull()) {
+            // v1.15.3 拍板：放大镜导出 = 主界面同款左右 50% 并列——
+            // 左半边原图（源区域金色四角括号标记），右半边放大视图。
+            if (p.magnifierPip && !p.magnifierSrcRect.isNull()
+                && videoRect.width() >= 240) {
+                const int halfW = videoRect.width() / 2 - 3;
+                const QRect leftHalf(videoRect.x(), videoRect.y(),
+                                     halfW, videoRect.height());
+                const QRect rightHalf(videoRect.x() + halfW + 6, videoRect.y(),
+                                      videoRect.width() - halfW - 6,
+                                      videoRect.height());
+                // 左侧：原图（等比居中）
+                QImage scaledL = curFrame.scaled(leftHalf.size(),
+                                                 Qt::KeepAspectRatio,
+                                                 Qt::SmoothTransformation);
+                const QRect dispL(
+                    leftHalf.x() + (leftHalf.width() - scaledL.width()) / 2,
+                    leftHalf.y() + (leftHalf.height() - scaledL.height()) / 2,
+                    scaledL.width(), scaledL.height());
+                painter.drawImage(dispL, scaledL);
+                // 源区域金色四角括号（主界面同款：衬影+主体+倍率徽章）
+                {
+                    const QRect src = p.magnifierSrcRect.intersected(
+                        QRect(0, 0, curFrame.width(), curFrame.height()));
+                    if (src.isValid() && !src.isEmpty()) {
+                        const double sx = double(dispL.width())
+                                          / curFrame.width();
+                        const double sy = double(dispL.height())
+                                          / curFrame.height();
+                        const QRect mk(dispL.x() + int(src.x() * sx),
+                                       dispL.y() + int(src.y() * sy),
+                                       qMax(1, int(src.width() * sx)),
+                                       qMax(1, int(src.height() * sy)));
+                        drawMagnifierBrackets(painter, mk, p.magnifierZoom,
+                                              qMax(1, dispL.height() / 540),
+                                              qMax(10, dispL.height() / 36));
+                    }
+                }
+                // 右侧：放大视图（同源裁剪 → 旋转 → 等比填满右半）
                 QImage crop = curFrame.copy(p.magnifierSrcRect.intersected(
                     QRect(0, 0, curFrame.width(), curFrame.height())));
                 if (p.magnifierRotation != 0)
                     crop = crop.transformed(QTransform().rotate(p.magnifierRotation));
-                drawPipImage(painter, videoRect, crop, p.magnifierZoom);
+                QImage scaledR = crop.scaled(rightHalf.size(),
+                                             Qt::KeepAspectRatio,
+                                             Qt::SmoothTransformation);
+                painter.drawImage(
+                    rightHalf.x() + (rightHalf.width() - scaledR.width()) / 2,
+                    rightHalf.y() + (rightHalf.height() - scaledR.height()) / 2,
+                    scaledR);
+            } else {
+                painter.drawImage(vx, vy, scaled);
             }
 
             const double outMs = double(k) * 1000.0 / p.outFps;
