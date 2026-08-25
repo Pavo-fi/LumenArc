@@ -55,6 +55,13 @@ beijingMsOf=wallMsOf+0，轴/快照/多机全口径"不生效"；.vla 留痕照�
 onCalibPhotoFinished 调之；ui_chain +6 断言直驱锁死（offset 834000 管道/
 留痕字段/人工修正注记/beijingMsOf 反映）。18 套全绿。
 
+**补记 13（v1.15.3 续，选段导出两修——湛江遂溪案实测）**：①产物不对：LAClip
+42.56s≠选段 26.95s——根因 onExportClip 对同选段静默沿用上次变速计划（vla
+speed_plan rates[1,0.25,1]，Q5 持久化的副作用）；改默认恒 planFromLabels
+原速 1x，同选段时 setLastPlan 醒目黄条提示+「恢复上次变速」一键钮。②导出完
+毕没提示：finished 只写面板/状态栏——补 QMessageBox 完成弹窗（含产物路径）。
+18 套全绿。
+
 **补记 12（v1.15.3 续，校时卡速率文案人话化）**：用户实测看不懂双锚点确认卡
 ——「基本准」与「每 1 天快 621 秒」同卡自相矛盾（根因：①叠加校准时旧校时也
 是 crosscam，两锚同点必差 0，「基本准」无信息量；②「每 1 天快 X 秒」把画面

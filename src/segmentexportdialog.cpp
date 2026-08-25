@@ -104,6 +104,31 @@ SegmentExportDialog::SegmentExportDialog(const speedplan::SpeedPlan &plan,
     m_osdCheck->setChecked(true);
     lay->addWidget(m_osdCheck);
 
+    // v1.15.3：沿用上次变速设置的醒目提示条 + 一键恢复原速
+    auto *lastRow = new QHBoxLayout();
+    m_lastHint = new QLabel(this);
+    m_lastHint->setWordWrap(true);
+    m_lastHint->setVisible(false);
+    m_lastHint->setStyleSheet(QStringLiteral(
+        "QLabel { color: #8a5a00; background: #fff3d6; border: 1px solid #e0b060;"
+        " border-radius: 4px; padding: 4px 8px; font-weight: bold; }"));
+    lastRow->addWidget(m_lastHint, 1);
+    m_restoreBtn = new QPushButton(lang("恢复上次变速", "Restore last speeds"), this);
+    m_restoreBtn->setVisible(false);
+    connect(m_restoreBtn, &QPushButton::clicked, this, [this]() {
+        if (!m_lastPlan.isValid())
+            return;
+        m_plan = m_lastPlan;
+        m_plan.normalize();
+        rebuildTable();
+        updateSummary();
+        m_lastHint->setVisible(false);
+        m_restoreBtn->setVisible(false);
+        m_resultLabel->clear();
+    });
+    lastRow->addWidget(m_restoreBtn);
+    lay->addLayout(lastRow);
+
     auto *pathRow = new QHBoxLayout();
     pathRow->addWidget(new QLabel(lang("输出：", "Output:"), this));
     m_pathEdit = new QLineEdit(suggestedPath, this);
@@ -210,8 +235,36 @@ void SegmentExportDialog::setPlan(const speedplan::SpeedPlan &plan,
     m_plan.normalize();
     m_pathEdit->setText(suggestedPath);
     m_resultLabel->clear();
+    // 新选段不沿用上次设置：收起提示条（恢复钮保留，点恢复会重新出现？
+    // 不——恢复只作用于本面板当前计划，恢复后即收起，语义见 setLastPlan）
+    m_lastHint->setVisible(false);
+    m_restoreBtn->setVisible(false);
     rebuildTable();
     updateSummary();
+}
+
+void SegmentExportDialog::setLastPlan(const speedplan::SpeedPlan &plan)
+{
+    m_lastPlan = plan;
+    if (!plan.isValid())
+        return;
+    // 同选段沿用了上次变速（非全 1x）→ 醒目提示，避免“导出的文件不对”
+    bool hasNonOne = false;
+    for (double r : plan.rates)
+        if (qAbs(r - 1.0) > 1e-6) {
+            hasNonOne = true;
+            break;
+        }
+    if (!hasNonOne)
+        return;
+    m_lastHint->setText(lang(
+        "⚠ 本次选段与上次导出相同，已默认沿用上次的变速设置"
+        "（含非原速段）。如需原速请点「恢复上次变速」右侧按钮，"
+        "或在表格中把速率改为 1.00。",
+        "Same range as last export: last speed plan reused. "
+        "Click Restore or set rates to 1.00 for realtime."));
+    m_lastHint->setVisible(true);
+    m_restoreBtn->setVisible(true);
 }
 
 void SegmentExportDialog::setExportRunning(bool running, int totalFrames)

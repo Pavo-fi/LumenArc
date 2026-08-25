@@ -2842,12 +2842,11 @@ void MainWindow::onExportSegmentClip()
     const qint64 aMs = m_chartPanel->abPointA();
     const qint64 bMs = m_chartPanel->abPointB();
 
-    // 初值方案：.vla 恢复的 m_speedPlan 与当前选段吻合则沿用；否则按选段内
-    // 标签（N 键标记 = 关键时刻）自动分段（拍板 Q4 扩展的默认边界来源）
+    // 初值方案：v1.15.3 改为默认恒原速（1x + 选段内标签分段）。
+    // 上次导出的变速计划不再静默沿用——同选段时通过 setLastPlan 醒目提示，
+    // 用户可一键恢复（避免“导出的文件不对”）。
     speedplan::SpeedPlan plan;
-    if (m_speedPlan.isValid() && m_speedPlan.aMs == aMs && m_speedPlan.bMs == bMs) {
-        plan = m_speedPlan;
-    } else {
+    {
         QVector<qint64> labelTimes;
         for (const ChartLabel &lb : m_chartPanel->labels())
             labelTimes.append(lb.timeMs);
@@ -2889,6 +2888,10 @@ void MainWindow::onExportSegmentClip()
     m_exportDlg->show();
     m_exportDlg->raise();
     m_exportDlg->activateWindow();
+    // v1.15.3：同选段且上次有变速 → 醒目提示（默认已不再沿用）
+    m_exportDlg->setLastPlan(
+        (m_speedPlan.isValid() && m_speedPlan.aMs == aMs && m_speedPlan.bMs == bMs)
+            ? m_speedPlan : speedplan::SpeedPlan{});
 }
 
 /// P-68：面板「开始导出」→ 采集底图 + 引擎启动（进度回报回面板）
@@ -2948,11 +2951,17 @@ void MainWindow::startSegmentExport(const speedplan::SpeedPlan &planIn,
     connect(eng, &SegmentExportEngine::progress, m_exportDlg,
             &SegmentExportDialog::setProgress, Qt::UniqueConnection);
     connect(eng, &SegmentExportEngine::finished, this,
-            [this](bool ok, const QString &msg) {
+            [this, outPath](bool ok, const QString &msg) {
                 if (m_exportDlg)
                     m_exportDlg->setResult(ok, msg);
-                if (ok)
+                if (ok) {
                     showOperationStatus(lang("选段视频导出完成", "Clip exported"));
+                    // v1.15.3 用户实测：导出完毕没有提示——完成弹窗（含路径）
+                    QMessageBox::information(this,
+                        lang("导出完成", "Export done"),
+                        lang("选段视频导出完成：\n%1", "Clip exported:\n%1")
+                            .arg(outPath));
+                }
             }, Qt::UniqueConnection);
     eng->start(pp);
 }

@@ -42,6 +42,8 @@ public:
 
     /// 选段/初值刷新（再次打开时）
     void setPlan(const speedplan::SpeedPlan &plan, const QString &suggestedPath);
+    /// v1.15.3：告知“上次导出设置”（同选段沿用时醒目提示 + 一键恢复）
+    void setLastPlan(const speedplan::SpeedPlan &plan);
     /// 实时游标（父窗口 positionChanged 驱动）
     void setCursorMs(qint64 ms) { m_cursorMs = ms; }
 
@@ -75,6 +77,10 @@ private:
     QProgressBar *m_progressBar = nullptr;
     QLabel *m_resultLabel = nullptr;
     QPushButton *m_openFolderBtn = nullptr;  ///< 成功后「打开所在文件夹」
+    // v1.15.3：沿用上次变速设置的提示条与恢复钮
+    QLabel *m_lastHint = nullptr;
+    QPushButton *m_restoreBtn = nullptr;
+    speedplan::SpeedPlan m_lastPlan;         ///< 上次导出的变速计划（可恢复）
 };
 
 #endif // SEGMENTEXPORTDIALOG_H
