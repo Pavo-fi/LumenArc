@@ -77,6 +77,8 @@
 #include <QInputDialog>
 #include <QTime>
 #include <QFile>
+#include <QDateTime>
+#include <QDir>
 #include <QFileInfo>
 #include <QTextStream>
 #include <QSettings>
@@ -2953,13 +2955,29 @@ void MainWindow::startSegmentExport(const speedplan::SpeedPlan &planIn,
                 &SegmentExportDialog::setProgress);
         connect(m_segmentExporter, &SegmentExportEngine::finished, this,
                 [this](bool ok, const QString &msg) {
+                    // v1.15.3 诊断日志（问题未闭环，强援排查用——档案：
+                    // docs/INVESTIGATION_EXPORT_FROZEN_20260825.md）
+                    auto diag = [](const QString &line) {
+                        QFile f(QDir::temp().absoluteFilePath(
+                                    QStringLiteral("lumenarc_export_diag.log")));
+                        if (f.open(QIODevice::Append | QIODevice::Text)) {
+                            QTextStream ts(&f);
+                            ts << QDateTime::currentDateTime()
+                                      .toString(QStringLiteral("HH:mm:ss.zzz"))
+                               << QStringLiteral(" | ") << line << QStringLiteral("\n");
+                        }
+                    };
+                    diag(QStringLiteral("finished slot enter ok=%1")
+                             .arg(ok ? 1 : 0));
                     if (m_exportDlg)
                         m_exportDlg->setResult(ok, msg);
                     if (ok) {
                         showOperationStatus(lang("选段视频导出完成", "Clip exported"));
-                        // v1.15.3 完成弹窗（用户拍板）：含路径 + 「打开所在文件夹」。
-                        // 用非模态 open()：exec() 嵌套事件循环在部分场景堵塞主线程
-                        // （用户实测关不掉/软件卡死）；open()+显式 accept 最稳。
+                        // 完成提示（用户拍板）：含路径 + 「打开所在文件夹」。
+                        // 关键：setWindowModality(NonModal)+show() —— Qt 的
+                        // application-modal 窗口存在期间拦截全应用输入（exec/open
+                        // 皆是），用户实测「导出后所有按键不能按」即为该拦截；
+                        // 显式 NonModal 后即使弹窗异常也绝不影响主界面。
                         auto *box = new QMessageBox(
                             QMessageBox::Information,
                             lang("导出完成", "Export done"),
@@ -2967,6 +2985,7 @@ void MainWindow::startSegmentExport(const speedplan::SpeedPlan &planIn,
                                 .arg(m_lastExportPath),
                             QMessageBox::Ok, this);
                         box->setAttribute(Qt::WA_DeleteOnClose);
+                        box->setWindowModality(Qt::NonModal);
                         auto *openBtn = box->addButton(
                             lang("打开所在文件夹", "Open containing folder"),
                             QMessageBox::AcceptRole);
@@ -2979,8 +2998,10 @@ void MainWindow::startSegmentExport(const speedplan::SpeedPlan &planIn,
                                          QDir::toNativeSeparators(m_lastExportPath)});
                                 box->accept();   // 显式关闭，绝不残留
                             });
-                        box->open();
+                        box->show();
+                        diag(QStringLiteral("box shown (NonModal)"));
                     }
+                    diag(QStringLiteral("finished slot exit"));
                 });
     }
     m_lastExportPath = outPath;   // 供一次性 finished 槽取本次产物路径
