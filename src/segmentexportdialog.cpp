@@ -99,8 +99,8 @@ SegmentExportDialog::SegmentExportDialog(const speedplan::SpeedPlan &plan,
     lay->addLayout(splitRow);
 
     m_osdCheck = new QCheckBox(
-        lang("烧录信息角标（演示副本 · 倍速 · 时刻 · 案件号）",
-             "Burn info overlay (demo copy · speed · time · case)"), this);
+        lang("烧录信息角标（倍速 · 时刻 · 案件号）",
+             "Burn info overlay (speed · time · case)"), this);
     m_osdCheck->setChecked(true);
     lay->addWidget(m_osdCheck);
 

@@ -608,7 +608,7 @@ void SegmentExportEngine::run()
                                   .arg(t / 60000 % 60, 2, 10, QLatin1Char('0'))
                                   .arg(t / 1000 % 60, 2, 10, QLatin1Char('0'));
                 }
-                QString osd = QStringLiteral("演示副本 · %1x · %2")
+                QString osd = QStringLiteral("%1x · %2")
                                   .arg(rate, 0, 'g', 3).arg(timeStr);
                 if (!p.caseLabel.isEmpty())
                     osd += QStringLiteral(" · 案件 %1").arg(p.caseLabel);
@@ -1039,7 +1039,7 @@ void SegmentExportEngine::runMultiCam()
             // ---- OSD ----
             if (p.burnOsd) {
                 const double rate = p.plan.rateAtOutputMs(outMs);
-                QString osd = QStringLiteral("演示副本 · %1x · %2")
+                QString osd = QStringLiteral("%1x · %2")
                                   .arg(rate, 0, 'g', 3)
                                   .arg(QDateTime::fromMSecsSinceEpoch(qint64(wall))
                                            .toString(QStringLiteral("yyyy-MM-dd HH:mm:ss")));
