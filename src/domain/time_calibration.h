@@ -157,8 +157,10 @@ struct TimeCalibration
         double  driftSecondsPerDay() const { return (rate - 1.0) * 86400.0; }
     };
 
-    /// 漂移显著性下限：30 秒/天（低于此视为"钟准"，不修正只报告）
-    static constexpr double kMinSignificantRateDev = 30.0 / 86400000.0;
+    /// 漂移显著性下限：10 秒/天（低于此视为“钟准”，不修正只报告）
+    /// v1.15.3 用户拍板：30→10——两小时录像 10 秒/天仅差 0.8 秒，可接受；
+    /// 超过即应修正，不放任。
+    static constexpr double kMinSignificantRateDev = 10.0 / 86400000.0;
     /// 两点拟合时的单点假设误差（OSD 秒级量化）：±1s
     static constexpr double kAssumedPointErrorMs = 1000.0;
     /// 野点残差阈值：超过则提示剔除重拟合
@@ -171,7 +173,7 @@ struct TimeCalibration
      *
      * - n=1：rate=1.0，offset=wall-stream（现状语义）
      * - n=2：精确线；σ 用 kAssumedPointErrorMs 估计（保守：两点通常不够显著）
-     * - n≥3：残差估计 σ；rateSignificant 需 |rate-1| > max(3σ, 30秒/天)
+     * - n≥3：残差估计 σ；rateSignificant 需 |rate-1| > max(3σ, 10秒/天)
      * 可反复调用：用户剔除野点（used=false）后重新拟合。
      */
     static FitResult fit(const QVector<Sample> &samples);

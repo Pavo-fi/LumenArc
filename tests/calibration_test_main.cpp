@@ -10,7 +10,7 @@
  *
  * 覆盖（docs/V1_ERA_TECH_PLAN_CN.md §3.4）：
  *  - 单点/两点/三点拟合路径
- *  - 漂移显著性门控（3σ 与 30秒/天双阈）
+ *  - 漂移显著性门控（3σ 与 10秒/天双阈）
  *  - 野点残差警告与剔除重拟合
  *  - 异常速率（OCR 误读）拒绝应用
  *  - 退化路径：空测点/全排除/同一流内位置
@@ -134,10 +134,10 @@ static void testMinThresholdBoundary()
 {
     // 微小漂移需要足够长的跨度才能解析（OSD 秒级量化）：
     // 47 分钟跨度上 40 秒/天只产生 ~1.3ms 漂移，物理上不可检出。
-    // 用 24 小时跨度测试 30 秒/天阈值的门控行为：
+    // 用 24 小时跨度测试 10 秒/天阈值的门控行为（v1.15.3 拍板收紧 30→10）：
     const qint64 x1 = 43200000, x2 = 86400000;   // 12h / 24h
-    // 20 秒/天：可测（24h 漂移 20s）但低于 30 秒/天下限 → 不显著
-    const double rLow = 1.0 + 20.0 / 86400000.0;
+    // 5 秒/天：可测（24h 漂移 5s）但低于 10 秒/天下限 → 不显著
+    const double rLow = 1.0 + 5.0 / 86400000.0;
     auto fr = TimeCalibration::fit({
         pt(0, kOff),
         pt(x1, kOff + static_cast<qint64>(std::llround(rLow * x1))),
@@ -145,7 +145,7 @@ static void testMinThresholdBoundary()
     CHECK(fr.ok && !fr.rateSignificant);
     CHECK(std::fabs(fr.rate - rLow) < 1e-9);     // 拟合仍精确解出（供报告）
 
-    // 40 秒/天：超过下限且 σ≈0 → 显著
+    // 40 秒/天：超过 10 秒/天下限且 σ≈0 → 显著
     const double rHigh = 1.0 + 40.0 / 86400000.0;
     fr = TimeCalibration::fit({
         pt(0, kOff),
