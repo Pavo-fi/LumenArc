@@ -308,12 +308,15 @@ ReportData ReportService::collect(CaseManager *cm, VideoStateManager *vsm,
                 if (deltaText.isEmpty() && !cal.calibNote.isEmpty())
                     deltaText = cal.calibNote;
                 if (deltaText.isEmpty())
-                    deltaText = QStringLiteral("依基准（见取证链）");
+                    // v1.15.3 大白话：没可靠称出本体钟差，只证明时间轴已对齐
+                    deltaText = QStringLiteral("未直接测定（仅锚点对齐，分析以墙钟为准）");
                 row.timeDiffText = deltaText;
                 row.resultText = QStringLiteral(
                     "以基准路「%1」为坐标：%2 个特征事件逐帧对齐；"
-                    "源监控较北京时间 %3")
-                    .arg(ref).arg(row.anchorCount).arg(deltaText);
+                    "源监控较北京时间 %3。%4")
+                    .arg(ref).arg(row.anchorCount).arg(deltaText,
+                    QStringLiteral("说明：锚点只证明两路画面内容同步、"
+                                   "时间轴已对齐北京；本体烧录钟差未可靠测定。"));
             } else if (cal.source == TimeCalibration::Source::Inherited) {
                 row.baseRefText = QStringLiteral("源校时");
                 row.resultText = QStringLiteral("前处理产物，继承源校时时间轴");
