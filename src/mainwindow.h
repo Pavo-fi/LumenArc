@@ -320,7 +320,6 @@ protected:
     // P-68 选段导出（分段变速方案随 .vla 持久化，拍板 Q5）
     speedplan::SpeedPlan m_speedPlan;
     class SegmentExportEngine *m_segmentExporter = nullptr;
-    QString m_lastExportPath;            ///< 本次导出产物路径（v1.15.3 完成弹窗用）
     QPushButton *m_exportClipBtn = nullptr;
     class SegmentExportDialog *m_exportDlg = nullptr;   // 非模态导出面板（复用）
     SpectrogramPanelEnhanced *m_spectrogramEnhanced = nullptr;
