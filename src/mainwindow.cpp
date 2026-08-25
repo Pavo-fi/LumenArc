@@ -2957,21 +2957,29 @@ void MainWindow::startSegmentExport(const speedplan::SpeedPlan &planIn,
                         m_exportDlg->setResult(ok, msg);
                     if (ok) {
                         showOperationStatus(lang("选段视频导出完成", "Clip exported"));
-                        // 完成弹窗：含路径 + 「打开所在文件夹」（用户拍板）
-                        QMessageBox box(QMessageBox::Information,
+                        // v1.15.3 完成弹窗（用户拍板）：含路径 + 「打开所在文件夹」。
+                        // 用非模态 open()：exec() 嵌套事件循环在部分场景堵塞主线程
+                        // （用户实测关不掉/软件卡死）；open()+显式 accept 最稳。
+                        auto *box = new QMessageBox(
+                            QMessageBox::Information,
                             lang("导出完成", "Export done"),
                             lang("选段视频导出完成：\n%1", "Clip exported:\n%1")
                                 .arg(m_lastExportPath),
                             QMessageBox::Ok, this);
-                        auto *openBtn = box.addButton(
+                        box->setAttribute(Qt::WA_DeleteOnClose);
+                        auto *openBtn = box->addButton(
                             lang("打开所在文件夹", "Open containing folder"),
-                            QMessageBox::AcceptRole);   // AcceptRole：点击即关闭
-                        box.exec();
-                        if (box.clickedButton() == openBtn
-                            && !m_lastExportPath.isEmpty())
-                            QProcess::startDetached(QStringLiteral("explorer.exe"),
-                                {QStringLiteral("/select,"),
-                                 QDir::toNativeSeparators(m_lastExportPath)});
+                            QMessageBox::AcceptRole);
+                        QObject::connect(openBtn, &QPushButton::clicked, box,
+                            [this, box]() {
+                                if (!m_lastExportPath.isEmpty())
+                                    QProcess::startDetached(
+                                        QStringLiteral("explorer.exe"),
+                                        {QStringLiteral("/select,"),
+                                         QDir::toNativeSeparators(m_lastExportPath)});
+                                box->accept();   // 显式关闭，绝不残留
+                            });
+                        box->open();
                     }
                 });
     }
