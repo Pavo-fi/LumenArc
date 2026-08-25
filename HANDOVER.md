@@ -55,6 +55,13 @@ beijingMsOf=wallMsOf+0，轴/快照/多机全口径"不生效"；.vla 留痕照�
 onCalibPhotoFinished 调之；ui_chain +6 断言直驱锁死（offset 834000 管道/
 留痕字段/人工修正注记/beijingMsOf 反映）。18 套全绿。
 
+**补记 17（v1.15.3 续，导出完成弹窗卡死：问题转档交强援）**：用户三次反馈
+「导出完弹窗关不掉/软件卡死」——历次修复（重复 connect 堆叠→一次性、ActionRole
+→AcceptRole→非模态 open()）均未见用户确认生效；关键疑点：open() 版 exe 是否
+已被用户测到未确认（期间多次 LNK1104 占链）。现象从未本地复现（开发机无法
+GUI 操作导出）。已建立完整问题档案 docs/INVESTIGATION_EXPORT_FROZEN_20260825.md
+（症状/时序/已排查/未闭环疑点/代码锚点/接手步骤），供更强专家接手。
+
 **补记 16（v1.15.3 续，导出完成弹窗带「打开所在文件夹」+ 连环弹窗卡死修）**：
 ①用户要完成弹窗里直接有打开所在文件夹——QMessageBox 实例化+ActionRole 按钮，
 点击 explorer /select 定位产物（面板内 📂 按钮保留）。②「导出一次后卡住」真凶：
