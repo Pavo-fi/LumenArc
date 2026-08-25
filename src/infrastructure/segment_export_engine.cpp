@@ -294,10 +294,21 @@ void SegmentExportEngine::run()
         return;
     }
     const AVRational tb = fmt->streams[vstream]->time_base;
+    dec->pkt_timebase = tb;   // 帧时间戳与 tb 同基（引擎测试对照验证）
 
-    // 从 A 前最近关键帧起解码（长 GOP 源兜底）
-    const int64_t seekTs = av_rescale_q(p.plan.aMs, AV_TIME_BASE_Q, tb);
-    av_seek_frame(fmt, vstream, seekTs, AVSEEK_FLAG_BACKWARD);
+    // v1.15.3 冻结根因（湛江遂溪 D15 实测）：部分 DVR 流的包时间戳从
+    // start_time 起算（D15=62585s，非 0），而 aMs/bMs 是流内毫秒（从 0 起）——
+    // 直接比较恒错，curPtsMs 恒压过 target，主循环永不拉新帧 → 全产物首帧。
+    // 解法：seek 与帧位置都按 start_time 归一到流内毫秒（对齐
+    // engine_test catchup-bench 的 startPtsUs+startMs 模型）。
+    const qint64 startMs = (fmt->start_time != AV_NOPTS_VALUE)
+        ? fmt->start_time / 1000 : 0;   // µs → ms；D15 = 62585001
+    const qint64 seekUs = startMs * 1000LL + p.plan.aMs * 1000LL;   // 绝对µs
+    if (avformat_seek_file(fmt, -1, INT64_MIN, seekUs, seekUs,
+                           AVSEEK_FLAG_BACKWARD) < 0)
+        av_seek_frame(fmt, vstream,
+                      av_rescale_q(startMs + p.plan.aMs, AVRational{1, 1000}, tb),
+                      AVSEEK_FLAG_BACKWARD);
     avcodec_flush_buffers(dec);
 
     SwsContext *sws = nullptr;
@@ -399,13 +410,20 @@ void SegmentExportEngine::run()
                 continue;
             }
             if (pkt->stream_index != vstream) { av_packet_unref(pkt); continue; }
+            // v1.15.3 冻结修：流内位置以 packet 时间戳为准（stream time_base），
+            // 不用 fr->best_effort_timestamp——部分 DVR HEVC 流的帧时间戳不随
+            // 帧推进（湛江遂溪 D15 实测），用 fr 时间会致 curPtsMs 恒压过
+            // target → 全产物复用首帧。与 engine_test catchup-bench 同源。
+            const int64_t pktMs = (pkt->dts != AV_NOPTS_VALUE)
+                ? av_rescale_q(pkt->dts, tb, AVRational{1, 1000}) - startMs
+                : (pkt->pts != AV_NOPTS_VALUE
+                       ? av_rescale_q(pkt->pts, tb, AVRational{1, 1000}) - startMs
+                       : AV_NOPTS_VALUE);
             if (avcodec_send_packet(dec, pkt) < 0) { av_packet_unref(pkt); continue; }
             av_packet_unref(pkt);
             while (avcodec_receive_frame(dec, fr) == 0) {
-                const int64_t pts = (fr->best_effort_timestamp != AV_NOPTS_VALUE)
-                                        ? fr->best_effort_timestamp : fr->pts;
-                if (pts == AV_NOPTS_VALUE) { av_frame_unref(fr); continue; }
-                const double ms = double(pts) * tb.num * 1000.0 / tb.den;
+                const double ms = (pktMs != AV_NOPTS_VALUE)
+                    ? double(pktMs) : -1.0;
                 if (ms < p.plan.aMs - 1.0) { av_frame_unref(fr); continue; }  // 关键帧前导丢弃
                 if (!frameToImage(fr, &curFrame)) { av_frame_unref(fr); continue; }
                 curPtsMs = ms;

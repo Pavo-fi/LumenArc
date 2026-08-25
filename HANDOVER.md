@@ -55,6 +55,17 @@ beijingMsOf=wallMsOf+0，轴/快照/多机全口径"不生效"；.vla 留痕照�
 onCalibPhotoFinished 调之；ui_chain +6 断言直驱锁死（offset 834000 管道/
 留痕字段/人工修正注记/beijingMsOf 反映）。18 套全绿。
 
+**补记 14（v1.15.3 续，选段导出冻结根因修复——湛江遂溪 D15 实测）**：
+产物画面静止（42.56s 全首帧）。排查链：CLI ffmpeg 抽帧全同误导两次（bash
+select 转义坑抽到前 4 帧）→ engine_test 加软解抽帧钩子证明内嵌解码正常 →
+引擎内 DIAG 打印揪出真凶：**DVR 流包时间戳从 start_time 起算（D15=62585s），
+而 aMs/bMs 是流内毫秒（0 起）**——curPtsMs=62585001 恒压过 target，主循环
+永不拉新帧 → 全产物首帧。修复：startMs=start_time/1000 归一 seek（seekUs=
+startMs×1000+aMs×1000 绝对微秒）与帧位置（pktMs−startMs）；顺带 dec->
+pkt_timebase=tb、seek 改 avformat_seek_file。验证：DIAG curPtsMs 1592841→
+1597961 跟进、产物 250 帧 scene 变化 13 处、抽帧 MAE 5~9 动态。诊断钩子已
+全部还原；18 套全绿。
+
 **补记 13（v1.15.3 续，选段导出两修——湛江遂溪案实测）**：①产物不对：LAClip
 42.56s≠选段 26.95s——根因 onExportClip 对同选段静默沿用上次变速计划（vla
 speed_plan rates[1,0.25,1]，Q5 持久化的副作用）；改默认恒 planFromLabels
