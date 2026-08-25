@@ -1,0 +1,531 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>校时逻辑图解 · LumenArc 追光者</title>
+<style>
+  :root{
+    --paper:#f7f3ea; --card:#fffdf7; --ink:#2b2620; --ink2:#6b6154;
+    --gold:#b8860b; --gold2:#c8963e; --blue:#4a7fa5; --red:#b5462d;
+    --green:#4a7c59; --line:#e3d9c4;
+  }
+  *{box-sizing:border-box}
+  body{
+    margin:0; background:var(--paper); color:var(--ink);
+    font-family:"Microsoft YaHei","PingFang SC","Noto Sans CJK SC",sans-serif;
+    line-height:1.9; font-size:16.5px;
+  }
+  header.hero{
+    background:linear-gradient(135deg,#2b2620 0%,#4a3f2e 60%,#7a5c1e 100%);
+    color:#f5ead0; padding:64px 24px 56px; text-align:center;
+  }
+  header.hero h1{font-size:34px; margin:0 0 10px; letter-spacing:2px}
+  header.hero .sub{font-size:17px; opacity:.85}
+  header.hero .meta{margin-top:22px; font-size:13px; opacity:.6}
+  nav.toc{
+    max-width:880px; margin:-28px auto 0; background:var(--card);
+    border:1px solid var(--line); border-radius:12px; padding:18px 26px;
+    box-shadow:0 6px 24px rgba(60,45,10,.12); position:relative; z-index:2;
+  }
+  nav.toc b{color:var(--gold)}
+  nav.toc ol{margin:8px 0 0; padding-left:22px; columns:2; column-gap:40px}
+  nav.toc li{margin:3px 0; font-size:14.5px}
+  nav.toc a{color:var(--ink); text-decoration:none}
+  nav.toc a:hover{color:var(--gold); text-decoration:underline}
+  main{max-width:880px; margin:36px auto 80px; padding:0 20px}
+  section.chapter{
+    background:var(--card); border:1px solid var(--line); border-radius:12px;
+    padding:34px 38px; margin:28px 0; box-shadow:0 2px 10px rgba(60,45,10,.06);
+  }
+  h2{
+    font-size:24px; margin:0 0 6px; color:var(--gold);
+    border-bottom:2px solid var(--line); padding-bottom:12px;
+  }
+  h2 .no{
+    display:inline-block; background:var(--gold); color:#fff; border-radius:8px;
+    font-size:15px; padding:2px 12px; margin-right:12px; vertical-align:4px;
+  }
+  h3{font-size:18.5px; color:var(--ink); margin:30px 0 8px}
+  h3::before{content:"◆ "; color:var(--gold2); font-size:14px}
+  p{margin:12px 0}
+  .lead{font-size:17.5px; background:#faf5e6; border-left:4px solid var(--gold);
+    padding:14px 18px; border-radius:0 8px 8px 0; margin:18px 0}
+  .case{background:#eef4f0; border-left:4px solid var(--green);
+    padding:12px 18px; border-radius:0 8px 8px 0; margin:16px 0; font-size:15.5px}
+  .case::before{content:"📁 实战案例　"; font-weight:bold; color:var(--green)}
+  .warn{background:#fbeee9; border-left:4px solid var(--red);
+    padding:12px 18px; border-radius:0 8px 8px 0; margin:16px 0; font-size:15.5px}
+  .warn::before{content:"⚠ 注意　"; font-weight:bold; color:var(--red)}
+  .fig{margin:22px auto; text-align:center}
+  .fig svg{max-width:100%; height:auto}
+  .fig .cap{font-size:13.5px; color:var(--ink2); margin-top:6px}
+  table.tb{width:100%; border-collapse:collapse; margin:18px 0; font-size:15px}
+  table.tb th{background:#f0e8d2; border:1px solid var(--line); padding:9px 12px; text-align:left}
+  table.tb td{border:1px solid var(--line); padding:9px 12px; vertical-align:top}
+  .formula{
+    text-align:center; font-size:20px; margin:22px 0; padding:16px;
+    background:#2b2620; color:#f5ead0; border-radius:10px;
+    font-family:"Cambria Math",Georgia,serif; letter-spacing:1px;
+  }
+  .formula .hl{color:#ffd77a}
+  .kw{color:var(--gold); font-weight:bold}
+  .blue{color:var(--blue); font-weight:bold}
+  .red{color:var(--red); font-weight:bold}
+  .green{color:var(--green); font-weight:bold}
+  dl.dict dt{font-weight:bold; color:var(--gold); margin-top:12px}
+  dl.dict dd{margin:4px 0 0 0; padding-left:8px}
+  .oneline{font-size:18px; text-align:center; padding:20px 24px;
+    background:linear-gradient(135deg,#faf5e6,#f5ead0); border:1px dashed var(--gold2);
+    border-radius:10px; margin:24px 0}
+  footer{ text-align:center; color:var(--ink2); font-size:13px; padding:30px 20px 50px}
+  @media print{
+    body{background:#fff} nav.toc{display:none}
+    section.chapter{box-shadow:none; break-inside:avoid}
+  }
+</style>
+</head>
+<body>
+
+<header class="hero">
+  <h1>校时逻辑图解</h1>
+  <div class="sub">把监控录像的时间，变成法庭上站得住的北京时间</div>
+  <div class="sub" style="font-size:14px;margin-top:6px">—— 写给所有人的 LumenArc 校时体系说明书（初中生可读版）——</div>
+  <div class="meta">LumenArc 追光者火灾调查音视频分析系统 · 基于 v1.15.3 实现整理 · 2026-08</div>
+</header>
+
+<nav class="toc">
+  <b>目录</b>
+  <ol>
+    <li><a href="#c0">问题：录像里的两个"时间"为什么对不上</a></li>
+    <li><a href="#c1">核心思想：校时 = 造一把换算尺</a></li>
+    <li><a href="#c2">方法一：自动校时（三点取样拟合）</a></li>
+    <li><a href="#c3">方法二：北京时间对时（同框拍照）</a></li>
+    <li><a href="#c4">方法三：同事件对时（接力链）</a></li>
+    <li><a href="#c5">特例：被压缩的录像（时间重建）</a></li>
+    <li><a href="#c6">方法四：继承（拼接产物自带校时）</a></li>
+    <li><a href="#c7">专题：电子表为什么会不准（晶振与 RC）</a></li>
+    <li><a href="#c8">可靠性设计：三道闸门与留档</a></li>
+    <li><a href="#c9">生效面与取证红线</a></li>
+    <li><a href="#c10">术语小词典</a></li>
+  </ol>
+</nav>
+
+<main>
+
+<!-- ============ 第 0 章 ============ -->
+<section class="chapter" id="c0">
+<h2><span class="no">0</span>问题：录像里的两个"时间"为什么对不上</h2>
+
+<p>打开一段监控录像，里面其实藏着<span class="kw">两个互相不认识的时间</span>：</p>
+
+<div class="fig">
+<svg viewBox="0 0 720 250" width="720">
+  <rect x="20" y="20" width="680" height="210" rx="12" fill="#26211a"/>
+  <rect x="40" y="40" width="640" height="150" rx="6" fill="#3a2f22"/>
+  <text x="70" y="75" fill="#8a7c60" font-size="14">监控画面</text>
+  <rect x="430" y="52" width="230" height="30" rx="4" fill="#000" opacity="0.55"/>
+  <text x="445" y="73" fill="#ffd77a" font-size="17" font-family="Consolas,monospace">2026-08-04 16:25:12</text>
+  <text x="445" y="100" fill="#c8963e" font-size="12">← 画面上的电子表（OSD）</text>
+  <rect x="40" y="200" width="640" height="14" rx="7" fill="#15110c"/>
+  <rect x="40" y="200" width="300" height="14" rx="7" fill="#c8963e"/>
+  <circle cx="340" cy="207" r="10" fill="#f5ead0"/>
+  <text x="40" y="240" fill="#8a7c60" font-size="13" font-family="Consolas,monospace">流内 00:42:10</text>
+  <text x="560" y="240" fill="#8a7c60" font-size="13" font-family="Consolas,monospace">01:26:40</text>
+</svg>
+<div class="cap">图 0-1　一段录像里的两个钟：进度条（流内时间）与画面上的电子表（OSD 时间）</div>
+</div>
+
+<table class="tb">
+<tr><th>钟</th><th>是什么</th><th>毛病</th></tr>
+<tr><td><span class="blue">流内时间</span>（进度条）</td><td>文件里每一帧的放映序号：第 N 帧 ÷ 每秒帧数</td><td>永远从 00:00 开始，不知道"现实里这是几点"</td></tr>
+<tr><td><span class="kw">OSD 时间</span>（画面电子表）</td><td>录像那一刻，监控主机自己的钟显示的时间，被印死在画面像素上</td><td>这台钟常常<b>从来没对过时</b>：整体慢几分钟、日期错、每天还快/慢几十秒</td></tr>
+</table>
+
+<p>火灾调查要回答的是：<b>"几点几分几秒着的火？"</b>——这是现实世界的时间。进度条答不了；电子表答了也不敢信。</p>
+
+<div class="lead">校时，就是给这两个时间之间<b>修一座桥</b>：让软件里任何一帧画面，都能换算出可信的现实时刻，并且把"这座桥是怎么修的"全程留档。</div>
+</section>
+
+<!-- ============ 第 1 章 ============ -->
+<section class="chapter" id="c1">
+<h2><span class="no">1</span>核心思想：校时 = 造一把"换算尺"</h2>
+
+<p>数学上，桥只有一条公式（别怕，就两个数）：</p>
+
+<div class="formula">真实时刻 = <span class="hl">起点 offset</span> + <span class="hl">走时速率 rate</span> × 流内毫秒</div>
+
+<ul>
+<li><span class="kw">起点 offset</span>：进度条 00:00 那一帧，对应现实世界的几点几分（含日期）。</li>
+<li><span class="kw">走时速率 rate</span>：进度条每走 1 秒，画面上的电子表走几秒。正常钟 = 1.000；每天快 31 秒的钟 = 1.00036。</li>
+</ul>
+
+<div class="fig">
+<svg viewBox="0 0 720 300" width="720">
+  <line x1="90" y1="250" x2="680" y2="250" stroke="#2b2620" stroke-width="2"/>
+  <line x1="90" y1="250" x2="90" y2="30" stroke="#2b2620" stroke-width="2"/>
+  <text x="640" y="278" fill="#2b2620" font-size="14">流内时间 →</text>
+  <text x="30" y="50" fill="#2b2620" font-size="14">真</text>
+  <text x="30" y="70" fill="#2b2620" font-size="14">实</text>
+  <text x="30" y="90" fill="#2b2620" font-size="14">时</text>
+  <text x="30" y="110" fill="#2b2620" font-size="14">刻</text>
+  <line x1="90" y1="200" x2="640" y2="70" stroke="#c8963e" stroke-width="3.5"/>
+  <circle cx="90" cy="200" r="7" fill="#b8860b"/>
+  <text x="100" y="222" fill="#b8860b" font-size="15" font-weight="bold">起点 offset</text>
+  <text x="100" y="240" fill="#6b6154" font-size="12">（流内0点 = 现实 08:15:00）</text>
+  <line x1="420" y1="143" x2="520" y2="143" stroke="#4a7fa5" stroke-width="2" stroke-dasharray="5,4"/>
+  <line x1="520" y1="143" x2="520" y2="122" stroke="#4a7fa5" stroke-width="2" stroke-dasharray="5,4"/>
+  <text x="470" y="112" fill="#4a7fa5" font-size="14" font-weight="bold">斜率 = rate</text>
+  <text x="430" y="165" fill="#6b6154" font-size="12">钟走快 → 线更陡；走慢 → 更平</text>
+</svg>
+<div class="cap">图 1-1　换算尺：知道起点和斜率，任意流内位置都能换算真实时刻</div>
+</div>
+
+<h3>一把尺子量到底</h3>
+<p>软件里所有需要时间的地方——图表横轴、光标读数、标签、CSV 导出、报告——<b>全部只允许从这一个换算口拿数</b>（代码里叫 <span class="kw">wallMsOf()</span>，行规 C3）。这样就杜绝了"图表说 16:25、报告说 16:27"这种各说各话的事故。</p>
+
+<div class="oneline">全软件只有一把尺子。校时做的事，就是把这把尺子造准、并留下造尺子的全部证据。</div>
+</section>
+
+<!-- ============ 第 2 章 ============ -->
+<section class="chapter" id="c2">
+<h2><span class="no">2</span>方法一：自动校时（三点取样拟合）</h2>
+
+<p>思路朴素得像称体重：在录像的<b>开头、中间、结尾</b>各截一帧，用 OCR（文字识别）读出画面上电子表的数字，得到三组数据：</p>
+
+<table class="tb">
+<tr><th>取样点</th><th>流内位置</th><th>电子表读数（OCR）</th></tr>
+<tr><td>开头</td><td>0 秒</td><td>08:00:00</td></tr>
+<tr><td>中间</td><td>1800 秒</td><td>09:00:00.65</td></tr>
+<tr><td>结尾</td><td>3600 秒</td><td>09:00:01.3</td></tr>
+</table>
+
+<p>三组数据画在坐标系里是三个点，用<b>最小二乘法</b>画一条"最贴合三点"的直线——</p>
+<ul>
+<li>直线截距 = <span class="kw">起点</span>：流内 0 点 = 08:00:00</li>
+<li>直线斜率 = <span class="kw">走时速率</span>：3601.3 ÷ 3600 = 1.00036 → 换算成人话：<b>"画面时钟每天快 31 秒"</b></li>
+</ul>
+
+<div class="fig">
+<svg viewBox="0 0 720 300" width="720">
+  <line x1="90" y1="250" x2="680" y2="250" stroke="#2b2620" stroke-width="2"/>
+  <line x1="90" y1="250" x2="90" y2="30" stroke="#2b2620" stroke-width="2"/>
+  <text x="600" y="278" fill="#2b2620" font-size="14">流内时间 →</text>
+  <text x="40" y="50" fill="#2b2620" font-size="14">OSD 读数</text>
+  <line x1="110" y1="222" x2="630" y2="62" stroke="#c8963e" stroke-width="3"/>
+  <circle cx="130" cy="216" r="8" fill="#4a7fa5"/>
+  <circle cx="370" cy="139" r="8" fill="#4a7fa5"/>
+  <circle cx="610" cy="68" r="8" fill="#b5462d"/>
+  <text x="118" y="200" fill="#4a7fa5" font-size="13">开头</text>
+  <text x="358" y="123" fill="#4a7fa5" font-size="13">中间</text>
+  <text x="596" y="52" fill="#b5462d" font-size="13">结尾</text>
+  <text x="290" y="285" fill="#6b6154" font-size="13">三点不一定完美共线 → 拟合直线取"最公平"的位置</text>
+</svg>
+<div class="cap">图 2-1　三点取样 + 直线拟合：斜率就是监控钟的快慢</div>
+</div>
+
+<h3>为什么要三个点，两个不行吗</h3>
+<p>两个点<b>永远</b>能连成一条完美的直线——但你永远无法发现"其中一个点其实是 OCR 看错了"。三个点就不同了：如果某个点明显不在这条线上，它就是<span class="red">野点</span>（异常点），系统会标 ⚠ 自动排除后重新拟合，对话框里还可以人工取消勾选。<b>第三个点是测谎仪。</b></p>
+
+<div class="warn">拟合出的速率若超过 <b>1%（每天快/慢 14.4 分钟）</b>，系统直接拒绝应用——物理上没有任何正常的钟能走成这样（见第 7 章），超了必是"看错了"或"文件有问题"。<b>宁可不校，不能错校。</b></div>
+
+<h3>拟合出的 rate≠1，是文件被压缩了吗？</h3>
+<p><b>不是。</b>正常录像是实时的：真实世界每过 1 秒录 25 帧，播放也是 25 帧——流内时间和真实时间 1:1 流动，谁也没压缩谁。rate≠1 说的是<b>画面上那个电子表自己走得不准</b>（监控主机的钟快/慢），跟文件无关。真正被压缩的文件长什么样，见第 5 章。</p>
+</section>
+
+<!-- ============ 第 3 章 ============ -->
+<section class="chapter" id="c3">
+<h2><span class="no">3</span>方法二：北京时间对时（同框拍照）</h2>
+
+<p>第 2 章解决了"钟走得快不快"，但还有一个独立的问题：<b>钟整体偏了多少</b>。很多监控主机从装上的那天起就没对过时，整个钟慢十几分钟是常事。</p>
+
+<div class="fig">
+<svg viewBox="0 0 720 260" width="720">
+  <rect x="40" y="30" width="420" height="200" rx="10" fill="#26211a"/>
+  <rect x="60" y="50" width="380" height="160" rx="6" fill="#3a2f22"/>
+  <text x="80" y="85" fill="#8a7c60" font-size="13">监控屏幕</text>
+  <rect x="70" y="150" width="220" height="44" rx="5" fill="none" stroke="#c8963e" stroke-width="2.5" stroke-dasharray="7,5"/>
+  <text x="82" y="179" fill="#ffd77a" font-size="19" font-family="Consolas,monospace">12:25:47</text>
+  <text x="82" y="143" fill="#c8963e" font-size="12">框① 监控主机时间</text>
+  <rect x="520" y="50" width="150" height="230" rx="16" fill="#1c1a17"/>
+  <rect x="532" y="70" width="126" height="190" rx="8" fill="#2e2b25"/>
+  <rect x="540" y="120" width="110" height="46" rx="5" fill="none" stroke="#4a7fa5" stroke-width="2.5" stroke-dasharray="7,5"/>
+  <text x="548" y="149" fill="#9fc3e0" font-size="17" font-family="Consolas,monospace">12:39:41</text>
+  <text x="540" y="112" fill="#4a7fa5" font-size="12">框② 北京时间</text>
+  <text x="505" y="40" fill="#6b6154" font-size="13">手机同框拍入</text>
+</svg>
+<div class="cap">图 3-1　取证惯例：手机显示标准北京时间，与监控屏幕同框拍照</div>
+</div>
+
+<p>把照片导入软件，依次框选两个时间 → OCR 自动识别 → 相减：</p>
+
+<div class="formula">偏差 = 北京时间 − 监控时间 = 12:39:41 − 12:25:47 = <span class="hl">慢 13 分 54 秒</span></div>
+
+<p>这个偏差叠在第 1 章的尺子最外层：<b>北京时间 = 监控墙钟 + 偏差</b>。确认卡上两个时间<b>可以直接人工修正</b>（OCR 偶尔会认错数字），原文、截图、框选坐标全部随案件留档——原文永不修改，修正留痕。</p>
+
+<div class="warn"><b>精确度边界</b>：对时补的是"拍照那一刻"的偏差。如果监控钟还在漂移（每天快 31 秒），而照片是案发后 5 天才拍的，那案发那一刻的真实偏差和拍照时测到的偏差之间，隔着 5 天 × 31 秒 ≈ 2.6 分钟的累积漂移——<b>拍照离案发越近越准</b>。</div>
+
+<div class="case">2026 年 8 月某火灾案：C01 机位同框对时，测出监控慢 13 分 54 秒。报告中这一路的"显示时间取样"列写的就是经人工修正后的 12:25:47，OCR 原文（12:25:42，识别有误）作为留档标注一并呈现——<b>修正值与偏差值 834 秒完全自洽</b>。</div>
+</section>
+
+<!-- ============ 第 4 章 ============ -->
+<section class="chapter" id="c4">
+<h2><span class="no">4</span>方法三：同事件对时（接力链）</h2>
+
+<p>有些摄像头没法直接对时：画面里没电子表、也没法拍同框照。但火灾现场常常有天然的"对时信号"——<b>两路监控拍到了同一件事</b>：同一声爆燃、同一扇门被推开、同一个人跑过巷口。</p>
+
+<p>做法：在<b>已校时</b>的"参考路"和<b>没校时</b>的"目标路"上，各标出这件事发生的时刻 → 两个时刻对齐 → 目标路的时间轴整体平移过去。标两个以上事件，还能连"快慢"一起拟合出来。</p>
+
+<div class="fig">
+<svg viewBox="0 0 720 240" width="720">
+  <text x="60" y="30" fill="#6b6154" font-size="14">标准授时（照片对时）</text>
+  <g font-size="14">
+    <rect x="60" y="50" width="130" height="46" rx="8" fill="#4a7c59"/>
+    <text x="95" y="79" fill="#fff">C01 已对时</text>
+    <rect x="290" y="50" width="130" height="46" rx="8" fill="#c8963e"/>
+    <text x="325" y="79" fill="#fff">C02 接力</text>
+    <rect x="520" y="50" width="130" height="46" rx="8" fill="#b5462d"/>
+    <text x="555" y="79" fill="#fff">C03 接力</text>
+  </g>
+  <line x1="195" y1="73" x2="285" y2="73" stroke="#2b2620" stroke-width="2.5"/>
+  <polygon points="285,73 275,67 275,79" fill="#2b2620"/>
+  <text x="200" y="60" fill="#6b6154" font-size="12">同事件锚点</text>
+  <line x1="425" y1="73" x2="515" y2="73" stroke="#2b2620" stroke-width="2.5"/>
+  <polygon points="515,73 505,67 505,79" fill="#2b2620"/>
+  <text x="430" y="60" fill="#6b6154" font-size="12">同事件锚点</text>
+  <text x="60" y="140" fill="#6b6154" font-size="13">"准时间"像水漂一样一跳一跳传过去。每一跳有人工对帧误差（约半帧），</text>
+  <text x="60" y="162" fill="#6b6154" font-size="13">误差逐跳累加，报告里如实呈现，不许美化。</text>
+  <text x="60" y="200" fill="#b5462d" font-size="13" font-weight="bold">规则：允许多跳接力，但禁止绕成环（A借B、B借A）——建锚时自动沿链检查。</text>
+</svg>
+<div class="cap">图 4-1　接力链：C01 有照片对时，C02 借 C01，C03 借 C02</div>
+</div>
+
+<div class="case">同一案件：C02 无电子表，靠两段录像里"同一声响"与 C01 对帧，误差 ±0.3 秒（报告写"一致（±0.5 秒内）"）；C03 再借 C02 的对齐结果。报告"时间校准"章末尾如实写出接力关系：<b>C03 → C02 → C01 → 标准授时</b>。</div>
+</section>
+
+<!-- ============ 第 5 章 ============ -->
+<section class="chapter" id="c5">
+<h2><span class="no">5</span>特例：被压缩的录像（时间重建）</h2>
+
+<p>有些 DVR 为了省硬盘用<b>抽帧录像</b>：没动静时每秒只录 12.5 帧，有动静才录满 25 帧；导出时统一按 25 帧重新打时间戳。后果是——</p>
+
+<div class="lead">真实世界 103 分钟的内容，被压进了 74 分钟的流内时间里。<b>流内 60 秒 ≠ 真实 60 秒</b>，而且压多压少随时段变化。</div>
+
+<div class="fig">
+<svg viewBox="0 0 720 230" width="720">
+  <text x="40" y="30" fill="#2b2620" font-size="14" font-weight="bold">真实世界（OSD 电子表）</text>
+  <rect x="40" y="42" width="640" height="30" rx="6" fill="#4a7fa5"/>
+  <text x="300" y="63" fill="#fff" font-size="14">103 分钟</text>
+  <text x="40" y="108" fill="#2b2620" font-size="14" font-weight="bold">文件流内时间（被压缩）</text>
+  <rect x="40" y="120" width="460" height="30" rx="6" fill="#b5462d"/>
+  <text x="220" y="141" fill="#fff" font-size="14">74 分钟</text>
+  <line x1="40" y1="72" x2="40" y2="120" stroke="#6b6154" stroke-width="1.5" stroke-dasharray="4,4"/>
+  <line x1="500" y1="120" x2="680" y2="72" stroke="#6b6154" stroke-width="1.5" stroke-dasharray="4,4"/>
+  <text x="40" y="196" fill="#6b6154" font-size="13">一条直线救不了它：拟合会得到"每天快 39%"——超 1% 上限被自动拒绝，</text>
+  <text x="40" y="216" fill="#6b6154" font-size="13">软件自动改走"时间重建"：把整片切成若干段，每段一把小尺子。</text>
+</svg>
+<div class="cap">图 5-1　抽帧录像：真实 103 分钟 → 流内 74 分钟</div>
+</div>
+
+<h3>分段查表：一把尺子换成一排尺子</h3>
+<p>时间重建用"两级采样"：先粗采样找出"哪里变速了"（边界），再在边界附近加密取样确认，最后生成一张<b>分段时间映射表</b>——每段内部仍是"起点+速率"的小直线，段与段之间允许跳变。</p>
+
+<div class="fig">
+<svg viewBox="0 0 720 260" width="720">
+  <line x1="70" y1="220" x2="690" y2="220" stroke="#2b2620" stroke-width="2"/>
+  <line x1="70" y1="220" x2="70" y2="30" stroke="#2b2620" stroke-width="2"/>
+  <text x="630" y="246" fill="#2b2620" font-size="13">流内时间 →</text>
+  <text x="20" y="45" fill="#2b2620" font-size="13">真实时刻</text>
+  <polyline points="80,205 240,140" fill="none" stroke="#c8963e" stroke-width="3.5"/>
+  <polyline points="240,120 430,70" fill="none" stroke="#c8963e" stroke-width="3.5"/>
+  <polyline points="430,95 660,40" fill="none" stroke="#c8963e" stroke-width="3.5"/>
+  <line x1="240" y1="140" x2="240" y2="120" stroke="#b5462d" stroke-width="3"/>
+  <line x1="430" y1="70" x2="430" y2="95" stroke="#b5462d" stroke-width="3"/>
+  <text x="150" y="190" fill="#b8860b" font-size="12">段1（待机低帧率）</text>
+  <text x="300" y="110" fill="#b8860b" font-size="12">段2（异动全帧率）</text>
+  <text x="500" y="80" fill="#b8860b" font-size="12">段3</text>
+  <text x="248" y="133" fill="#b5462d" font-size="12">跳变</text>
+  <text x="438" y="90" fill="#b5462d" font-size="12">缺口（漏录时段）</text>
+</svg>
+<div class="cap">图 5-2　分段查表：段内是直线，段间允许跳变；竖线缺口 = 监控关机/漏录的真实空档</div>
+</div>
+
+<p>段间的竖直跳变不是错误，是<b>如实记录</b>：监控有缺口（关机、漏录、循环覆盖）是常态。打开这种文件时软件会弹出缺口提示，缺口明细同时写进报告——<b>少了哪段时间，调查员必须知道。</b></p>
+</section>
+
+<!-- ============ 第 6 章 ============ -->
+<section class="chapter" id="c6">
+<h2><span class="no">6</span>方法四：继承（拼接产物自带校时）</h2>
+
+<p>前处理"素材转码拼接"把多段素材合成一个文件时，软件会把每一段的校时信息写成一个小小的伴生文件（<span class="kw">.lumencal.json</span>，行话叫 sidecar）跟着产物走：</p>
+
+<ul>
+<li>每段的墙钟起点 + 走时速率（按画面 OCR 时间锚定）</li>
+<li>重叠修剪了多少、哪段转码失败被丢弃、缺口的起止和时长——全部留痕</li>
+</ul>
+
+<p>打开拼接产物时，这份信息<b>自动继承</b>为分段校时表，不用再做一遍校时。前处理的证据摘要（"导入 N → 输出 M，缺口逐条明细"）与这份校时同口径，两边数字永远对得上。</p>
+</section>
+
+<!-- ============ 第 7 章 ============ -->
+<section class="chapter" id="c7">
+<h2><span class="no">7</span>专题：电子表为什么会不准（晶振与 RC）</h2>
+
+<h3>电子表的心脏：每秒振 32768 下的小石英片</h3>
+<p>监控主机里管时钟的是一颗 <b>32.768 kHz 石英晶振</b>。为什么是这个怪数字？因为 32768 = 2¹⁵，电路数它振满 32768 下，就当 1 秒。</p>
+<ul>
+<li>石英片振得比设计值略快（比如每秒 32768.5 下）→ 表<b>走快</b>（每天快约 1.3 秒）</li>
+<li>振得略慢 → 表<b>走慢</b></li>
+</ul>
+
+<div class="warn"><b>纠正一个流传很广的误解</b>："晶体会衰减，所以钟总是越来越慢"——<b>不对</b>。走快走慢都可能，没有单向变慢的物理规律。</div>
+
+<table class="tb">
+<tr><th>影响因素</th><th>方向</th><th>量级</th><th>说明</th></tr>
+<tr><td><b>① 出厂底子</b></td><td><b>可快可慢</b></td><td>每天 ±0.4~1.7 秒</td><td>晶体切割有误差，这颗生而就快、那颗生而就慢，随机，跟随一辈子</td></tr>
+<tr><td><b>② 温度</b></td><td>只会推向慢</td><td>机房酷热时每天再慢几秒</td><td>音叉晶体在 25°C 时振最快，冷了热了都变慢——但若出厂底子偏快，热天只是"没那么快"，仍可能在走快</td></tr>
+<tr><td><b>③ 老化（"衰减"）</b></td><td>可快可慢</td><td>每年 1~2 分钟以内</td><td>存在但极小、方向不定，头一年变化多点，之后基本稳定</td></tr>
+</table>
+
+<h3>为什么有的监控钟慢得离谱：RC 振荡器</h3>
+<p>芯片干活需要"心跳"节拍。产生节拍最准的办法是石英晶振，<b>最便宜的办法是 RC 振荡器</b>——用一颗电阻（R）加一颗电容（C）搭的节拍器：</p>
+
+<div class="fig">
+<svg viewBox="0 0 720 250" width="720">
+  <text x="60" y="30" fill="#2b2620" font-size="15" font-weight="bold">石英晶振 = 音叉</text>
+  <path d="M120,60 Q100,120 120,180 M170,60 Q190,120 170,180" stroke="#4a7fa5" stroke-width="5" fill="none"/>
+  <line x1="145" y1="120" x2="215" y2="120" stroke="#4a7fa5" stroke-width="3" stroke-dasharray="6,5"/>
+  <polygon points="215,120 205,114 205,126" fill="#4a7fa5"/>
+  <text x="60" y="215" fill="#6b6154" font-size="12.5">材料物理决定频率，几千万片每片都一样</text>
+  <text x="60" y="235" fill="#4a7c59" font-size="12.5" font-weight="bold">误差 ±0.002%：每天几秒以内</text>
+  <text x="400" y="30" fill="#2b2620" font-size="15" font-weight="bold">RC 振荡器 = 气球 + 细水管</text>
+  <circle cx="560" cy="110" r="42" fill="none" stroke="#b5462d" stroke-width="4"/>
+  <text x="540" y="116" fill="#b5462d" font-size="14">电容C</text>
+  <line x1="470" y1="110" x2="512" y2="110" stroke="#2b2620" stroke-width="3"/>
+  <path d="M470,110 l6,-8 l8,16 l8,-16 l8,16 l8,-16 l6,8" stroke="#b8860b" stroke-width="3" fill="none"/>
+  <text x="452" y="90" fill="#b8860b" font-size="13">电阻R</text>
+  <text x="610" y="90" fill="#6b6154" font-size="12.5">充电→放掉→充电…</text>
+  <text x="610" y="106" fill="#6b6154" font-size="12.5">每轮=一拍</text>
+  <text x="400" y="215" fill="#6b6154" font-size="12.5">气球皮厚薄、水管粗细各不相同，还随温度变</text>
+  <text x="400" y="235" fill="#b5462d" font-size="12.5" font-weight="bold">误差 ±1% 量级：每天能差十几分钟</text>
+</svg>
+<div class="cap">图 7-1　两种"心跳"：音叉式 vs 气球水管式</div>
+</div>
+
+<p>山寨 DVR 用 RC 纯粹是为了<b>省一毛钱</b>（晶振要外焊一颗元件，RC 能集成在芯片里）——"能显个数就行，准不准没人管"。</p>
+
+<h3>量级感：每天差多少算正常</h3>
+<table class="tb">
+<tr><th>钟的种类</th><th>每天误差上限</th><th>结论</th></tr>
+<tr><td>正常石英晶体</td><td>几秒以内</td><td>✅ 正常</td></tr>
+<tr><td>烂晶体 + 极端温度</td><td>十几秒</td><td>边缘，仍属晶体物理范围</td></tr>
+<tr><td>RC 垃圾钟（山寨机）</td><td>十几分钟</td><td>硬件垃圾，不是"衰减"</td></tr>
+<tr><td><b>超出以上（每天差几十分钟）</b></td><td>—</td><td class="red"><b>物理上不可能 = 必是 OCR 看错 或 文件被压缩</b></td></tr>
+</table>
+
+<div class="case">增城案 C03 机位：同事件对时拟合出"每天快 10 分钟"——比最烂的石英晶体还烂 40 倍。所以结论不是"钟快"，而是<b>这路文件的时间轴本身有压缩特性</b>。两路独立拟合结果一致，正说明"错得很稳定"——错的是文件，不是识别。</div>
+</section>
+
+<!-- ============ 第 8 章 ============ -->
+<section class="chapter" id="c8">
+<h2><span class="no">8</span>可靠性设计：三道闸门与留档</h2>
+
+<p>校时结论是要进报告、上法庭的。系统用三道闸门把住"宁可不校、不能错校"的底线：</p>
+
+<div class="fig">
+<svg viewBox="0 0 720 260" width="720">
+  <g font-size="13.5">
+    <rect x="30" y="40" width="200" height="150" rx="10" fill="#eef4f0" stroke="#4a7c59" stroke-width="2"/>
+    <text x="55" y="70" fill="#4a7c59" font-size="15" font-weight="bold">闸门 ① 显著性</text>
+    <text x="45" y="100" fill="#2b2620">每天差 &lt; 30 秒：</text>
+    <text x="45" y="122" fill="#2b2620">视为"钟准"，只报告</text>
+    <text x="45" y="144" fill="#2b2620">不做修正</text>
+    <text x="45" y="172" fill="#6b6154" font-size="12">（对火灾调查无影响，</text>
+    <text x="45" y="188" fill="#6b6154" font-size="12">修反而引入噪声）</text>
+    <rect x="260" y="40" width="200" height="150" rx="10" fill="#faf5e6" stroke="#b8860b" stroke-width="2"/>
+    <text x="285" y="70" fill="#b8860b" font-size="15" font-weight="bold">闸门 ② 物理上限</text>
+    <text x="275" y="100" fill="#2b2620">每天差 &gt; 14.4 分钟（1%）：</text>
+    <text x="275" y="122" fill="#2b2620">超一切钟的物理极限</text>
+    <text x="275" y="144" fill="#b5462d" font-weight="bold">拒绝应用</text>
+    <text x="275" y="172" fill="#6b6154" font-size="12">（必是 OCR 误读或</text>
+    <text x="275" y="188" fill="#6b6154" font-size="12">文件被压缩）</text>
+    <rect x="490" y="40" width="200" height="150" rx="10" fill="#fbeee9" stroke="#b5462d" stroke-width="2"/>
+    <text x="515" y="70" fill="#b5462d" font-size="15" font-weight="bold">闸门 ③ 野点剔除</text>
+    <text x="505" y="100" fill="#2b2620">某取样点偏离直线</text>
+    <text x="505" y="122" fill="#2b2620">超过 3 秒 → 标 ⚠</text>
+    <text x="505" y="144" fill="#2b2620">自动排除后重拟合</text>
+    <text x="505" y="172" fill="#6b6154" font-size="12">（人可在对话框复核、</text>
+    <text x="505" y="188" fill="#6b6154" font-size="12">取消勾选任一测点）</text>
+  </g>
+  <text x="30" y="240" fill="#6b6154" font-size="13">三道闸门全部通过，校时结果才允许生效——且每道闸的判定过程都留档。</text>
+</svg>
+<div class="cap">图 8-1　三道可靠性闸门</div>
+</div>
+
+<h3>留档：每个结论都能回溯到原始证据</h3>
+<ul>
+<li><b>OCR 原文、证据截图、框选坐标</b>随校时结果一起存进 .vla 与案件目录，原文<b>永不修改</b>；人工修正只改"修正值"，原文一并呈现</li>
+<li>修正参数可审计、可关闭（rateApplied=false 即回到未修正状态）</li>
+<li>每次校时操作记录"操作时刻"时间戳</li>
+<li>同事件接力：事件名必填、误差逐跳累加、报告独立小节如实呈现接力链</li>
+<li>报告"时间校准"章用白话写校准方法、差值与结论，不堆参数</li>
+</ul>
+</section>
+
+<!-- ============ 第 9 章 ============ -->
+<section class="chapter" id="c9">
+<h2><span class="no">9</span>生效面与取证红线</h2>
+
+<h3>校时一旦采用，这些地方全部同步生效</h3>
+<table class="tb">
+<tr><th>位置</th><th>表现</th></tr>
+<tr><td>案件树</td><td>视频条目旁亮 ⏰ 徽标</td></tr>
+<tr><td>图表时间轴 / 光标 / 标签悬停</td><td>显示真实时刻（已做北京时间对时则显示北京时间）</td></tr>
+<tr><td>CSV 导出</td><td>时间列同口径换算</td></tr>
+<tr><td>截图</td><td>文件名自动带校准后北京时间；OSD 角标显示北京时间</td></tr>
+<tr><td>报告</td><td>第四章"时间校准"：白话方法说明 + 六列对照表 + 接力链小节</td></tr>
+<tr><td>合并轨 / 多机联放</td><td>各路按墙钟对齐（同事件对时的预览即"同一墙钟瞬间"）</td></tr>
+<tr><td>前处理产物命名</td><td>自动按校时墙钟命名：CAM01_20260722_172528-173541.mp4</td></tr>
+</table>
+
+<p><b>没校时的视频行为完全不变</b>（图表照旧显示流内时间）——校时是可选增强，不是强制。</p>
+
+<h3>取证红线（不可逾越）</h3>
+<div class="warn">
+<b>OSD 画面像素永不修改。</b>画面是证据，动一个像素都不行。软件做的永远是"建换算模型"，不是"改画面"；源文件永不写入；所有修正只动模型参数，且全程留痕、可关闭、可回溯。
+</div>
+
+<div class="oneline">一句话总结：正常录像的流内时间就是真实时间的脚步（1:1），自动校时量的是"画面里那个挂钟准不准、起点在哪"；只有抽帧录像才存在真·压缩，而它走时间重建那条路。所有结论留档，所有误差如实呈现。</div>
+</section>
+
+<!-- ============ 第 10 章 ============ -->
+<section class="chapter" id="c10">
+<h2><span class="no">10</span>术语小词典</h2>
+<dl class="dict">
+<dt>流内时间</dt><dd>视频文件自己的播放进度时间，从 00:00 起算。由帧序号÷帧率决定。</dd>
+<dt>OSD 时间</dt><dd>监控主机印在画面像素上的电子表读数（On-Screen Display）。是"监控的钟"的历史记录。</dd>
+<dt>北京时间 / 墙钟</dt><dd>现实世界标准时间。软件内部叫 wallMs（墙钟毫秒）；北京时间 = 墙钟 + 对时偏差。</dd>
+<dt>偏移 offset</dt><dd>换算尺的起点：流内 0 点对应的真实时刻。</dd>
+<dt>速率 rate</dt><dd>换算尺的斜率：流内每走 1 秒，OSD 走几秒。1.00036 = 钟每天快 31 秒。</dd>
+<dt>拟合 / 最小二乘</dt><dd>给几个取样点画一条"最公平"直线的数学方法。</dd>
+<dt>野点</dt><dd>明显偏离直线的取样点（多半是 OCR 认错了），自动标 ⚠ 排除。</dd>
+<dt>锚点 / 同事件对时</dt><dd>两路监控拍到同一事件的时刻对。把已校时路的"准"传递给未校时路。</dd>
+<dt>接力链</dt><dd>锚点传递形成的路径，如 C03 → C02 → C01 → 标准授时。允许多跳，禁止成环。</dd>
+<dt>分段表 / 时间重建</dt><dd>变速/抽帧文件的校时方式：整片切成若干段，每段一把小尺子，段间允许跳变。</dd>
+<dt>缺口</dt><dd>监控没录上的真实时间段（关机/漏录）。如实提示并写入报告。</dd>
+<dt>sidecar（.lumencal.json）</dt><dd>拼接产物的伴生校时文件，打开产物时自动继承成分段校时。</dd>
+<dt>晶振 / RC 振荡器</dt><dd>时钟芯片的"心跳"来源。晶振准（每天几秒），RC 不准（每天能差十几分钟），山寨机为省钱用 RC。</dd>
+<dt>.vla</dt><dd>本软件的分析结果文件（含校时模型与全部证据留档）。</dd>
+</dl>
+</section>
+
+</main>
+
+<footer>
+LumenArc 追光者火灾调查音视频分析系统 · 校时逻辑图解<br>
+基于 v1.15.3 实现整理 · 本文档为离线单文件，可直接打印/归档<br>
+© 2026 Huang Jingyun / Liu Xinghua / Huang Wenhua · Apache License 2.0
+</footer>
+
+</body>
+</html>
