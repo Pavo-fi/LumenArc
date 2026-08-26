@@ -64,6 +64,9 @@ public:
     /// 参数=被保存校时的视频路径（主视口若正开着它需同步内存校时，
     /// 防旧值回写覆盖 .vla——v1.15.3 用户实测"退出多机后主页面没更新"）
     std::function<void(const QString &videoPath)> onCaseDataChanged;
+    /// v1.16.0：多机起播前回调（主窗挂此暂停主视口——开窗时的一次暂停挡不住
+    /// 用户回主窗再播，起播前拦才可靠）
+    std::function<void()> onAboutToPlay;
 
     /// 为槽位装载视频（onPickVideo 的对话框后段；测试通道：绕过文件框直喂路径）
     void pickVideoForSlot(int slot, const QString &path);

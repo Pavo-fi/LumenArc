@@ -2397,8 +2397,13 @@ void MainWindow::onMultiCamView()
         m_multiCamWin = nullptr;
         return;
     }
+    // v1.16.0：多机起播前拦主视口（开窗时的一次暂停挡不住回主窗再播）
+    win->onAboutToPlay = [this]() {
+        if (m_videoEngine && m_videoEngine->state() == PlaybackState::Playing)
+            m_videoEngine->pause();
+    };
     win->setAttribute(Qt::WA_DeleteOnClose);
-    win->show();
+    win->showMaximized();   // v1.16.0 拍板：多机窗默认最大化（多路铺屏）
 }
 
 void MainWindow::onMultiCamStandalone()
@@ -2441,8 +2446,12 @@ void MainWindow::onMultiCamStandalone()
         }
     };
     win->openStandalone();
+    win->onAboutToPlay = [this]() {   // v1.16.0：同上拦主视口
+        if (m_videoEngine && m_videoEngine->state() == PlaybackState::Playing)
+            m_videoEngine->pause();
+    };
     win->setAttribute(Qt::WA_DeleteOnClose);
-    win->show();
+    win->showMaximized();   // v1.16.0：默认最大化
 }
 
 void MainWindow::openVideoFile(const QString &filePath)

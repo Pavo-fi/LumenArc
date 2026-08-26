@@ -1005,6 +1005,9 @@ void MultiCamPlaybackWindow::onTogglePlay()
         ecTogglePlay();
         return;
     }
+    // v1.16.0：起播前通知主窗暂停主视口（防双路音频/资源竞争）
+    if (onAboutToPlay && m_svc->state() != MultiCamSyncService::State::Playing)
+        onAboutToPlay();
     m_svc->togglePlay();
 }
 
@@ -1016,6 +1019,8 @@ void MultiCamPlaybackWindow::ecTogglePlay()
 
 void MultiCamPlaybackWindow::ecSetPlayRange(int lane, bool on)
 {
+    if (on && onAboutToPlay)
+        onAboutToPlay();   // v1.16.0：沙盒起播同样拦主视口
     m_ecPlaying = on;
     m_ecPlayLane = on ? lane : -1;
     for (int i = 0; i < m_svc->laneCount(); ++i)
@@ -1620,15 +1625,24 @@ void MultiCamPlaybackWindow::buildEventCalibPanel()
     eg->setWordWrap(true);
     eg->setStyleSheet(QStringLiteral("color:%1;").arg(Theme::TextSecond));
     v3->addWidget(eg);
-    // v1.16.0 拍板：对时沙盒双播放钮——「播放选中瓦片」/「播放全部」
-    auto *pr = new QHBoxLayout();
+    // v1.16.0 拍板：对时沙盒双播放钮——整行竖排+高亮描边（用户实测：
+    // 窄面板里横排小字看不见）
+    const QString ecPlayStyle = QStringLiteral(
+        "QPushButton { border:2px solid %1; border-radius:6px;"
+        " font-weight:bold; padding:6px; }"
+        "QPushButton:hover { background:%1; color:#20242B; }")
+        .arg(Theme::Accent);
     m_ecPlaySelBtn = new QPushButton(lang("▶ 播放选中瓦片", "▶ Play selected"),
                                      m_ecStep3);
+    m_ecPlaySelBtn->setMinimumHeight(36);
+    m_ecPlaySelBtn->setStyleSheet(ecPlayStyle);
     m_ecPlaySelBtn->setToolTip(lang(
         "只播当前点选的那一路（金框瓦片），其余暂停——逐帧比对该路用",
         "Play only the selected tile; others paused"));
     m_ecPlayAllBtn = new QPushButton(lang("▶▶ 播放全部", "▶▶ Play all"),
                                      m_ecStep3);
+    m_ecPlayAllBtn->setMinimumHeight(36);
+    m_ecPlayAllBtn->setStyleSheet(ecPlayStyle);
     m_ecPlayAllBtn->setToolTip(lang(
         "两路一起播（配合「同听两路」比对喇叭/轰鸣类声音事件）",
         "Play all lanes together"));
@@ -1645,9 +1659,8 @@ void MultiCamPlaybackWindow::buildEventCalibPanel()
         const bool allRun = m_ecPlaying && m_ecPlayLane < 0;
         ecSetPlayRange(-1, !allRun);
     });
-    pr->addWidget(m_ecPlaySelBtn);
-    pr->addWidget(m_ecPlayAllBtn);
-    v3->addLayout(pr);
+    v3->addWidget(m_ecPlaySelBtn);
+    v3->addWidget(m_ecPlayAllBtn);
     m_ecBothAudio = new QCheckBox(
         lang("🔊 同时听这两路的声音（比对喇叭/轰鸣类声音事件用）",
              "🔊 Hear both lanes at once (for sound events)"),
