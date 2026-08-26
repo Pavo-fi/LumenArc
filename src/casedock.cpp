@@ -10,6 +10,9 @@
  */
 #include "casedock.h"
 
+#include "imagepreviewdialog.h"
+
+#include <QtConcurrent/QtConcurrent>
 #include <QAction>
 #include <QApplication>
 #include <QAbstractButton>
@@ -20,6 +23,7 @@
 #include <QFile>
 #include <QFileDialog>
 #include <QFileInfo>
+#include <QFutureWatcher>
 #include <QLabel>
 #include <QMenu>
 #include <QInputDialog>
@@ -88,6 +92,7 @@ CaseDock::CaseDock(CaseManager *cm, QWidget *parent)
 
     m_tree = new QTreeWidget(host);
     m_tree->setHeaderHidden(true);
+    m_tree->setIconSize(QSize(56, 56));   // v1.16.0：快照缩略图行高
     m_tree->setContextMenuPolicy(Qt::CustomContextMenu);
     m_tree->setStyleSheet(QStringLiteral(
         "QTreeWidget { background:%1; border:1px solid %2; border-radius:6px; }"
@@ -95,6 +100,15 @@ CaseDock::CaseDock(CaseManager *cm, QWidget *parent)
         .arg(Theme::BgCard, Theme::Border));
     lay->addWidget(m_tree, 1);
     setWidget(host);
+
+    // v1.16.0：缩略图异步加载完成后合批刷新（150ms 收敛，避免每张图一次重建）
+    m_thumbTimer = new QTimer(this);
+    m_thumbTimer->setSingleShot(true);
+    m_thumbTimer->setInterval(150);
+    connect(m_thumbTimer, &QTimer::timeout, this, [this]() {
+        if (m_caseManager && m_caseManager->isOpen())
+            refreshTree();
+    });
 
     connect(m_tree, &QTreeWidget::itemDoubleClicked,
             this, &CaseDock::onItemDoubleClicked);
@@ -341,10 +355,53 @@ void CaseDock::fillSnapshots(QTreeWidgetItem *group)
             {QStringLiteral("📷 ") + fi.fileName()});
         it->setData(0, kRoleKind, QStringLiteral("file"));
         it->setData(0, kRolePath, fi.absoluteFilePath());
-        it->setToolTip(0, fi.absoluteFilePath());
+        it->setToolTip(0, fi.absoluteFilePath()
+                          + lang("\n双击预览", "\nDouble-click to preview"));
         it->setForeground(0, QColor(Theme::TextPrimary));
+        // v1.16.0：图片条目挂缩略图（缓存命中直接贴，否则异步加载）
+        const QString p = fi.absoluteFilePath();
+        if (isImageFilePath(p)) {
+            if (m_thumbCache.contains(p))
+                it->setIcon(0, m_thumbCache.value(p));
+            else
+                requestThumbnail(p);
+        }
     }
     group->setText(0, lang("快照（%1）", "Snapshots (%1)").arg(files.size()));
+}
+
+/// v1.16.0：图片后缀判定（快照/证据帧/校时照片通用）
+bool CaseDock::isImageFilePath(const QString &path)
+{
+    const QString suf = QFileInfo(path).suffix().toLower();
+    return suf == QLatin1String("png") || suf == QLatin1String("jpg")
+           || suf == QLatin1String("jpeg") || suf == QLatin1String("bmp")
+           || suf == QLatin1String("webp");
+}
+
+void CaseDock::requestThumbnail(const QString &path)
+{
+    if (m_thumbLoading.contains(path) || m_thumbCache.contains(path))
+        return;
+    m_thumbLoading.insert(path);
+    auto *watcher = new QFutureWatcher<QImage>(this);
+    connect(watcher, &QFutureWatcher<QImage>::finished, this,
+            [this, watcher, path]() {
+                watcher->deleteLater();
+                m_thumbLoading.remove(path);
+                const QImage img = watcher->result();
+                if (!img.isNull()) {
+                    m_thumbCache.insert(path, QIcon(QPixmap::fromImage(img)));
+                    if (m_thumbTimer)
+                        m_thumbTimer->start();   // 合批刷新
+                }
+            });
+    watcher->setFuture(QtConcurrent::run([path]() {
+        QImage img(path);
+        if (img.isNull())
+            return QImage();
+        return img.scaledToHeight(56, Qt::SmoothTransformation);
+    }));
 }
 
 void CaseDock::refreshTree()
@@ -381,6 +438,9 @@ void CaseDock::onItemDoubleClicked(QTreeWidgetItem *item, int column)
     if ((kind == QLatin1String("video") || kind == QLatin1String("output"))
         && !path.isEmpty())
         emit openVideoRequested(path);
+    else if (kind == QLatin1String("file") && !path.isEmpty()
+             && isImageFilePath(path))
+        ImagePreviewDialog::preview(path, this);   // v1.16.0：图片软件内预览
 }
 
 /// v1.7.1：高亮正在播放的案件条目（▶ 前缀 + 背景色 + 加粗；旧高亮恢复）
@@ -725,6 +785,11 @@ void CaseDock::onContextMenu(const QPoint &pos)
                                item->data(0, kRoleIdx).toInt());
                        });
     } else {   // file：sidecar / 报告 / 快照
+        if (isImageFilePath(path))
+            menu.addAction(lang("预览", "Preview"), this,
+                           [this, path]() {
+                               ImagePreviewDialog::preview(path, this);
+                           });
         menu.addAction(lang("在资源管理器中显示", "Show in Explorer"), this,
                        [this, path]() { showInExplorer(path); });
         menu.addSeparator();

@@ -55,6 +55,16 @@ beijingMsOf=wallMsOf+0，轴/快照/多机全口径"不生效"；.vla 留痕照�
 onCalibPhotoFinished 调之；ui_chain +6 断言直驱锁死（offset 834000 管道/
 留痕字段/人工修正注记/beijingMsOf 反映）。18 套全绿。
 
+**补记 21（v1.16.0，快照分屏+软件内图片预览）**：用户拍板 A1+缩略图+通用组件。
+①onSnapshotQuick 分屏：放大镜开着时视频区=左原生全分辨率原帧（标注+金框+
+OSD）+右放大视图同高（标注经 scale∘translate 变换烧入放大坐标系，底部注记
+倍率+时刻），画幅 2× 宽细节零损失；底部"放大镜视图"独立小节取消；放大镜关
+着行为不变。②新通用组件 ImagePreviewDialog（滚轮缩放光标锚点/拖动平移/双击
+复位/适应窗口/1:1/资源管理器；非模态+WA_DeleteOnClose，不持嵌套事件循环——
+吸取导出弹窗教训）。③CaseDock：快照条目 56px 缩略图（QtConcurrent 异步+
+150ms 合批刷新+缓存）+双击预览+右键预览。④版本升 v1.16.0（CMakeLists+标题
+12 处+mac bundle）。18 套全绿。
+
 **补记 20（v1.15.3 续，显著性闸门收紧 30→10 秒/天 + 图解四点再修）**：
 【代码】用户拍板"10 秒内可以接受"——kMinSignificantRateDev 30.0→10.0/86400000
 （time_calibration.h，sidecar 继承处自动跟随）；calibration_test

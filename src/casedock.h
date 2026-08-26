@@ -82,6 +82,13 @@ private:
     QSet<QString> buildSnapshot() const;
     void removeVideo(const QString &id);
     void showInExplorer(const QString &path) const;
+    /// v1.16.0：快照缩略图（异步加载防卡 UI，完成后经定时器合批刷新）
+    void requestThumbnail(const QString &path);
+    static bool isImageFilePath(const QString &path);   ///< 图片后缀判定
+
+    QHash<QString, QIcon> m_thumbCache;     ///< 路径 → 缩略图
+    QSet<QString> m_thumbLoading;           ///< 在途加载（防重入）
+    QTimer *m_thumbTimer = nullptr;         ///< 合批刷新定时器
 
     CaseManager *m_caseManager = nullptr;   // 不持有（SSOT 在 MainWindow）
     QTreeWidget *m_tree = nullptr;

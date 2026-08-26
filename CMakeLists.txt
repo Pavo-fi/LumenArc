@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(LumenArc VERSION 1.15.3 LANGUAGES CXX)
+project(LumenArc VERSION 1.16.0 LANGUAGES CXX)
 add_compile_definitions(APP_VERSION="${PROJECT_VERSION}")
 
 set(CMAKE_CXX_STANDARD 17)
@@ -96,6 +96,7 @@ set(SOURCES
     src/domain/case_model.cpp
     src/app/case_manager.cpp
     src/casedock.cpp
+    src/imagepreviewdialog.cpp
     src/app/case_open_panel.cpp
     src/casedialogs.cpp
     src/multicamview.cpp
@@ -754,7 +755,7 @@ elseif(APPLE)
         MACOSX_BUNDLE TRUE
         MACOSX_BUNDLE_INFO_PLIST "${CMAKE_CURRENT_SOURCE_DIR}/src/Info.plist"
         MACOSX_BUNDLE_BUNDLE_NAME "LumenArc"
-        MACOSX_BUNDLE_BUNDLE_VERSION "1.15.1"
+        MACOSX_BUNDLE_BUNDLE_VERSION "1.16.0"
         MACOSX_BUNDLE_SHORT_VERSION_STRING "1.15.1"
         MACOSX_BUNDLE_GUI_IDENTIFIER "com.firetech.lumenarc"
     )

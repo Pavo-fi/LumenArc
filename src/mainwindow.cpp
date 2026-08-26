@@ -121,7 +121,7 @@ MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent)
 {
     loadLanguage();
-    setWindowTitle(lang("追光者 Lumen Arc v1.15.3", "Lumen Arc v1.15.3") + buildStamp());
+    setWindowTitle(lang("追光者 Lumen Arc v1.16.0", "Lumen Arc v1.16.0") + buildStamp());
     resize(1280, 720);
 
     m_roiModel = new RoiModel(this);   // 统一 ROI 模型（矩形+多边形，v1.5.0 Q-18）
@@ -1843,7 +1843,7 @@ void MainWindow::setupConnections()
                 }
 
                 setWindowTitle(windowTitleWithCase(
-                    lang("追光者 Lumen Arc v1.15.3", "Lumen Arc v1.15.3")));
+                    lang("追光者 Lumen Arc v1.16.0", "Lumen Arc v1.16.0")));
                 updateTimeDisplay();
                 showOperationStatus(lang("已清空视频列表", "Video list cleared"));
             });
@@ -2073,7 +2073,7 @@ void MainWindow::enterCaseMode()
     if (m_batchRelocateAction)
         m_batchRelocateAction->setEnabled(true);
     setWindowTitle(windowTitleWithCase(
-        lang("追光者 Lumen Arc v1.15.3", "Lumen Arc v1.15.3")));
+        lang("追光者 Lumen Arc v1.16.0", "Lumen Arc v1.16.0")));
     showOperationStatus(lang("案件已打开：%1", "Case opened: %1")
                             .arg(m_caseManager->meta().caseNo));
     // 开案批量校时徽标校验（用户实测：旧 vla time_offset=0 误亮 ⏰ 且只在
@@ -2124,7 +2124,7 @@ void MainWindow::exitCaseMode()
         m_exportCaseAction->setEnabled(false);
     if (m_batchRelocateAction)
         m_batchRelocateAction->setEnabled(false);
-    setWindowTitle(lang("追光者 Lumen Arc v1.15.3", "Lumen Arc v1.15.3"));
+    setWindowTitle(lang("追光者 Lumen Arc v1.16.0", "Lumen Arc v1.16.0"));
     showOperationStatus(lang("案件已关闭", "Case closed"));
 }
 
@@ -2302,7 +2302,7 @@ void MainWindow::onCaseProperties()
     // 名称可能已改：刷新标题/面板/状态栏
     if (m_caseManager->isOpen()) {
         setWindowTitle(windowTitleWithCase(
-            lang("追光者 Lumen Arc v1.15.3", "Lumen Arc v1.15.3")));
+            lang("追光者 Lumen Arc v1.16.0", "Lumen Arc v1.16.0")));
         m_caseDock->refreshTree();
         m_caseStatusBtn->setText(
             QStringLiteral("📁 ") + m_caseManager->meta().caseNo);
@@ -2467,7 +2467,7 @@ void MainWindow::openVideoFile(const QString &filePath)
 
         // Do NOT overwrite m_currentVideoPath with the .vla path: it is an
         // analysis file, not a playable video, and it keys VideoStateManager.
-        setWindowTitle(windowTitleWithCase("Lumen Arc v1.15.3 - [Loaded: " +
+        setWindowTitle(windowTitleWithCase("Lumen Arc v1.16.0 - [Loaded: " +
                            QFileInfo(filePath).fileName() + "]"));
         } else {
             QMessageBox::critical(this, lang("错误", "Error"),
@@ -2820,7 +2820,7 @@ void MainWindow::onLoadAnalysis()
                 m_guideLineModel->addLine(line);
 
             // Do NOT overwrite m_currentVideoPath with the .vla path (see openVideoFile).
-        setWindowTitle(windowTitleWithCase("Lumen Arc v1.15.3 - [Loaded: " +
+        setWindowTitle(windowTitleWithCase("Lumen Arc v1.16.0 - [Loaded: " +
                        QFileInfo(filePath).fileName() + "]"));
         QMessageBox::information(this, lang("已加载", "Loaded"),
             lang("分析结果加载成功。", "Analysis result loaded successfully."));
@@ -4251,6 +4251,64 @@ void MainWindow::onSnapshotQuick()
         p.end();
     }
 
+    // ---- v1.16.0 拍板 A1：放大镜开着 → 视频区改左右分屏（与主页面观感一致）。
+    // 左半 = 原生全分辨率原帧（标注+金框+OSD 已烧录）；右半 = 放大视图同高，
+    // ROI/辅助线同步烧录进放大坐标系；画幅 = 左W + 间隔 + 右W2（细节零损失）。
+    bool magSplitDone = false;
+    if (m_magnifier && m_magnifier->currentSourceRect().isValid()) {
+        const QImage magRaw = m_magnifier->currentMagnifiedImage();  // 含旋转+调节
+        if (!magRaw.isNull()) {
+            QImage right = magRaw.scaledToHeight(videoPart.height(),
+                                                 Qt::SmoothTransformation)
+                               .convertToFormat(QImage::Format_ARGB32);
+            const QRect magRect = OverlayWidget::mapStoredRectToFrame(
+                m_magnifier->currentSourceRect(), videoPart.size(),
+                videoSize, rotation);
+            {
+                QPainter p(&right);
+                p.setRenderHint(QPainter::Antialiasing);
+                if (magRect.isValid() && !magRect.isEmpty()) {
+                    // 标注映射：存储坐标 → 旋转后整帧 → 裁剪放大图
+                    const double sx = double(right.width()) / magRect.width();
+                    const double sy = double(right.height()) / magRect.height();
+                    p.scale(sx, sy);
+                    p.translate(-magRect.topLeft());
+                    OverlayWidget::burnAnnotations(
+                        p, videoPart.size(), videoSize, rotation,
+                        m_roiModel, m_roiModel, m_guideLineModel, annoPen);
+                }
+                p.end();
+            }
+            {   // 右半底部注记：倍率 + 时刻（黑底阴影，同 OSD 风格）
+                QPainter p(&right);
+                p.setRenderHint(QPainter::Antialiasing);
+                const int fs2 = qBound(12, right.height() / 44, 34);
+                const int pad2 = fs2;
+                const QString cap = lang("放大镜 ×%1 · ", "Magnifier ×%1 · ")
+                    .arg(m_magnifier->zoomLevel(), 0, 'f', 1) + timeText;
+                p.setFont(fontSans(fs2, QFont::Bold));
+                const QRect tr(pad2, right.height() - pad2 - fs2 * 13 / 10,
+                               right.width() - pad2 * 2, fs2 * 13 / 10);
+                p.setPen(QColor(0, 0, 0, 200));
+                p.drawText(tr.translated(2, 2),
+                           Qt::AlignLeft | Qt::AlignVCenter, cap);
+                p.setPen(QColor(Theme::Accent));
+                p.drawText(tr, Qt::AlignLeft | Qt::AlignVCenter, cap);
+                p.end();
+            }
+            const int gap = qBound(4, videoPart.width() / 320, 12);
+            QImage combined(videoPart.width() + gap + right.width(),
+                            videoPart.height(), QImage::Format_ARGB32);
+            combined.fill(Qt::black);
+            QPainter cp(&combined);
+            cp.drawImage(0, 0, videoPart);
+            cp.drawImage(videoPart.width() + gap, 0, right);
+            cp.end();
+            videoPart = combined;
+            magSplitDone = true;
+        }
+    }
+
     // ---- 分析数据区（§14 v2：离屏重渲染——图表走 CPU 矢量重绘，语谱图走
     // CPU 光栅化，均不动屏幕 widget；dock 内 resize+grab 实测曲线丢失/GL 错位）----
     const AnalysisSnapshot snap = m_timelineModel->snapshot();
@@ -4261,7 +4319,7 @@ void MainWindow::onSnapshotQuick()
     if (snap.hasAudio() && m_spectrogramEnhanced)
         specImg = m_spectrogramEnhanced->renderHeatmapImage(
             QSize(videoPart.width(), 300));
-    if (m_magnifier) {
+    if (m_magnifier && !magSplitDone) {   // 分屏时已融入右半，不再单列小节
         const QImage raw = m_magnifier->currentMagnifiedImage();
         if (!raw.isNull()) {
             magImg = raw.scaledToHeight(320, Qt::SmoothTransformation);
