@@ -822,10 +822,11 @@ if(WIN32)
     )
 
     # Copy user manual PDF (mac: 与可执行文件同目录，供 帮助→使用手册 打开)
-    if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/追光者 Lumen Arc v1.0 — 操作手册.pdf")
+    # v1.16.0：文件名去版本号（手册随包永远最新）；由 MANUAL.md 经 Qt markdown 导出
+    if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/追光者 Lumen Arc — 操作手册.pdf")
         add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
             COMMAND ${CMAKE_COMMAND} -E copy_if_different
-                "${CMAKE_CURRENT_SOURCE_DIR}/追光者 Lumen Arc v1.0 — 操作手册.pdf"
+                "${CMAKE_CURRENT_SOURCE_DIR}/追光者 Lumen Arc — 操作手册.pdf"
                 "$<TARGET_FILE_DIR:${PROJECT_NAME}>"
             COMMENT "Copying user manual PDF..."
         )

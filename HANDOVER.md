@@ -55,6 +55,16 @@ beijingMsOf=wallMsOf+0，轴/快照/多机全口径"不生效"；.vla 留痕照�
 onCalibPhotoFinished 调之；ui_chain +6 断言直驱锁死（offset 834000 管道/
 留痕字段/人工修正注记/beijingMsOf 反映）。18 套全绿。
 
+**补记 25（v1.16.0 发布收尾，版本号+手册 PDF+GitHub Release）**：
+①启动画面 splash 版本号曾硬编码 v1.2.0（滞后 14 版）→ APP_VERSION 宏；
+关于框（曾 v1.13.3）/案件包导出说明同改宏——对外版本号单一真源 =
+CMakeLists project(VERSION)。②MANUAL.md → PDF 走 tools/manual2pdf
+（Qt QTextDocument markdown+QPdfWriter，零第三方依赖，表格 yes/22 页）；
+文件名去版本号「追光者 Lumen Arc — 操作手册.pdf」（CMake POST_BUILD 源
++帮助菜单查找名同步改）；工具源码收 tools/manual2pdf（PDF 本身不入库，
+可再生成）。③GitHub Release v1.16.0 已发（gh CLI）：290MB 便携包，
+打包排除 cases/（5.9GB 真实案件数据红线）+测试程序+日志杂项。
+
 **补记 24（v1.16.0 续，多机返修三点）**：①双播放钮用户实测"没看到"——
 窄面板横排小字不显眼 → 改竖排整行+金色描边加粗高36。②主视窗暂停：开窗时的
 一次暂停挡不住用户回主窗再播 → 新增 onAboutToPlay 回调，多机每次起播前

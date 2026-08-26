@@ -91,11 +91,12 @@ static QPixmap createSplashPixmap(const QString &statusText, int progress = 30)
     p.drawText(QRect(60, 160, W - 120, 28), Qt::AlignLeft | Qt::AlignVCenter,
                QString::fromUtf8("\xe7\x81\xab\xe7\x81\xbe\xe8\xb0\x83\xe6\x9f\xa5\xe8\xa7\x86\xe9\xa2\x91\xe5\x88\x86\xe6\x9e\x90\xe5\xb7\xa5\xe5\x85\xb7"));
 
-    // --- Version tag ---
+    // --- Version tag（v1.16.0：读 APP_VERSION 宏，不再硬编码——曾滞后 14 个版本）---
     QFont verFont = fontMono(10);
     p.setFont(verFont);
     p.setPen(QColor(255, 255, 240, 150));
-    p.drawText(QRect(60, 216, W - 120, 22), Qt::AlignLeft | Qt::AlignVCenter, "v1.2.0");
+    p.drawText(QRect(60, 216, W - 120, 22), Qt::AlignLeft | Qt::AlignVCenter,
+               QStringLiteral("v") + QString::fromLatin1(APP_VERSION));
 
     // --- Progress bar background ---
     int barX = 60;
