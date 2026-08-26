@@ -55,6 +55,13 @@ beijingMsOf=wallMsOf+0，轴/快照/多机全口径"不生效"；.vla 留痕照�
 onCalibPhotoFinished 调之；ui_chain +6 断言直驱锁死（offset 834000 管道/
 留痕字段/人工修正注记/beijingMsOf 反映）。18 套全绿。
 
+**补记 22（v1.16.0 热修，快照删除误判报告）**：removeCaseFile 用
+data(kRoleIdx).toInt() 判别——快照条目从不设该 role，无效 QVariant toInt()=0
+→ 误判「报告 #0」：无报告时弹「报告索引越界」（用户实测"索引失败"）；有报告
+时会误删报告 #0 文件（确认框显示快照路径却删别的，数据丢失级）。修：QVariant
+isValid() 判别。另：预览器去「适应窗口」按钮（打开即自适应）+快照右半不烧录
+倍率注记（左半 OSD 已有）。
+
 **补记 21（v1.16.0，快照分屏+软件内图片预览）**：用户拍板 A1+缩略图+通用组件。
 ①onSnapshotQuick 分屏：放大镜开着时视频区=左原生全分辨率原帧（标注+金框+
 OSD）+右放大视图同高（标注经 scale∘translate 变换烧入放大坐标系，底部注记

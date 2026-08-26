@@ -862,11 +862,16 @@ void CaseDock::removeCaseFile(QTreeWidgetItem *item)
     if (!item)
         return;
     const QString path = item->data(0, kRolePath).toString();
-    const int si = item->data(0, kRoleIdx).toInt();
+    // v1.16.0 热修：快照条目从不设 kRoleIdx——无效 QVariant 的 toInt()=0
+    // 会被误判成「报告 #0」（无报告时弹「报告索引越界」；有报告时会把
+    // 报告 #0 的文件删掉——确认框显示快照路径却删别的文件，数据丢失级）。
+    // 判别必须用 QVariant 有效性，不能用数值。
+    const QVariant idxVar = item->data(0, kRoleIdx);
+    const int si = idxVar.isValid() ? idxVar.toInt() : -1;
     const bool underSession = item->parent()
         && item->parent()->data(0, kRoleKind).toString()
                == QLatin1String("session");
-    const bool isReport = !underSession && si >= 0;
+    const bool isReport = !underSession && idxVar.isValid();
     QMessageBox box(this);
     box.setWindowTitle(lang("删除文件", "Delete file"));
     box.setIcon(QMessageBox::Warning);
