@@ -44,12 +44,7 @@ ImagePreviewDialog::ImagePreviewDialog(const QString &path, QWidget *parent)
     m_status->setStyleSheet(QStringLiteral("color:%1;").arg(Theme::TextSecond));
     bl->addWidget(m_status, 1);
 
-    auto *fitBtn = new QPushButton(lang("适应窗口", "Fit"), bottom);
-    connect(fitBtn, &QPushButton::clicked, this, [this]() {
-        fitToWindow();
-        update();
-    });
-    bl->addWidget(fitBtn);
+    // v1.16.0 用户拍板：打开即自适应 + 双击复位，不提供「适应窗口」按钮
     auto *actualBtn = new QPushButton(lang("1:1", "1:1"), bottom);
     connect(actualBtn, &QPushButton::clicked, this, [this, bottom]() {
         // 以视口中心为锚设回 100%

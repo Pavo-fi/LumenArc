@@ -4279,23 +4279,7 @@ void MainWindow::onSnapshotQuick()
                 }
                 p.end();
             }
-            {   // 右半底部注记：倍率 + 时刻（黑底阴影，同 OSD 风格）
-                QPainter p(&right);
-                p.setRenderHint(QPainter::Antialiasing);
-                const int fs2 = qBound(12, right.height() / 44, 34);
-                const int pad2 = fs2;
-                const QString cap = lang("放大镜 ×%1 · ", "Magnifier ×%1 · ")
-                    .arg(m_magnifier->zoomLevel(), 0, 'f', 1) + timeText;
-                p.setFont(fontSans(fs2, QFont::Bold));
-                const QRect tr(pad2, right.height() - pad2 - fs2 * 13 / 10,
-                               right.width() - pad2 * 2, fs2 * 13 / 10);
-                p.setPen(QColor(0, 0, 0, 200));
-                p.drawText(tr.translated(2, 2),
-                           Qt::AlignLeft | Qt::AlignVCenter, cap);
-                p.setPen(QColor(Theme::Accent));
-                p.drawText(tr, Qt::AlignLeft | Qt::AlignVCenter, cap);
-                p.end();
-            }
+            // v1.16.0 用户拍板：右半不烧录「倍率·时刻」注记——左半 OSD 已有
             const int gap = qBound(4, videoPart.width() / 320, 12);
             QImage combined(videoPart.width() + gap + right.width(),
                             videoPart.height(), QImage::Format_ARGB32);
