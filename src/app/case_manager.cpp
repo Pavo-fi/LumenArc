@@ -1305,8 +1305,9 @@ private:
                       : QStringLiteral("2. 轻量包：首次打开后请按提示将各路视频重新定位到本机文件；"
                                        "定位后强制指纹比对，与上表一致方可采用。"))
               << QStringLiteral("3. 「案件 → 完整性校验」可随时复核案内文件未被篡改。")
-              << QStringLiteral("4. 本包由 Lumen Arc v1.3.0 导出；案件数据只读引用，"
-                                "源视频与 .vla 分析数据分离管理。");
+              << QStringLiteral("4. 本包由 Lumen Arc v") + APP_VERSION
+                     + QStringLiteral(" 导出；案件数据只读引用，"
+                                      "源视频与 .vla 分析数据分离管理。");   // v1.16.0：版本号随宏
         if (!skipBundled.isEmpty()) {
             lines << QString()
                   << QStringLiteral("注意：以下视频源文件导出时缺失，未随包携带副本：%1")
