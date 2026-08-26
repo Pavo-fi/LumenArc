@@ -24,7 +24,9 @@ constexpr int kLabelW = 168;    // 左侧机位标签列宽
 constexpr int kMarginR = 12;
 constexpr int kLaneH = 34;      // 机位行高
 constexpr int kLaneGap = 8;
-constexpr int kTopMargin = 8;
+constexpr int kTopMargin = 26;   // 顶部留位：游标时刻气泡高 18+2（v1.16.0
+                                 // 热修：原为 8，气泡画在 y=-12 全被裁掉，
+                                 // 「播放时间轴整体下移」= 内容区整体下移让气泡可见）
 constexpr int kTickLabelH = 20; // 底部刻度文字区
 constexpr int kBandLabelH = 16; // 带标签区（缺口/重叠时长）
 } // namespace
@@ -44,8 +46,8 @@ void MultiCamViewWidget::setLanes(const QVector<CamLane> &lanes,
 {
     m_lanes = lanes;
     m_tolMs = toleranceMs;
-    setMinimumHeight(kTopMargin * 2 + int(lanes.size()) * (kLaneH + kLaneGap)
-                     + kBandLabelH + kTickLabelH + 8);
+    setMinimumHeight(kTopMargin + int(lanes.size()) * (kLaneH + kLaneGap)
+                     + kBandLabelH + kTickLabelH + 14);   // 底部留白 14
     rebuildLayout();
     update();
 }
@@ -239,9 +241,22 @@ void MultiCamViewWidget::paintEvent(QPaintEvent *)
         QFont lf = p.font();
         lf.setPixelSize(11);
         p.setFont(lf);
-        p.drawText(QRect(4, y, kLabelW - 10, kLaneH),
-                   Qt::AlignVCenter | Qt::AlignLeft,
-                   QStringLiteral("%1  %2").arg(l.videoId, l.fileName));
+        const QRect nameRect(4, y, kLabelW - 10, 16);
+        p.drawText(nameRect, Qt::AlignVCenter | Qt::AlignLeft,
+                   p.fontMetrics().elidedText(
+                       QStringLiteral("%1  %2").arg(l.videoId, l.fileName),
+                       Qt::ElideRight, nameRect.width()));
+        // v1.16.0：北京时间对时完成（直接/间接）→ 行标签下挂绿色明显标识
+        if (l.truthSynced) {
+            QFont bf2 = p.font();
+            bf2.setPixelSize(10);
+            bf2.setBold(true);
+            p.setFont(bf2);
+            p.setPen(QColor(Theme::Success));
+            p.drawText(QRect(4, y + 16, kLabelW - 10, 14),
+                       Qt::AlignVCenter | Qt::AlignLeft,
+                       lang("✓ 已对时·北京时间", "✓ Beijing-synced"));
+        }
     }
 
     // 机位块（P-69：合并轨逐段多色——同色调按段号明暗交替；被压重叠区斜纹+⚠）
@@ -295,7 +310,10 @@ void MultiCamViewWidget::paintEvent(QPaintEvent *)
         p.setPen(QPen(QColor(Theme::Border), 1));
         p.drawLine(tk.first, tickY, tk.first, tickY + 4);
         p.setPen(textMut);
-        p.drawText(QRect(tk.first - 48, tickY + 4, 96, kTickLabelH),
+        // v1.16.0：标签横向夹进可视区（首/末刻度防半字裁切）
+        const int cx = qBound(int(kLabelW) + 48, tk.first,
+                              width() - int(kMarginR) - 48);
+        p.drawText(QRect(cx - 48, tickY + 4, 96, kTickLabelH),
                    Qt::AlignHCenter | Qt::AlignTop, tk.second);
     }
 

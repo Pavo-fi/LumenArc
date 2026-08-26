@@ -39,6 +39,7 @@ public:
     void setAudible(bool on);               ///< 🔊 角标
     void setTemporaryBadge(bool on);        ///< “临时对齐（未校时）”角标
     void setLowresBadge(bool on);           ///< “预览降清档”角标（§4 档②）
+    void setTruthBadge(bool on);            ///< “✓已对时”角标（v1.16.0：北京时间对时完成）
     /// 缺口/失败占位（非清空帧——保留最后帧下压暗纹提示）
     void setPlaceholder(const QString &text);   ///< 空串 = 取消占位
 
@@ -82,6 +83,7 @@ private:
     bool m_audible = false;
     bool m_tempBadge = false;
     bool m_lowresBadge = false;
+    bool m_truthBadge = false;              ///< v1.16.0：“已对时”绿角标
     QString m_placeholder;
 
     // 放大镜状态（归一化源坐标：center ∈ [0,1]²，zoom ≥1）

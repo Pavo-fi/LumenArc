@@ -66,6 +66,20 @@ struct SyncLaneData
     }
 };
 
+/// v1.16.0：本路是否已完成「北京时间对时」（直接照片/OCR 或经同事件对时
+/// 从已校真路间接获得——落路后 cal.truthOffsetMs 非 0）。瓦片/时间线挂
+/// 「已对时」明显标识用。合并轨：任一段有真即视为有（段各自持 cal）。
+inline bool syncLaneHasTruth(const SyncLaneData &l)
+{
+    if (l.isMerged()) {
+        for (const auto &s : l.segments)
+            if (s.cal.truthOffsetMs != 0)
+                return true;
+        return false;
+    }
+    return l.cal.truthOffsetMs != 0;
+}
+
 /// P-69 合并轨：墙钟命中的段号（重叠 → 「先起步者赢」= wallStart 最小者；
 /// 同起步取段号小者）；无覆盖返回 -1
 inline int syncSegmentAt(const SyncLaneData &l, qint64 wallMs)

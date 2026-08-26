@@ -170,9 +170,15 @@ private:
     class QPushButton *m_ecAddBtn = nullptr;
     class QPushButton *m_ecFitBtn = nullptr;
     class QCheckBox *m_ecBothAudio = nullptr;  ///< 「同听两路」开关
+    class QPushButton *m_ecPlaySelBtn = nullptr;  ///< v1.16.0：▶ 播放选中瓦片
+    class QPushButton *m_ecPlayAllBtn = nullptr;  ///< v1.16.0：▶▶ 播放全部
     bool m_ecPlaying = false;                  ///< 对时沙盒播放态（不经服务状态机）
+    int m_ecPlayLane = -1;                     ///< 沙盒播放范围：-1 全部 / >=0 仅该路
     class QTimer *m_ecTick = nullptr;          ///< 沙盒播放时驱动条/OSD 跟随
     void ecTogglePlay();                       ///< 沙盒自由播放/暂停
+    /// v1.16.0 拍板：沙盒播放范围收口——lane=-1 全部 / >=0 仅该路；on=false 全停。
+    /// 面板双播放钮（选中瓦片/全部）与工具栏播放钮共用此入口。
+    void ecSetPlayRange(int lane, bool on);
     void updateBarsFromEngines();              ///< 条值=引擎真实位置（onClock/沙盒共用）
     class QPushButton *m_ecSaveBtn = nullptr;
     QVector<eventcalib::EventAnchor> m_ecAnchors;  ///< 目标路锚点（既有+会话）

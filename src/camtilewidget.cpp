@@ -17,6 +17,7 @@
 #include <QTransform>
 
 #include "infrastructure/ivideo_engine.h"
+#include "i18n.h"
 #include "theme.h"
 
 CamTileWidget::CamTileWidget(QWidget *parent)
@@ -116,6 +117,14 @@ void CamTileWidget::setTemporaryBadge(bool on)
     if (m_tempBadge == on)
         return;
     m_tempBadge = on;
+    update();
+}
+
+void CamTileWidget::setTruthBadge(bool on)
+{
+    if (m_truthBadge == on)
+        return;
+    m_truthBadge = on;
     update();
 }
 
@@ -341,6 +350,8 @@ void CamTileWidget::paintEvent(QPaintEvent *)
         };
         if (m_tempBadge)
             badge(QStringLiteral("临时对齐"), QColor(Theme::Accent));
+        if (m_truthBadge)   // v1.16.0：北京时间对时完成（直接/间接）明显标识
+            badge(lang("✓ 已对时", "✓ synced"), QColor(Theme::Success));
         if (m_lowresBadge)
             badge(QStringLiteral("预览降清档"), QColor(Theme::TextMuted));
         if (m_zoom > 1.0)

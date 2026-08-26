@@ -33,6 +33,7 @@ struct CamLane {
     qint64 wallEndMs = 0;         ///< 块位终点（已分析最大流内时刻的墙钟）
     qint64 streamDurationMs = 0;  ///< .vla 已分析时长（块位宽度的数据源）
     QString calibrationSummary;   ///< 校时徽标缓存文案（tooltip 展示）
+    bool truthSynced = false;     ///< v1.16.0：北京时间对时完成（直接/间接）
 
     /// P-69 合并轨段块（空=单段传统路；非空=合并轨逐段一块，同行多色）
     struct SegBlock {

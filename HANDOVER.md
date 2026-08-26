@@ -55,6 +55,16 @@ beijingMsOf=wallMsOf+0，轴/快照/多机全口径"不生效"；.vla 留痕照�
 onCalibPhotoFinished 调之；ui_chain +6 断言直驱锁死（offset 834000 管道/
 留痕字段/人工修正注记/beijingMsOf 反映）。18 套全绿。
 
+**补记 23（v1.16.0，多机同步播放三优化）**：①时间轴整体下移根因=
+游标时刻气泡画在 y=kTopMargin-20=-12 全被裁——kTopMargin 8→26 内容区整体
+下移气泡可见；刻度标签横向夹取防首末半字裁切；底部留白 14。②对时完成标识：
+syncLaneHasTruth()（cal.truthOffsetMs≠0，直接/间接都算；合并轨任一段有真即
+有）→ 瓦片绿色「✓已对时」角标（camtilewidget setTruthBadge）+ 时间线行标签
+下绿色「✓ 已对时·北京时间」（CamLane.truthSynced）。③同事件对时沙盒双播放
+钮：ecSetPlayRange(lane,on) 收口（-1 全部/>=0 仅该路），③段内「▶ 播放选中
+瓦片」「▶▶ 播放全部」，工具栏播放钮=全部语义。④MANUAL 多机节同步重写。
+18 套全绿。
+
 **补记 22（v1.16.0 热修，快照删除误判报告）**：removeCaseFile 用
 data(kRoleIdx).toInt() 判别——快照条目从不设该 role，无效 QVariant toInt()=0
 → 误判「报告 #0」：无报告时弹「报告索引越界」（用户实测"索引失败"）；有报告
