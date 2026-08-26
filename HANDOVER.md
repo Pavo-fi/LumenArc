@@ -55,6 +55,13 @@ beijingMsOf=wallMsOf+0，轴/快照/多机全口径"不生效"；.vla 留痕照�
 onCalibPhotoFinished 调之；ui_chain +6 断言直驱锁死（offset 834000 管道/
 留痕字段/人工修正注记/beijingMsOf 反映）。18 套全绿。
 
+**补记 26（手册上云管线，方案 A 拍板）**：git 留真源（MANUAL.md），WPS 在线
+文档做阅读/批注/分享端。新增 tools/manual2docx：复用工程零依赖 DocxWriter
+（P-28 报告同款排版），行解析 md 子集（# 标题/表格/列表/引用），行内 **粗体**
+/`代码` 标记剥除（DocxWriter 只支持整段加粗，v1 可接受）。产出「追光者 Lumen
+Arc — 操作手册.docx」（284KB，30 表）已挂 Release v1.16.0 第二资产；PDF/DOCX
+导出物入 .gitignore 不入库（可再生成）。WPS 导入即转在线智能文档。
+
 **补记 25（v1.16.0 发布收尾，版本号+手册 PDF+GitHub Release）**：
 ①启动画面 splash 版本号曾硬编码 v1.2.0（滞后 14 版）→ APP_VERSION 宏；
 关于框（曾 v1.13.3）/案件包导出说明同改宏——对外版本号单一真源 =
