@@ -99,6 +99,7 @@ FfmpegVideoEngine::~FfmpegVideoEngine()
         m_thread->quit();
         m_thread->wait(5000);
     }
+    tapClose();   // 探针文件冲刷落盘（线程已停，安全）
 }
 
 // ---------------------------------------------------------------------------
@@ -148,6 +149,7 @@ void FfmpegVideoEngine::unload()
     // UI 可见状态全部归零：duration=0 → 全局快捷键（空格播放等）自动失效
     m_positionMs = 0;
     m_durationMs = 0;
+    tapClose();   // 探针文件冲刷落盘（线程已 joined）
     m_fps = 0;
     m_width = 0;
     m_height = 0;
@@ -417,6 +419,30 @@ void FfmpegVideoEngine::processAudioPacket(AVPacket *pkt)
             continue;
         }
 
+        // 音频 PTS 空档补偿/重叠裁剪（正常播放+原速；对齐分析侧 P-59）。
+        // DVR 写盘卡顿产生的空档若不补，空档后的声响会被压塌提前——
+        // 用户实测「声响先到、曲线峰迟 ~2s」的时有时无病灶。
+        if (!scrubbing && relMs >= 0
+            && qAbs(m_rate.load() - 1.0f) < 0.01f) {
+            if (m_audioNextPtsRelMs >= 0) {
+                const qint64 skew = relMs - m_audioNextPtsRelMs;
+                if (skew > 40) {
+                    m_audioPendingPadMs += qMin<qint64>(skew, 10000);  // 空档→补等长静音
+                    if (skew > 10000)
+                        audioDiag(QStringLiteral("AUDIO GAP %1ms exceeds 10s pad cap, "
+                                  "AV desync by %2ms").arg(skew).arg(skew - 10000));
+                } else if (skew < -40) {
+                    const qint64 ov = -skew;   // 重叠（重复内容）：裁帧首防后移
+                    if (ov >= frameDurMs) {
+                        av_frame_unref(frame);
+                        continue;              // 整帧重复
+                    }
+                    skipFrac = qMax(skipFrac, double(ov) / double(frameDurMs));
+                }
+            }
+            m_audioNextPtsRelMs = relMs + frameDurMs;
+        }
+
         int outSamples = swr_get_out_samples(m_swr, frame->nb_samples);
         if (outSamples > 0) {
             const int frameBytes = m_outChannels * m_outBytesPerSample;
@@ -517,6 +543,13 @@ void FfmpegVideoEngine::processAudioPacket(AVPacket *pkt)
                     payload = resampled.size();
                 }
 
+                // 空档静音补写（P-59 播放侧）：先于本帧内容，保持
+                // 「字节位置↔内容时间」映射与曲线/语谱时间轴一致
+                if (m_audioPendingPadMs > 0) {
+                    padAudioSilence(m_audioPendingPadMs);
+                    m_audioPendingPadMs = 0;
+                }
+
                 // 背压：设备缓冲满则短暂等待（播放面自然节流）
                 int guard = 0;
                 while (m_sink->bytesFree() < payload && guard++ < 100
@@ -525,12 +558,38 @@ void FfmpegVideoEngine::processAudioPacket(AVPacket *pkt)
                        && !hasPendingCommand()) {
                     QThread::msleep(2);
                 }
-                if (m_sinkIo)
-                    m_sinkIo->write(payloadData, payload);
-                m_audioBytesWritten += payload;
-                if (m_tapPcm) {   // AV 追踪：落盘 PCM + 事件行
-                    m_tapPcm->write(payloadData, payload);
-                    tapAudioWrite(payload, m_sink ? m_sink->bytesFree() : -1);
+                // 短写防护：write 可能只收部分字节（背压超时后缓冲仍满）。
+                // 静默丢字节 = 后续内容整体提前（声先画后），必须补写完整。
+                qint64 sent = 0;
+                while (sent < payload) {
+                    if (!m_sinkIo)
+                        break;
+                    const qint64 w = m_sinkIo->write(payloadData + sent,
+                                                     payload - sent);
+                    if (w <= 0)
+                        break;
+                    sent += w;
+                    m_audioBytesWritten += w;
+                    if (m_tapPcm) {   // AV 追踪：落盘 PCM + 事件行
+                        m_tapPcm->write(payloadData + sent - w, w);
+                        tapAudioWrite(w, m_sink ? m_sink->bytesFree() : -1);
+                    }
+                    if (sent < payload) {
+                        // 短写：等缓冲腾空再补；补不上则后续内容提前，响亮记录
+                        int g2 = 0;
+                        while (m_sink && m_sink->bytesFree() < payload - sent
+                               && g2++ < 150 && !m_quit.load()
+                               && m_state.load() == static_cast<int>(PlaybackState::Playing)
+                               && !hasPendingCommand()) {
+                            QThread::msleep(2);
+                        }
+                        if (!m_sink || m_sink->bytesFree() < payload - sent) {
+                            audioDiag(QStringLiteral("SHORT WRITE GIVEUP: lost %1 bytes "
+                                      "(后续音频将提前，音画偏差由此产生)")
+                                      .arg(payload - sent));
+                            break;
+                        }
+                    }
                 }
                 if (guard >= 100)
                     audioDiag(QStringLiteral("BACKPRESSURE TIMEOUT: sink not draining "
@@ -1073,26 +1132,43 @@ void FfmpegVideoEngine::tapEnsure()
         return;
     m_tapPcm = new QFile(QString::fromUtf8(dir) + "/tap.pcm", this);
     m_tapLog = new QFile(QString::fromUtf8(dir) + "/tap.csv", this);
-    if (!m_tapPcm->open(QIODevice::WriteOnly) || !m_tapLog->open(QIODevice::WriteOnly)) {
+    const bool okPcm = m_tapPcm->open(QIODevice::WriteOnly);
+    const bool okLog = m_tapLog->open(QIODevice::WriteOnly);
+    if (!okPcm || !okLog) {
         delete m_tapPcm; delete m_tapLog;
         m_tapPcm = nullptr; m_tapLog = nullptr;
         return;
     }
     m_tapLog->write("kind,monoMs,arg0,arg1,arg2\n");
-    m_tapLog->write(QStringLiteral("meta,rate=%1,ch=%2,fmt=%3\n")
-                        .arg(m_outSampleRate).arg(m_outChannels)
-                        .arg(int(m_outSampleFmt)).toUtf8());
+    m_tapLog->flush();
+}
+
+void FfmpegVideoEngine::tapClose()
+{
+    // 工作线程已 joined 后调用（析构/unload）：冲刷 stdio 缓冲并关闭。
+    // 注意 QFile 在 Windows 走 stdio：小行写一直攒在 4KB 缓冲区，
+    // 不冲刷不落盘（探针曾因此只剩表头一行）。
+    if (m_tapLog) { m_tapLog->flush(); m_tapLog->close(); }
+    if (m_tapPcm) { m_tapPcm->flush(); m_tapPcm->close(); }
 }
 
 void FfmpegVideoEngine::tapAudioWrite(qint64 payload, qint64 bytesFreeAfter)
 {
     if (!m_tapLog)
         return;
+    if (!m_tapMetaWritten) {   // 首写时输出格式已就绪（tapEnsure 时机太早拿到 0）
+        m_tapMetaWritten = true;
+        m_tapLog->write(QStringLiteral("meta,rate=%1,ch=%2,fmt=%3\n")
+                            .arg(m_outSampleRate).arg(m_outChannels)
+                            .arg(int(m_outSampleFmt)).toUtf8());
+    }
     const qint64 mono = m_monotonic.isValid() ? m_monotonic.elapsed() : -1;
     // kind=A: arg0=本次写入字节 arg1=写后缓冲余量 arg2=累计写入
     m_tapLog->write(QStringLiteral("A,%1,%2,%3,%4\n")
                         .arg(mono).arg(payload).arg(bytesFreeAfter)
                         .arg(m_audioBytesWritten.load()).toUtf8());
+    if (++m_tapLines % 64 == 0)   // 周期冲刷（stdio 缓冲）
+        m_tapLog->flush();
 }
 
 void FfmpegVideoEngine::tapVideoDisplay(qint64 relMs)
@@ -1102,6 +1178,48 @@ void FfmpegVideoEngine::tapVideoDisplay(qint64 relMs)
     const qint64 mono = m_monotonic.isValid() ? m_monotonic.elapsed() : -1;
     // kind=V: arg0=显示帧的流内毫秒
     m_tapLog->write(QStringLiteral("V,%1,%2,0,0\n").arg(mono).arg(relMs).toUtf8());
+}
+
+// 音频 PTS 空档补偿（P-59 播放侧）：向 sink 写入流补等长静音。
+// 分块（100ms）背压写入，块间响应 seek/暂停/退出，避免长空档卡死流水线。
+void FfmpegVideoEngine::padAudioSilence(qint64 gapMs)
+{
+    if (!m_sink || !m_sinkIo || m_outSampleRate <= 0 || gapMs <= 0)
+        return;
+    const int frameBytes = m_outChannels * m_outBytesPerSample;
+    if (frameBytes <= 0)
+        return;
+    const qint64 bytesPerMs = m_outSampleRate * frameBytes / 1000;
+    const QByteArray zeros(int(bytesPerMs * 100), '\0');   // 100ms 一块
+    qint64 remain = gapMs * bytesPerMs;
+    while (remain > 0) {
+        if (m_quit.load() || hasPendingCommand()
+            || m_state.load() != static_cast<int>(PlaybackState::Playing)) {
+            audioDiag(QStringLiteral("audio gap pad aborted, %1ms unwritten")
+                      .arg(remain / qMax<qint64>(1, bytesPerMs)));
+            return;
+        }
+        const qint64 n = qMin(remain, qint64(zeros.size()));
+        int guard = 0;
+        while (m_sink->bytesFree() < n && guard++ < 150 && !m_quit.load()
+               && m_state.load() == static_cast<int>(PlaybackState::Playing)
+               && !hasPendingCommand()) {
+            QThread::msleep(2);
+        }
+        if (m_sink->bytesFree() < n) {
+            audioDiag(QStringLiteral("audio gap pad backpressure timeout"));
+            return;
+        }
+        const qint64 w = m_sinkIo->write(zeros.constData(), n);
+        if (w <= 0)
+            return;
+        remain -= w;
+        m_audioBytesWritten += w;
+        if (m_tapPcm) {   // AV 追踪：补写的静音同样落盘（映射守恒验证）
+            m_tapPcm->write(zeros.constData(), w);
+            tapAudioWrite(w, m_sink->bytesFree());
+        }
+    }
 }
 
 void FfmpegVideoEngine::setRate(float rate)
@@ -1470,6 +1588,8 @@ bool FfmpegVideoEngine::openFile(const QString &filePath)
     m_discardBeforeRelMs = -1;
     m_audioDiscardBeforeRelMs = -1;
     m_audioBaseRelMs = -1;
+    m_audioNextPtsRelMs = -1;   // 空档补偿跟踪：开新文件重新锚定
+    m_audioPendingPadMs = 0;
     if (m_pbDenoise)
         m_pbDenoise->reset();   // P-54b：开新文件/重播，DSP 状态重建
     m_stepOnce = false;
@@ -1636,6 +1756,8 @@ void FfmpegVideoEngine::scrubRedirectDemuxer(qint64 timeMs)
     }
     m_audioBytesWritten = 0;
     m_audioBaseRelMs = -1;
+    m_audioNextPtsRelMs = -1;   // 空档补偿跟踪：seek 后重新锚定
+    m_audioPendingPadMs = 0;
     m_smoothAudioClock = -1;
     m_lastRawAudioClock = -1;
     if (m_pbDenoise)

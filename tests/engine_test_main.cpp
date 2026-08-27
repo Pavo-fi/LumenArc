@@ -23,6 +23,8 @@ extern "C" {
 #include <QMediaDevices>
 #include <QAudioDevice>
 #include <QAudioFormat>
+#include <QFile>
+#include <QDir>
 extern "C" {
 #include <libswresample/swresample.h>
 }
@@ -72,6 +74,77 @@ static void pumpFor(int ms)
         QCoreApplication::processEvents(QEventLoop::AllEvents, 20);
 }
 
+/// 合成带音频 PTS 空档的 mkv：rawvideo 黑帧 8fps + PCM 8k mono 双段音。
+/// 音频：0~0.512s 440Hz 响亮段 → 1.5s 空档 → 2.0~2.512s 880Hz 哔声。
+/// （P-59 播放侧补偿判决：补偿生效→哔声在写入流 ~2.0s 字节位；
+/// 压塌（修复前）→ ~0.5s，即「声响比曲线峰早 1.5s」）
+static bool muxGapToneMkv(const QString &path)
+{
+    QFile::remove(path);
+    AVFormatContext *oc = nullptr;
+    const QByteArray u8 = path.toUtf8();
+    // NUT 容器：原生支持 rawvideo+PCM（matroska 拒 rawvideo）
+    if (avformat_alloc_output_context2(&oc, nullptr, "nut", u8.constData()) < 0 || !oc)
+        return false;
+    AVStream *vs = avformat_new_stream(oc, nullptr);
+    vs->codecpar->codec_type = AVMEDIA_TYPE_VIDEO;
+    vs->codecpar->codec_id = AV_CODEC_ID_RAWVIDEO;
+    vs->codecpar->width = 320;
+    vs->codecpar->height = 240;
+    vs->codecpar->format = AV_PIX_FMT_YUV420P;
+    vs->codecpar->codec_tag = MKTAG('I', '4', '2', '0');  // rawvideo 解码靠 fourcc 定像素格式
+    vs->time_base = {1, 8};
+    AVStream *as = avformat_new_stream(oc, nullptr);
+    as->codecpar->codec_type = AVMEDIA_TYPE_AUDIO;
+    as->codecpar->codec_id = AV_CODEC_ID_PCM_S16LE;
+    as->codecpar->sample_rate = 8000;
+    av_channel_layout_default(&as->codecpar->ch_layout, 1);
+    as->time_base = {1, 8000};
+    if (avio_open(&oc->pb, u8.constData(), AVIO_FLAG_WRITE) < 0
+        || avformat_write_header(oc, nullptr) < 0) {
+        avformat_free_context(oc);
+        return false;
+    }
+    // 写头后 time_base 可能被容器收编——按实际打点
+    const AVRational vtb = vs->time_base, atb = as->time_base;
+    const int vbytes = 320 * 240 * 3 / 2;   // yuv420p 黑帧
+    QByteArray black(vbytes, '\0');
+    for (int i = 0; i < 26; ++i) {          // 0..3.125s @8fps
+        AVPacket *p = av_packet_alloc();
+        av_new_packet(p, vbytes);
+        memset(p->data, 0, vbytes);
+        p->pts = av_rescale_q(i * 125, {1, 1000}, vtb);
+        p->dts = p->pts;
+        p->duration = av_rescale_q(125, {1, 1000}, vtb);
+        p->stream_index = vs->index;
+        av_interleaved_write_frame(oc, p);  // 成功即接管所有权
+    }
+    auto ms2tbA = [&](qint64 ms) { return av_rescale_q(ms, {1, 1000}, atb); };
+    int16_t smp[1024];
+    const double PI2 = 6.283185307179586;
+    for (int seg = 0; seg < 2; ++seg) {
+        const double freq = seg == 0 ? 440.0 : 880.0;
+        const qint64 base = seg == 0 ? 0 : 2000;
+        for (int i = 0; i < 4; ++i) {       // 各 4×128ms=0.512s
+            for (int j = 0; j < 1024; ++j)
+                smp[j] = int16_t(20000.0 * std::sin(PI2 * freq * double(j) / 8000.0));
+            AVPacket *p = av_packet_alloc();
+            av_new_packet(p, int(sizeof(smp)));
+            memcpy(p->data, smp, sizeof(smp));
+            p->pts = ms2tbA(base + i * 128);
+            p->dts = p->pts;
+            p->duration = ms2tbA(128);
+            p->stream_index = as->index;
+            av_interleaved_write_frame(oc, p);
+        }
+    }
+    av_write_trailer(oc);
+    if (oc->pb)
+        avio_closep(&oc->pb);
+    avformat_free_context(oc);
+    return true;
+}
+
 int main(int argc, char *argv[])
 {
     QCoreApplication app(argc, argv);
@@ -84,6 +157,21 @@ int main(int argc, char *argv[])
     QString scenario = args[1];
     QString file = args[2];
     int failures = 0;
+
+    // avgap 预置：先 mux 带音频空档的合成片 + 布 tap 目录，再走标准 load
+    if (scenario == QStringLiteral("avgap")) {
+        const QString tapDir = QDir::temp().filePath(QStringLiteral("lumenarc_avgap_tap"));
+        QDir().mkpath(tapDir);
+        QFile::remove(tapDir + QStringLiteral("/tap.pcm"));
+        QFile::remove(tapDir + QStringLiteral("/tap.csv"));
+        qputenv("LUMENARC_AUDIO_TAP", tapDir.toUtf8());
+        file = QDir::temp().filePath(QStringLiteral("lumenarc_avgap.nut"));
+        if (!muxGapToneMkv(file)) {
+            printf("[FAIL] avgap: mux gap mkv failed\n");
+            return 1;
+        }
+        printf("[avgap] gap file muxed: %s\n", qPrintable(file));
+    }
 
     if (scenario == "catchup-bench") {
         // 追赶解码吞吐基准：seek 到 startMs 后连续解码 spanMs 视频，
@@ -296,6 +384,75 @@ int main(int argc, char *argv[])
         pumpFor(500);
         printf("[avtrace] done: frames=%d lastPos=%lld\n", rec.frameCount,
                (long long)rec.lastPos);
+        printf("[RESULT] PASS\n");
+        return 0;
+    }
+
+    if (scenario == "avgap") {
+        // P-59 播放侧空档补偿判决：补偿生效 → 哔声在写入流 ~2.0s 字节位；
+        // 压塌（修复前）→ ~0.5s（声响比曲线峰早 1.5s 的机制复现）
+        engine.seek(0);
+        pumpFor(500);
+        engine.play();
+        pumpFor(8000);
+        engine.pause();
+        pumpFor(300);
+        engine.unload();   // 触发 tapClose 冲刷——否则 stdio 缓冲未落盘读不到 meta
+        const QString tapDir = QString::fromUtf8(qgetenv("LUMENARC_AUDIO_TAP"));
+        QFile pcm(tapDir + QStringLiteral("/tap.pcm"));
+        QFile csv(tapDir + QStringLiteral("/tap.csv"));
+        int rate = 0, ch = 0;
+        QByteArray raw;
+        if (pcm.open(QIODevice::ReadOnly))
+            raw = pcm.readAll();
+        if (csv.open(QIODevice::ReadOnly)) {
+            while (!csv.atEnd()) {
+                const QByteArray line = csv.readLine();
+                if (line.startsWith("meta,rate=")) {
+                    const QList<QByteArray> parts = line.trimmed().split(',');
+                    if (parts.size() >= 3) {
+                        rate = parts[1].mid(5).toInt();    // "rate=44100"
+                        ch = parts[2].mid(3).toInt();      // "ch=1"
+                    }
+                    break;
+                }
+            }
+        }
+        if (rate <= 0 || ch <= 0 || raw.size() < 1000) {
+            printf("[avgap] SKIP (tap empty: rate=%d ch=%d bytes=%lld — 无声卡环境)\n",
+                   rate, ch, (long long)raw.size());
+            printf("[RESULT] PASS (skipped)\n");
+            return 0;
+        }
+        const int16_t *s = reinterpret_cast<const int16_t *>(raw.constData());
+        const qint64 frames = raw.size() / 2 / ch;
+        // 哔声 = 1.0s 之后首个响亮样本（前段 440Hz 在 0~0.512s）
+        qint64 beepAt = -1;
+        for (qint64 i = rate; i < frames; ++i) {
+            bool loud = false;
+            for (int c = 0; c < ch; ++c) {
+                const int v = int(s[i * ch + c]);
+                if (v > 5000 || v < -5000) { loud = true; break; }
+            }
+            if (loud) { beepAt = i; break; }
+        }
+        const double beepSec = beepAt >= 0 ? double(beepAt) / double(rate) : -1.0;
+        printf("[avgap] rate=%d ch=%d pcmDur=%.2fs beepAt=%.3fs "
+               "(expect ~2.0 padded; ~0.5 collapsed)\n",
+               rate, ch, double(frames) / double(rate), beepSec);
+        if (beepAt < 0) {
+            printf("[FAIL] avgap: beep not found in tap stream\n");
+            return 1;
+        }
+        if (beepSec < 1.5) {
+            printf("[FAIL] avgap: beep COLLAPSED to %.3fs — gap not padded\n", beepSec);
+            return 1;
+        }
+        if (beepSec < 1.55 || beepSec > 2.45) {
+            printf("[FAIL] avgap: beep at %.3fs, expect 2.0±0.45\n", beepSec);
+            return 1;
+        }
+        printf("[ OK ] avgap: beep at %.3fs — 空档已补偿，播放与曲线时间轴一致\n", beepSec);
         printf("[RESULT] PASS\n");
         return 0;
     }

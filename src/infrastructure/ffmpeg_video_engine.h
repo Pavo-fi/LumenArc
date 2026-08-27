@@ -296,8 +296,17 @@ private:
     QFile *m_tapPcm = nullptr;
     QFile *m_tapLog = nullptr;
     void tapEnsure();                     // 懒开（env 未设则恒 null）
+    void tapClose();                      // 析构/unload 冲刷关闭（stdio 缓冲）
     void tapAudioWrite(qint64 payload, qint64 bytesFreeAfter);
     void tapVideoDisplay(qint64 relMs);
+    bool m_tapMetaWritten = false;        // meta 行（真实输出格式）首写时落盘
+    int m_tapLines = 0;                   // 周期冲刷计数
+    // 音频 PTS 空档补偿（对齐分析侧 P-59）：DVR 写盘卡顿产生的空档若不补，
+    // 空档后内容被压塌提前——声响比曲线/语谱早出现（用户实测 ~2s、时有时无）。
+    // 播放侧向写入流补等长静音，保持「字节位置↔内容时间」映射守恒。
+    qint64 m_audioNextPtsRelMs = -1;      // 下一音频帧期望起点（-1=未锚定/seek 后）
+    qint64 m_audioPendingPadMs = 0;       // 待补写的空档静音（DSP 缓冲期帧也会累计）
+    void padAudioSilence(qint64 gapMs);   // 分块背压写静音；被命令打断即弃
     bool m_diagOutFailLogged = false;     // ensureAudioOutput 失败只记一次
 
     // --- 临时诊断：scrub 卡顿归因计数（定位后移除） ---
