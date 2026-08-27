@@ -493,3 +493,9 @@ P-74 点位图编辑器施工。
 扇形朝向（张角半径可调）+标准图框出图（2480×1754 PNG 入
 reports/assets/sitemap.png）+ sitemap.json 归一化坐标持久化 + 孤儿点位
 标红。待施工（粗估 1.5~2 天）。
+
+## 29c) 光标-曲线 2s 偏移根治（08c5dee，v1.16.1）
+- **三段判决**：合成片实验证分析双链清白（10000/9962ms）；AV 追踪探针（LUMENARC_AUDIO_TAP）证播放音画对齐清白（43ms）；病灶=**DVR 音频 PTS 空档**：分析侧 P-59 补静音（曲线对），播放侧压塌 → 空档后声响提前 gap 时长，仅带空档文件发病=时有时无
+- **修复**：processAudioPacket 空档>40ms 补等长静音（padAudioSilence 分块背压、封顶10s）、重叠>40ms 裁帧首；sink 短写循环补写防护；open/seek 重置
+- **测试**：engine_test avgap 场景（NUT 合成空档片+tap 断言哔声 2.0s±0.45，实测 1.998s）；libav_test testAvEventAlignment 永久回归
+- **坑**：QFile 在 Windows 走 stdio 4KB 缓冲，小行写不 flush 不落盘 → tapClose（析构/unload）+每64行冲刷；matroska 拒 rawvideo（用 NUT+codec_tag I420）；engine_test 场景要先 seek(0) 再 play
