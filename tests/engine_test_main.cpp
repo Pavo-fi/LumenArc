@@ -282,6 +282,24 @@ int main(int argc, char *argv[])
         printf("[ OK ] seek %lldms -> %lldms (err %lldms)\n", target, pos, err);
     };
 
+    if (scenario == "avtrace") {
+        // AV 追踪探针场景（配 LUMENARC_AUDIO_TAP=目录）：实时播放 N 秒，
+        // 引擎落盘 tap.pcm + tap.csv，供离线对齐分析（光标-曲线偏移根因）
+        const int secs = args.size() > 3 ? args[3].toInt() : 15;
+        printf("[avtrace] playing %ds realtime, tap dir=%s\n", secs,
+               qgetenv("LUMENARC_AUDIO_TAP").constData());
+        engine.seek(0);   // 与 play 场景一致：先 seek 激活状态机，直接 play 不走
+        pumpFor(500);
+        engine.play();
+        pumpFor(secs * 1000);
+        engine.pause();
+        pumpFor(500);
+        printf("[avtrace] done: frames=%d lastPos=%lld\n", rec.frameCount,
+               (long long)rec.lastPos);
+        printf("[RESULT] PASS\n");
+        return 0;
+    }
+
     if (scenario == "audio-peak") {
         // 定位无声环节：复刻引擎音频通路（AAC decode → swr → s16），
         // 分段测量「解码原始电平」与「swr 输出电平」，并打印 swr 初始化结果

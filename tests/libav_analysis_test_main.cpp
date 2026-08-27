@@ -695,6 +695,107 @@ static void testAudioPtsGapPadding()
     QFile::remove(path);
 }
 
+/// 音画事件对齐判决实验（2026-08-27 用户实测「声响先到，曲线峰/语谱亮斑迟 ~2s」
+/// 反反复复，定根因）：合成 20s 测试片——t=10.0~10.5s 同时全白闪 + 880Hz 哔声；
+/// 分别跑亮度分析与音频分析，断言两条链的事件落点都在 10.0s ± 0.3s 且互差 <0.2s。
+/// 若双双过 → 分析侧清白，问题在播放位置/光标域；若音频分析迟 → 分析侧实锤。
+static void testAvEventAlignment()
+{
+    const QString appDir = QCoreApplication::applicationDirPath();
+    const QString ffmpegExe = appDir + QStringLiteral("/ffmpeg/ffmpeg.exe");
+    if (!QFile::exists(ffmpegExe)) {
+        fprintf(stderr, "[av-align] SKIP (ffmpeg.exe missing)\n");
+        return;
+    }
+    const QString path = QDir::temp().filePath(QStringLiteral("lumenarc_avalign.mp4"));
+    QFile::remove(path);
+
+    QProcess proc;
+    proc.setProgram(ffmpegExe);
+    proc.setArguments({
+        QStringLiteral("-y"), QStringLiteral("-hide_banner"), QStringLiteral("-v"), QStringLiteral("error"),
+        QStringLiteral("-f"), QStringLiteral("lavfi"),
+        QStringLiteral("-i"), QStringLiteral("color=black:size=320x240:rate=25:duration=20"),
+        QStringLiteral("-f"), QStringLiteral("lavfi"),
+        QStringLiteral("-i"), QStringLiteral("sine=frequency=880:sample_rate=44100:duration=20"),
+        QStringLiteral("-filter_complex"),
+        QStringLiteral("[0:v]drawbox=x=0:y=0:w=iw:h=ih:c=white:t=fill:enable='between(t,10,10.5)'[v];"
+                       "[1:a]volume='if(between(t,10,10.5),1,0)':eval=frame[a]"),
+        QStringLiteral("-map"), QStringLiteral("[v]"),
+        QStringLiteral("-map"), QStringLiteral("[a]"),
+        QStringLiteral("-c:v"), QStringLiteral("libx264"),
+        QStringLiteral("-preset"), QStringLiteral("veryfast"),
+        QStringLiteral("-g"), QStringLiteral("50"),
+        QStringLiteral("-pix_fmt"), QStringLiteral("yuv420p"),
+        QStringLiteral("-c:a"), QStringLiteral("aac"),
+        QStringLiteral("-b:a"), QStringLiteral("64k"),
+        path});
+    proc.start();
+    proc.waitForFinished(60000);
+    const bool genOk = (proc.exitCode() == 0) && QFile::exists(path);
+    CHECK(genOk, "av-align: synth file generated");
+    if (!genOk) {
+        fprintf(stderr, "[av-align] ffmpeg: %s\n", proc.readAllStandardError().constData());
+        return;
+    }
+
+    // ---- 亮度链：全帧 ROI，找首个 lum>230 的时间戳 ----
+    qint64 tLum = -1;
+    {
+        LibavAnalysisEngine eng;
+        AnalysisSnapshot snap;
+        bool done = false, failed = false;
+        QEventLoop loop;
+        QObject::connect(&eng, &IAnalysisEngine::analysisFinished,
+                         &loop, [&](const AnalysisSnapshot &s) { snap = s; done = true; loop.quit(); });
+        QObject::connect(&eng, &IAnalysisEngine::analysisFailed,
+                         &loop, [&](const QString &) { failed = true; loop.quit(); });
+        QVector<QRect> rects{QRect(0, 0, 320, 240)};
+        eng.startAnalysis(path, rects, {}, {}, {1}, {});
+        QTimer::singleShot(120000, &loop, &QEventLoop::quit);
+        loop.exec();
+        CHECK(done && !failed && !snap.timestamps.isEmpty(), "av-align: luminance run ok");
+        if (done && !snap.lumRows().isEmpty()) {
+            const auto &lum = snap.lumRows().first();
+            for (int i = 0; i < lum.size(); ++i) {
+                if (lum[i] > 230.0) { tLum = snap.timestamps[i]; break; }
+            }
+        }
+    }
+
+    // ---- 音频链：音量归一化后首个 >0.5 的时间 ----
+    qint64 tVol = -1;
+    {
+        LibavAnalysisEngine eng;
+        AnalysisSnapshot snap;
+        bool done = false, failed = false;
+        QEventLoop loop;
+        QObject::connect(&eng, &IAnalysisEngine::analysisFinished,
+                         &loop, [&](const AnalysisSnapshot &s) { snap = s; done = true; loop.quit(); });
+        QObject::connect(&eng, &IAnalysisEngine::analysisFailed,
+                         &loop, [&](const QString &) { failed = true; loop.quit(); });
+        eng.startAudioAnalysis(path);
+        QTimer::singleShot(120000, &loop, &QEventLoop::quit);
+        loop.exec();
+        CHECK(done && !failed && snap.hasAudio(), "av-align: audio run ok");
+        if (snap.hasAudio()) {
+            const auto &vol = snap.audioData().volume;
+            const double hopMs = snap.audioData().timeResolutionMs;
+            for (int i = 0; i < vol.size(); ++i) {
+                if (vol[i] > 0.5) { tVol = qint64(i * hopMs); break; }
+            }
+        }
+    }
+
+    fprintf(stderr, "[av-align] tLum=%lld ms  tVol=%lld ms  (event true=10000 ms)\n",
+            (long long)tLum, (long long)tVol);
+    CHECK(tLum > 0 && qAbs(tLum - 10000) <= 300, "av-align: luminance peak at 10.0s±0.3");
+    CHECK(tVol > 0 && qAbs(tVol - 10000) <= 300, "av-align: volume peak at 10.0s±0.3");
+    if (tLum > 0 && tVol > 0)
+        CHECK(qAbs(tLum - tVol) <= 200, "av-align: lum/vol agree within 0.2s");
+    QFile::remove(path);
+}
+
 int main(int argc, char **argv)
 {
     QCoreApplication app(argc, argv);
@@ -704,6 +805,7 @@ int main(int argc, char **argv)
     testScaleRect();
     testLateVideoProbeLimit();
     testAudioPtsGapPadding();
+    testAvEventAlignment();
 
     QString video = QStringLiteral("build_tmp/caltest/basic.mp4");
     QString audioVideo = QStringLiteral("build_tmp/caltest/audio_varied.mp4");

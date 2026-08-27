@@ -528,6 +528,10 @@ void FfmpegVideoEngine::processAudioPacket(AVPacket *pkt)
                 if (m_sinkIo)
                     m_sinkIo->write(payloadData, payload);
                 m_audioBytesWritten += payload;
+                if (m_tapPcm) {   // AV 追踪：落盘 PCM + 事件行
+                    m_tapPcm->write(payloadData, payload);
+                    tapAudioWrite(payload, m_sink ? m_sink->bytesFree() : -1);
+                }
                 if (guard >= 100)
                     audioDiag(QStringLiteral("BACKPRESSURE TIMEOUT: sink not draining "
                               "state=%1 err=%2 bytesFree=%3")
@@ -1057,6 +1061,47 @@ void FfmpegVideoEngine::setPlaybackDenoise(bool on, double strength)
 {
     m_pbDenoiseOn.store(on);
     m_pbDenoiseStrength.store(strength);
+}
+
+// ---- AV 追踪探针（LUMENARC_AUDIO_TAP=目录；默认关闭零开销）----
+void FfmpegVideoEngine::tapEnsure()
+{
+    if (m_tapPcm || m_tapLog)
+        return;
+    static const QByteArray dir = qgetenv("LUMENARC_AUDIO_TAP");  // 只查一次
+    if (dir.isEmpty())
+        return;
+    m_tapPcm = new QFile(QString::fromUtf8(dir) + "/tap.pcm", this);
+    m_tapLog = new QFile(QString::fromUtf8(dir) + "/tap.csv", this);
+    if (!m_tapPcm->open(QIODevice::WriteOnly) || !m_tapLog->open(QIODevice::WriteOnly)) {
+        delete m_tapPcm; delete m_tapLog;
+        m_tapPcm = nullptr; m_tapLog = nullptr;
+        return;
+    }
+    m_tapLog->write("kind,monoMs,arg0,arg1,arg2\n");
+    m_tapLog->write(QStringLiteral("meta,rate=%1,ch=%2,fmt=%3\n")
+                        .arg(m_outSampleRate).arg(m_outChannels)
+                        .arg(int(m_outSampleFmt)).toUtf8());
+}
+
+void FfmpegVideoEngine::tapAudioWrite(qint64 payload, qint64 bytesFreeAfter)
+{
+    if (!m_tapLog)
+        return;
+    const qint64 mono = m_monotonic.isValid() ? m_monotonic.elapsed() : -1;
+    // kind=A: arg0=本次写入字节 arg1=写后缓冲余量 arg2=累计写入
+    m_tapLog->write(QStringLiteral("A,%1,%2,%3,%4\n")
+                        .arg(mono).arg(payload).arg(bytesFreeAfter)
+                        .arg(m_audioBytesWritten.load()).toUtf8());
+}
+
+void FfmpegVideoEngine::tapVideoDisplay(qint64 relMs)
+{
+    if (!m_tapLog)
+        return;
+    const qint64 mono = m_monotonic.isValid() ? m_monotonic.elapsed() : -1;
+    // kind=V: arg0=显示帧的流内毫秒
+    m_tapLog->write(QStringLiteral("V,%1,%2,0,0\n").arg(mono).arg(relMs).toUtf8());
 }
 
 void FfmpegVideoEngine::setRate(float rate)
@@ -1935,6 +1980,9 @@ bool FfmpegVideoEngine::paceUntil(qint64 ptsRelMs)
 void FfmpegVideoEngine::displayFrame(AVFrame *frame)
 {
     qint64 relMs = ptsToRelMs(frame->best_effort_timestamp);
+
+    tapEnsure();          // AV 追踪探针懒开（env 未设恒 null）
+    tapVideoDisplay(relMs);
 
     // 有界化 frameReady 队列（VLC vout 式）：UI 未消费 ≥2 帧时丢帧而不是排队——
     // 防止 Qt 信号队列积压导致画面滞后/回放感（拖拽与低配机 4K 播放场景）

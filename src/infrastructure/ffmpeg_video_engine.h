@@ -29,6 +29,8 @@
 #include <atomic>
 #include <memory>
 
+class QFile;
+
 struct AVFormatContext;
 struct AVCodecContext;
 struct SwsContext;
@@ -289,6 +291,13 @@ private:
     // --- 临时诊断：音频健康日志（定位后移除） ---
     qint64 m_diagDecodedMs = 0;           // 本日志周期内已解码音频时长
     int m_diagPeak = 0;                   // 本日志周期内 s16 输出峰值
+    // AV 追踪探针（LUMENARC_AUDIO_TAP=目录 时启用；光标-曲线偏移根因调查）：
+    // PCM 写入流落盘 + 写/显示事件墙钟 CSV，供离线对齐分析
+    QFile *m_tapPcm = nullptr;
+    QFile *m_tapLog = nullptr;
+    void tapEnsure();                     // 懒开（env 未设则恒 null）
+    void tapAudioWrite(qint64 payload, qint64 bytesFreeAfter);
+    void tapVideoDisplay(qint64 relMs);
     bool m_diagOutFailLogged = false;     // ensureAudioOutput 失败只记一次
 
     // --- 临时诊断：scrub 卡顿归因计数（定位后移除） ---
