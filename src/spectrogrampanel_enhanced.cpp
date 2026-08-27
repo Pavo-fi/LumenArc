@@ -817,6 +817,22 @@ void SpectrogramPanelEnhanced::wheelEvent(QWheelEvent *event)
         return;
     }
 
+    // Alt+滚轮：沿时间轴平移（上滚向过去、下滚向未来，每格 10% 可视宽度）
+    if (event->modifiers() & Qt::AltModifier) {
+        if (m_viewXMax > m_viewXMin) {
+            const double specDur = double(m_audioData.durationMs());
+            const double range = m_viewXMax - m_viewXMin;
+            double lo = m_viewXMin - range * 0.10 * (delta > 0 ? 1.0 : -1.0);
+            lo = qBound(0.0, lo, qMax(0.0, specDur - range));
+            m_viewXMin = lo;
+            m_viewXMax = lo + range;
+            emit xAxisRangeChanged(m_viewXMin, m_viewXMax);   // 联动曲线图
+            update();
+        }
+        event->accept();
+        return;
+    }
+
     // Plain wheel: time axis zoom (X-axis), centered on mouse position
     if (m_viewXMax > m_viewXMin && m_audioData.hasSpectrogram()) {
         double mouseX = event->position().x();

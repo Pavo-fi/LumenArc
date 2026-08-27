@@ -62,6 +62,14 @@ onCalibPhotoFinished 调之；ui_chain +6 断言直驱锁死（offset 834000 管
 Arc — 操作手册.docx」（284KB，30 表）已挂 Release v1.16.0 第二资产；PDF/DOCX
 导出物入 .gitignore 不入库（可再生成）。WPS 导入即转在线智能文档。
 
+**补记 28（v1.16.1，曲线图/语谱图滚轮操作归一化，用户拍板规格）**：
+滚轮=X 轴缩放@鼠标位（两图原有）；Ctrl+滚轮=Y 轴缩放@鼠标位（曲线图新增：
+亮度轴，首用自动关 Y 自动范围，右键菜单恢复；语谱图原有频率轴）；
+Alt+滚轮=X 轴平移（两图新增，上滚向过去，每格 10% 可视宽度，夹取边界）。
+曲线图 X rangeChanged 信号自动联动语谱，语谱 Alt 平移 emit 联动曲线。
+顺手修手册旧错：语谱 Y 平移实为 Ctrl+左键拖拽（非中键）。19 套全绿。
+播放音频降噪方案调研中（afftdn 风格流式谱减 vs RNNoise 对比，待拍板）。
+
 **补记 27（v1.16.1，P-54 音频降噪 libav 原生落地）**：降噪滑杆自 v1.5 默认
 libav 引擎起即空操作（Python 谱减法随 P-25 退役）——本批实装：domain/
 audio_denoise.cpp 谱门控（就地 PCM：STFT N=2048/hop=512 Hann COLA → 等距采样

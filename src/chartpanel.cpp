@@ -1697,6 +1697,42 @@ void ChartPanel::wheelEvent(QWheelEvent *event)
     qreal delta = event->angleDelta().y() / 120.0;
     qreal xPos = mapXToTime(chartPos.x());
 
+    // Ctrl+滚轮：以鼠标位置为中心 Y 轴缩放（亮度轴；首用自动关闭 Y 自动范围，
+    // 右键菜单「启用 Y 轴自动范围」可恢复）
+    if (event->modifiers() & Qt::ControlModifier) {
+        if (m_axisY) {
+            const qreal yMin = m_axisY->min(), yMax = m_axisY->max();
+            const qreal yRange = yMax - yMin;
+            if (yRange > 0 && plotArea.height() > 0) {
+                const qreal t = (chartPos.y() - plotArea.top()) / plotArea.height();
+                const qreal yPos = yMax - t * yRange;   // 鼠标处亮度值
+                const qreal factor = (delta > 0) ? 0.8 : 1.25;
+                const qreal newRange = qBound<qreal>(2.0, yRange * factor, 300.0);
+                qreal lo = yPos - (yPos - yMin) * (newRange / yRange);
+                qreal hi = lo + newRange;
+                if (lo < -10.0) { lo = -10.0; hi = lo + newRange; }
+                if (hi > 265.0) { hi = 265.0; lo = hi - newRange; }
+                if (m_yAxisAutoRange)
+                    setAutoYRange(false);
+                m_axisY->setRange(lo, hi);
+            }
+        }
+        event->accept();
+        return;
+    }
+
+    // Alt+滚轮：沿 X 轴平移（上滚向过去、下滚向未来，每格 10% 可视宽度；
+    // rangeChanged 信号自动联动语谱图/光标/刻度）
+    if (event->modifiers() & Qt::AltModifier) {
+        const qreal range = m_axisX->max() - m_axisX->min();
+        qreal lo = m_axisX->min() - range * 0.10 * (delta > 0 ? 1.0 : -1.0);
+        lo = qBound<qreal>(0.0, lo, qMax<qreal>(0.0, m_durationMs - range));
+        m_axisX->setRange(lo, lo + range);
+        updateYAxisRange();
+        event->accept();
+        return;
+    }
+
     qreal range = m_axisX->max() - m_axisX->min();
     qreal factor = (delta > 0) ? 0.8 : 1.25;  // zoom in / zoom out
     qreal newRange = qBound<qreal>(1000.0, range * factor, static_cast<qreal>(m_durationMs));
