@@ -819,10 +819,17 @@ void SpectrogramPanelEnhanced::wheelEvent(QWheelEvent *event)
 
     // Alt+滚轮：沿时间轴平移（上滚向过去、下滚向未来，每格 10% 可视宽度）
     if (event->modifiers() & Qt::AltModifier) {
+        // Windows 下 Alt+滚轮常走横向滚动消息（angleDelta.y()==0）——取非零分量
+        const QPoint ad = event->angleDelta();
+        const double steps = (ad.y() != 0 ? ad.y() : ad.x()) / 120.0;
+        if (steps == 0.0) {
+            event->accept();
+            return;
+        }
         if (m_viewXMax > m_viewXMin) {
             const double specDur = double(m_audioData.durationMs());
             const double range = m_viewXMax - m_viewXMin;
-            double lo = m_viewXMin - range * 0.10 * (delta > 0 ? 1.0 : -1.0);
+            double lo = m_viewXMin - range * 0.10 * (steps > 0 ? 1.0 : -1.0);
             lo = qBound(0.0, lo, qMax(0.0, specDur - range));
             m_viewXMin = lo;
             m_viewXMax = lo + range;
@@ -862,6 +869,17 @@ void SpectrogramPanelEnhanced::wheelEvent(QWheelEvent *event)
 
 void SpectrogramPanelEnhanced::mousePressEvent(QMouseEvent *event)
 {
+    // 中键拖拽：平移时间轴（v1.16.1 归一化，与曲线图同语义）
+    if (event->button() == Qt::MiddleButton && m_audioData.hasSpectrogram()) {
+        m_panningX = true;
+        m_panStartPos = event->position();
+        m_panStartXMin = m_viewXMin;
+        m_panStartXMax = m_viewXMax;
+        setCursor(Qt::ClosedHandCursor);
+        event->accept();
+        return;
+    }
+
     if (event->button() == Qt::LeftButton && (event->modifiers() & Qt::ControlModifier)) {
         m_draggingY = true;
         m_lastDragY = event->position().y();
@@ -906,6 +924,23 @@ void SpectrogramPanelEnhanced::mousePressEvent(QMouseEvent *event)
 
 void SpectrogramPanelEnhanced::mouseMoveEvent(QMouseEvent *event)
 {
+    if (m_panningX) {
+        const double range = m_panStartXMax - m_panStartXMin;
+        const int plotW = width() - m_leftMargin - m_rightMargin;
+        if (plotW > 0 && range > 0) {
+            const double dx = m_panStartPos.x() - event->position().x();
+            const double specDur = double(m_audioData.durationMs());
+            double lo = m_panStartXMin + dx / plotW * range;
+            lo = qBound(0.0, lo, qMax(0.0, specDur - range));
+            m_viewXMin = lo;
+            m_viewXMax = lo + range;
+            emit xAxisRangeChanged(m_viewXMin, m_viewXMax);   // 联动曲线图
+            update();
+        }
+        event->accept();
+        return;
+    }
+
     // Cursor dragging
     if (m_draggingCursor) {
         int heatW = width() - m_leftMargin - m_rightMargin;
@@ -1028,6 +1063,12 @@ void SpectrogramPanelEnhanced::mouseMoveEvent(QMouseEvent *event)
 
 void SpectrogramPanelEnhanced::mouseReleaseEvent(QMouseEvent *event)
 {
+    if (event->button() == Qt::MiddleButton && m_panningX) {
+        m_panningX = false;
+        unsetCursor();
+        event->accept();
+        return;
+    }
     if (event->button() == Qt::LeftButton && m_draggingY) {
         m_draggingY = false;
         event->accept();

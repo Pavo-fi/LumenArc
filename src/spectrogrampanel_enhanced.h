@@ -103,6 +103,11 @@ private:
     bool m_draggingY = false;
     int m_lastDragY = 0;
     bool m_draggingCursor = false;
+    // v1.16.1 滚轮/拖拽归一化：中键拖拽平移时间轴（与曲线图同语义）
+    bool m_panningX = false;
+    QPointF m_panStartPos;
+    double m_panStartXMin = 0.0;
+    double m_panStartXMax = 0.0;
 
     // OpenGL resources
     QOpenGLShaderProgram *m_program = nullptr;
