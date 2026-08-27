@@ -446,11 +446,14 @@ void FfmpegVideoEngine::processAudioPacket(AVPacket *pkt)
                     && m_pbDenoiseStrength.load() > 0.0) {
                     if (!m_pbDenoise
                         || m_pbDenoise->sampleRate() != m_outSampleRate
-                        || m_pbDenoise->channels() != m_outChannels
-                        || qAbs(m_pbDenoise->strength() - m_pbDenoiseStrength.load()) > 1e-9) {
+                        || m_pbDenoise->channels() != m_outChannels) {
+                        // 采样率/声道变化才重建（seek 已在 seek 路径 reset）
                         m_pbDenoise = std::make_unique<SpectralGateStream>();
                         m_pbDenoise->configure(m_outSampleRate, m_outChannels,
                                                m_pbDenoiseStrength.load());
+                    } else {
+                        // 强度热更新：下一帧生效，不重建状态、无断音
+                        m_pbDenoise->setStrength(m_pbDenoiseStrength.load());
                     }
                     // 内容锚点：首个喂入帧的 relMs 即输出流零点（若在写时刻
                     // 锚定会因 DSP 定稿滞后偏晚一窗）

@@ -144,13 +144,14 @@ void spectralGateDenoise(QVector<float> &pcm, int sampleRate, double strength)
 
 void SpectralGateStream::configure(int sampleRate, int channels, double strength)
 {
-    if (m_configured && m_sampleRate == sampleRate && m_channels == channels
-        && qAbs(m_strength - strength) < 1e-9)
+    if (m_configured && m_sampleRate == sampleRate && m_channels == channels) {
+        setStrength(strength);   // 仅强度变化：热更新，不重建
         return;
+    }
     releaseTx();
     m_sampleRate = sampleRate;
     m_channels = qBound(1, channels, 2);
-    m_strength = qBound(0.0, strength, 10.0);
+    m_strength.store(qBound(0.0, strength, 10.0));
     m_ch.clear();
     m_ch.resize(m_channels);
     m_configured = true;
@@ -250,7 +251,7 @@ void SpectralGateStream::processFrame(QVector<int16_t> &out, qint64 maxEmit)
             // 运行最小值→典型底噪标定：Rayleigh 分布下运行最小值远低于分位
             // 噪声谱（实测不标定时降噪力度不足，×0.65）；×4 ≈ 25 分位水平
             const double ne = ch.noise[k] * 4.0;
-            const double g = (mag - m_strength * ne) / (mag + kEps);
+            const double g = (mag - m_strength.load() * ne) / (mag + kEps);
             gain[k] = qBound(kFloor, g, 1.0);
         }
         ch.noiseInit = true;
@@ -315,7 +316,7 @@ void SpectralGateStream::processFrame(QVector<int16_t> &out, qint64 maxEmit)
 void SpectralGateStream::feed(const int16_t *interleaved, int totalSamples,
                               QVector<int16_t> &out)
 {
-    if (!m_configured || m_strength <= 0.0) {
+    if (!m_configured || m_strength.load() <= 0.0) {
         for (int i = 0; i < totalSamples; ++i)
             out.append(interleaved[i]);   // 旁路直通（调用方通常已拦，双保险）
         return;
@@ -343,7 +344,7 @@ void SpectralGateStream::feed(const int16_t *interleaved, int totalSamples,
 
 void SpectralGateStream::flush(QVector<int16_t> &out)
 {
-    if (!m_configured || m_strength <= 0.0)
+    if (!m_configured || m_strength.load() <= 0.0)
         return;
     ensureTx();
     if (!m_ftx || !m_itx)

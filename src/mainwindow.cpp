@@ -1493,6 +1493,9 @@ void MainWindow::setupConnections()
     connect(m_noiseReductionSlider, &QSlider::valueChanged, this, [this](int value) {
         m_noiseReductionStrength = value / 10.0;
         m_noiseReductionValueLabel->setText(QString::number(m_noiseReductionStrength, 'f', 1));
+        // P-54b：播放降噪强度实时跟随（原子热更新，下一帧生效，不用点应用）；
+        // 分析显示链路仍需「应用」重跑（图是离线数据渲染的）
+        applyPlaybackDenoiseSetting();
     });
     // Apply button: directly connected via member variable
     connect(m_nrApplyBtn, &QPushButton::clicked, this, [this]() {

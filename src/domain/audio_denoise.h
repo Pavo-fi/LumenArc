@@ -2,6 +2,7 @@
 #define AUDIO_DENOISE_H
 
 #include <QVector>
+#include <atomic>
 
 /// @file audio_denoise.h
 /// @brief 谱门控降噪（P-54：libav 引擎原生降噪，替代已退役的 Python 谱减法）
@@ -36,12 +37,14 @@ class SpectralGateStream
 public:
     SpectralGateStream() = default;
 
-    /// 配置（采样率/声道数/强度任一变化即内部重建）
+    /// 配置（采样率/声道数变化才内部重建；强度请走 setStrength 免重建）
     void configure(int sampleRate, int channels, double strength);
+    /// 强度热更新（原子，下一帧生效；不重建状态、无断音）
+    void setStrength(double s) { m_strength.store(qBound(0.0, s, 10.0)); }
     bool isConfigured() const { return m_configured; }
     int sampleRate() const { return m_sampleRate; }
     int channels() const { return m_channels; }
-    double strength() const { return m_strength; }
+    double strength() const { return m_strength.load(); }
 
     /// seek/换流：清输入缓冲/OLA 累加器/底噪估计（底噪由后续帧快速重建）
     void reset();
@@ -69,7 +72,7 @@ private:
 
     int m_sampleRate = 48000;
     int m_channels = 1;
-    double m_strength = 1.0;
+    std::atomic<double> m_strength{1.0};   // 热更新（setStrength）
     bool m_configured = false;
     QVector<ChannelState> m_ch;
     QVector<double> m_norm;             ///< 各声道共享的 w² 累加（同窗同步）
