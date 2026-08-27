@@ -625,6 +625,12 @@ bool MultiCamPlaybackWindow::openCaseLanes(const CaseManager &cm)
     return true;
 }
 
+void MultiCamPlaybackWindow::applyPlaybackDenoise(bool on, double strength)
+{
+    if (m_svc)
+        m_svc->setPlaybackDenoiseAll(on, strength);
+}
+
 void MultiCamPlaybackWindow::openStandalone()
 {
     m_case = nullptr;

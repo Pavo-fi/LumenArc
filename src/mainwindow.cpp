@@ -138,6 +138,7 @@ MainWindow::MainWindow(QWidget *parent)
         ffEngine->setHardwareAdapter(
             engineSettings.value("hwAdapter", -1).toInt());
         m_videoEngine = ffEngine;
+        applyPlaybackDenoiseSetting();   // P-54b：启动即同步开关/强度
     }
 
     m_videoWidget = new VideoWidget(this);
@@ -987,6 +988,26 @@ void MainWindow::createMenus()
     connect(hwAction, &QAction::toggled, this, [](bool on) {
         QSettings s("LumenArc", "LumenArc");
         s.setValue("hwDecode", on);
+    });
+
+    // v1.16.1 P-54b：播放音频降噪（谱门控流式 DSP，强度与语谱图降噪滑杆共享；
+    // 默认关——取证保守；scrub 拖拽片段旁路；seek/开关自动重建状态）
+    QAction *pbNrAction = settingsMenu->addAction(
+        lang("播放音频降噪（强度随语谱图降噪滑杆）",
+             "Playback noise reduction (strength follows spectrogram NR slider)"));
+    pbNrAction->setCheckable(true);
+    pbNrAction->setToolTip(lang("对播放声音实时降噪（语谱图「降噪」滑杆控制强度）。\n"
+                                "只影响监听，原始数据与分析结果不变。",
+                                "Real-time playback denoise; strength follows the spectrogram NR slider.\n"
+                                "Monitoring only — source data and analysis are untouched."));
+    {
+        QSettings s("LumenArc", "LumenArc");
+        pbNrAction->setChecked(s.value("playbackDenoise", false).toBool());
+    }
+    connect(pbNrAction, &QAction::toggled, this, [this](bool on) {
+        QSettings s("LumenArc", "LumenArc");
+        s.setValue("playbackDenoise", on);
+        applyPlaybackDenoiseSetting();
     });
 
     // 硬解设备选择（自动=偏好独显；重启生效）
@@ -2403,6 +2424,12 @@ void MainWindow::onMultiCamView()
         if (m_videoEngine && m_videoEngine->state() == PlaybackState::Playing)
             m_videoEngine->pause();
     };
+    {
+        // P-54b：多机窗继承播放降噪设置
+        QSettings s("LumenArc", "LumenArc");
+        win->applyPlaybackDenoise(s.value("playbackDenoise", false).toBool(),
+                                  m_noiseReductionStrength);
+    }
     win->setAttribute(Qt::WA_DeleteOnClose);
     win->showMaximized();   // v1.16.0 拍板：多机窗默认最大化（多路铺屏）
 }
@@ -2451,6 +2478,11 @@ void MainWindow::onMultiCamStandalone()
         if (m_videoEngine && m_videoEngine->state() == PlaybackState::Playing)
             m_videoEngine->pause();
     };
+    {
+        QSettings s("LumenArc", "LumenArc");   // P-54b 同上
+        win->applyPlaybackDenoise(s.value("playbackDenoise", false).toBool(),
+                                  m_noiseReductionStrength);
+    }
     win->setAttribute(Qt::WA_DeleteOnClose);
     win->showMaximized();   // v1.16.0：默认最大化
 }
@@ -3604,6 +3636,16 @@ void MainWindow::onAnalyze()
 
 
 /// @brief 启动音频分析（独立于亮度分析，无需 ROI）
+void MainWindow::applyPlaybackDenoiseSetting()
+{
+    QSettings s("LumenArc", "LumenArc");
+    const bool on = s.value("playbackDenoise", false).toBool();
+    if (m_videoEngine)
+        m_videoEngine->setPlaybackDenoise(on, m_noiseReductionStrength);
+    if (m_multiCamWin)
+        m_multiCamWin->applyPlaybackDenoise(on, m_noiseReductionStrength);
+}
+
 void MainWindow::onAudioAnalysis()
 {
     if (m_currentVideoPath.isEmpty()) {
@@ -3617,6 +3659,7 @@ void MainWindow::onAudioAnalysis()
     // P-54：降噪强度随任务下发（0=干净分析；滑杆调回 0 再应用即复原）
     if (m_analysisEngine)
         m_analysisEngine->setAudioDenoiseStrength(m_noiseReductionStrength);
+    applyPlaybackDenoiseSetting();   // 滑杆可能变了：播放 DSP 同步强度
     m_taskService->start(AnalysisChannels::audio(), m_currentVideoPath,
                          {}, {}, {}, {});
 }

@@ -227,6 +227,7 @@ add_executable(lumenarc_engine_test
     src/infrastructure/ivideo_engine.h
     src/infrastructure/ffmpeg_video_engine.h
     src/infrastructure/ffmpeg_video_engine.cpp
+    src/domain/audio_denoise.cpp   # P-54b：引擎依赖（播放降噪 DSP）
 )
 target_include_directories(lumenarc_engine_test PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src

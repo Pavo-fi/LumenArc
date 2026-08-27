@@ -568,6 +568,15 @@ IVideoEngine *MultiCamSyncService::engineAt(int idx) const
     return m_engines.value(idx, nullptr);
 }
 
+void MultiCamSyncService::setPlaybackDenoiseAll(bool on, double strength)
+{
+    // P-54b：全部路引擎同设（仅发声路可闻，全设免切换发声路时跟随）
+    for (IVideoEngine *e : m_engines) {
+        if (e)
+            e->setPlaybackDenoise(on, strength);
+    }
+}
+
 qint64 MultiCamSyncService::contentStartWallMs() const { return m_contentStart; }
 qint64 MultiCamSyncService::contentEndWallMs() const { return m_contentEnd; }
 

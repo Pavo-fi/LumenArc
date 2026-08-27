@@ -436,9 +436,53 @@ void FfmpegVideoEngine::processAudioPacket(AVPacket *pkt)
 
                 const char *payloadData = out.constData() + offset;
                 qint64 payload = bytes - offset;
+
+                // P-54b 播放降噪（v1.16.1）：scrub 片段旁路；DSP 在音量增益与
+                // 变速重采样之前。内容流重索引对齐（输出样本 p 恒为输入 p 的
+                // 降噪版），计算滞后 ≤kWin 样本由 1s 设备缓冲吸收 → 稳态零偏移
+                QByteArray dspOut;
+                bool dspActive = false;
+                if (!scrubbing && m_pbDenoiseOn.load()
+                    && m_pbDenoiseStrength.load() > 0.0) {
+                    if (!m_pbDenoise
+                        || m_pbDenoise->sampleRate() != m_outSampleRate
+                        || m_pbDenoise->channels() != m_outChannels
+                        || qAbs(m_pbDenoise->strength() - m_pbDenoiseStrength.load()) > 1e-9) {
+                        m_pbDenoise = std::make_unique<SpectralGateStream>();
+                        m_pbDenoise->configure(m_outSampleRate, m_outChannels,
+                                               m_pbDenoiseStrength.load());
+                    }
+                    // 内容锚点：首个喂入帧的 relMs 即输出流零点（若在写时刻
+                    // 锚定会因 DSP 定稿滞后偏晚一窗）
+                    if (m_audioBaseRelMs < 0) {
+                        if (relMs >= 0)
+                            m_audioBaseRelMs = qMax<qint64>(relMs, m_audioDiscardBeforeRelMs);
+                        else
+                            m_audioBaseRelMs = qMax<qint64>(0, m_audioDiscardBeforeRelMs);
+                    }
+                    QVector<int16_t> emitted;
+                    m_pbDenoise->feed(
+                        reinterpret_cast<const int16_t *>(payloadData),
+                        static_cast<int>(payload / 2), emitted);
+                    if (!emitted.isEmpty()) {
+                        dspOut = QByteArray(
+                            reinterpret_cast<const char *>(emitted.constData()),
+                            int(emitted.size()) * 2);
+                        payloadData = dspOut.constData();
+                        payload = dspOut.size();
+                        dspActive = true;
+                    } else {
+                        av_frame_unref(frame);
+                        continue;   // 定稿前沿未推进（起步缓冲期 ~一窗）
+                    }
+                } else if (!scrubbing && !m_pbDenoiseOn.load() && m_pbDenoise) {
+                    m_pbDenoise.reset();   // 关断即销毁（状态不残留；scrub 不动它）
+                }
+
                 // v1.7.1：音量 >100% 的 PCM 增益（削波保护；≤100% 走 sink 音量）
                 if (m_volume.load() > 100)
-                    applyVolumeGain(out.data() + offset, payload, m_volume.load() / 100.0f);
+                    applyVolumeGain(dspActive ? dspOut.data() : out.data() + offset,
+                                    payload, m_volume.load() / 100.0f);
 
                 if (scrubbing) {
                     // 片段直写：无背压等待（片段 ≤100ms），不打断追逐循环
@@ -1006,6 +1050,12 @@ bool FfmpegVideoEngine::scrubChaseMainFrame()
     return shown;
 }
 
+void FfmpegVideoEngine::setPlaybackDenoise(bool on, double strength)
+{
+    m_pbDenoiseOn.store(on);
+    m_pbDenoiseStrength.store(strength);
+}
+
 void FfmpegVideoEngine::setRate(float rate)
 {
     m_rate = rate > 0.0f ? rate : 1.0f;
@@ -1372,6 +1422,8 @@ bool FfmpegVideoEngine::openFile(const QString &filePath)
     m_discardBeforeRelMs = -1;
     m_audioDiscardBeforeRelMs = -1;
     m_audioBaseRelMs = -1;
+    if (m_pbDenoise)
+        m_pbDenoise->reset();   // P-54b：开新文件/重播，DSP 状态重建
     m_stepOnce = false;
     m_eof = false;
     m_clockValid = false;
@@ -1538,6 +1590,8 @@ void FfmpegVideoEngine::scrubRedirectDemuxer(qint64 timeMs)
     m_audioBaseRelMs = -1;
     m_smoothAudioClock = -1;
     m_lastRawAudioClock = -1;
+    if (m_pbDenoise)
+        m_pbDenoise->reset();   // P-54b：seek 内容跳变，OLA/底噪状态重建
 
     m_discardBeforeRelMs = -1;
     m_audioDiscardBeforeRelMs = -1;

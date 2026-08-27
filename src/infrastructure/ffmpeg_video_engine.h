@@ -18,6 +18,7 @@
 #pragma once
 
 #include "ivideo_engine.h"
+#include "domain/audio_denoise.h"   // P-54b 播放降噪流式处理器
 #include <QThread>
 #include <QMutex>
 #include <QWaitCondition>
@@ -26,6 +27,7 @@
 #include <QVector>
 #include <QImage>
 #include <atomic>
+#include <memory>
 
 struct AVFormatContext;
 struct AVCodecContext;
@@ -64,6 +66,9 @@ public:
     int volume() const override;
     void setVolume(int vol) override;
     void setRate(float rate) override;
+    /// P-54b 播放音频降噪（谱门控流式 DSP）：开关/强度原子写入，
+    /// 工作线程在下个音频帧生效；scrub 片段音频旁路。
+    void setPlaybackDenoise(bool on, double strength) override;
     float rate() const override;
     bool supportsRateAudio() const override { return true; }  // v1.1：倍速变速音频（音调随速度变化）
     /// 启用/禁用硬件解码（下次 load 生效；失败自动回退软解）
@@ -173,6 +178,10 @@ private:
     std::atomic<float> m_fps{0.0f};
     std::atomic<float> m_rate{1.0f};
     std::atomic<int> m_volume{100};
+    // P-54b 播放降噪：开关/强度原子（UI 线程写），处理器对象归工作线程
+    std::atomic<bool> m_pbDenoiseOn{false};
+    std::atomic<double> m_pbDenoiseStrength{0.0};
+    std::unique_ptr<SpectralGateStream> m_pbDenoise;   // 仅工作线程访问
 
     // --- 播放面（仅工作线程访问） ---
     QThread *m_thread = nullptr;

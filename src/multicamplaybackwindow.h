@@ -68,6 +68,9 @@ public:
     /// 用户回主窗再播，起播前拦才可靠）
     std::function<void()> onAboutToPlay;
 
+    /// P-54b：播放降噪设置透传到全部路引擎（主窗设置联动）
+    void applyPlaybackDenoise(bool on, double strength);
+
     /// 为槽位装载视频（onPickVideo 的对话框后段；测试通道：绕过文件框直喂路径）
     void pickVideoForSlot(int slot, const QString &path);
 

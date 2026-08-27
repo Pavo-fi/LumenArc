@@ -77,6 +77,9 @@ private slots:
     void onAnalyze();
     /// @brief 启动音频分析流程（独立于亮度分析）
     void onAudioAnalysis();
+    /// P-54b：把播放降噪开关（QSettings）+ 当前降噪滑杆强度下发到
+    /// 主引擎与多机窗（开着的）
+    void applyPlaybackDenoiseSetting();
     /// 证据快照（2026-08-14）：视频当前帧（所见即所得含画面调节）+
     /// 曲线分析区合成 PNG，OSD 烧录标签/时间码，入案件 snapshots/。
     void onSnapshotQuick();

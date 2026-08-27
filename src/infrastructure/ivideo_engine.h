@@ -73,6 +73,11 @@ public:
     virtual void setPreviewLowres(int level) { Q_UNUSED(level) }
     /// 当前预览降清档位（0=全分辨率）
     virtual int previewLowres() const { return 0; }
+    /// 播放音频降噪开关与强度（P-54b 谱门控流式 DSP，v1.16.1；
+    /// 默认无操作——不支持的引擎静默忽略）
+    virtual void setPlaybackDenoise(bool on, double strength) {
+        Q_UNUSED(on) Q_UNUSED(strength)
+    }
     /// UI 已消费一帧（有界化 frameReady 队列：引擎在积压时丢帧而不是排队，VLC 式）
     virtual void ackFrame() {}
     /// 当前使用的硬解适配器名称（软解返回空串）

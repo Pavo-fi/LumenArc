@@ -90,6 +90,9 @@ public:
     bool laneUsable(int idx) const;     ///< 加载成功且未暴毙（占位判定）
     bool laneLinked(int idx) const;     ///< 已入统一墙钟轴（校时路恒 true；临时路对齐后 true）
 
+    /// P-54b：全部路引擎设置播放降噪（v1.16.1；仅发声路可闻，但全设免切换跟随）
+    void setPlaybackDenoiseAll(bool on, double strength);
+
 signals:
     void stateChanged(MultiCamSyncService::State s);
     void clockChanged(qint64 wallMs);       ///< 100ms 节拍（UI 刷新游标/进度条）
