@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(LumenArc VERSION 1.16.0 LANGUAGES CXX)
+project(LumenArc VERSION 1.16.1 LANGUAGES CXX)
 add_compile_definitions(APP_VERSION="${PROJECT_VERSION}")
 
 set(CMAKE_CXX_STANDARD 17)
@@ -93,6 +93,7 @@ set(SOURCES
     src/domain/time_calibration.cpp
     src/domain/truth_time_parse.cpp   # v1.12.5 北京时间对时文本解析
     src/domain/time_piecewise.cpp
+    src/domain/audio_denoise.cpp   # P-54 谱门控降噪（libav 引擎原生）
     src/domain/case_model.cpp
     src/app/case_manager.cpp
     src/casedock.cpp
@@ -425,6 +426,7 @@ add_executable(lumenarc_libav_test
     src/infrastructure/libav_analysis_engine.cpp
     src/infrastructure/libav_analysis_engine.h
     src/infrastructure/ianalysis_engine.h
+    src/domain/audio_denoise.cpp   # P-54：引擎依赖
 )
 target_include_directories(lumenarc_libav_test PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src
@@ -433,6 +435,21 @@ target_include_directories(lumenarc_libav_test PRIVATE
 target_link_libraries(lumenarc_libav_test PRIVATE
     Qt6::Core
     Qt6::Gui
+    ${FFMPEG_LIBRARIES}
+)
+
+# --- P-54 谱门控降噪单测（合成信号：底噪压制/纯音保留/旁路） ---
+add_executable(lumenarc_denoise_test
+    tests/denoise_test_main.cpp
+    src/domain/audio_denoise.cpp
+    src/domain/audio_denoise.h
+)
+target_include_directories(lumenarc_denoise_test PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+    ${FFMPEG_INCLUDE_DIR}
+)
+target_link_libraries(lumenarc_denoise_test PRIVATE
+    Qt6::Core
     ${FFMPEG_LIBRARIES}
 )
 
@@ -755,8 +772,8 @@ elseif(APPLE)
         MACOSX_BUNDLE TRUE
         MACOSX_BUNDLE_INFO_PLIST "${CMAKE_CURRENT_SOURCE_DIR}/src/Info.plist"
         MACOSX_BUNDLE_BUNDLE_NAME "LumenArc"
-        MACOSX_BUNDLE_BUNDLE_VERSION "1.16.0"
-        MACOSX_BUNDLE_SHORT_VERSION_STRING "1.16.0"
+        MACOSX_BUNDLE_BUNDLE_VERSION "1.16.1"
+        MACOSX_BUNDLE_SHORT_VERSION_STRING "1.16.1"
         MACOSX_BUNDLE_GUI_IDENTIFIER "com.firetech.lumenarc"
     )
 else()

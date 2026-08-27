@@ -71,6 +71,10 @@ public:
      */
     virtual void startAudioAnalysis(const QString &videoPath);
 
+    /// P-54：设置音频降噪强度（谱门控 α，0=关闭；1.0=标准，≥2.0=强）。
+    /// 在 startAudioAnalysis 之前调用生效；默认实现空操作。
+    virtual void setAudioDenoiseStrength(double strength);
+
 signals:
     void progressUpdated(int analyzed, int total, qreal percent);
     void analysisFinished(const AnalysisSnapshot &result);
@@ -92,4 +96,8 @@ inline qint64 IAnalysisEngine::trustedDurationMs(const QString &videoPath)
 inline void IAnalysisEngine::startAudioAnalysis(const QString &)
 {
     emit analysisFailed(QObject::tr("当前分析引擎不支持音频分析"));
+}
+
+inline void IAnalysisEngine::setAudioDenoiseStrength(double)
+{
 }

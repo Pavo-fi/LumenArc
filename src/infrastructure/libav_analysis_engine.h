@@ -50,6 +50,8 @@ public:
                        const QVector<int> &rectRoiIds = {},
                        const QVector<int> &polygonRoiIds = {}) override;
     void startAudioAnalysis(const QString &videoPath);
+    /// P-54：音频降噪强度（谱门控 α；0=关）。线程安全，worker 启动时读取。
+    void setAudioDenoiseStrength(double strength) override;
     void cancelAnalysis() override;
     bool isRunning() const override;
 
@@ -114,6 +116,7 @@ private:
 
     std::atomic<bool> m_cancel{false};
     std::atomic<bool> m_running{false};
+    std::atomic<double> m_audioDenoiseStrength{0.0};   // P-54
 
     // 任务参数（startAnalysis 时填好，worker 读取）
     QString m_videoPath;

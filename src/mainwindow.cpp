@@ -121,7 +121,7 @@ MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent)
 {
     loadLanguage();
-    setWindowTitle(lang("追光者 Lumen Arc v1.16.0", "Lumen Arc v1.16.0") + buildStamp());
+    setWindowTitle(lang("追光者 Lumen Arc v1.16.1", "Lumen Arc v1.16.1") + buildStamp());
     resize(1280, 720);
 
     m_roiModel = new RoiModel(this);   // 统一 ROI 模型（矩形+多边形，v1.5.0 Q-18）
@@ -1475,12 +1475,11 @@ void MainWindow::setupConnections()
     });
     // Apply button: directly connected via member variable
     connect(m_nrApplyBtn, &QPushButton::clicked, this, [this]() {
-        if (m_noiseReductionStrength > 0 && !m_currentVideoPath.isEmpty()) {
-            // P-25 退役注记：降噪为 Python 引擎专属能力（谱减法），
-            // libav 引擎不支持——滑杆值自 v1.5 默认引擎起即不参与分析，
-            // 此处保留"重新分析"触发；滑杆 UI 清理登记 PENDING 待拍板
+        // P-54（v1.16.1 落地）：libav 引擎原生谱门控降噪——
+        // 强度随任务下发引擎（onAudioAnalysis 内统一读取滑杆值）；
+        // 调回 0 再应用 = 重跑干净分析复原。
+        if (!m_currentVideoPath.isEmpty())
             onAudioAnalysis();
-        }
     });
 
     connect(m_chartPanel, &ChartPanel::seekRequested,
@@ -1845,7 +1844,7 @@ void MainWindow::setupConnections()
                 }
 
                 setWindowTitle(windowTitleWithCase(
-                    lang("追光者 Lumen Arc v1.16.0", "Lumen Arc v1.16.0")));
+                    lang("追光者 Lumen Arc v1.16.1", "Lumen Arc v1.16.1")));
                 updateTimeDisplay();
                 showOperationStatus(lang("已清空视频列表", "Video list cleared"));
             });
@@ -2075,7 +2074,7 @@ void MainWindow::enterCaseMode()
     if (m_batchRelocateAction)
         m_batchRelocateAction->setEnabled(true);
     setWindowTitle(windowTitleWithCase(
-        lang("追光者 Lumen Arc v1.16.0", "Lumen Arc v1.16.0")));
+        lang("追光者 Lumen Arc v1.16.1", "Lumen Arc v1.16.1")));
     showOperationStatus(lang("案件已打开：%1", "Case opened: %1")
                             .arg(m_caseManager->meta().caseNo));
     // 开案批量校时徽标校验（用户实测：旧 vla time_offset=0 误亮 ⏰ 且只在
@@ -2126,7 +2125,7 @@ void MainWindow::exitCaseMode()
         m_exportCaseAction->setEnabled(false);
     if (m_batchRelocateAction)
         m_batchRelocateAction->setEnabled(false);
-    setWindowTitle(lang("追光者 Lumen Arc v1.16.0", "Lumen Arc v1.16.0"));
+    setWindowTitle(lang("追光者 Lumen Arc v1.16.1", "Lumen Arc v1.16.1"));
     showOperationStatus(lang("案件已关闭", "Case closed"));
 }
 
@@ -2304,7 +2303,7 @@ void MainWindow::onCaseProperties()
     // 名称可能已改：刷新标题/面板/状态栏
     if (m_caseManager->isOpen()) {
         setWindowTitle(windowTitleWithCase(
-            lang("追光者 Lumen Arc v1.16.0", "Lumen Arc v1.16.0")));
+            lang("追光者 Lumen Arc v1.16.1", "Lumen Arc v1.16.1")));
         m_caseDock->refreshTree();
         m_caseStatusBtn->setText(
             QStringLiteral("📁 ") + m_caseManager->meta().caseNo);
@@ -2478,7 +2477,7 @@ void MainWindow::openVideoFile(const QString &filePath)
 
         // Do NOT overwrite m_currentVideoPath with the .vla path: it is an
         // analysis file, not a playable video, and it keys VideoStateManager.
-        setWindowTitle(windowTitleWithCase("Lumen Arc v1.16.0 - [Loaded: " +
+        setWindowTitle(windowTitleWithCase("Lumen Arc v1.16.1 - [Loaded: " +
                            QFileInfo(filePath).fileName() + "]"));
         } else {
             QMessageBox::critical(this, lang("错误", "Error"),
@@ -2831,7 +2830,7 @@ void MainWindow::onLoadAnalysis()
                 m_guideLineModel->addLine(line);
 
             // Do NOT overwrite m_currentVideoPath with the .vla path (see openVideoFile).
-        setWindowTitle(windowTitleWithCase("Lumen Arc v1.16.0 - [Loaded: " +
+        setWindowTitle(windowTitleWithCase("Lumen Arc v1.16.1 - [Loaded: " +
                        QFileInfo(filePath).fileName() + "]"));
         QMessageBox::information(this, lang("已加载", "Loaded"),
             lang("分析结果加载成功。", "Analysis result loaded successfully."));
@@ -3615,6 +3614,9 @@ void MainWindow::onAudioAnalysis()
 
 
     // v1.8.0 P1a：音频无前置条件（无 ROI 要求），状态机接管
+    // P-54：降噪强度随任务下发（0=干净分析；滑杆调回 0 再应用即复原）
+    if (m_analysisEngine)
+        m_analysisEngine->setAudioDenoiseStrength(m_noiseReductionStrength);
     m_taskService->start(AnalysisChannels::audio(), m_currentVideoPath,
                          {}, {}, {}, {});
 }

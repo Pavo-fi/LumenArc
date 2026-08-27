@@ -10,6 +10,7 @@
  * Licensed under the Apache License, Version 2.0
  */
 #include "libav_analysis_engine.h"
+#include "domain/audio_denoise.h"   // P-54 谱门控降噪
 
 extern "C" {
 #include <libavformat/avformat.h>
@@ -187,6 +188,11 @@ void LibavAnalysisEngine::startAudioAnalysis(const QString &videoPath)
     m_cancel = false;
     m_running = true;
     emit beginAudio();
+}
+
+void LibavAnalysisEngine::setAudioDenoiseStrength(double strength)
+{
+    m_audioDenoiseStrength.store(qBound(0.0, strength, 10.0));
 }
 
 void LibavAnalysisEngine::cancelAnalysis()
@@ -839,6 +845,10 @@ bool LibavAnalysisEngine::analyzeAudioOne(const QString &path, AudioData *out)
         pcm = pad + pcm;
     }
     avformat_close_input(&fmt);
+
+    // ---- P-54 谱门控降噪（分析显示链路；strength>0 启用；播放音频不动）----
+    if (m_audioDenoiseStrength.load() > 0.0)
+        spectralGateDenoise(pcm, 24000, m_audioDenoiseStrength.load());
 
     // ---- RMS 音量（frame 2048 / hop 512，除以 max 归一化） ----
     QVector<qreal> volume;

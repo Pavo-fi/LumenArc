@@ -62,6 +62,17 @@ onCalibPhotoFinished 调之；ui_chain +6 断言直驱锁死（offset 834000 管
 Arc — 操作手册.docx」（284KB，30 表）已挂 Release v1.16.0 第二资产；PDF/DOCX
 导出物入 .gitignore 不入库（可再生成）。WPS 导入即转在线智能文档。
 
+**补记 27（v1.16.1，P-54 音频降噪 libav 原生落地）**：降噪滑杆自 v1.5 默认
+libav 引擎起即空操作（Python 谱减法随 P-25 退役）——本批实装：domain/
+audio_denoise.cpp 谱门控（就地 PCM：STFT N=2048/hop=512 Hann COLA → 等距采样
+2000 帧×频点 25 分位噪声谱 → 谱减增益夹 [0.02,1] → 快攻慢释+频率 3 点平滑 →
+ISTFT OLA Σw² 归一，长度不变）；仅作用于分析显示链路（语谱/音量），播放音频与
+原始数据不动。引擎 setAudioDenoiseStrength 接口（ianalysis 默认空操作）；
+onAudioAnalysis 统一读取滑杆下发；应用钮去 strength>0 守卫（调回 0 重跑=复原）。
+**坑**：avutil av_tx 逆变换 scale 参数被忽略（txprobe 实测 ifft 恒输出 N·x，
+nullptr/1/N 一样）——归一化手动除 N。测试 lumenarc_denoise_test（合成白噪+440Hz：
+底噪 ×0.335、纯音 RMS ×0.937、相关性 0.9964、0 强度旁路）。版本升 v1.16.1。
+
 **补记 26（手册重构 B+C，用户拍板）**：MANUAL.md 全文重写为八章工作流制
 （认识→快速上手→案件与前处理→校时体系→单路分析→多机→产出与移交→附录），
 854→650 行；正文 34 处版本标签/内部语言（P-编号/拍板/日期）全清，演进史剥离至
