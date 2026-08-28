@@ -5054,3 +5054,51 @@ collapse/expand 基准 {550,230,160}。mw_test 补「视频行≈55%±8%」断�
 - 真机待验：合并轨（已验 ✅ 用户确认「可以了」）；同事件对时新引导+沙盒
   三件套（自由播放/同听两路/无遮罩干扰）。
 - 合并轨导出合成：后续批次（当前明文拒导）。
+## 74. P-28 分析报告模块启动：DOCX 地基 + 点位图编辑器方案（P-74）
+
+**日期**：2026-08-23｜**版本**：1.13.3（地基无用户可见面，随批次②升 1.14.0）｜**性质**：功能批次（P-28 批次①）
+
+**拍板**（用户 + 《火灾视频分析报告模板.md》）：只出 DOCX；哈希 MD5+SHA-256
+双列；静态目录无页码；向导入口（勾章节+补录元数据+附件图）；章节号重排
+一~七+落款；远期 HTML 渲染器接口预留。
+
+**地基落地**：
+- `ZipStoreWriter`：手写 store（不压缩）模式 ZIP——OPC 对压缩无要求，
+  零依赖零私有 API，固定 DOS 时间戳产物字节级确定（取证可复算）；
+- `DocxWriter`：极简 OPC 子集——标题 1-3 级（黑体加粗居中/居左）、正文
+  （宋体小四首行缩进 1.5 倍行距）、带框表格（首行底纹加粗/归一化列宽）、
+  分页符、PNG 图片嵌入（EMU 宽高+rels）；
+- `docx_test` 23 断言：CRC32 已知向量/zip 回读/中文 UTF-8 条目/OPC 结构/
+  document.xml QXmlStreamReader 良构/转义/表格/分页/图片嵌入。
+- **测试套数 15 → 16**（新增 lumenarc_docx_test）。
+
+**P-74 点位图编辑器方案成文**（docs/SITEMAP_EDITOR_DESIGN_CN.md，拍板：
+不画比例尺/扇形方向且扇面可调/一案一张）：底图导入+机位拖放布点+
+扇形朝向（张角半径可调）+标准图框出图（2480×1754 PNG 入
+reports/assets/sitemap.png）+ sitemap.json 归一化坐标持久化 + 孤儿点位
+标红。待施工（粗估 1.5~2 天）。
+
+## 29c) 光标-曲线 2s 偏移根治（08c5dee，v1.16.1）
+- **三段判决**：合成片实验证分析双链清白（10000/9962ms）；AV 追踪探针（LUMENARC_AUDIO_TAP）证播放音画对齐清白（43ms）；病灶=**DVR 音频 PTS 空档**：分析侧 P-59 补静音（曲线对），播放侧压塌 → 空档后声响提前 gap 时长，仅带空档文件发病=时有时无
+- **修复**：processAudioPacket 空档>40ms 补等长静音（padAudioSilence 分块背压、封顶10s）、重叠>40ms 裁帧首；sink 短写循环补写防护；open/seek 重置
+- **测试**：engine_test avgap 场景（NUT 合成空档片+tap 断言哔声 2.0s±0.45，实测 1.998s）；libav_test testAvEventAlignment 永久回归
+- **坑**：QFile 在 Windows 走 stdio 4KB 缓冲，小行写不 flush 不落盘 → tapClose（析构/unload）+每64行冲刷；matroska 拒 rawvideo（用 NUT+codec_tag I420）；engine_test 场景要先 seek(0) 再 play
+
+## 29d) v1.16.1 发布 + Win10 闪退结案 + 副屏全屏（3fb9c05→发布）
+- **Win10 闪退结案**：根因=缺 VC++ 运行库，安装随包 vc_redist.x64.exe 即可；已入 MANUAL 常见问题首行+异常退出诊断条目
+- **副屏全屏**（adcc92b，用户拍板 6 点）：FullscreenVideoWindow（无边框/letterbox/ESC双击退出/光标3s自隐/4K自适应降质）；视图菜单动态列屏+F11 上次屏；帧与调节与主视口同源共享；暂停态推 rawFrame
+- **崩溃黑匣子**（e097dbc）：UEF→MiniDumpWriteDump（dbghelp）+阶段面包屑+会话锁+异常退出提示；LUMENARC_CRASHTEST=1 自毁验证过
+- **Release v1.16.1**：https://github.com/Pavo-fi/LumenArc/releases/tag/v1.16.1（290MB zip）
+- **打包新坑**：①cygwin 重定向 >nul 会在目录生成真「nul」文件→Compress-Archive 崩（保留设备名），打包前删；②manual2pdf 独立目录运行弹 Qt platform plugin 框挂起——Qt6 可重定位构建插件前缀随 Qt6Core.dll 目录，build.bat 现自带 platforms/（qoffscreen+qwindows）且工具默认 offscreen；③build.bat 必须 CRLF+英文注释
+- **遗留**：build/Release/Qt6Test.dll 是测试会话补的（不入包，已在打包排除）；mw_test 曾因此假绿（tail 管道吞 rc）——回归要看真 rc
+
+## 29e) Win11 自动校时失效结案（c6877a1）
+- **根因**：v1.16.0 起打包排除清单误杀 `probe_timestamps.py`（被当开发探针；实为自动校时 OCR 运行时脚本，TimestampOcrEngine 从 applicationDirPath 加载）。开发机有该文件故无感，安装包机器全部失效
+- **处置**：pack_release.py 固化打包管线（必含清单 12 项源目录+zip 双校验；zip 直出）；v1.16.1 资产已重新打包上传（290MB，含脚本）；发布说明补重下提示
+- **核查结论**：lightchaser.jpg 有 qrc 内嵌兜底（可排除）；analyze_video.py 是退役引擎遗物（排除）；python 依赖 cv2/numpy/rapidocr/onnxruntime 均在包
+
+## 29f) 账号+反馈系统启动（476a57a，服务端先行）
+- 拍板：强制登录+每月至少一次（30天token）；手机号短信验证码注册收姓名/单位；腾讯云开发；邀请码通道（离线机180天token）；云控制台导出即管理端
+- 已入库 docs/cloudbase/：README（表结构/token设计/控制台部署6步）+ 四云函数（authRegister/authHeartbeat/inviteActivate/feedback），token=HMAC-SHA256，语法校验过
+- **关键现实**：个人开发者拿不到短信签名企业资质→走 CloudBase Auth 内置短信通道（固定腾讯云签名）；HTTP 端点 VERIFY_SMS_TODO 待联调实锤，不通则备选邮箱验证码
+- 待办：①用户开通 CloudBase 环境+开短信登录+建三集合+部四函数+给环境ID；②客户端：登录闸/凭证存储/反馈窗/HTTPS(Schannel 零依赖)

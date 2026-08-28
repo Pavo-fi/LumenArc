@@ -5,24 +5,22 @@
 
 ## 表头（每次写完 HANDOVER 与 WORK_HISTORY 后必须同步更新本表头——规则 R2）
 
-- **当前 HEAD**：施工批（2026-08-22 §73 P-69 编号合并轨落地，
-  版本 **v1.15.1**）
+- **当前 HEAD**：施工批（2026-08-28 §79 账号系统客户端 v1 + 云端全链联调）
 - **构建**：`cmd //c "build_tmp\build_target.bat ALL"`；测试：`QT_QPA_PLATFORM=offscreen`
   + PATH 含 `C:\code\Qt\6.8.0\msvc2022_64\bin`（配置：`build_tmp\reconfigure.bat`）
-- **全回归基线**（**18 套**，v1.15.1 施工批）：mw 97 / task_registry 41 / case 248 /
-  case_e2e 51 / piecewise 129 / preprocess 268 / ui_chain 97 /
-  calibration 99 / roi_model 23 /
-  vla v10 累计 40 + gaptick 4 + gapcollide 2 / libav 32（无 caltest 素材
-  环境跑 20）/ v17 37 / **sync 193（含 P-69 合并轨 44 + P-73 引导 9/可听集 5）**/ sidecar 34 / segment 54 / **docx 23 + report 49 + sitemap 16（P-28 全批+P-74）/ case 267（机位组）**
+- **全回归基线**（18 套，v1.16.1 后）：mw 97 / ui_chain 103 / libav 26（含 av-align/denoise）/
+  case 270 / engine（avgap/play/seek-matrix）/ denoise / docx / report / sitemap / sync 等全绿
+- **云端**（CloudBase）：env `lumenarc-prod-d6gcdfb6a8873d906`；四函数已部署+HTTP 触发器已通；
+  改函数后 `cd build_tmp/tcb_deploy && MSYS_NO_PATHCONV=1 tcb fn deploy <name> --force --yes`；
+  AUTH_SECRET 在 build_tmp/tcb_deploy/.auth_secret（不入库）；详见 docs/cloudbase/README.md
 - **当前保留批次**（新→旧，R2 限 5 批）：
+  第七十批 §79（账号与反馈系统 v1：客户端登录闸+云端全链联调）·
   第六十九批 §78（热修：识图校时偏移丢行回归，版本→1.15.1）·
   第六十八批 §77（机位组正式化：组织轴心重写，版本→1.15.0）·
   第六十七批 §76（P-28 收尾：曲线嵌入+哈希进度+P-74 点位图落地）·
-  第六十六批 §75（P-28 批次②：报告聚合+章节映射+生成入口，版本→1.14.0）·
-  第六十五批 §74（P-28 报告模块批次①：DOCX 地基 + P-74 点位图方案）。
-- **最近归档动作**：2026-08-24 §78 批——第六十四批（§73）移入 WORK_HISTORY.md 末尾；
-  早前：§77 批——第六十三批（§72）移入；
-  早前：§72 批——第五十八批（§67）移入。
+  第六十六批 §75（P-28 批次②：报告聚合+章节映射+生成入口，版本→1.14.0）。
+- **最近归档动作**：2026-08-28 §79 批——第六十五批（§74）移入 WORK_HISTORY.md 末尾；
+  早前：2026-08-24 §78 批——第六十四批（§73）移入；
 - **常用参考导航**（已归档，查 WORK_HISTORY.md）：机位勾选面板（§54）、
   校时落盘双根因修复（§55）、显示旋转 90° 方案 A
   （第三批 §12）、音频时间轴对齐与问题 A/B 定案（深夜批）、项目规则 R1/R2
@@ -32,8 +30,30 @@
 - **管理文档**（2026-08-16 §44 建立）：待办唯一登记处 `docs/PENDING.md`；
   文档体系与维护规矩 `docs/DOCS_MAP.md`（规矩 D1-D8，待办必登记 PENDING）。
 # ============================================================================
-# 工作记录（2026-08-22，第六十三批）——P-73 多机同事件间接校时（v1.13.2）
+# 工作记录（2026-08-28，第七十批）——账号与反馈系统 v1：客户端+云端全链联调
 # ============================================================================
+
+## 79. 账号与反馈系统 v1：登录闸/30 天策略/意见反馈 + CloudBase 全链部署联调
+
+- **服务端（CLI 部署）**：`tcb login`（设备码授权）→ env `lumenarc-prod-d6gcdfb6a8873d906`
+  （上海，体验版）；探针函数实锤文档型云数据库可用并创建 users/invites/feedback 三集合；
+  四函数 + HTTP 触发器全部署；E2E 真测：邀请码激活→心跳→反馈→复用拒绝 全通，
+  authRegister 格式 token 过 heartbeat 验签并触发自动续签。
+- **短信链路实锤**（从 @cloudbase/js-sdk 3.9.0 拦截真实请求挖出）：
+  网关 `https://<env>.api.tcloudbasegateway.com/auth/v1/<ep>?client_id=<env>` + 头 `x-device-id`；
+  流程 verification→verify→signin/signup 得 access_token → 交 authRegister 验（user/me）。
+  cygwin 坑：tcb --path /x 需 MSYS_NO_PATHCONV=1；zip 含 node_modules 会坏服务端 unzip（在线装依赖）。
+- **客户端**：`cloud_account.h/.cpp`（网关+函数双链封装，15s 超时，错误码归一化）、
+  `credential_store.h/.cpp`（QSettings，启动判决 Pass/NeedLogin：token 过期或 ≥30 天未验证→重登）、
+  `logindialog.h/.cpp`（手机号/邀请码双通道，60s 重发倒计时）、`feedbackdialog.h/.cpp`
+  （诊断包仅版本/系统/崩溃标记，无案件数据）；main.cpp 闸（splash 后）+ 启动异步心跳；
+  mainwindow 帮助菜单「意见反馈」。HTTPS 走 Qt Schannel（windeployqt 已带 tls/qschannelbackend.dll，
+  已入 pack_release REQUIRED）。
+- **雷区**：authRegister 初版 token 格式与 heartbeat/feedback 不一致（base64url vs hex sig、
+  uid vs phone 字段）——已统一为 `base64url(JSON{phone,kind,exp,nonce}).HMAC-hex`；
+  跨函数一致性以后改任一函数 token 逻辑时必须三函数一起对。
+- 全量回归绿（mw97/ui103/libav26/case270/denoise/avgap）；提交推送至 github master。
+- **待联调**：真机短信全流程（用户首次启动注册即实测）；副屏全屏多屏真机验收。
 
 ## 78. 热修：识图校时偏差永不生效（v1.12.6 引入的丢行回归）
 
@@ -470,51 +490,3 @@ QProgressDialog（可取消，取消即弃稿）+ QEventLoop 等待。
 **遗留（后续批）**：图表/语谱图整段光栅嵌入、大文件哈希进度条、
 P-74 点位图编辑器施工。
 
-## 74. P-28 分析报告模块启动：DOCX 地基 + 点位图编辑器方案（P-74）
-
-**日期**：2026-08-23｜**版本**：1.13.3（地基无用户可见面，随批次②升 1.14.0）｜**性质**：功能批次（P-28 批次①）
-
-**拍板**（用户 + 《火灾视频分析报告模板.md》）：只出 DOCX；哈希 MD5+SHA-256
-双列；静态目录无页码；向导入口（勾章节+补录元数据+附件图）；章节号重排
-一~七+落款；远期 HTML 渲染器接口预留。
-
-**地基落地**：
-- `ZipStoreWriter`：手写 store（不压缩）模式 ZIP——OPC 对压缩无要求，
-  零依赖零私有 API，固定 DOS 时间戳产物字节级确定（取证可复算）；
-- `DocxWriter`：极简 OPC 子集——标题 1-3 级（黑体加粗居中/居左）、正文
-  （宋体小四首行缩进 1.5 倍行距）、带框表格（首行底纹加粗/归一化列宽）、
-  分页符、PNG 图片嵌入（EMU 宽高+rels）；
-- `docx_test` 23 断言：CRC32 已知向量/zip 回读/中文 UTF-8 条目/OPC 结构/
-  document.xml QXmlStreamReader 良构/转义/表格/分页/图片嵌入。
-- **测试套数 15 → 16**（新增 lumenarc_docx_test）。
-
-**P-74 点位图编辑器方案成文**（docs/SITEMAP_EDITOR_DESIGN_CN.md，拍板：
-不画比例尺/扇形方向且扇面可调/一案一张）：底图导入+机位拖放布点+
-扇形朝向（张角半径可调）+标准图框出图（2480×1754 PNG 入
-reports/assets/sitemap.png）+ sitemap.json 归一化坐标持久化 + 孤儿点位
-标红。待施工（粗估 1.5~2 天）。
-
-## 29c) 光标-曲线 2s 偏移根治（08c5dee，v1.16.1）
-- **三段判决**：合成片实验证分析双链清白（10000/9962ms）；AV 追踪探针（LUMENARC_AUDIO_TAP）证播放音画对齐清白（43ms）；病灶=**DVR 音频 PTS 空档**：分析侧 P-59 补静音（曲线对），播放侧压塌 → 空档后声响提前 gap 时长，仅带空档文件发病=时有时无
-- **修复**：processAudioPacket 空档>40ms 补等长静音（padAudioSilence 分块背压、封顶10s）、重叠>40ms 裁帧首；sink 短写循环补写防护；open/seek 重置
-- **测试**：engine_test avgap 场景（NUT 合成空档片+tap 断言哔声 2.0s±0.45，实测 1.998s）；libav_test testAvEventAlignment 永久回归
-- **坑**：QFile 在 Windows 走 stdio 4KB 缓冲，小行写不 flush 不落盘 → tapClose（析构/unload）+每64行冲刷；matroska 拒 rawvideo（用 NUT+codec_tag I420）；engine_test 场景要先 seek(0) 再 play
-
-## 29d) v1.16.1 发布 + Win10 闪退结案 + 副屏全屏（3fb9c05→发布）
-- **Win10 闪退结案**：根因=缺 VC++ 运行库，安装随包 vc_redist.x64.exe 即可；已入 MANUAL 常见问题首行+异常退出诊断条目
-- **副屏全屏**（adcc92b，用户拍板 6 点）：FullscreenVideoWindow（无边框/letterbox/ESC双击退出/光标3s自隐/4K自适应降质）；视图菜单动态列屏+F11 上次屏；帧与调节与主视口同源共享；暂停态推 rawFrame
-- **崩溃黑匣子**（e097dbc）：UEF→MiniDumpWriteDump（dbghelp）+阶段面包屑+会话锁+异常退出提示；LUMENARC_CRASHTEST=1 自毁验证过
-- **Release v1.16.1**：https://github.com/Pavo-fi/LumenArc/releases/tag/v1.16.1（290MB zip）
-- **打包新坑**：①cygwin 重定向 >nul 会在目录生成真「nul」文件→Compress-Archive 崩（保留设备名），打包前删；②manual2pdf 独立目录运行弹 Qt platform plugin 框挂起——Qt6 可重定位构建插件前缀随 Qt6Core.dll 目录，build.bat 现自带 platforms/（qoffscreen+qwindows）且工具默认 offscreen；③build.bat 必须 CRLF+英文注释
-- **遗留**：build/Release/Qt6Test.dll 是测试会话补的（不入包，已在打包排除）；mw_test 曾因此假绿（tail 管道吞 rc）——回归要看真 rc
-
-## 29e) Win11 自动校时失效结案（c6877a1）
-- **根因**：v1.16.0 起打包排除清单误杀 `probe_timestamps.py`（被当开发探针；实为自动校时 OCR 运行时脚本，TimestampOcrEngine 从 applicationDirPath 加载）。开发机有该文件故无感，安装包机器全部失效
-- **处置**：pack_release.py 固化打包管线（必含清单 12 项源目录+zip 双校验；zip 直出）；v1.16.1 资产已重新打包上传（290MB，含脚本）；发布说明补重下提示
-- **核查结论**：lightchaser.jpg 有 qrc 内嵌兜底（可排除）；analyze_video.py 是退役引擎遗物（排除）；python 依赖 cv2/numpy/rapidocr/onnxruntime 均在包
-
-## 29f) 账号+反馈系统启动（476a57a，服务端先行）
-- 拍板：强制登录+每月至少一次（30天token）；手机号短信验证码注册收姓名/单位；腾讯云开发；邀请码通道（离线机180天token）；云控制台导出即管理端
-- 已入库 docs/cloudbase/：README（表结构/token设计/控制台部署6步）+ 四云函数（authRegister/authHeartbeat/inviteActivate/feedback），token=HMAC-SHA256，语法校验过
-- **关键现实**：个人开发者拿不到短信签名企业资质→走 CloudBase Auth 内置短信通道（固定腾讯云签名）；HTTP 端点 VERIFY_SMS_TODO 待联调实锤，不通则备选邮箱验证码
-- 待办：①用户开通 CloudBase 环境+开短信登录+建三集合+部四函数+给环境ID；②客户端：登录闸/凭证存储/反馈窗/HTTPS(Schannel 零依赖)
