@@ -10,6 +10,8 @@
  */
 #include <QApplication>
 #include <QSplashScreen>
+#include <QMessageBox>
+#include <QTimer>
 #include <QIcon>
 #include <QDir>
 #include <QFont>
@@ -18,6 +20,7 @@
 #include <QLinearGradient>
 #include <QImage>
 #include <QLibrary>
+#include "infrastructure/crash_handler.h"
 #ifdef Q_OS_WIN
 #include <qt_windows.h>
 #endif
@@ -138,6 +141,13 @@ int main(int argc, char *argv[])
     app.setApplicationName("LumenArc");
     app.setOrganizationName("LumenArc");
 
+    // 崩溃黑匣子（最早安装）：UEF minidump + 阶段面包屑 + 会话锁
+    CrashHandler::install();
+    const bool prevCrashed = CrashHandler::previousSessionCrashed();
+    const QString prevCrashInfo = CrashHandler::previousSessionInfo();
+    CrashHandler::beginSession();
+    CrashHandler::setStage(QStringLiteral("theme"));
+
     // 全局深色主题（Design Tokens + Qt 默认控件全覆盖）
     Theme::apply(app);
 
@@ -154,10 +164,12 @@ int main(int argc, char *argv[])
     }
     splash.show();
     app.processEvents();
+    CrashHandler::setStage(QStringLiteral("splash"));
 
     splash.setPixmap(createSplashPixmap("Initializing video engine...", 35));
     app.processEvents();
 
+    CrashHandler::setStage(QStringLiteral("mainwindow-ctor"));
     MainWindow window;
 
     splash.setPixmap(createSplashPixmap("Loading interface...", 85));
@@ -168,6 +180,33 @@ int main(int argc, char *argv[])
 
     splash.finish(&window);
     window.showMaximized();
+    CrashHandler::setStage(QStringLiteral("mainwindow-shown"));
+
+    // 黑匣子自毁开关（现场验证用）：LUMENARC_CRASHTEST=1 启动后立即空指针崩溃
+    if (qEnvironmentVariableIsSet("LUMENARC_CRASHTEST")) {
+        CrashHandler::setStage(QStringLiteral("crashtest"));
+        *reinterpret_cast<volatile int *>(0) = 1;
+    }
+
+    // 上次异常退出：提示诊断目录（非模态，不阻塞；含打开目录按钮）
+    if (prevCrashed) {
+        auto *box = new QMessageBox(QMessageBox::Warning,
+            QStringLiteral("检测到异常退出"),
+            QStringLiteral("LumenArc 上次运行时异常退出（%1）。\n\n"
+                           "诊断信息已保存到：\n%2\n\n"
+                           "若频繁发生，请将该目录内容发送给开发者定位。")
+                .arg(prevCrashInfo.isEmpty() ? QStringLiteral("原因未知")
+                                             : prevCrashInfo,
+                     CrashHandler::crashDir()),
+            QMessageBox::Ok, &window);
+        box->setModal(false);
+        box->setAttribute(Qt::WA_DeleteOnClose);
+        QTimer::singleShot(1500, box, [box]() { box->show(); });
+    }
+
+    // 正常退出：删会话锁（崩溃路径不会走到这里）
+    QObject::connect(&app, &QCoreApplication::aboutToQuit,
+                     []() { CrashHandler::markCleanExit(); });
 
 #ifdef Q_OS_WIN
     // Windows 深色系统标题栏（DWMWA_USE_IMMERSIVE_DARK_MODE）

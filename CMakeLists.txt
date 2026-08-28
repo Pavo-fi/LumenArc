@@ -71,6 +71,7 @@ set(SOURCES
     src/snapshotoverlay.cpp
     src/playbackadjustpanel.cpp
     src/pinnedwidget.cpp
+    src/infrastructure/crash_handler.cpp
     src/displayadjust.cpp
     src/i18n.cpp
     src/aboutdialog.cpp
@@ -218,6 +219,7 @@ set(HEADERS
     src/infrastructure/concat_engine.h
     src/infrastructure/transcode_engine.h
     src/infrastructure/segment_export_engine.h
+    src/infrastructure/crash_handler.h
     src/segmentexportdialog.h
 )
 
@@ -804,6 +806,7 @@ if(WIN32)
         winmm
         dxgi
         d3d11
+        dbghelp   # 崩溃黑匣子 MiniDumpWriteDump（系统库，零三方依赖）
     )
     target_link_libraries(lumenarc_engine_test PRIVATE dxgi d3d11)
 endif()
