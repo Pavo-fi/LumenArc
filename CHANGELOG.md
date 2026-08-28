@@ -97,3 +97,13 @@
 ---
 
 > 更细粒度的开发记录见源码仓库 `HANDOVER.md`（批次级）与 git 提交历史（逐次级）。
+
+## 未发布
+
+### 新增（账号与反馈系统 v1）
+- 启动登录闸：手机号+短信验证码注册/登录、邀请码通道（离线机器），强制登录后使用
+- 凭证本地存储 + 30 天策略：token 30 天有效、距上次在线验证 ≥30 天强制重登；断网宽限内放行、超期锁定
+- 启动后异步心跳：自动续签（距到期 <7 天）、token 失效/账号停用拦回登录框
+- 帮助菜单新增「意见反馈」：可勾附带诊断信息（版本/系统/上次异常退出；绝不含案件数据）
+- HTTPS 走 Qt Schannel 后端（Windows 系统 TLS，零新增 DLL）；打包清单新增 tls/qschannelbackend.dll
+- 服务端：腾讯云开发 CloudBase 四云函数（authRegister/authHeartbeat/inviteActivate/feedback）+ 三集合，CLI 一键重部署

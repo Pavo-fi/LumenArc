@@ -52,6 +52,7 @@
 #include "spectrogrampanel_enhanced.h"
 #include "i18n.h"
 #include "aboutdialog.h"
+#include "feedbackdialog.h"
 #include "theme.h"
 
 #include <QListWidget>
@@ -1090,6 +1091,12 @@ void MainWindow::createMenus()
         QString path = QCoreApplication::applicationDirPath()
                        + "/追光者 Lumen Arc — 操作手册.pdf";
         QDesktopServices::openUrl(QUrl::fromLocalFile(path));
+    });
+
+    helpMenu->addSeparator();
+    helpMenu->addAction(lang("意见反馈", "Feedback"), this, [this]() {
+        FeedbackDialog dlg(this);
+        dlg.exec();
     });
 
     helpMenu->addSeparator();

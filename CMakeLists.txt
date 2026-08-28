@@ -20,7 +20,7 @@ endif()
 
 # --- Qt6 ---
 set(CMAKE_PREFIX_PATH "${CMAKE_PREFIX_PATH};$ENV{QT6_DIR}")
-find_package(Qt6 REQUIRED COMPONENTS Widgets Charts Multimedia Concurrent Test)
+find_package(Qt6 REQUIRED COMPONENTS Widgets Charts Multimedia Concurrent Network Test)
 
 # --- FFmpeg (LGPL shared build: bin/ include/ lib/) ---
 set(FFMPEG_SDK_PATH "" CACHE PATH "Path to FFmpeg SDK root (contains include/ and lib/)")
@@ -72,6 +72,10 @@ set(SOURCES
     src/playbackadjustpanel.cpp
     src/pinnedwidget.cpp
     src/infrastructure/crash_handler.cpp
+    src/infrastructure/cloud_account.cpp
+    src/infrastructure/credential_store.cpp
+    src/logindialog.cpp
+    src/feedbackdialog.cpp
     src/fullscreenvideowindow.cpp
     src/displayadjust.cpp
     src/i18n.cpp
@@ -222,6 +226,10 @@ set(HEADERS
     src/infrastructure/transcode_engine.h
     src/infrastructure/segment_export_engine.h
     src/infrastructure/crash_handler.h
+    src/infrastructure/cloud_account.h
+    src/infrastructure/credential_store.h
+    src/logindialog.h
+    src/feedbackdialog.h
     src/segmentexportdialog.h
 )
 
@@ -323,6 +331,7 @@ target_link_libraries(lumenarc_mw_test PRIVATE
     Qt6::Charts
     Qt6::Multimedia
     Qt6::Concurrent
+    Qt6::Network      # mainwindow→feedbackdialog→cloud_account（账号系统）
     Qt6::OpenGL
     Qt6::OpenGLWidgets
     Qt6::Test
@@ -798,6 +807,7 @@ target_link_libraries(${PROJECT_NAME} PRIVATE
     Qt6::Charts
     Qt6::OpenGL
     Qt6::Multimedia
+    Qt6::Network      # 账号系统 HTTPS（Schannel 系统 TLS）
     Qt6::Concurrent   # 分析结果解析 / .vla 保存后台线程（分析结束不再卡死 UI）
     ${FFMPEG_LIBRARIES}
 )

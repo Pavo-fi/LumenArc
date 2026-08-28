@@ -1,63 +1,49 @@
-// authRegister：注册/登录合一。手机号+短信验证码（+姓名/单位，首次必填）。
-// 短信验证码校验走 CloudBase 身份验证 HTTP 通道（固定「腾讯云」签名，个人账号可用，
-// 无需企业短信资质）——端点细节联调时与客户端一起实锤（见 VERIFY_SMS_TODO）。
-// 部署：Node.js 16+；环境变量 AUTH_SECRET；HTTP 触发器路径 /authRegister
+// authRegister —— 手机号用户注册/登录（短信验证码由客户端直连 CloudBase 身份验证完成，
+// 本函数收到客户端登录成功后的 CloudBase access_token，调 user/me 验证并取出手机号）。
+// POST {access_token, name, org} -> {token, expires_at}
 const tcb = require('@cloudbase/node-sdk');
 const crypto = require('crypto');
 
-const SECRET = process.env.AUTH_SECRET || '';
-const TOKEN_MS = 30 * 86400e3;
+const ENV_ID = 'lumenarc-prod-d6gcdfb6a8873d906';
+const TOKEN_TTL_SMS_MS = 30 * 24 * 3600 * 1000;   // 短信用户 30 天
 
-async function verifySmsCode(app, phone, code) {
-    // VERIFY_SMS_TODO(联调)：CloudBase Auth 的短信验证码 HTTP 校验。
-    // 候选实现：POST https://{env}.service.tcloudbase.com/auth/v1/verification/verify
-    //   {phone_number, verification_code}（以 Web SDK 实际请求为准）
-    // 联调前占位：拒绝一切（返回 false）——未接通前注册不可用是安全的默认。
-    return false;
+function signToken(phone, kind, expMs, secret) {
+    const payload = Buffer.from(JSON.stringify({
+        phone, kind, exp: expMs, nonce: crypto.randomBytes(8).toString('hex'),
+    })).toString('base64url');
+    const sig = crypto.createHmac('sha256', secret).update(payload).digest('hex');
+    return `${payload}.${sig}`;
+}
+
+async function fetchPhone(accessToken) {
+    const r = await fetch(`https://${ENV_ID}.api.tcloudbasegateway.com/auth/v1/user/me?client_id=${ENV_ID}`, {
+        headers: { 'Authorization': `Bearer ${accessToken}` }
+    });
+    if (!r.ok) return null;
+    const j = await r.json().catch(() => null);
+    const p = j && (j.phone_number || j.phone);
+    return p ? String(p) : null;
 }
 
 exports.main = async (event) => {
-    let body = {};
-    try { body = JSON.parse(event.body || '{}'); } catch { /* ignore */ }
-    const phone = String(body.phone || '').trim();
-    const code = String(body.code || '').trim();
-    const name = String(body.name || '').trim();
-    const org = String(body.org || '').trim();
-    if (!/^1\d{10}$/.test(phone) || !code)
-        return { statusCode: 400, body: JSON.stringify({ error: 'bad_request' }) };
+    const body = typeof event.body === 'string' ? JSON.parse(event.body || '{}') : (event.body || event);
+    const { access_token, name, org } = body || {};
+    if (!access_token || !name || !org) return { statusCode: 400, body: JSON.stringify({ error: 'missing_fields' }) };
+
+    const phone = await fetchPhone(access_token).catch(() => null);
+    if (!phone) return { statusCode: 401, body: JSON.stringify({ error: 'cloudbase_token_invalid' }) };
 
     const app = tcb.init({ env: tcb.SYMBOL_CURRENT_ENV });
-    if (!(await verifySmsCode(app, phone, code)))
-        return { statusCode: 401, body: JSON.stringify({ error: 'sms_code_invalid' }) };
-
     const db = app.database();
+    const users = db.collection('users');
     const now = Date.now();
-    const exist = await db.collection('users').where({ phone }).get();
-    if (exist.data && exist.data.length > 0) {
-        const u = exist.data[0];
-        if (u.status === 'disabled')
-            return { statusCode: 403, body: JSON.stringify({ error: 'disabled' }) };
-        await db.collection('users').where({ phone }).update({
-            lastSeenAt: now,
-            lastVersion: String(body.version || ''),
-            lastPlatform: String(body.platform || ''),
-        });
+    const exist = await users.where({ phone }).limit(1).get().catch(() => null);
+    if (exist && exist.data && exist.data.length) {
+        await users.doc(exist.data[0]._id).update({ lastLoginAt: now, name, org }).catch(() => {});
     } else {
-        if (!name || !org)
-            return { statusCode: 400, body: JSON.stringify({ error: 'name_org_required' }) };
-        await db.collection('users').add({
-            phone, name, org, source: 'sms', createdAt: now, lastSeenAt: now,
-            lastVersion: String(body.version || ''),
-            lastPlatform: String(body.platform || ''),
-            status: 'active',
-        });
+        await users.add({ phone, name, org, createdAt: now, lastLoginAt: now, disabled: false }).catch(() => {});
     }
-
-    const payload = Buffer.from(JSON.stringify({
-        phone, kind: 'sms', exp: now + TOKEN_MS,
-        nonce: crypto.randomBytes(8).toString('hex'),
-    })).toString('base64url');
-    const token = payload + '.'
-        + crypto.createHmac('sha256', SECRET).update(payload).digest('hex');
-    return { statusCode: 200, body: JSON.stringify({ ok: true, token, exp: now + TOKEN_MS }) };
+    const exp = now + TOKEN_TTL_SMS_MS;
+    const token = signToken(phone, 'sms', exp, process.env.AUTH_SECRET || '');
+    return { statusCode: 200, body: JSON.stringify({ token, expires_at: exp }) };
 };

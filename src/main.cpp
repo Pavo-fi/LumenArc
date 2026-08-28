@@ -9,6 +9,9 @@
  * Licensed under the Apache License, Version 2.0
  */
 #include <QApplication>
+#include <QDateTime>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QSplashScreen>
 #include <QMessageBox>
 #include <QTimer>
@@ -21,6 +24,9 @@
 #include <QImage>
 #include <QLibrary>
 #include "infrastructure/crash_handler.h"
+#include "infrastructure/cloud_account.h"
+#include "infrastructure/credential_store.h"
+#include "logindialog.h"
 #ifdef Q_OS_WIN
 #include <qt_windows.h>
 #endif
@@ -166,6 +172,21 @@ int main(int argc, char *argv[])
     app.processEvents();
     CrashHandler::setStage(QStringLiteral("splash"));
 
+    CrashHandler::setStage(QStringLiteral("account-gate"));
+
+    // 账号闸（账号系统 v1，拍板：强制登录才能用；30 天策略）
+    {
+        const Credential cred = CredentialStore::load();
+        const auto verdict = CredentialStore::startupVerdict(cred, QDateTime::currentMSecsSinceEpoch());
+        if (verdict == CredentialStore::Verdict::NeedLogin) {
+            splash.hide();
+            LoginDialog dlg;
+            if (dlg.exec() != QDialog::Accepted) return 0;  // 用户放弃 = 退出
+            splash.show();
+            app.processEvents();
+        }
+    }
+
     splash.setPixmap(createSplashPixmap("Initializing video engine...", 35));
     app.processEvents();
 
@@ -181,6 +202,42 @@ int main(int argc, char *argv[])
     splash.finish(&window);
     window.showMaximized();
     CrashHandler::setStage(QStringLiteral("mainwindow-shown"));
+
+    // 启动心跳（异步，不阻塞）：成功刷新 lastOkAt/可能的续签 token；
+    // token 失效/账号停用 → 拦回登录框；纯网络失败 → 放行（断网宽限内可用）
+    {
+        const Credential cred = CredentialStore::load();
+        if (cred.valid()) {
+            CloudAccount::instance().heartbeat(cred.token, [&window](const CloudAccount::Result &r) {
+                const qint64 nowMs = QDateTime::currentMSecsSinceEpoch();
+                if (r.ok) {
+                    CredentialStore::touchOk(nowMs);
+                    const QString nt = r.data.value(QStringLiteral("token")).toString();
+                    if (!nt.isEmpty()) {
+                        // 续签：解 payload 段拿 exp（base64url JSON，非密文）
+                        const QString payload = nt.section(QLatin1Char('.'), 0, 0);
+                        const QJsonObject claims = QJsonDocument::fromJson(
+                            QByteArray::fromBase64(payload.toUtf8(), QByteArray::Base64UrlEncoding)).object();
+                        Credential c = CredentialStore::load();
+                        c.token = nt;
+                        const double exp = claims.value(QStringLiteral("exp")).toDouble();
+                        if (exp > 0) c.expiresAtMs = static_cast<qint64>(exp);
+                        CredentialStore::save(c);
+                    }
+                } else if (r.error == QLatin1String("invalid_or_expired_token")
+                           || r.error == QLatin1String("user_disabled")) {
+                    QMessageBox::warning(&window, QStringLiteral("登录状态失效"),
+                        r.error == QLatin1String("user_disabled")
+                            ? QStringLiteral("该账号已停用，请重新登录或联系提供方。")
+                            : QStringLiteral("登录已过期（30 天未在线验证或 token 到期），请重新登录。"));
+                    LoginDialog dlg(&window);
+                    if (dlg.exec() != QDialog::Accepted) {
+                        QTimer::singleShot(0, &window, &QWidget::close);
+                    }
+                }
+            });
+        }
+    }
 
     // 黑匣子自毁开关（现场验证用）：LUMENARC_CRASHTEST=1 启动后立即空指针崩溃
     if (qEnvironmentVariableIsSet("LUMENARC_CRASHTEST")) {

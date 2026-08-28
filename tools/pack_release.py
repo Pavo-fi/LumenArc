@@ -34,6 +34,7 @@ REQUIRED = [
     "python/python.exe",                       # 随包 Python（OCR 依赖）
     "ffmpeg/ffmpeg.exe", "ffmpeg/ffprobe.exe",
     "platforms/qwindows.dll",
+    "tls/qschannelbackend.dll",                # HTTPS(Schannel 系统 TLS，账号/反馈链路)
     "app.ico",
     "Qt6Core.dll", "Qt6Widgets.dll", "Qt6Multimedia.dll",
     "追光者 Lumen Arc — 操作手册.pdf",          # 帮助菜单运行时查找

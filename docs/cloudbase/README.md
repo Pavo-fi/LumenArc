@@ -42,17 +42,27 @@ C++ 客户端 ──HTTPS POST──> HTTP 触发器云函数 ──> 云数据�
 
 | 函数 | 端点用途 | 说明 |
 |------|---------|------|
-| authRegister | 注册/登录合一 | 校验短信验证码（CloudBase Auth HTTP 通道）→ upsert users → 发 token（30 天） |
-| authHeartbeat | 心跳/续期 | 验 token → 更新 lastSeenAt/版本 → 返回服务端时间戳 |
+| authRegister | 注册/登录合一 | 验 CloudBase access_token（调 user/me）→ upsert users → 发 token（30 天） |
+| authHeartbeat | 心跳/续期 | 验 token → 更新 lastSeenAt/版本 → 距到期<7天自动续签 |
 | inviteActivate | 邀请码激活 | 验 code → 登记 users(source=invite) → 发长期 token |
 | feedback | 意见反馈 | 验 token → 写 feedback 表 |
 
 ## token 设计
 
-云函数签发：base64(json{phone, exp, nonce}) + "." + HMAC-SHA256(secret)
-- secret 放云函数环境变量 `AUTH_SECRET`（控制台配置，勿入库）
+云函数签发：`base64url(JSON{phone,kind,exp,nonce}) + "." + HMAC-SHA256-hex`
+- secret 放云函数环境变量 `AUTH_SECRET`（勿入库）
 - 短信用户 token 30 天；邀请码用户 180 天（离线友好）
 - 心跳验签+查 status；过期/停用 → 401，客户端强制重新登录
+
+## 短信链路（客户端直连 CloudBase 身份验证网关，联调实锤 2026-08-28）
+
+网关 base：`https://<env>.api.tcloudbasegateway.com/auth/v1`，统一 query `?client_id=<env>`，
+头部 `x-device-id`（稳定设备指纹）。源自 @cloudbase/js-sdk 3.9.0 源码拦截实测。
+1. `POST /verification` `{phone_number:"+86 1XX"}` → 发短信，得 `verification_id`
+2. `POST /verification/verify` `{phone_number, verification_code}` → `verification_token, is_user`
+3. 老用户 `POST /signin` `{username:"+86 1XX", verification_token}` → `access_token`；
+   新用户先 `POST /signup` `{phone_number, verification_token, verification_code}` 再 signin
+4. 客户端把 `access_token` 交 authRegister：服务端 `GET /user/me`（Bearer）验真伪取手机号
 
 ## 部署实况（2026-08-28，CLI 自动部署完成）
 
