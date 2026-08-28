@@ -52,6 +52,7 @@
 #include "spectrogrampanel_enhanced.h"
 #include "i18n.h"
 #include "aboutdialog.h"
+#include "accountdialog.h"
 #include "feedbackdialog.h"
 #include "logindialog.h"
 #include "infrastructure/credential_store.h"
@@ -1100,20 +1101,13 @@ void MainWindow::createMenus()
         FeedbackDialog dlg(this);
         dlg.exec();
     });
-    helpMenu->addAction(lang("退出登录", "Sign Out"), this, [this]() {
-        const Credential cred = CredentialStore::load();
-        const QString who = cred.name.isEmpty()
-            ? cred.uid
-            : cred.name + QStringLiteral("（") + cred.org + QStringLiteral("）");
-        const auto ret = QMessageBox::question(
-            this, lang("退出登录", "Sign Out"),
-            lang("当前登录账号：%1\n\n退出后将返回登录界面，可换其他账号登录。\n（取消登录将退出程序）",
-                 "Current account: %1\n\nYou will return to the sign-in screen.\n(Canceling sign-in will exit the app)")
-                .arg(who));
-        if (ret != QMessageBox::Yes) return;
-        CredentialStore::clear();
-        LoginDialog dlg(this);
-        if (dlg.exec() != QDialog::Accepted) close();  // 放弃登录 = 退出
+    helpMenu->addAction(lang("账号管理", "Account"), this, [this]() {
+        AccountDialog dlg(this);
+        dlg.exec();
+        if (dlg.signedOut()) {
+            LoginDialog login(this);
+            if (login.exec() != QDialog::Accepted) close();  // 放弃登录 = 退出
+        }
     });
 
     helpMenu->addSeparator();

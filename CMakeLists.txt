@@ -76,6 +76,7 @@ set(SOURCES
     src/infrastructure/credential_store.cpp
     src/logindialog.cpp
     src/feedbackdialog.cpp
+    src/accountdialog.cpp
     src/fullscreenvideowindow.cpp
     src/displayadjust.cpp
     src/i18n.cpp
@@ -230,6 +231,7 @@ set(HEADERS
     src/infrastructure/credential_store.h
     src/logindialog.h
     src/feedbackdialog.h
+    src/accountdialog.h
     src/segmentexportdialog.h
 )
 

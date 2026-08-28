@@ -40,12 +40,23 @@ public:
     void heartbeat(const QString& token, Callback cb);
     void activateInvite(const QString& code, const QString& name, const QString& org, Callback cb);
     void submitFeedback(const QString& token, const QString& text, const QJsonObject& diag, Callback cb);
+    // 账号管理：重新验明手机持有（verify+signin 得 access_token，不做注册）
+    void reauthPhone(const QString& phone11, const QString& code, Callback cb);
+    // 账号管理：修改姓名/单位（服务端双校验 token+access_token）
+    void updateProfile(const QString& token, const QString& accessToken,
+                       const QString& name, const QString& org, Callback cb);
 
     QString m_lastVerificationId;  // sendSmsCode 成功后缓存；verify 必须回传（网关实锤）
     // need_signup 暂存（阶段二用）
     QString m_pendingPhone;
     QString m_pendingCode;
     QString m_pendingVtoken;
+
+private:
+    // verify+signin → access_token（NOT_FOUND 原样透传）；供 signInWithSms/reauthPhone 复用
+    void smsAccessToken(const QString& phone11, const QString& code, Callback cb);
+
+public:
 
 private:
     CloudAccount() = default;
