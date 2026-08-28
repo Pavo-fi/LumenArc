@@ -507,3 +507,8 @@ reports/assets/sitemap.png）+ sitemap.json 归一化坐标持久化 + 孤儿点
 - **Release v1.16.1**：https://github.com/Pavo-fi/LumenArc/releases/tag/v1.16.1（290MB zip）
 - **打包新坑**：①cygwin 重定向 >nul 会在目录生成真「nul」文件→Compress-Archive 崩（保留设备名），打包前删；②manual2pdf 独立目录运行弹 Qt platform plugin 框挂起——Qt6 可重定位构建插件前缀随 Qt6Core.dll 目录，build.bat 现自带 platforms/（qoffscreen+qwindows）且工具默认 offscreen；③build.bat 必须 CRLF+英文注释
 - **遗留**：build/Release/Qt6Test.dll 是测试会话补的（不入包，已在打包排除）；mw_test 曾因此假绿（tail 管道吞 rc）——回归要看真 rc
+
+## 29e) Win11 自动校时失效结案（c6877a1）
+- **根因**：v1.16.0 起打包排除清单误杀 `probe_timestamps.py`（被当开发探针；实为自动校时 OCR 运行时脚本，TimestampOcrEngine 从 applicationDirPath 加载）。开发机有该文件故无感，安装包机器全部失效
+- **处置**：pack_release.py 固化打包管线（必含清单 12 项源目录+zip 双校验；zip 直出）；v1.16.1 资产已重新打包上传（290MB，含脚本）；发布说明补重下提示
+- **核查结论**：lightchaser.jpg 有 qrc 内嵌兜底（可排除）；analyze_video.py 是退役引擎遗物（排除）；python 依赖 cv2/numpy/rapidocr/onnxruntime 均在包
