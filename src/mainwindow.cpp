@@ -39,6 +39,7 @@
 #include "multicamplaybackwindow.h"
 #include "timesettingsdialog.h"
 #include "magnifierwidget.h"
+#include "fullscreenvideowindow.h"
 #include "snapshotoverlay.h"
 #include "playbackadjustpanel.h"
 #include "displayadjust.h"
@@ -76,6 +77,9 @@
 #include <QMimeData>
 #include <QInputDialog>
 #include <QTime>
+#include <QGuiApplication>
+#include <QScreen>
+#include <QWindow>
 #include <QFile>
 #include <QDateTime>
 #include <QDir>
@@ -970,6 +974,36 @@ void MainWindow::createMenus()
     editMenu->addAction(lang("清除选区(&R)", "Clear &Regions"), this, &MainWindow::onClearRegions);
     editMenu->addAction(lang("清除数据(&D)", "Clear &Data"), this, &MainWindow::onClearData);
 
+    // 视图菜单：副屏全屏展示（多屏主机；拍板：手选屏/纯画面/调节共享/单路/F11）
+    QMenu *viewMenu = menuBar()->addMenu(lang("视图(&V)", "&View"));
+    QMenu *fsMenu = viewMenu->addMenu(lang("副屏全屏显示(&F)", "Fullscreen on &Screen"));
+    auto rebuildFsMenu = [this, fsMenu]() {
+        fsMenu->clear();
+        const auto screens = QGuiApplication::screens();
+        const QScreen *primary = QGuiApplication::primaryScreen();
+        const QString last = QSettings().value(QStringLiteral("fullscreen/screen")).toString();
+        for (int i = 0; i < screens.size(); ++i) {
+            QScreen *s = screens[i];
+            QString text = QStringLiteral("%1. %2 (%3×%4)")
+                               .arg(i + 1).arg(s->name())
+                               .arg(s->size().width()).arg(s->size().height());
+            if (s == primary)
+                text += lang("〔主屏〕", " [primary]");
+            if (s->name() == last)
+                text += lang("〔上次〕", " [last]");
+            if (m_fsWindow && m_fsWindow->screen() == s)
+                text += lang("〔全屏中〕", " [fullscreen]");
+            fsMenu->addAction(text, this, [this, s]() { toggleFullscreenOnScreen(s); });
+        }
+        if (screens.size() < 2)
+            fsMenu->addAction(lang("（仅检测到一块屏幕）", "(only one screen detected)"))
+                ->setEnabled(false);
+    };
+    QObject::connect(fsMenu, &QMenu::aboutToShow, this, rebuildFsMenu);
+    QAction *fsLast = viewMenu->addAction(lang("副屏全屏（上次屏幕）(&L)", "Fullscreen (last screen)(&L)"),
+                                          this, [this]() { toggleFullscreenLastScreen(); });
+    fsLast->setShortcut(QKeySequence(QStringLiteral("F11")));
+
     QMenu *exportMenu = menuBar()->addMenu(lang("导出(&X)", "&Export"));
     exportMenu->addAction(lang("导出为 CSV(&C)...", "Export to &CSV..."), this, &MainWindow::onExportCsv);
 
@@ -1624,6 +1658,8 @@ void MainWindow::setupConnections()
                 if (m_magnifier)
                     m_magnifier->onFrameReady(img);
                 updatePinnedImage(img);
+                if (m_fsWindow)
+                    m_fsWindow->setFrame(img);   // 副屏全屏：同源帧（隐式共享）
             });
 
     // Snapshot overlay connections
@@ -1672,6 +1708,8 @@ void MainWindow::setupConnections()
                         m_magnifier->setDisplayAdjust(adj);
                     if (m_pinned)
                         m_pinned->setDisplayLut(lut);
+                    if (m_fsWindow)
+                        m_fsWindow->setDisplayAdjust(adj);   // 副屏共享调节
                 });
         // 旋转档位（Q1 方案 A）：主画面 + 放大镜 + 钉图同步随转
         connect(m_adjustPanel, &PlaybackAdjustPanel::rotationChanged, this,
@@ -1836,6 +1874,10 @@ void MainWindow::setupConnections()
                 if (m_videoWidget) {
                     m_videoWidget->clearSnapshot();
                     m_videoWidget->clearFrame();   // 清空 m_frameImage → 回到初始空状态
+                }
+                if (m_fsWindow) {
+                    m_fsWindow->close();           // 清数据/关文件：副屏全屏一并关
+                    m_fsWindow = nullptr;
                 }
                 // 竞态：worker 已 emit、UI 尚未处理的在途 frameReady 会在
                 // clearFrame 之后到达又把帧画回去（现场反馈：第二次清空画面留存）。
@@ -3786,6 +3828,63 @@ void MainWindow::onTaskCancelled(const QString &taskId)
     m_statusLabel->setText(lang("分析已取消", "Analysis cancelled"));
 }
 
+
+void MainWindow::toggleFullscreenOnScreen(QScreen *screen)
+{
+    if (!screen)
+        return;
+    if (m_fsWindow) {
+        const bool same = (m_fsWindow->screen() == screen);
+        m_fsWindow->close();          // WA_DeleteOnClose
+        m_fsWindow = nullptr;
+        if (same)
+            return;                   // 再点同屏 = 关闭；换屏 = 关后重开
+    }
+    m_fsWindow = new FullscreenVideoWindow(nullptr);   // 顶层独立窗
+    // 暂停态即刻有画面：推主视口当前原帧 + 当前调节值（播放中由帧流刷新）
+    if (m_videoWidget && !m_videoWidget->rawFrame().isNull())
+        m_fsWindow->setFrame(m_videoWidget->rawFrame());
+    if (m_adjustPanel)
+        m_fsWindow->setDisplayAdjust(m_adjustPanel->adjust());
+    connect(m_fsWindow, &FullscreenVideoWindow::destroyed, this, [this]() {
+        m_fsWindow = nullptr;
+    });
+    QSettings().setValue(QStringLiteral("fullscreen/screen"), screen->name());
+    m_fsWindow->showOnScreen(screen);
+    statusBar()->showMessage(lang("副屏全屏已开启：%1（ESC / 双击退出）",
+                                  "Fullscreen on: %1 (ESC / double-click to exit)")
+                                 .arg(screen->name()), 5000);
+}
+
+void MainWindow::toggleFullscreenLastScreen()
+{
+    if (m_fsWindow) {
+        m_fsWindow->close();
+        m_fsWindow = nullptr;
+        return;
+    }
+    const auto screens = QGuiApplication::screens();
+    if (screens.size() < 2) {
+        statusBar()->showMessage(lang("仅检测到一块屏幕，无法副屏全屏",
+                                      "Only one screen detected"), 4000);
+        return;
+    }
+    const QString last = QSettings().value(QStringLiteral("fullscreen/screen")).toString();
+    QScreen *target = nullptr;
+    for (QScreen *s : screens) {
+        if (s->name() == last) { target = s; break; }
+    }
+    if (!target) {   // 无记忆/记忆失效：选主窗不在的那块
+        QScreen *winScreen = window() && window()->windowHandle()
+                                 ? window()->windowHandle()->screen() : nullptr;
+        for (QScreen *s : screens) {
+            if (s != winScreen) { target = s; break; }
+        }
+        if (!target)
+            target = screens.first();
+    }
+    toggleFullscreenOnScreen(target);
+}
 
 void MainWindow::onClearRegions()
 {

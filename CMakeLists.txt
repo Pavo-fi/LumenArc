@@ -72,6 +72,7 @@ set(SOURCES
     src/playbackadjustpanel.cpp
     src/pinnedwidget.cpp
     src/infrastructure/crash_handler.cpp
+    src/fullscreenvideowindow.cpp
     src/displayadjust.cpp
     src/i18n.cpp
     src/aboutdialog.cpp
@@ -170,6 +171,7 @@ set(HEADERS
     src/snapshotoverlay.h
     src/playbackadjustpanel.h
     src/pinnedwidget.h
+    src/fullscreenvideowindow.h
     src/displayadjust.h
     src/i18n.h
     src/aboutdialog.h
@@ -326,6 +328,9 @@ target_link_libraries(lumenarc_mw_test PRIVATE
     Qt6::Test
     ${FFMPEG_LIBRARIES}
 )
+if(WIN32)
+    target_link_libraries(lumenarc_mw_test PRIVATE dbghelp)   # crash_handler
+endif()
 if(WIN32)
     set(_qoff2 "${Qt6_DIR}/../../../plugins/platforms/qoffscreen.dll")
     if(EXISTS "${_qoff2}")

@@ -26,6 +26,7 @@ class QSystemTrayIcon;
 
 class VideoWidget;
 class MagnifierWidget;
+class FullscreenVideoWindow;
 class ChartPanel;
 class SnapshotOverlay;
 class PinnedWidget;
@@ -124,6 +125,8 @@ private:
     void createMenus();
     void createToolBar();
     void setupConnections();
+    void toggleFullscreenOnScreen(QScreen *screen);   // 副屏全屏：指定屏开关
+    void toggleFullscreenLastScreen();                // F11：上次选择/非主屏
     void updateTimeDisplay();
     QString formatTime(qint64 ms) const;
     /// @brief 打开视频对话框公共流程（admitToCase=false 为临时打开不入案）
@@ -195,6 +198,7 @@ protected:
 
     VideoWidget *m_videoWidget = nullptr;
     MagnifierWidget *m_magnifier = nullptr;
+    FullscreenVideoWindow *m_fsWindow = nullptr;   // 副屏全屏展示窗（多屏主机）
     bool m_videoListWasExpanded = true;  // 保存呼出放大镜前视频列表状态
     PinnedWidget *m_pinned = nullptr;
     ChartPanel *m_chartPanel = nullptr;
