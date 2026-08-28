@@ -512,3 +512,9 @@ reports/assets/sitemap.png）+ sitemap.json 归一化坐标持久化 + 孤儿点
 - **根因**：v1.16.0 起打包排除清单误杀 `probe_timestamps.py`（被当开发探针；实为自动校时 OCR 运行时脚本，TimestampOcrEngine 从 applicationDirPath 加载）。开发机有该文件故无感，安装包机器全部失效
 - **处置**：pack_release.py 固化打包管线（必含清单 12 项源目录+zip 双校验；zip 直出）；v1.16.1 资产已重新打包上传（290MB，含脚本）；发布说明补重下提示
 - **核查结论**：lightchaser.jpg 有 qrc 内嵌兜底（可排除）；analyze_video.py 是退役引擎遗物（排除）；python 依赖 cv2/numpy/rapidocr/onnxruntime 均在包
+
+## 29f) 账号+反馈系统启动（476a57a，服务端先行）
+- 拍板：强制登录+每月至少一次（30天token）；手机号短信验证码注册收姓名/单位；腾讯云开发；邀请码通道（离线机180天token）；云控制台导出即管理端
+- 已入库 docs/cloudbase/：README（表结构/token设计/控制台部署6步）+ 四云函数（authRegister/authHeartbeat/inviteActivate/feedback），token=HMAC-SHA256，语法校验过
+- **关键现实**：个人开发者拿不到短信签名企业资质→走 CloudBase Auth 内置短信通道（固定腾讯云签名）；HTTP 端点 VERIFY_SMS_TODO 待联调实锤，不通则备选邮箱验证码
+- 待办：①用户开通 CloudBase 环境+开短信登录+建三集合+部四函数+给环境ID；②客户端：登录闸/凭证存储/反馈窗/HTTPS(Schannel 零依赖)
