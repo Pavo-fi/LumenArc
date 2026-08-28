@@ -54,14 +54,18 @@ C++ 客户端 ──HTTPS POST──> HTTP 触发器云函数 ──> 云数据�
 - 短信用户 token 30 天；邀请码用户 180 天（离线友好）
 - 心跳验签+查 status；过期/停用 → 401，客户端强制重新登录
 
-## 部署步骤（控制台）
+## 部署实况（2026-08-28，CLI 自动部署完成）
 
-1. 建环境（按量付费）→ 记环境 ID
-2. 身份验证 → 开启「手机短信验证码」
-3. 数据库 → 建 `users`/`invites`/`feedback`（权限选「仅云函数可读写」）
-4. 云函数 → 逐个新建（Node.js 16+，粘贴 functions/<name>/index.js）→ 各配 HTTP 触发器（路径即函数名）
-5. 每个云函数 → 环境变量加 `AUTH_SECRET=<随机长字符串>`
-6. 短信验证码校验：见 authRegister 内注释（CloudBase Auth HTTP 端点，联调时与客户端一起实锤）
+- 环境 ID：`lumenarc-prod-d6gcdfb6a8873d906`（上海，体验版）
+- 四个函数已部署 + HTTP 触发器已通（负向测试全过）：
+  - `https://lumenarc-prod-d6gcdfb6a8873d906.service.tcloudbase.com/authRegister`
+  - `.../authHeartbeat`  `.../inviteActivate`  `.../feedback`
+- 集合 users/invites/feedback 已由探针函数创建（已验证文档型云数据库可用）
+- AUTH_SECRET 已配（存于 build_tmp/tcb_deploy/.auth_secret，不入库）
+- 改动后重新部署：`cd build_tmp/tcb_deploy && tcb fn deploy <name> --path /<name> --force --yes`
+  （cygwin 下需 `MSYS_NO_PATHCONV=1`，否则 /path 被转成 Windows 路径）
+- 唯一剩下的控制台手点：**身份验证 → 登录方式 → 手机短信验证码 → 开启**
+  （tcb API 无此开关，DescribeAuthProviders 等均 InvalidAction）
 
 ## 成本估算
 
