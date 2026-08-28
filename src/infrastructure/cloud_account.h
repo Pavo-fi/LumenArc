@@ -38,6 +38,8 @@ public:
     void activateInvite(const QString& code, const QString& name, const QString& org, Callback cb);
     void submitFeedback(const QString& token, const QString& text, const QJsonObject& diag, Callback cb);
 
+    QString m_lastVerificationId;  // sendSmsCode 成功后缓存；verify 必须回传（网关实锤）
+
 private:
     CloudAccount() = default;
     void post(const QString& url, const QJsonObject& body, bool gateway, Callback cb);

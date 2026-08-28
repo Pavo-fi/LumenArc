@@ -180,10 +180,18 @@ int main(int argc, char *argv[])
         const auto verdict = CredentialStore::startupVerdict(cred, QDateTime::currentMSecsSinceEpoch());
         if (verdict == CredentialStore::Verdict::NeedLogin) {
             splash.hide();
-            LoginDialog dlg;
-            if (dlg.exec() != QDialog::Accepted) return 0;  // 用户放弃 = 退出
+            CrashHandler::setStage(QStringLiteral("account-dialog"));
+            bool accepted = false;
+            {
+                LoginDialog dlg;
+                accepted = (dlg.exec() == QDialog::Accepted);
+                CrashHandler::setStage(QStringLiteral("account-dialog-closed"));
+            }   // dlg 先析构再恢复 splash（嵌套事件循环拆卸时序防御）
+            if (!accepted) return 0;  // 用户放弃 = 退出
+            CrashHandler::setStage(QStringLiteral("account-splash-reshow"));
             splash.show();
             app.processEvents();
+            CrashHandler::setStage(QStringLiteral("account-gate-done"));
         }
     }
 

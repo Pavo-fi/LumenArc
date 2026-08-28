@@ -81,3 +81,16 @@ C++ 客户端 ──HTTPS POST──> HTTP 触发器云函数 ──> 云数据�
 
 - 短信：约 0.045 元/条 ×（注册 1 + 每月 1）≈ 每用户每年 0.6 元
 - 云函数/数据库：免费额度内（用户量 <1000 无压力）
+
+## 联调实锤坑位（2026-08-28 客户端联调）
+
+1. **URL 拼接顺序**：`?client_id=` 必须最后加（先加再拼路径 → 路径掉进 query，
+   网关报 `invalid client id`，客户端误显示"验证码错误"）
+2. **异步回调禁止引用捕获栈变量**（`[&gb]` 悬空 → Qt6Core 0xC0000005，崩在固定地址）；
+   排查法：崩溃黑匣子 stage 面包屑 + 同款代码本地测试台（build_tmp/cloudtest）+
+   本地回显服务器抓包 + curl 同参二分
+3. verify 必须回传 `verification_id`；verify 响应**不带** `is_user`；
+   signin 对新用户报 NOT_FOUND → 转 signup（signup 直接返回 access_token）
+4. 同手机号反复发码会互相作废旧码；发码有限流（RESOURCE_EXHAUSTED）
+5. 客户端 env 覆盖调试钩子：`LUMENARC_CLOUD_GATEWAY` / `LUMENARC_CLOUD_SERVICE`；
+   编译加 `LUMENARC_CLOUD_DEBUG` 宏可 dump 请求/响应原文

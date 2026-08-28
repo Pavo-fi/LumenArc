@@ -17,7 +17,8 @@ namespace {
 QString tr_err(const QString& code, const QString& serverMsg) {
     if (code == QLatin1String("network") || code == QLatin1String("timeout"))
         return QStringLiteral("网络连接失败，请检查网络后重试");
-    if (code == QLatin1String("INVALID_ARGUMENT") || code == QLatin1String("sms_code_invalid"))
+    if (code == QLatin1String("INVALID_ARGUMENT") || code == QLatin1String("invalid_argument")
+        || code == QLatin1String("sms_code_invalid"))
         return QStringLiteral("验证码错误或已过期，请重新获取");
     if (code == QLatin1String("LIMIT_EXCEEDED") || code == QLatin1String("OPERATION_TOO_FREQUENT"))
         return QStringLiteral("操作太频繁，请稍后再试");
