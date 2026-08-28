@@ -29,8 +29,11 @@ public:
 
     // ---- CloudBase 身份验证（短信）----
     void sendSmsCode(const QString& phone11, Callback cb);
-    // 验码并登录（含新用户自动注册），成功 data 含 accessToken
+    // 阶段一：验码并登录。老用户：直接完成注册，data 含 token/expires_at（成功即完事）；
+    // 新用户：返回 error="need_signup"，随后调 signUpAndRegister 补全姓名/单位。
     void signInWithSms(const QString& phone11, const QString& code, Callback cb);
+    // 阶段二（仅在 need_signup 后调用）：signup → 登录 → 注册（姓名/单位）
+    void signUpAndRegister(const QString& name, const QString& org, Callback cb);
 
     // ---- 自家云函数 ----
     void registerAccount(const QString& accessToken, const QString& name, const QString& org, Callback cb);
@@ -39,6 +42,10 @@ public:
     void submitFeedback(const QString& token, const QString& text, const QJsonObject& diag, Callback cb);
 
     QString m_lastVerificationId;  // sendSmsCode 成功后缓存；verify 必须回传（网关实锤）
+    // need_signup 暂存（阶段二用）
+    QString m_pendingPhone;
+    QString m_pendingCode;
+    QString m_pendingVtoken;
 
 private:
     CloudAccount() = default;

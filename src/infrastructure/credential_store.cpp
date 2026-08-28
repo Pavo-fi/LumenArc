@@ -49,6 +49,8 @@ void CredentialStore::touchOk(qint64 nowMs) {
 CredentialStore::Verdict CredentialStore::startupVerdict(const Credential& c, qint64 nowMs) {
     if (!c.valid()) return Verdict::NeedLogin;
     if (c.expiresAtMs > 0 && nowMs >= c.expiresAtMs) return Verdict::NeedLogin;      // token 过期
+    // 邀请码用户（离线机器）：只看 token 有效期（180 天），不适用 30 天在线复核
+    if (c.uid.startsWith(QStringLiteral("invite:"))) return Verdict::Pass;
     if (c.lastOkAtMs <= 0 || nowMs - c.lastOkAtMs >= kReverifyWindowMs)               // 超 30 天未在线验证
         return Verdict::NeedLogin;
     return Verdict::Pass;

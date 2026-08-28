@@ -27,8 +27,10 @@ async function fetchPhone(accessToken) {
 
 exports.main = async (event) => {
     const body = typeof event.body === 'string' ? JSON.parse(event.body || '{}') : (event.body || event);
-    const { access_token, name, org } = body || {};
-    if (!access_token || !name || !org) return { statusCode: 400, body: JSON.stringify({ error: 'missing_fields' }) };
+    const { access_token } = body || {};
+    const name = String(body.name || '').trim();
+    const org = String(body.org || '').trim();
+    if (!access_token) return { statusCode: 400, body: JSON.stringify({ error: 'missing_fields' }) };
 
     const phone = await fetchPhone(access_token).catch(() => null);
     if (!phone) return { statusCode: 401, body: JSON.stringify({ error: 'cloudbase_token_invalid' }) };
@@ -39,9 +41,14 @@ exports.main = async (event) => {
     const now = Date.now();
     const exist = await users.where({ phone }).limit(1).get().catch(() => null);
     if (exist && exist.data && exist.data.length) {
-        await users.doc(exist.data[0]._id).update({ lastLoginAt: now, name, org }).catch(() => {});
+        // 老用户：姓名/单位可选，提供才更新（两层注册流：老用户第二层不出现）
+        const upd = { lastLoginAt: now };
+        if (name) upd.name = name;
+        if (org) upd.org = org;
+        await users.doc(exist.data[0]._id).update(upd).catch(() => {});
     } else {
-        await users.add({ phone, name, org, createdAt: now, lastLoginAt: now, disabled: false }).catch(() => {});
+        if (!name || !org) return { statusCode: 400, body: JSON.stringify({ error: 'missing_fields' }) };
+        await users.add({ phone, name, org, source: 'sms', createdAt: now, lastLoginAt: now, lastSeenAt: now, status: 'active' }).catch(() => {});
     }
     const exp = now + TOKEN_TTL_SMS_MS;
     const token = signToken(phone, 'sms', exp, process.env.AUTH_SECRET || '');

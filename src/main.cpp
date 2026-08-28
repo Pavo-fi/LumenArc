@@ -174,27 +174,6 @@ int main(int argc, char *argv[])
 
     CrashHandler::setStage(QStringLiteral("account-gate"));
 
-    // 账号闸（账号系统 v1，拍板：强制登录才能用；30 天策略）
-    {
-        const Credential cred = CredentialStore::load();
-        const auto verdict = CredentialStore::startupVerdict(cred, QDateTime::currentMSecsSinceEpoch());
-        if (verdict == CredentialStore::Verdict::NeedLogin) {
-            splash.hide();
-            CrashHandler::setStage(QStringLiteral("account-dialog"));
-            bool accepted = false;
-            {
-                LoginDialog dlg;
-                accepted = (dlg.exec() == QDialog::Accepted);
-                CrashHandler::setStage(QStringLiteral("account-dialog-closed"));
-            }   // dlg 先析构再恢复 splash（嵌套事件循环拆卸时序防御）
-            if (!accepted) return 0;  // 用户放弃 = 退出
-            CrashHandler::setStage(QStringLiteral("account-splash-reshow"));
-            splash.show();
-            app.processEvents();
-            CrashHandler::setStage(QStringLiteral("account-gate-done"));
-        }
-    }
-
     splash.setPixmap(createSplashPixmap("Initializing video engine...", 35));
     app.processEvents();
 
@@ -210,6 +189,23 @@ int main(int argc, char *argv[])
     splash.finish(&window);
     window.showMaximized();
     CrashHandler::setStage(QStringLiteral("mainwindow-shown"));
+
+    // 账号闸（v1.1 拍板：主窗先出，登录窗模态盖在上面；取消 = 退出）
+    {
+        const Credential cred = CredentialStore::load();
+        const auto verdict = CredentialStore::startupVerdict(cred, QDateTime::currentMSecsSinceEpoch());
+        if (verdict == CredentialStore::Verdict::NeedLogin) {
+            CrashHandler::setStage(QStringLiteral("account-dialog"));
+            bool accepted = false;
+            {
+                LoginDialog dlg(&window);
+                accepted = (dlg.exec() == QDialog::Accepted);
+                CrashHandler::setStage(QStringLiteral("account-dialog-closed"));
+            }
+            if (!accepted) return 0;  // 用户放弃 = 退出
+        }
+    }
+    CrashHandler::setStage(QStringLiteral("account-gate-done"));
 
     // 启动心跳（异步，不阻塞）：成功刷新 lastOkAt/可能的续签 token；
     // token 失效/账号停用 → 拦回登录框；纯网络失败 → 放行（断网宽限内可用）

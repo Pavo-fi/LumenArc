@@ -35,6 +35,10 @@ exports.main = async (event) => {
     const app = tcb.init({ env: tcb.SYMBOL_CURRENT_ENV });
     const db = app.database();
     const now = Date.now();
+    // 停用检查（管理端把 users.status 改为 disabled 即拒绝）
+    const u = await db.collection('users').where({ phone: claims.phone }).limit(1).get().catch(() => null);
+    if (u && u.data && u.data.length && (u.data[0].status === 'disabled' || u.data[0].disabled === true))
+        return { statusCode: 401, body: JSON.stringify({ error: 'user_disabled' }) };
     await db.collection('users').where({ phone: claims.phone }).update({
         lastSeenAt: now,
         lastVersion: String(body.version || ''),

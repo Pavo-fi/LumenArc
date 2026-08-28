@@ -37,9 +37,14 @@ exports.main = async (event) => {
 
     const app = tcb.init({ env: tcb.SYMBOL_CURRENT_ENV });
     const db = app.database();
+    let name = String(body.name || '');
+    if (!name) {
+        const u = await db.collection('users').where({ phone: claims.phone }).limit(1).get().catch(() => null);
+        if (u && u.data && u.data.length) name = String(u.data[0].name || '');
+    }
     await db.collection('feedback').add({
         phone: claims.phone,
-        name: String(body.name || ''),
+        name,
         version: String(body.version || ''),
         platform: String(body.platform || ''),
         text: text.slice(0, 4000),

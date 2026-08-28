@@ -1,9 +1,11 @@
 #include "infrastructure/cloud_account.h"
+#include "infrastructure/credential_store.h"
 
 #include <QJsonDocument>
 #include <QNetworkReply>
 #include <QNetworkRequest>
 #include <QSettings>
+#include <QSysInfo>
 #include <QTimer>
 #include <QUuid>
 #include <memory>
@@ -163,8 +165,7 @@ void CloudAccount::sendSmsCode(const QString& phone11, Callback cb) {
 
 // ---- 短信：验码并登录 ----
 void CloudAccount::signInWithSms(const QString& phone11, const QString& code, Callback cb) {
-    // 注意：withClientId 会加 ?client_id=，必须每个端点拼接后再加（此前 base 带 query
-    // 再拼路径导致路径进 query 的真机坑）；gb 必须按值捕获（异步回调时栈已销毁，引用捕获悬空）
+    // 注意：withClientId 会加 ?client_id=，必须每个端点拼接后再加；gb 按值捕获（异步回调栈已销毁）
     const auto ep = [gb = gatewayBase()](const QString& path) { return withClientId(gb + path); };
     QJsonObject verifyBody;
     verifyBody.insert(QStringLiteral("phone_number"), phone11);
@@ -178,50 +179,78 @@ void CloudAccount::signInWithSms(const QString& phone11, const QString& code, Ca
                  return;
              }
              const QString vtoken = vr.data.value(QStringLiteral("verification_token")).toString();
-             // 联调实锤（2026-08-28 真机）：verify 响应不带 is_user；signin 对新用户返
-             // NOT_FOUND；signup 成功直接带 access_token。策略：先 signin，遇 NOT_FOUND
-             // 走 signup，signup 无 token 时再 signin 一次。
-             auto finish = [cb](const Result& sr) {
-                 if (sr.ok && sr.data.value(QStringLiteral("access_token")).toString().isEmpty()) {
-                     Result r = sr;
-                     r.ok = false;
-                     r.error = QStringLiteral("no_access_token");
-                     r.message = QStringLiteral("登录响应异常");
-                     cb(r);
-                     return;
-                 }
-                 cb(sr);
-             };
-             auto doSignUp = std::make_shared<std::function<void()>>();
-             auto doSignIn = std::make_shared<std::function<void()>>();
-             *doSignUp = [this, cb, ep, phone11, code, vtoken, finish, doSignIn]() mutable {
-                 QJsonObject up;
-                 up.insert(QStringLiteral("phone_number"), QStringLiteral("+86 ") + phone11);
-                 up.insert(QStringLiteral("verification_token"), vtoken);
-                 up.insert(QStringLiteral("verification_code"), code);
-                 post(ep(QStringLiteral("/signup")), up, true,
-                      [cb, finish, doSignIn](const Result& ur) mutable {
-                          if (ur.ok && !ur.data.value(QStringLiteral("access_token")).toString().isEmpty()) {
-                              finish(ur);   // signup 直接带 token（新用户即登录）
-                          } else {
-                              (*doSignIn)();// 兜底：signup 后补 signin
-                          }
-                      });
-             };
-             *doSignIn = [this, cb, ep, phone11, vtoken, finish, doSignUp]() mutable {
-                 QJsonObject in;
-                 in.insert(QStringLiteral("username"), QStringLiteral("+86 ") + phone11);
-                 in.insert(QStringLiteral("verification_token"), vtoken);
-                 post(ep(QStringLiteral("/signin")), in, true,
-                      [cb, finish, doSignUp](const Result& sr) mutable {
-                          if (!sr.ok && sr.error == QLatin1String("NOT_FOUND")) {
-                              (*doSignUp)();  // 新用户：先注册
-                              return;
-                          }
-                          finish(sr);
-                      });
-             };
-             (*doSignIn)();
+             if (vtoken.isEmpty()) {
+                 Result r;
+                 r.error = QStringLiteral("no_verification_token");
+                 r.message = QStringLiteral("验证码校验失败");
+                 cb(r);
+                 return;
+             }
+             // 老用户直接 signin；新用户 signin 报 NOT_FOUND → 返回 need_signup 由界面补全信息
+             QJsonObject in;
+             in.insert(QStringLiteral("username"), QStringLiteral("+86 ") + phone11);
+             in.insert(QStringLiteral("verification_token"), vtoken);
+             post(ep(QStringLiteral("/signin")), in, true,
+                  [this, cb, phone11, code, vtoken](const Result& sr) mutable {
+                      if (!sr.ok && sr.error == QLatin1String("NOT_FOUND")) {
+                          m_pendingPhone = phone11;
+                          m_pendingCode = code;
+                          m_pendingVtoken = vtoken;
+                          Result r;
+                          r.error = QStringLiteral("need_signup");
+                          cb(r);
+                          return;
+                      }
+                      if (!sr.ok) {
+                          cb(sr);
+                          return;
+                      }
+                      // 老用户：拿 access_token 直接完成注册（姓名/单位服务端沿用）
+                      registerAccount(sr.data.value(QStringLiteral("access_token")).toString(),
+                                      QString(), QString(), std::move(cb));
+                  });
+         });
+}
+
+void CloudAccount::signUpAndRegister(const QString& name, const QString& org, Callback cb) {
+    const auto ep = [gb = gatewayBase()](const QString& path) { return withClientId(gb + path); };
+    if (m_pendingVtoken.isEmpty()) {
+        Result r;
+        r.error = QStringLiteral("no_pending_signup");
+        r.message = QStringLiteral("请先完成短信验证");
+        cb(r);
+        return;
+    }
+    QJsonObject up;
+    up.insert(QStringLiteral("phone_number"), QStringLiteral("+86 ") + m_pendingPhone);
+    up.insert(QStringLiteral("verification_token"), m_pendingVtoken);
+    up.insert(QStringLiteral("verification_code"), m_pendingCode);
+    const QString phone = m_pendingPhone;
+    const QString vtoken = m_pendingVtoken;
+    post(ep(QStringLiteral("/signup")), up, true,
+         [this, cb, ep, name, org, phone, vtoken](const Result& ur) mutable {
+             const QString at = ur.data.value(QStringLiteral("access_token")).toString();
+             if (ur.ok && !at.isEmpty()) {
+                 registerAccount(at, name, org, std::move(cb));  // signup 直接带 token（联调实锤）
+                 return;
+             }
+             // 兜底：signup 后补 signin
+             QJsonObject in;
+             in.insert(QStringLiteral("username"), QStringLiteral("+86 ") + phone);
+             in.insert(QStringLiteral("verification_token"), vtoken);
+             post(ep(QStringLiteral("/signin")), in, true,
+                  [this, cb, name, org](const Result& sr) mutable {
+                      const QString at2 = sr.data.value(QStringLiteral("access_token")).toString();
+                      if (!sr.ok || at2.isEmpty()) {
+                          Result r = sr;
+                          r.ok = false;
+                          if (r.error.isEmpty()) r.error = QStringLiteral("signin_failed");
+                          if (r.message.isEmpty()) r.message = QStringLiteral("登录响应异常");
+                          cb(r);
+                          return;
+                      }
+                      registerAccount(at2, name, org, std::move(cb));
+                  });
          });
 }
 
@@ -253,9 +282,13 @@ void CloudAccount::activateInvite(const QString& code, const QString& name, cons
 
 void CloudAccount::submitFeedback(const QString& token, const QString& text, const QJsonObject& diag,
                                   Callback cb) {
+    const Credential cred = CredentialStore::load();
     QJsonObject body;
     body.insert(QStringLiteral("token"), token);
     body.insert(QStringLiteral("text"), text.left(4000));
     body.insert(QStringLiteral("diag"), diag);
+    body.insert(QStringLiteral("name"), cred.name);
+    body.insert(QStringLiteral("version"), QStringLiteral(APP_VERSION));
+    body.insert(QStringLiteral("platform"), QSysInfo::prettyProductName());
     post(serviceBase() + QStringLiteral("/feedback"), body, false, std::move(cb));
 }

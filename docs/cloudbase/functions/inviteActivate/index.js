@@ -53,5 +53,5 @@ exports.main = async (event) => {
     })).toString('base64url');
     const token = payload + '.'
         + crypto.createHmac('sha256', SECRET).update(payload).digest('hex');
-    return { statusCode: 200, body: JSON.stringify({ ok: true, token, exp: now + TOKEN_MS }) };
+    return { statusCode: 200, body: JSON.stringify({ ok: true, token, expires_at: now + TOKEN_MS }) };
 };
