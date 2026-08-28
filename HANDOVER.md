@@ -499,3 +499,11 @@ reports/assets/sitemap.png）+ sitemap.json 归一化坐标持久化 + 孤儿点
 - **修复**：processAudioPacket 空档>40ms 补等长静音（padAudioSilence 分块背压、封顶10s）、重叠>40ms 裁帧首；sink 短写循环补写防护；open/seek 重置
 - **测试**：engine_test avgap 场景（NUT 合成空档片+tap 断言哔声 2.0s±0.45，实测 1.998s）；libav_test testAvEventAlignment 永久回归
 - **坑**：QFile 在 Windows 走 stdio 4KB 缓冲，小行写不 flush 不落盘 → tapClose（析构/unload）+每64行冲刷；matroska 拒 rawvideo（用 NUT+codec_tag I420）；engine_test 场景要先 seek(0) 再 play
+
+## 29d) v1.16.1 发布 + Win10 闪退结案 + 副屏全屏（3fb9c05→发布）
+- **Win10 闪退结案**：根因=缺 VC++ 运行库，安装随包 vc_redist.x64.exe 即可；已入 MANUAL 常见问题首行+异常退出诊断条目
+- **副屏全屏**（adcc92b，用户拍板 6 点）：FullscreenVideoWindow（无边框/letterbox/ESC双击退出/光标3s自隐/4K自适应降质）；视图菜单动态列屏+F11 上次屏；帧与调节与主视口同源共享；暂停态推 rawFrame
+- **崩溃黑匣子**（e097dbc）：UEF→MiniDumpWriteDump（dbghelp）+阶段面包屑+会话锁+异常退出提示；LUMENARC_CRASHTEST=1 自毁验证过
+- **Release v1.16.1**：https://github.com/Pavo-fi/LumenArc/releases/tag/v1.16.1（290MB zip）
+- **打包新坑**：①cygwin 重定向 >nul 会在目录生成真「nul」文件→Compress-Archive 崩（保留设备名），打包前删；②manual2pdf 独立目录运行弹 Qt platform plugin 框挂起——Qt6 可重定位构建插件前缀随 Qt6Core.dll 目录，build.bat 现自带 platforms/（qoffscreen+qwindows）且工具默认 offscreen；③build.bat 必须 CRLF+英文注释
+- **遗留**：build/Release/Qt6Test.dll 是测试会话补的（不入包，已在打包排除）；mw_test 曾因此假绿（tail 管道吞 rc）——回归要看真 rc
