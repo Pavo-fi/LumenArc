@@ -12,6 +12,10 @@
 
 int main(int argc, char **argv)
 {
+    // 纯命令行工具（QPdfWriter 不需要窗口）：默认 offscreen 平台，
+    // 避免在未布 platforms 插件的目录运行时弹「Qt platform plugin」错误框
+    if (!qEnvironmentVariableIsSet("QT_QPA_PLATFORM"))
+        qputenv("QT_QPA_PLATFORM", "offscreen");
     QGuiApplication app(argc, argv);
     if (argc < 3) {
         std::fprintf(stderr, "usage: manual2pdf <in.md> <out.pdf>\n");
