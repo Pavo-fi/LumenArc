@@ -74,7 +74,6 @@ set(SOURCES
     src/infrastructure/crash_handler.cpp
     src/infrastructure/cloud_account.cpp
     src/infrastructure/credential_store.cpp
-    src/infrastructure/signature_store.cpp
     src/logindialog.cpp
     src/feedbackdialog.cpp
     src/accountdialog.cpp
@@ -230,7 +229,6 @@ set(HEADERS
     src/infrastructure/crash_handler.h
     src/infrastructure/cloud_account.h
     src/infrastructure/credential_store.h
-    src/infrastructure/signature_store.h
     src/logindialog.h
     src/feedbackdialog.h
     src/accountdialog.h

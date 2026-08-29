@@ -2,7 +2,6 @@
 
 #include "infrastructure/cloud_account.h"
 #include "infrastructure/credential_store.h"
-#include "infrastructure/signature_store.h"
 
 #include <QDateTime>
 #include <QFormLayout>
@@ -197,7 +196,6 @@ void LoginDialog::succeedWithToken(const QString& token, qint64 expiresAtMs, con
     c.name = name;
     c.org = org;
     CredentialStore::save(c);
-    SignatureStore::initIfEmpty(name, org);  // 署名为空才用账号档案初始化（不覆盖用户自设）
     accept();
 }
 
