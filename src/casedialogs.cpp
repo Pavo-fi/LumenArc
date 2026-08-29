@@ -10,7 +10,7 @@
  */
 #include "casedialogs.h"
 
-#include "infrastructure/credential_store.h"
+#include "infrastructure/signature_store.h"
 
 #include <QDateEdit>
 #include <QDateTime>
@@ -51,11 +51,10 @@ NewCaseDialog::NewCaseDialog(const QString &rootDir, QWidget *parent)
     m_title->setPlaceholderText(lang("如：xx厂房火灾", "e.g. Warehouse fire"));
     m_investigator = new QLineEdit(this);
     m_unit = new QLineEdit(this);
-    // 账号系统 v1.1：调查员/单位默认取登录账号的姓名/单位（用户可改）
+    // 账号系统 v1.3：调查员/单位默认取署名（SignatureStore 单一真源，用户可改）
     {
-        const Credential cred = CredentialStore::load();
-        if (!cred.name.isEmpty()) m_investigator->setText(cred.name);
-        if (!cred.org.isEmpty()) m_unit->setText(cred.org);
+        if (!SignatureStore::name().isEmpty()) m_investigator->setText(SignatureStore::name());
+        if (!SignatureStore::org().isEmpty()) m_unit->setText(SignatureStore::org());
     }
     m_incidentDate = new QDateEdit(QDate::currentDate(), this);
     m_incidentDate->setCalendarPopup(true);
@@ -183,13 +182,12 @@ CasePropertiesDialog::CasePropertiesDialog(CaseManager *cm, QWidget *parent)
     m_title = new QLineEdit(meta.title, this);
     m_investigator = new QLineEdit(meta.investigator, this);
     m_unit = new QLineEdit(meta.unit, this);
-    // 账号系统 v1.1：空值时用登录账号姓名/单位预填（已有值不动）
+    // 账号系统 v1.3：空值时用署名预填（已有值不动）
     {
-        const Credential cred = CredentialStore::load();
-        if (m_investigator->text().trimmed().isEmpty() && !cred.name.isEmpty())
-            m_investigator->setText(cred.name);
-        if (m_unit->text().trimmed().isEmpty() && !cred.org.isEmpty())
-            m_unit->setText(cred.org);
+        if (m_investigator->text().trimmed().isEmpty() && !SignatureStore::name().isEmpty())
+            m_investigator->setText(SignatureStore::name());
+        if (m_unit->text().trimmed().isEmpty() && !SignatureStore::org().isEmpty())
+            m_unit->setText(SignatureStore::org());
     }
     m_locationDetail = new QLineEdit(meta.locationDetail, this);
     m_description = new QPlainTextEdit(meta.description, this);

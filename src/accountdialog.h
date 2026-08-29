@@ -19,6 +19,7 @@ public:
 private:
     void onSendCode();
     void onSubmitProfile();
+    void onSaveSignature();
     void onSignOut();
     void setBusy(bool busy, const QString& hint = QString());
     void fail(const QString& machineCode, const QString& serverMsg);
@@ -33,6 +34,9 @@ private:
     QLineEdit* m_org = nullptr;
     QPushButton* m_sendBtn = nullptr;
     QPushButton* m_submitBtn = nullptr;
+    QLineEdit* m_sigName = nullptr;
+    QLineEdit* m_sigOrg = nullptr;
+    QPushButton* m_sigSaveBtn = nullptr;
     QPushButton* m_signoutBtn = nullptr;
     QLabel* m_status = nullptr;
     QTimer* m_countdown = nullptr;

@@ -2,6 +2,7 @@
 
 #include "infrastructure/cloud_account.h"
 #include "infrastructure/credential_store.h"
+#include "infrastructure/signature_store.h"
 
 #include <QFormLayout>
 #include <QGroupBox>
@@ -81,6 +82,23 @@ AccountDialog::AccountDialog(QWidget* parent) : QDialog(parent) {
         m_editBox->setEnabled(false);
         m_editBox->setToolTip(QStringLiteral("邀请码账号资料由提供方管理，如需修改请联系提供方"));
     }
+
+    // ---- 默认署名（本地值，免验证；案件/报告/点位图等落款接入点统一取它）----
+    auto* sigBox = new QGroupBox(QStringLiteral("默认署名"), this);
+    auto* sf = new QFormLayout(sigBox);
+    m_sigName = new QLineEdit(SignatureStore::name(), sigBox);
+    m_sigOrg = new QLineEdit(SignatureStore::org(), sigBox);
+    sf->addRow(QStringLiteral("姓 名"), m_sigName);
+    sf->addRow(QStringLiteral("单 位"), m_sigOrg);
+    m_sigSaveBtn = new QPushButton(QStringLiteral("保存署名"), sigBox);
+    sf->addRow(QString(), m_sigSaveBtn);
+    auto* sigHint = new QLabel(QStringLiteral("署名会自动用于案件录入、分析报告生成、点位图等处的落款；"
+                                              "此处修改立即生效，不需要短信验证。"), sigBox);
+    sigHint->setWordWrap(true);
+    sigHint->setStyleSheet(QStringLiteral("color:#888;"));
+    sf->addRow(sigHint);
+    root->addWidget(sigBox);
+    connect(m_sigSaveBtn, &QPushButton::clicked, this, &AccountDialog::onSaveSignature);
 
     m_status = new QLabel(this);
     m_status->setWordWrap(true);
@@ -172,6 +190,7 @@ void AccountDialog::onSubmitProfile() {
             c.name = name;
             c.org = org;
             CredentialStore::save(c);
+            SignatureStore::initIfEmpty(name, org);  // 署名为空才跟随账号档案
             setBusy(false);
             m_status->setStyleSheet(QStringLiteral("color:#27ae60;"));
             m_status->setText(QStringLiteral("资料已更新。新建案件与报告将使用新的姓名和单位。"));
@@ -179,6 +198,12 @@ void AccountDialog::onSubmitProfile() {
                                      .arg(name, org, maskPhone(m_uid)));
         });
     });
+}
+
+void AccountDialog::onSaveSignature() {
+    SignatureStore::save(m_sigName->text(), m_sigOrg->text());
+    m_status->setStyleSheet(QStringLiteral("color:#27ae60;"));
+    m_status->setText(QStringLiteral("署名已保存，之后的案件、报告、点位图落款将使用新署名。"));
 }
 
 void AccountDialog::onSignOut() {
