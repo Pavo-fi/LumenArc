@@ -3,6 +3,7 @@
 #include "app/case_manager.h"
 #include <QDialogButtonBox>
 #include "infrastructure/site_map_render.h"
+#include "infrastructure/credential_store.h"
 #include "theme.h"
 
 #include <QDateTime>
@@ -637,8 +638,11 @@ void SiteMapEditorDialog::exportFramed()
     }
     markOrphans();
     const CaseMeta &meta = m_cm->meta();
+    // 账号系统 v1.4：制图栏吃案件署名快照；历史空值兜底当前账号档案
+    QString drawer = meta.investigator;
+    if (drawer.isEmpty()) drawer = CredentialStore::load().name;
     const QImage out = sitemaprender::renderFramed(
-        m_data, m_base, m_laneColor, meta.caseNo, meta.investigator,
+        m_data, m_base, m_laneColor, meta.caseNo, drawer,
         meta.extraFields.value(QStringLiteral("report/reviewer")),
         QDateTime::currentDateTime().toString(QStringLiteral("yyyy-MM-dd")));
     const QString dst = m_cm->caseDir()

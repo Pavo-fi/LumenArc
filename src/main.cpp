@@ -216,6 +216,16 @@ int main(int argc, char *argv[])
                 const qint64 nowMs = QDateTime::currentMSecsSinceEpoch();
                 if (r.ok) {
                     CredentialStore::touchOk(nowMs);
+                    // 档案同步（署名写死用）：本地缺姓名/单位时用心跳响应补齐
+                    {
+                        const QString rn = r.data.value(QStringLiteral("name")).toString();
+                        const QString ro = r.data.value(QStringLiteral("org")).toString();
+                        Credential cc = CredentialStore::load();
+                        bool dirty = false;
+                        if (cc.name.isEmpty() && !rn.isEmpty()) { cc.name = rn; dirty = true; }
+                        if (cc.org.isEmpty() && !ro.isEmpty()) { cc.org = ro; dirty = true; }
+                        if (dirty) CredentialStore::save(cc);
+                    }
                     const QString nt = r.data.value(QStringLiteral("token")).toString();
                     if (!nt.isEmpty()) {
                         // 续签：解 payload 段拿 exp（base64url JSON，非密文）

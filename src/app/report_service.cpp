@@ -4,6 +4,7 @@
 #include "videostatemanager.h"
 #include "domain/report_fmt.h"
 #include "infrastructure/tool_paths.h"
+#include "infrastructure/credential_store.h"
 
 #include <QCryptographicHash>
 #include <QDateTime>
@@ -142,6 +143,12 @@ ReportData ReportService::collect(CaseManager *cm, VideoStateManager *vsm,
     rd.title = meta.title;
     rd.investigator = meta.investigator;
     rd.unit = meta.unit;
+    // 账号系统 v1.4：历史空值兜底当前账号档案（署名写死策略）
+    if (rd.investigator.isEmpty() || rd.unit.isEmpty()) {
+        const Credential cred = CredentialStore::load();
+        if (rd.investigator.isEmpty()) rd.investigator = cred.name;
+        if (rd.unit.isEmpty()) rd.unit = cred.org;
+    }
     rd.incidentTimeMs = meta.incidentTimeMs;
     rd.city = meta.city;
     rd.district = meta.district;

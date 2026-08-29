@@ -57,5 +57,9 @@ exports.main = async (event) => {
         newToken = payload + '.'
             + crypto.createHmac('sha256', SECRET).update(payload).digest('hex');
     }
-    return { statusCode: 200, body: JSON.stringify({ ok: true, now, token: newToken }) };
+    // 附带档案姓名/单位（客户端署名写死同步用；老用户本地可能缺）
+    const prof = (u && u.data && u.data.length)
+        ? { name: String(u.data[0].name || ''), org: String(u.data[0].org || '') }
+        : {};
+    return { statusCode: 200, body: JSON.stringify({ ok: true, now, token: newToken, ...prof }) };
 };

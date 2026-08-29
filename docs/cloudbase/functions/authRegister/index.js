@@ -52,5 +52,11 @@ exports.main = async (event) => {
     }
     const exp = now + TOKEN_TTL_SMS_MS;
     const token = signToken(phone, 'sms', exp, process.env.AUTH_SECRET || '');
-    return { statusCode: 200, body: JSON.stringify({ token, expires_at: exp }) };
+    // 响应带档案姓名/单位（老用户=服务端档案值）：客户端本地凭证需要它做署名写死
+    let finalName = name, finalOrg = org;
+    if (exist && exist.data && exist.data.length) {
+        finalName = name || String(exist.data[0].name || '');
+        finalOrg = org || String(exist.data[0].org || '');
+    }
+    return { statusCode: 200, body: JSON.stringify({ token, expires_at: exp, name: finalName, org: finalOrg }) };
 };

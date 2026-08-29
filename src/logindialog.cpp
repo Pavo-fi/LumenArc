@@ -240,10 +240,12 @@ void LoginDialog::onSmsLogin() {
             fail(r.error, r.message);
             return;
         }
-        // 老用户：注册已在链路内完成，直接落凭证
+        // 老用户：注册已在链路内完成；档案姓名/单位以服务端响应为准（署名写死用）
         const QString token = r.data.value(QStringLiteral("token")).toString();
         const qint64 exp = rr_expires(r.data);
-        succeedWithToken(token, exp, QStringLiteral("+86 ") + phone, QString(), QString());
+        succeedWithToken(token, exp, QStringLiteral("+86 ") + phone,
+                         r.data.value(QStringLiteral("name")).toString(),
+                         r.data.value(QStringLiteral("org")).toString());
     });
 }
 
@@ -262,7 +264,12 @@ void LoginDialog::onCompleteRegistration() {
         }
         const QString token = r.data.value(QStringLiteral("token")).toString();
         const qint64 exp = rr_expires(r.data);
-        succeedWithToken(token, exp, QStringLiteral("+86 ") + m_phone->text().trimmed(), name, org);
+        // 新注册：服务端响应为准（与提交一致）
+        succeedWithToken(token, exp, QStringLiteral("+86 ") + m_phone->text().trimmed(),
+                         r.data.value(QStringLiteral("name")).toString().isEmpty()
+                             ? name : r.data.value(QStringLiteral("name")).toString(),
+                         r.data.value(QStringLiteral("org")).toString().isEmpty()
+                             ? org : r.data.value(QStringLiteral("org")).toString());
     });
 }
 
