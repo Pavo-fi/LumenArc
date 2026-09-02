@@ -8,6 +8,7 @@
 #include <QKeyEvent>
 #include <QMouseEvent>
 #include <QScreen>
+#include <QWindow>
 #include <QTimer>
 
 FullscreenVideoWindow::FullscreenVideoWindow(QWidget *parent)
@@ -28,8 +29,14 @@ FullscreenVideoWindow::FullscreenVideoWindow(QWidget *parent)
 void FullscreenVideoWindow::showOnScreen(QScreen *screen)
 {
     if (screen) {
-        setScreen(screen);
-        move(screen->geometry().topLeft());
+        // v1.16.2 多屏实测修复：旧写法 setScreen+move+showFullScreen 会把窗口
+        // 落到主屏（四策略真机对比：仅 windowHandle()->setScreen + handle 级
+        // setGeometry 生效；QWidget::setGeometry 会被默认定位逻辑覆盖）。
+        winId();   // 强制创建 windowHandle（否则 setScreen 无对象）
+        if (windowHandle()) {
+            windowHandle()->setScreen(screen);
+            windowHandle()->setGeometry(screen->geometry());
+        }
     }
     showFullScreen();
     m_cursorTimer->start();

@@ -26,6 +26,7 @@
 #include <QMap>
 #include <QVector>
 #include <QImage>
+#include <QAudioFormat>
 #include <atomic>
 #include <memory>
 
@@ -133,6 +134,7 @@ private:
     void processVideoPacket(AVPacket *pkt);   // 送包 + 排干解码器
     void processAudioPacket(AVPacket *pkt);   // 音频解码 → 重采样 → 环形缓冲
     bool ensureAudioOutput();                 // 惰性创建 QAudioSink（工作线程内）
+    void followDefaultAudioDevice();          // 系统默认输出设备变化时热切换
     void suspendAudio();
     void resumeAudio();
     bool drainDecoder();                      // 返回是否取到帧
@@ -276,6 +278,9 @@ private:
     int m_outBytesPerSample = 2;    // sink 实际样本字节（Int16=2，Int64=8…）
     // S16 = 1（FFmpeg AVSampleFormat 枚举值；头文件仅前置声明）
     AVSampleFormat m_outSampleFmt = static_cast<AVSampleFormat>(1);
+    QAudioFormat m_sinkFmt;       // sink 实际格式（设备热切换重建用）
+    QByteArray m_sinkDeviceId;    // sink 当前输出设备 id
+    int m_devCheckCounter = 0;    // 周期性检查系统默认输出设备变化
     bool m_audioMaster = false;     // 有可用音轨且 rate==1.0 时音频为主时钟
     std::atomic<qint64> m_audioBytesWritten{0};
     qint64 m_audioBaseRelMs = -1;   // 首个写入样本的 PTS（相对毫秒），-1=未锚定

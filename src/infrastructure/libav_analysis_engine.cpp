@@ -759,18 +759,24 @@ bool LibavAnalysisEngine::analyzeAudioOne(const QString &path, AudioData *out)
         if (d == 0) {
             const int64_t fpts = (frame->pts != AV_NOPTS_VALUE)
                 ? frame->pts : frame->best_effort_timestamp;
-            // 拼点空档：本帧起点晚于期望位置 → 先补等量静音（>20ms 起补，
-            // 单段上限 30s 防御；与下方首偏移补齐同策略）
-            if (fpts != AV_NOPTS_VALUE && expectPts != AV_NOPTS_VALUE
-                && fpts > expectPts) {
-                const double gapMs = double(fpts - expectPts)
+            // 拼点空档：本帧起点晚于期望位置 → 先补等量静音（阈值 200ms，
+            // 单段上限 30s 防御；与播放侧同阈值——v1.16.2 起）。原 20ms 阈值
+            // 对 PTS 打包抖动的机种（LAMerged 实测 180/78/20ms 乱跳）每包误
+            // 触发 → 图谱渐进错位；真实拼点空档 ≥0.5s（P-59 ~0.7s）。
+            // 反向重叠（PTS 回退=内容重复）同样 >200ms 才裁本帧头部，与播放
+            // 侧对称，防重复内容把后续声响后移。
+            double cropMs = 0.0;   // >0 = 本帧头部需裁掉的重叠时长
+            if (fpts != AV_NOPTS_VALUE && expectPts != AV_NOPTS_VALUE) {
+                const double skewMs = double(fpts - expectPts)
                     * av_q2d(ast->time_base) * 1000.0;
-                if (gapMs > 20.0) {
+                if (skewMs > 200.0) {
                     const int padN = int(std::lround(
-                        qMin(gapMs, 30000.0) * 24.0));   // 24 样本/ms@24k
+                        qMin(skewMs, 30000.0) * 24.0));   // 24 样本/ms@24k
                     const int old = pcm.size();
                     pcm.resize(old + padN);
                     memset(pcm.data() + old, 0, padN * sizeof(float));
+                } else if (skewMs < -200.0) {
+                    cropMs = qMin(-skewMs, 30000.0);
                 }
             }
             // AAC priming samples：ffmpeg CLI 默认 trim（skip_samples 侧数据），
@@ -783,6 +789,8 @@ bool LibavAnalysisEngine::analyzeAudioOne(const QString &path, AudioData *out)
                 skip = static_cast<int>(p[0]);   // skip_samples
             }
             // 转换到输出缓冲
+            if (cropMs > 0.0)   // 重叠裁剪：跳过本帧头部等量内容（与 got 同单位 24k 样本）
+                skip += int(std::lround(cropMs * 24.0));
             const int outSamples = swr_get_out_samples(swr, frame->nb_samples);
             QVector<float> buf(static_cast<int>(outSamples));
             uint8_t *outPtr = reinterpret_cast<uint8_t *>(buf.data());
@@ -800,7 +808,13 @@ bool LibavAnalysisEngine::analyzeAudioOne(const QString &path, AudioData *out)
             // PTS 缺失帧按期望位置自然顺延（无校可依，维持连续假设）
             const int64_t durTb = av_rescale_q(frame->nb_samples,
                 {1, frame->sample_rate}, ast->time_base);
-            if (fpts != AV_NOPTS_VALUE)
+            if (cropMs > 0.0) {
+                // 重叠裁剪后：余下内容接在期望位置之后；整帧重复则原地不动
+                const int64_t cropTb = av_rescale_q(int64_t(cropMs),
+                    {1, 1000}, ast->time_base);
+                if (cropTb < durTb && expectPts != AV_NOPTS_VALUE)
+                    expectPts += durTb - cropTb;
+            } else if (fpts != AV_NOPTS_VALUE)
                 expectPts = fpts + durTb;
             else if (expectPts != AV_NOPTS_VALUE)
                 expectPts += durTb;

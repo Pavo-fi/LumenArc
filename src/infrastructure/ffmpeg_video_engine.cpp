@@ -314,6 +314,8 @@ bool FfmpegVideoEngine::ensureAudioOutput()
 
     int bytesPerSec = m_outSampleRate * m_outChannels * m_outBytesPerSample;
     m_sink = new QAudioSink(device, fmt);
+    m_sinkFmt = fmt;             // 设备热切换重建用
+    m_sinkDeviceId = device.id();
     m_sink->setBufferSize(bytesPerSec);              // 1s 设备缓冲
     m_sink->setVolume(qMin(m_volume.load(), 100) / 100.0f);
     // 推模式：工作线程无 Qt 事件循环，拉模式的设备回调不会被驱动
@@ -325,6 +327,36 @@ bool FfmpegVideoEngine::ensureAudioOutput()
     // 音频帧时长估算：AAC 固定 1024 样本/帧（8kHz=128ms，16kHz=64ms，44.1k≈23ms）
     m_audioFrameMs = qMax<qint64>(1, 1024 * 1000 / m_adec->sample_rate);
     return m_audioSinkOk.load();
+}
+
+void FfmpegVideoEngine::followDefaultAudioDevice()
+{
+    // 跟随系统默认输出设备：用户拔插耳机/连蓝牙/HDMI 显示器抢默认后，
+    // 之前建的 sink 不会自动迁移 → 重建到新默认设备，位置用设备时钟续接。
+    if (!m_sink || m_sinkFmt.sampleRate() <= 0)
+        return;
+    const QAudioDevice dev = QMediaDevices::defaultAudioOutput();
+    if (dev.isNull() || dev.id() == m_sinkDeviceId)
+        return;
+    const qint64 posMs = audioClockMs();   // 已播放位置（旧设备时钟）
+    audioDiag(QStringLiteral("audio output device changed: '%1' -> '%2', rebase at %3ms")
+              .arg(QString::fromUtf8(m_sinkDeviceId.left(16)), dev.description())
+              .arg(posMs));
+    m_sink->stop();
+    delete m_sink;
+    const int bytesPerSec = m_outSampleRate * m_outChannels * m_outBytesPerSample;
+    m_sink = new QAudioSink(dev, m_sinkFmt);
+    m_sink->setBufferSize(bytesPerSec);
+    m_sink->setVolume(qMin(m_volume.load(), 100) / 100.0f);
+    m_sinkIo = m_sink->start();
+    m_audioSinkOk = (m_sinkIo != nullptr);
+    if (m_audioSinkOk.load()) {
+        m_sinkDeviceId = dev.id();
+        m_audioBaseRelMs = qMax<qint64>(posMs, 0);  // 新设备时钟从 0 起，基准续接
+    } else {
+        delete m_sink;
+        m_sink = nullptr;
+    }
 }
 
 void FfmpegVideoEngine::suspendAudio()
@@ -389,6 +421,13 @@ void FfmpegVideoEngine::processAudioPacket(AVPacket *pkt)
 
     m_sink->setVolume(qMin(m_volume.load(), 100) / 100.0f);  // 音量原子量随包应用
 
+    // 跟随系统默认输出设备（拔插耳机/蓝牙/HDMI 抢默认后自动切换，~每 16 包查一次）
+    if (((++m_devCheckCounter) & 15) == 0) {
+        followDefaultAudioDevice();
+        if (!m_sink || !m_sinkIo)
+            return;
+    }
+
     if (avcodec_send_packet(m_adec, pkt) < 0)
         return;
 
@@ -422,16 +461,20 @@ void FfmpegVideoEngine::processAudioPacket(AVPacket *pkt)
         // 音频 PTS 空档补偿/重叠裁剪（正常播放+原速；对齐分析侧 P-59）。
         // DVR 写盘卡顿产生的空档若不补，空档后的声响会被压塌提前——
         // 用户实测「声响先到、曲线峰迟 ~2s」的时有时无病灶。
+        // 阈值 200ms（v1.16.2 起）：LAMerged 实测部分机种音频包 PTS 极不规则
+        // （180/78/20ms 乱跳），原 40ms 阈值每包误触发补/裁 → 卡顿+与图谱
+        // 渐进错位；真实 DVR 空档 ≥0.5s（P-59 ~0.7s、v1.16.1 病灶 ~2s），
+        // 200ms 阈值保留对真空档的补偿，放过亚帧级打包抖动。
         if (!scrubbing && relMs >= 0
             && qAbs(m_rate.load() - 1.0f) < 0.01f) {
             if (m_audioNextPtsRelMs >= 0) {
                 const qint64 skew = relMs - m_audioNextPtsRelMs;
-                if (skew > 40) {
+                if (skew > 200) {
                     m_audioPendingPadMs += qMin<qint64>(skew, 10000);  // 空档→补等长静音
                     if (skew > 10000)
                         audioDiag(QStringLiteral("AUDIO GAP %1ms exceeds 10s pad cap, "
                                   "AV desync by %2ms").arg(skew).arg(skew - 10000));
-                } else if (skew < -40) {
+                } else if (skew < -200) {
                     const qint64 ov = -skew;   // 重叠（重复内容）：裁帧首防后移
                     if (ov >= frameDurMs) {
                         av_frame_unref(frame);
