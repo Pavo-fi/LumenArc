@@ -727,6 +727,13 @@ bool LibavAnalysisEngine::analyzeAudioOne(const QString &path, AudioData *out)
         return false;
     }
 
+    // swr 输入侧参数快照（异构拼接直拷防御：中途变化时重建）
+    int curInRate = dec->sample_rate;
+    int curInFmt = dec->sample_fmt;
+    const uint64_t curInMask0 = (dec->ch_layout.order == AV_CHANNEL_ORDER_NATIVE)
+        ? dec->ch_layout.u.mask : 0;
+    uint64_t curInMask = curInMask0;
+
     QVector<float> pcm;
     AVPacket *pkt = av_packet_alloc();
     AVFrame *frame = av_frame_alloc();
@@ -757,6 +764,28 @@ bool LibavAnalysisEngine::analyzeAudioOne(const QString &path, AudioData *out)
         }
         const int d = avcodec_receive_frame(dec, frame);
         if (d == 0) {
+            // 异构拼接（concat -c copy）防御：输入参数中途变化 → 重建 swr
+            // 输入侧（输出侧保持 float32/24k/mono 不变，与 Python 通路对齐）
+            {
+                const uint64_t mask = (frame->ch_layout.order == AV_CHANNEL_ORDER_NATIVE)
+                    ? frame->ch_layout.u.mask : 0;
+                if (frame->sample_rate != curInRate || frame->format != curInFmt
+                    || mask != curInMask) {
+                    swr_free(&swr);
+                    swr = nullptr;
+                    if (swr_alloc_set_opts2(&swr, &outLayout, AV_SAMPLE_FMT_FLT, 24000,
+                            &frame->ch_layout,
+                            static_cast<AVSampleFormat>(frame->format),
+                            frame->sample_rate, 0, nullptr) < 0 || !swr
+                        || swr_init(swr) < 0) {
+                        if (swr) swr_free(&swr);
+                        av_frame_unref(frame);
+                        break;   // 重建失败：放弃本文件音频分析
+                    }
+                    curInRate = frame->sample_rate; curInFmt = frame->format;
+                    curInMask = mask;
+                }
+            }
             const int64_t fpts = (frame->pts != AV_NOPTS_VALUE)
                 ? frame->pts : frame->best_effort_timestamp;
             // 拼点空档：本帧起点晚于期望位置 → 先补等量静音（阈值 200ms，

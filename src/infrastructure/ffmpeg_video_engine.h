@@ -135,6 +135,7 @@ private:
     void processAudioPacket(AVPacket *pkt);   // 音频解码 → 重采样 → 环形缓冲
     bool ensureAudioOutput();                 // 惰性创建 QAudioSink（工作线程内）
     void followDefaultAudioDevice();          // 系统默认输出设备变化时热切换
+    bool reconfigSwrInput(const AVFrame *frame);  // 异构拼接：输入参数变化重建 swr
     void suspendAudio();
     void resumeAudio();
     bool drainDecoder();                      // 返回是否取到帧
@@ -281,6 +282,10 @@ private:
     QAudioFormat m_sinkFmt;       // sink 实际格式（设备热切换重建用）
     QByteArray m_sinkDeviceId;    // sink 当前输出设备 id
     int m_devCheckCounter = 0;    // 周期性检查系统默认输出设备变化
+    // swr 输入侧参数快照（异构拼接直拷：采样率/声道/格式中途变化时重建）
+    int m_swrInRate = 0;
+    int m_swrInFmt = -1;
+    uint64_t m_swrInMask = 0;
     bool m_audioMaster = false;     // 有可用音轨且 rate==1.0 时音频为主时钟
     std::atomic<qint64> m_audioBytesWritten{0};
     qint64 m_audioBaseRelMs = -1;   // 首个写入样本的 PTS（相对毫秒），-1=未锚定

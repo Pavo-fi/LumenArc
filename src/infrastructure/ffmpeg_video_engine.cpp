@@ -311,6 +311,10 @@ bool FfmpegVideoEngine::ensureAudioOutput()
         swr_free(&m_swr);
         return false;
     }
+    m_swrInRate = m_adec->sample_rate;
+    m_swrInFmt = m_adec->sample_fmt;
+    m_swrInMask = (m_adec->ch_layout.order == AV_CHANNEL_ORDER_NATIVE)
+        ? m_adec->ch_layout.u.mask : 0;
 
     int bytesPerSec = m_outSampleRate * m_outChannels * m_outBytesPerSample;
     m_sink = new QAudioSink(device, fmt);
@@ -327,6 +331,42 @@ bool FfmpegVideoEngine::ensureAudioOutput()
     // 音频帧时长估算：AAC 固定 1024 样本/帧（8kHz=128ms，16kHz=64ms，44.1k≈23ms）
     m_audioFrameMs = qMax<qint64>(1, 1024 * 1000 / m_adec->sample_rate);
     return m_audioSinkOk.load();
+}
+
+bool FfmpegVideoEngine::reconfigSwrInput(const AVFrame *frame)
+{
+    // 异构拼接（concat -c copy）防御：采样率/格式/声道布局中途变化时，
+    // 用解码帧的实际参数重建 swr 输入侧（输出侧保持设备选定参数不变）。
+    const uint64_t mask = (frame->ch_layout.order == AV_CHANNEL_ORDER_NATIVE)
+        ? frame->ch_layout.u.mask : 0;
+    if (frame->sample_rate == m_swrInRate && frame->format == m_swrInFmt
+        && mask == m_swrInMask)
+        return true;
+    audioDiag(QStringLiteral("audio stream params changed mid-file: %1Hz/fmt%2/mask%3 "
+              "-> %4Hz/fmt%5/mask%6, swr reconfigured")
+              .arg(m_swrInRate).arg(m_swrInFmt).arg(m_swrInMask)
+              .arg(frame->sample_rate).arg(frame->format).arg(mask));
+    if (m_swr)
+        swr_free(&m_swr);
+    AVChannelLayout outLayout;
+    av_channel_layout_default(&outLayout, m_outChannels);
+    if (swr_alloc_set_opts2(&m_swr, &outLayout, m_outSampleFmt, m_outSampleRate,
+                            &frame->ch_layout,
+                            static_cast<AVSampleFormat>(frame->format),
+                            frame->sample_rate, 0, nullptr) < 0 || !m_swr) {
+        av_channel_layout_uninit(&outLayout);
+        return false;
+    }
+    av_channel_layout_uninit(&outLayout);
+    if (swr_init(m_swr) < 0) {
+        swr_free(&m_swr);
+        return false;
+    }
+    m_swrInRate = frame->sample_rate;
+    m_swrInFmt = frame->format;
+    m_swrInMask = mask;
+    m_audioFrameMs = qMax<qint64>(1, 1024 * 1000 / qMax(1, frame->sample_rate));
+    return true;
 }
 
 void FfmpegVideoEngine::followDefaultAudioDevice()
@@ -431,11 +471,16 @@ void FfmpegVideoEngine::processAudioPacket(AVPacket *pkt)
     if (avcodec_send_packet(m_adec, pkt) < 0)
         return;
 
-    const int inRate = m_adec->sample_rate > 0 ? m_adec->sample_rate : 44100;
     AVFrame *frame = av_frame_alloc();
     while (avcodec_receive_frame(m_adec, frame) >= 0) {
         // --- seek 对齐：丢弃/裁剪早于目标的音频帧（F-A） ---
         qint64 relMs = ptsToRelMsA(frame->best_effort_timestamp);
+        // 异构拼接直拷：输入参数中途变化 → 重建 swr（防变调/时长失真）
+        if (!reconfigSwrInput(frame)) {
+            av_frame_unref(frame);
+            continue;
+        }
+        const int inRate = frame->sample_rate > 0 ? frame->sample_rate : 44100;
         qint64 frameDurMs = frame->nb_samples * 1000 / inRate;
         double skipFrac = 0.0;
         // scrub 模式由片段窗口自行定位，忽略 seek 丢弃点（否则回拖到 seek 点前会无声）
@@ -458,19 +503,22 @@ void FfmpegVideoEngine::processAudioPacket(AVPacket *pkt)
             continue;
         }
 
-        // 音频 PTS 空档补偿/重叠裁剪（正常播放+原速；对齐分析侧 P-59）。
+        // 音频 PTS 空档补偿/重叠裁剪（正常播放；对齐分析侧 P-59）。
         // DVR 写盘卡顿产生的空档若不补，空档后的声响会被压塌提前——
         // 用户实测「声响先到、曲线峰迟 ~2s」的时有时无病灶。
         // 阈值 200ms（v1.16.2 起）：LAMerged 实测部分机种音频包 PTS 极不规则
         // （180/78/20ms 乱跳），原 40ms 阈值每包误触发补/裁 → 卡顿+与图谱
         // 渐进错位；真实 DVR 空档 ≥0.5s（P-59 ~0.7s、v1.16.1 病灶 ~2s），
         // 200ms 阈值保留对真空档的补偿，放过亚帧级打包抖动。
-        if (!scrubbing && relMs >= 0
-            && qAbs(m_rate.load() - 1.0f) < 0.01f) {
+        // v1.16.2 起变速（≠1x）也补偿：原仅限原速，2x/4x 扫片过拼接空档时
+        // 声响会提前错位；补写量按 1/rate 缩放（空档占墙钟 = 媒体时长/倍速），
+        // 重叠裁剪是内容比例操作，与速率无关。
+        if (!scrubbing && relMs >= 0) {
             if (m_audioNextPtsRelMs >= 0) {
                 const qint64 skew = relMs - m_audioNextPtsRelMs;
                 if (skew > 200) {
-                    m_audioPendingPadMs += qMin<qint64>(skew, 10000);  // 空档→补等长静音
+                    const float r = qMax(0.25f, m_rate.load());
+                    m_audioPendingPadMs += qMin<qint64>(qint64(skew / r), 10000);
                     if (skew > 10000)
                         audioDiag(QStringLiteral("AUDIO GAP %1ms exceeds 10s pad cap, "
                                   "AV desync by %2ms").arg(skew).arg(skew - 10000));
