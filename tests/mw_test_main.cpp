@@ -9,6 +9,8 @@
  * offscreen 下模态框由定时器自动关闭（activeModalWidget→close）。
  */
 #include "mainwindow.h"
+#include "composeworkbench.h"
+#include <QTreeWidget>
 #include "app/uistate.h"
 #include "app/project_io.h"
 #include "app/video_session_manager.h"
@@ -982,6 +984,48 @@ static void testMultiCamCaseFlow(QApplication &app)
     CHECK(true, "p59: novice flow no crash");
 }
 
+// v1.16.2 P1.5/P2：合成导出工作台构造/材料树/片段编辑无头冒烟
+static void testComposeWorkbench(QApplication &app)
+{
+    Q_UNUSED(app);
+    {
+        // 独立模式（无案件无当前视频）：构造+显隐不崩（hide 触发 stopPreviews）
+        ComposeWorkbenchWindow wb(nullptr, QString(), 25.0, nullptr);
+        wb.show();
+        QCoreApplication::processEvents();
+        wb.hide();
+        QCoreApplication::processEvents();
+        CHECK(true, "workbench 独立模式构造/显隐");
+    }
+    // 真实案件模式：增城案目录在 → 素材树应含多通道+单视频两组（含前处理产物）
+    const QString caseDir = QStringLiteral(
+        "build/Release/cases/20260722-广州增城-a-20260722增城火灾");
+    if (!QFile::exists(caseDir + QStringLiteral("/case.json"))) {
+        qWarning() << "SKIP workbench case-mode: no 增城案";
+        return;
+    }
+    CaseManager cm;
+    QString err;
+    if (!cm.openCase(caseDir, &err)) {
+        qWarning() << "SKIP workbench case-mode: open failed" << err;
+        return;
+    }
+    ComposeWorkbenchWindow wb(&cm, QString(), 25.0, nullptr);
+    wb.show();
+    QCoreApplication::processEvents();
+    // 素材树两组实有内容（多通道组下有可勾选机位/单视频组下有文件）
+    auto *tree = wb.findChild<QTreeWidget *>();
+    CHECK(tree != nullptr, "workbench 素材树存在");
+    if (tree) {
+        CHECK(tree->topLevelItemCount() == 2, "素材树两组（多通道+单视频）");
+        int singleCount = tree->topLevelItem(1)->childCount();
+        CHECK(singleCount >= 2, "单视频组含案内视频+前处理产物");
+    }
+    wb.hide();
+    QCoreApplication::processEvents();
+    cm.closeCase();
+}
+
 int main(int argc, char **argv)
 {
     QApplication app(argc, argv);
@@ -997,6 +1041,7 @@ int main(int argc, char **argv)
     testMultiCamCaseFlow(app);
     testLumaFullChain(app);
     testMagnifierLayout(app);
+    testComposeWorkbench(app);
 
     fprintf(stderr, "mw_test: %d checks, %d failures\n", g_checks, g_failures);
     return g_failures == 0 ? 0 : 1;
