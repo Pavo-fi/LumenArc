@@ -5,7 +5,7 @@
 
 ## 表头（每次写完 HANDOVER 与 WORK_HISTORY 后必须同步更新本表头——规则 R2）
 
-- **当前 HEAD**：施工批（2026-09-03 §86 合成导出 P2：ROI/曲线滚动条+宫格布局+ffmpeg8 排雷+docx 原子写）
+- **当前 HEAD**：施工批（2026-09-03 §87 工作台四步引导改版+快捷键对齐剪映/PR）
 - **构建**：`cmd //c "build_tmp\build_target.bat ALL"`；测试：`QT_QPA_PLATFORM=offscreen`
   + PATH 含 `C:\code\Qt\6.8.0\msvc2022_64\bin`（配置：`build_tmp\reconfigure.bat`）
 - **全回归基线**（18 套，v1.16.1 后）：mw 97 / ui_chain 103 / libav 26（含 av-align/denoise）/
@@ -14,13 +14,15 @@
   改函数后 `cd build_tmp/tcb_deploy && MSYS_NO_PATHCONV=1 tcb fn deploy <name> --force --yes`；
   AUTH_SECRET 在 build_tmp/tcb_deploy/.auth_secret（不入库）；详见 docs/cloudbase/README.md
 - **当前保留批次**（新→旧，R2 限 5 批）：
+  第七十四批 §87（工作台四步引导改版+快捷键对齐剪映/PR）·
   第七十三批 §86（合成导出 P2：ROI/曲线滚动条+宫格布局+ffmpeg8 排雷+docx 原子写）·
   第七十二批 §85（合成导出工作台：素材树+可播放预览+片段块时间线）·
   第七十一批 §84（P1：in-process 多段+证据/演示双模式）·
-  第七十一批 §83（MLT melt 构建+能力矩阵实测）·
-  第七十一批 §82（v1.16.2 引擎三连修+拼接补全）。
+  第七十一批 §83（MLT melt 构建+能力矩阵实测）。
+  （§82 引擎三连修 已归档 WORK_HISTORY——见下）
   （§81 账号 v1.4 署名写死 已归档 WORK_HISTORY——见下）
-- **最近归档动作**：2026-09-03 §86 批——§81（账号 v1.4 署名写死）移入 WORK_HISTORY.md 末尾；
+- **最近归档动作**：2026-09-03 §87 批——§82（引擎三连修）移入 WORK_HISTORY.md 末尾；
+  早前：2026-09-03 §86 批——§81（账号 v1.4 署名写死）移入；
   早前：2026-09-03 §85 批——§80（账号 v1.2）移入；
   早前：2026-09-03 §84 批——§75~§79 移入；
   早前：2026-08-28 §79 批——第六十五批（§74）移入。
@@ -38,6 +40,29 @@
 # ============================================================================
 # 工作记录（2026-09-03，第七十一批）——合成导出器 P1 + 账号 v1.2~v1.4 + 引擎三连修 + MLT 基建
 # ============================================================================
+
+## 87. 工作台四步引导改版（新手向重构）+ 快捷键对齐剪映/PR
+
+- **缘起**：用户实测"打开视频编辑页无所适从"——拍板新手向重构（用户补充：
+  I/O 保留给提示+快捷键尽量对齐剪映/PR）。
+- **四步引导条**（顶部常驻）：①选素材→②截片段→③排顺序→④导出，当前步蓝底
+  高亮、完成步绿色；右侧一句白话动态提示随状态机切换（updateGuide()：
+  无素材→提示选素材 / 有素材无片段→提示截取键位 / 有片段→提示排序导出）。
+- **截取改版**：红色圆钮录音笔式单键流（⏺从这里开始(I) → ⏹到这里加入清单(O)，
+  armed 态变亮红）；I/O 按钮保留并标快捷键；onMarkOut 设终点即提交（一拍成片）；
+  提交后打点自动清零；开始导出钮无片段时禁用（可观测态）。
+- **快捷键**（QShortcut WindowShortcut + 输入框聚焦守卫；运输控件全部 NoFocus
+  防空格被按钮吃掉）：空格/K=播放暂停、I=起点、O=终点并加入、回车=等价O、
+  ←/→=逐帧(按 fps)、Shift+←/→=±1s、J/L=±5s、Home/End、Delete=删选中块、
+  Ctrl+E=开始导出。
+- **导出面板**：白话二选一（演示片——带角标红标用于汇报 / 证据原始片段——零改动
+  用于存档送检）+ tooltip 解释；OSD/案号/图表/ROI/曲线收进「更多选项▸」折叠面板；
+  「保存到」+「更改…」+大蓝钮「开始导出（Ctrl+E）」。
+- **陷阱**：QStringLiteral 不能包运行时三元表达式（编译错）；工作台 onMaterialChanged
+  读 currentItem——测试里 emit itemClicked 前须 setCurrentItem；slider seek 异部，
+  提交前须等 positionChanged（测试 qWait 1500）。
+- **测试**：mw 107 全绿（工作台引导流 e2e：点视频→红点 arm→seek→提交→导出钮亮；
+  快捷键 smoke 不崩）；手册七·2 整节重写（四步流+快捷键表）+PDF 重出。
 
 ## 86. 合成导出 P2：ROI/曲线滚动条烧录 + 宫格布局 + ffmpeg8 aresample 排雷 + docx 原子写
 
@@ -170,22 +195,3 @@
   （avdevice-63 易漏）；MLT XML 工程一律绝对路径（相对路径静默失败 rc=3）；
   CLI 文本角标参数走 GBK 控制台会乱码（集成一律生成 UTF-8 XML）。
 - melt 为 GPL 二进制（x264），若随包发布需附源码说明（docs/mlt/README.md 已述）。
-
-## 82. v1.16.2 前瞻：引擎三连修 + 拼接工况全景补全（24db060 / df56533）
-
-- **①副屏全屏落错屏**（用户双屏 DISPLAY1 1920x1200 + 34G1Q 3440x1440@x=3840）：
-  fsprobe 真机四策略对比，唯一正解=`winId()`+`windowHandle()->setScreen()`+
-  **handle 级** setGeometry+showFullScreen（fullscreenvideowindow.cpp showOnScreen）。
-  坑：QWidget::setGeometry 与 setScreen+move 均落主屏；探针须 qInstallMessageHandler
-  写文件（无控制台）+quitOnLastWindowClosed(false)。
-- **②LAMerged 卡顿+音谱错位**：音频包 PTS 极不规则（180/78/20ms 乱跳），空档补偿
-  阈值播放 40ms/分析 20ms 每包误触发 → 双侧统一 **200ms**，分析侧新增对称重叠裁剪；
-  实测 25s 实播零补偿日志（%TEMP%/lumenarc_audio.log audioDiag）。
-- **③输出设备热跟随**：followDefaultAudioDevice() 每 16 包检测系统默认设备变化
-  热切换续播（用户默认设备被副屏抢成 34G1Q NVIDIA HDMI 实锤）。
-- **拼接工况 8 矩阵补全**：⑥变速≠1x 过拼接空档补偿（pad 量 skew/rate）；⑦异构段
-  直拷（concat -c copy）双侧引擎 swr 输入侧随帧重建（reconfigSwrInput + 分析侧
-  curInRate/Fmt/Mask 快照）。已知边界在案：>10s 空档截断、40-200ms 小空档不补、
-  预览缓存 sws 不重建、纯视频段。
-- 病灶文件（现回归素材）：cases/20260722-广州增城/preprocess/.../LAMerged_02-04-52
-  _6m_03-39-11.mp4（91min、15fps、AAC 8kHz mono、PTS 抖动族）。

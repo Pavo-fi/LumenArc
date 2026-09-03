@@ -1017,9 +1017,42 @@ static void testComposeWorkbench(QApplication &app)
     auto *tree = wb.findChild<QTreeWidget *>();
     CHECK(tree != nullptr, "workbench 素材树存在");
     if (tree) {
-        CHECK(tree->topLevelItemCount() == 2, "素材树两组（多通道+单视频）");
+        CHECK(tree->topLevelItemCount() == 2, "素材树两组（多机位同屏+单个视频）");
         int singleCount = tree->topLevelItem(1)->childCount();
         CHECK(singleCount >= 2, "单视频组含案内视频+前处理产物");
+
+        // 引导流冒烟：点第一个单视频 → 红点记录两段位置 → 加入清单 → 导出钮亮起
+        auto *recBtn = wb.findChild<QPushButton *>(QStringLiteral("wbRecordBtn"));
+        auto *startBtn = wb.findChild<QPushButton *>(QStringLiteral("wbStartBtn"));
+        auto *slider = wb.findChild<QSlider *>();
+        CHECK(recBtn && startBtn && slider, "引导流控件存在");
+        if (recBtn && startBtn && slider) {
+            CHECK(!startBtn->isEnabled(), "无片段时开始导出禁用");
+            auto *first = tree->topLevelItem(1)->child(0);
+            tree->setCurrentItem(first);
+            emit tree->itemClicked(first, 0);
+            QCoreApplication::processEvents();
+            QTest::qWait(600);   // 引擎载入首帧
+            CHECK(recBtn->isEnabled(), "点选视频后红点可用");
+            // 快捷键烟（不崩即过；焦点在树上时字母键可能被搜索吃掉，不验状态）
+            tree->clearFocus();
+            QTest::keyClick(&wb, Qt::Key_Space);
+            QTest::keyClick(&wb, Qt::Key_Left);
+            QTest::keyClick(&wb, Qt::Key_Delete);
+            QCoreApplication::processEvents();
+            // 红点一键流（录音笔式）：开始 → 走一段 → 再按 = 加入清单
+            QTest::mouseClick(recBtn, Qt::LeftButton);
+            CHECK(recBtn->text().contains(QStringLiteral("加入清单")),
+                  "首按红点后进入待收点状态");
+            slider->setValue(400);
+            QCoreApplication::processEvents();
+            QTest::qWait(1500);   // seek 异部解码到位
+            QCoreApplication::processEvents();
+            QTest::mouseClick(recBtn, Qt::LeftButton);
+            CHECK(recBtn->text().contains(QStringLiteral("从这里开始")),
+                  "再按红点后回到待开始");
+            CHECK(startBtn->isEnabled(), "加入片段后开始导出亮起");
+        }
     }
     wb.hide();
     QCoreApplication::processEvents();

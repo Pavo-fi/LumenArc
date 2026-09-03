@@ -5586,3 +5586,22 @@ P-74 点位图编辑器施工。
   心跳块补齐本地缺失 name/org（自愈旧凭证）；report_service/sitemapeditordialog
   历史空值兜底当前账号档案。
 - harness profile 链验证通过；资源点结论：SMS=50 点/条唯一大头，先不升级。
+
+## 82. v1.16.2 前瞻：引擎三连修 + 拼接工况全景补全（24db060 / df56533）
+
+- **①副屏全屏落错屏**（用户双屏 DISPLAY1 1920x1200 + 34G1Q 3440x1440@x=3840）：
+  fsprobe 真机四策略对比，唯一正解=`winId()`+`windowHandle()->setScreen()`+
+  **handle 级** setGeometry+showFullScreen（fullscreenvideowindow.cpp showOnScreen）。
+  坑：QWidget::setGeometry 与 setScreen+move 均落主屏；探针须 qInstallMessageHandler
+  写文件（无控制台）+quitOnLastWindowClosed(false)。
+- **②LAMerged 卡顿+音谱错位**：音频包 PTS 极不规则（180/78/20ms 乱跳），空档补偿
+  阈值播放 40ms/分析 20ms 每包误触发 → 双侧统一 **200ms**，分析侧新增对称重叠裁剪；
+  实测 25s 实播零补偿日志（%TEMP%/lumenarc_audio.log audioDiag）。
+- **③输出设备热跟随**：followDefaultAudioDevice() 每 16 包检测系统默认设备变化
+  热切换续播（用户默认设备被副屏抢成 34G1Q NVIDIA HDMI 实锤）。
+- **拼接工况 8 矩阵补全**：⑥变速≠1x 过拼接空档补偿（pad 量 skew/rate）；⑦异构段
+  直拷（concat -c copy）双侧引擎 swr 输入侧随帧重建（reconfigSwrInput + 分析侧
+  curInRate/Fmt/Mask 快照）。已知边界在案：>10s 空档截断、40-200ms 小空档不补、
+  预览缓存 sws 不重建、纯视频段。
+- 病灶文件（现回归素材）：cases/20260722-广州增城/preprocess/.../LAMerged_02-04-52
+  _6m_03-39-11.mp4（91min、15fps、AAC 8kHz mono、PTS 抖动族）。

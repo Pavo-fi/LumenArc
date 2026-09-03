@@ -28,6 +28,11 @@
 #include <QLineEdit>
 #include <QMenu>
 #include <QMouseEvent>
+#include <QAbstractSpinBox>
+#include <QComboBox>
+#include <QKeySequence>
+#include <QShortcut>
+#include <QToolButton>
 #include <QPainter>
 #include <QProgressBar>
 #include <QPushButton>
@@ -83,7 +88,7 @@ protected:
         if (m_segs.isEmpty()) {
             p.setPen(QColor(Theme::TextMuted));
             p.drawText(rect(), Qt::AlignCenter,
-                       QStringLiteral("时间线为空——预览里 I/O 打点后「+ 加入时间线」"));
+                       QStringLiteral("还没有片段——在上方画面按 I 键（或点红色圆钮）截取第一段"));
             return;
         }
         const int laneH = height() - 34;
@@ -247,6 +252,32 @@ ComposeWorkbenchWindow::ComposeWorkbenchWindow(CaseManager *cm,
     setWindowFlags(windowFlags() | Qt::WindowMinMaxButtonsHint);
 
     auto *root = new QVBoxLayout(this);
+
+    // ---- 顶部：四步引导条（当前步高亮/完成变绿）+ 一句白话动态提示 ----
+    auto *guideBar = new QFrame(this);
+    guideBar->setObjectName(QStringLiteral("wbGuideBar"));
+    guideBar->setStyleSheet(QStringLiteral(
+        "QFrame#wbGuideBar{background:#23272e;border:1px solid #3a3f47;border-radius:6px;}"));
+    auto *gh = new QHBoxLayout(guideBar);
+    gh->setContentsMargins(10, 6, 10, 6);
+    const QStringList stepTexts = {
+        QStringLiteral("① 选素材"), QStringLiteral("② 截片段"),
+        QStringLiteral("③ 排顺序"), QStringLiteral("④ 导出")};
+    for (int i = 0; i < 4; ++i) {
+        m_stepLabels[i] = new QLabel(stepTexts[i], guideBar);
+        gh->addWidget(m_stepLabels[i]);
+        if (i < 3) {
+            auto *arrow = new QLabel(QStringLiteral("→"), guideBar);
+            arrow->setStyleSheet(QStringLiteral("color:#555;"));
+            gh->addWidget(arrow);
+        }
+    }
+    gh->addSpacing(20);
+    m_guideHint = new QLabel(guideBar);
+    m_guideHint->setStyleSheet(QStringLiteral("color:#d4a017;"));
+    gh->addWidget(m_guideHint, 1);
+    root->addWidget(guideBar);
+
     auto *mid = new QHBoxLayout();
 
     // ---- 左：素材树 ----
@@ -257,7 +288,7 @@ ComposeWorkbenchWindow::ComposeWorkbenchWindow(CaseManager *cm,
     m_matTree->setMinimumWidth(230);
     m_matTree->setMaximumWidth(300);
     matLay->addWidget(m_matTree);
-    auto *matHint = new QLabel(QStringLiteral("单视频：点击预览\n多通道：勾选 2~4 路机位"), matBox);
+    auto *matHint = new QLabel(QStringLiteral("单视频：点选即预览\n勾 2~4 个机位 = 同屏"), matBox);
     matHint->setStyleSheet(QStringLiteral("color:#888;"));
     matLay->addWidget(matHint);
     mid->addWidget(matBox);
@@ -281,75 +312,120 @@ ComposeWorkbenchWindow::ComposeWorkbenchWindow(CaseManager *cm,
     m_previewStack->addWidget(m_multiPage);
     center->addWidget(m_previewStack, 1);
 
-    // 走带条
+    // 走带条（键位对齐剪映/PR：空格=播放暂停，←/→=逐帧，Shift+←/→=±1秒，J/L=±5秒）
     auto *transport = new QHBoxLayout();
-    m_playBtn = new QPushButton(QStringLiteral("▶ 播放"), this);
-    m_playBtn->setFixedWidth(84);
+    m_playBtn = new QPushButton(QStringLiteral("▶ 播放（空格）"), this);
+    m_playBtn->setFixedWidth(116);
     m_playBtn->setEnabled(false);
+    m_playBtn->setFocusPolicy(Qt::NoFocus);
     m_slider = new QSlider(Qt::Horizontal, this);
     m_slider->setEnabled(false);
+    m_slider->setFocusPolicy(Qt::NoFocus);
     m_timeLabel = new QLabel(QStringLiteral("--:-- / --:--"), this);
-    m_inBtn = new QPushButton(QStringLiteral("I 入点"), this);
-    m_outBtn = new QPushButton(QStringLiteral("O 出点"), this);
-    m_inBtn->setEnabled(false);
-    m_outBtn->setEnabled(false);
-    m_markLabel = new QLabel(QString(), this);
-    m_markLabel->setStyleSheet(QStringLiteral("color:#d4a017;"));
-    m_addBtn = new QPushButton(QStringLiteral("+ 加入时间线"), this);
-    m_addBtn->setEnabled(false);
-    m_addBtn->setStyleSheet(QStringLiteral("font-weight:bold;"));
     transport->addWidget(m_playBtn);
     transport->addWidget(m_slider, 1);
     transport->addWidget(m_timeLabel);
-    transport->addWidget(m_inBtn);
-    transport->addWidget(m_outBtn);
-    transport->addWidget(m_markLabel);
-    transport->addWidget(m_addBtn);
     center->addLayout(transport);
 
+    // 截取条：红点一键记录（像录音笔，主操作）+ I/O 精确打点（剪映/PR 同款键位）
+    auto *cutRow = new QHBoxLayout();
+    m_recordBtn = new QPushButton(QStringLiteral("⏺ 从这里开始（I）"), this);
+    m_recordBtn->setObjectName(QStringLiteral("wbRecordBtn"));
+    m_recordBtn->setEnabled(false);
+    m_recordBtn->setMinimumHeight(34);
+    m_recordBtn->setFocusPolicy(Qt::NoFocus);
+    m_recordBtn->setStyleSheet(QStringLiteral(
+        "QPushButton{background:#8c2f2f;color:#fff;font-weight:bold;border-radius:5px;padding:0 14px;}"
+        "QPushButton:disabled{background:#4a3a3a;color:#998;}"));
+    m_recordBtn->setToolTip(QStringLiteral(
+        "用法像录音笔：到关键画面按一下（或按 I 键）开始记录；继续播放/拖动到结束画面，再按一下（或按 O 键）→ 这段自动进下方清单"));
+    m_inBtn = new QPushButton(QStringLiteral("设为起点（I）"), this);
+    m_outBtn = new QPushButton(QStringLiteral("设为终点并加入（O）"), this);
+    m_inBtn->setEnabled(false);
+    m_outBtn->setEnabled(false);
+    m_inBtn->setFocusPolicy(Qt::NoFocus);
+    m_outBtn->setFocusPolicy(Qt::NoFocus);
+    m_inBtn->setToolTip(QStringLiteral("快捷键 I——与剪映/PR 的入点一致"));
+    m_outBtn->setToolTip(QStringLiteral("快捷键 O——设终点并立即把这段加入下方清单"));
+    m_markLabel = new QLabel(QString(), this);
+    m_markLabel->setStyleSheet(QStringLiteral("color:#d4a017;"));
+    cutRow->addWidget(m_recordBtn);
+    cutRow->addSpacing(12);
+    cutRow->addWidget(m_inBtn);
+    cutRow->addWidget(m_outBtn);
+    cutRow->addWidget(m_markLabel);
+    cutRow->addStretch(1);
+    auto *keysHint = new QLabel(
+        QStringLiteral("←/→ 逐帧 · Shift+←/→ ±1秒 · J/L ±5秒"), this);
+    keysHint->setStyleSheet(QStringLiteral("color:#777;"));
+    cutRow->addWidget(keysHint);
+    center->addLayout(cutRow);
+
     // 片段块时间线
+    auto *tlCap = new QLabel(
+        QStringLiteral("片段清单（拖动排序 · 双击微调 · Delete 删除选中）"), this);
+    tlCap->setStyleSheet(QStringLiteral("color:#999;"));
+    center->addWidget(tlCap);
     m_timeline = new ComposeTimelineWidget(this);
+    m_timeline->setObjectName(QStringLiteral("wbTimeline"));
     center->addWidget(m_timeline);
     mid->addLayout(center, 1);
     root->addLayout(mid, 1);
 
-    // ---- 底：导出面板 ----
+    // ---- 底：导出面板（白话二选一；高级项默认折叠）----
     auto *outBox = new QGroupBox(QStringLiteral("导出"), this);
     auto *ov = new QVBoxLayout(outBox);
     auto *modeRow = new QHBoxLayout();
     m_demoRadio = new QRadioButton(
-        QStringLiteral("分析演示片（重编码：校正时间角标 + 强制「非原始证据」红标）"), outBox);
+        QStringLiteral("演示片 —— 带时间角标/红标，可加曲线和 ROI，用于汇报讲解"), outBox);
     m_evidenceRadio = new QRadioButton(
-        QStringLiteral("证据片段（无损直拷，像素零改动，附完整性清单）"), outBox);
+        QStringLiteral("证据原始片段 —— 画面零改动，附完整性清单，用于存档送检"), outBox);
     m_demoRadio->setChecked(true);
-    m_osdCheck = new QCheckBox(QStringLiteral("校正时间角标"), outBox);
-    m_osdCheck->setChecked(true);
-    m_caseNoCheck = new QCheckBox(QStringLiteral("案件号"), outBox);
-    m_caseNoCheck->setChecked(true);
-    m_panelsCheck = new QCheckBox(QStringLiteral("图表面板"), outBox);
-    m_panelsCheck->setChecked(true);
-    m_panelsCheck->setToolTip(QStringLiteral("仅单片段、源为当前视频、原速时可用（走全保真复合导出）"));
-    m_roiCheck = new QCheckBox(QStringLiteral("ROI 烧录"), outBox);
-    m_roiCheck->setChecked(true);
-    m_roiCheck->setToolTip(QStringLiteral("单视频段：叠加 .vla 中的矩形/多边形 ROI（无数据自动缺席）"));
-    m_chartCheck = new QCheckBox(QStringLiteral("曲线滚动条"), outBox);
-    m_chartCheck->setChecked(true);
-    m_chartCheck->setToolTip(QStringLiteral("单视频段：底部烧录亮度/音量曲线滚动条（游标跟随，无数据自动缺席）"));
+    m_demoRadio->setToolTip(QStringLiteral("重编码合成：多段拼接、宫格、变速、水印都用它"));
+    m_evidenceRadio->setToolTip(QStringLiteral(
+        "无损直拷原始码流（仅限纯单视频片段；含多机位同屏段时不可用）"));
     modeRow->addWidget(m_demoRadio);
     modeRow->addWidget(m_evidenceRadio);
-    modeRow->addSpacing(16);
-    modeRow->addWidget(m_osdCheck);
-    modeRow->addWidget(m_caseNoCheck);
-    modeRow->addWidget(m_panelsCheck);
-    modeRow->addWidget(m_roiCheck);
-    modeRow->addWidget(m_chartCheck);
     modeRow->addStretch(1);
+    m_advToggle = new QToolButton(outBox);
+    m_advToggle->setText(QStringLiteral("更多选项 ▸"));
+    m_advToggle->setCheckable(true);
+    m_advToggle->setChecked(false);
+    m_advToggle->setFocusPolicy(Qt::NoFocus);
+    modeRow->addWidget(m_advToggle);
     ov->addLayout(modeRow);
+
+    // 折叠区：烧录/图表面板等高级开关
+    m_advPanel = new QWidget(outBox);
+    auto *advRow = new QHBoxLayout(m_advPanel);
+    advRow->setContentsMargins(20, 0, 0, 0);
+    m_osdCheck = new QCheckBox(QStringLiteral("校正时间角标"), m_advPanel);
+    m_osdCheck->setChecked(true);
+    m_caseNoCheck = new QCheckBox(QStringLiteral("案件号"), m_advPanel);
+    m_caseNoCheck->setChecked(true);
+    m_panelsCheck = new QCheckBox(QStringLiteral("图表面板"), m_advPanel);
+    m_panelsCheck->setChecked(true);
+    m_panelsCheck->setToolTip(QStringLiteral("仅单片段、源为当前视频、原速时可用（走全保真复合导出）"));
+    m_roiCheck = new QCheckBox(QStringLiteral("ROI 烧录"), m_advPanel);
+    m_roiCheck->setChecked(true);
+    m_roiCheck->setToolTip(QStringLiteral("单视频段：叠加 .vla 中的矩形/多边形 ROI（无数据自动缺席）"));
+    m_chartCheck = new QCheckBox(QStringLiteral("曲线滚动条"), m_advPanel);
+    m_chartCheck->setChecked(true);
+    m_chartCheck->setToolTip(QStringLiteral("单视频段：底部烧录亮度/音量曲线滚动条（游标跟随，无数据自动缺席）"));
+    advRow->addWidget(m_osdCheck);
+    advRow->addWidget(m_caseNoCheck);
+    advRow->addWidget(m_panelsCheck);
+    advRow->addWidget(m_roiCheck);
+    advRow->addWidget(m_chartCheck);
+    advRow->addStretch(1);
+    m_advPanel->setVisible(false);
+    ov->addWidget(m_advPanel);
 
     auto *pathRow = new QHBoxLayout();
     m_outPath = new QLineEdit(outBox);
-    auto *browseBtn = new QPushButton(QStringLiteral("浏览…"), outBox);
-    pathRow->addWidget(new QLabel(QStringLiteral("输出："), outBox));
+    auto *browseBtn = new QPushButton(QStringLiteral("更改…"), outBox);
+    browseBtn->setFocusPolicy(Qt::NoFocus);
+    pathRow->addWidget(new QLabel(QStringLiteral("保存到："), outBox));
     pathRow->addWidget(m_outPath, 1);
     pathRow->addWidget(browseBtn);
     ov->addLayout(pathRow);
@@ -358,11 +434,17 @@ ComposeWorkbenchWindow::ComposeWorkbenchWindow(CaseManager *cm,
     m_progress = new QProgressBar(outBox);
     m_progress->setRange(0, 100);
     progRow->addWidget(m_progress, 1);
-    m_startBtn = new QPushButton(QStringLiteral("开始导出"), outBox);
-    m_startBtn->setDefault(true);
+    m_startBtn = new QPushButton(QStringLiteral("开始导出（Ctrl+E）"), outBox);
+    m_startBtn->setObjectName(QStringLiteral("wbStartBtn"));
+    m_startBtn->setMinimumHeight(34);
+    m_startBtn->setStyleSheet(QStringLiteral(
+        "QPushButton{background:#2f5d8c;color:#fff;font-weight:bold;border-radius:5px;padding:0 18px;}"
+        "QPushButton:disabled{background:#3a4048;color:#889;}"));
     m_cancelBtn = new QPushButton(QStringLiteral("取消导出"), outBox);
     m_cancelBtn->setEnabled(false);
+    m_cancelBtn->setFocusPolicy(Qt::NoFocus);
     m_closeBtn = new QPushButton(QStringLiteral("关 闭"), outBox);
+    m_closeBtn->setFocusPolicy(Qt::NoFocus);
     progRow->addWidget(m_startBtn);
     progRow->addWidget(m_cancelBtn);
     progRow->addWidget(m_closeBtn);
@@ -388,7 +470,12 @@ ComposeWorkbenchWindow::ComposeWorkbenchWindow(CaseManager *cm,
     connect(m_slider, &QSlider::sliderReleased, this, &ComposeWorkbenchWindow::onSliderReleased);
     connect(m_inBtn, &QPushButton::clicked, this, &ComposeWorkbenchWindow::onMarkIn);
     connect(m_outBtn, &QPushButton::clicked, this, &ComposeWorkbenchWindow::onMarkOut);
-    connect(m_addBtn, &QPushButton::clicked, this, &ComposeWorkbenchWindow::onAddSegment);
+    connect(m_recordBtn, &QPushButton::clicked, this, &ComposeWorkbenchWindow::onRecordToggle);
+    connect(m_advToggle, &QToolButton::toggled, this, [this](bool on) {
+        m_advPanel->setVisible(on);
+        m_advToggle->setText(on ? QStringLiteral("更多选项 ▾")
+                                : QStringLiteral("更多选项 ▸"));
+    });
     connect(m_timeline, &ComposeTimelineWidget::moveRequested, this,
             &ComposeWorkbenchWindow::onBlockMove);
     connect(m_timeline, &ComposeTimelineWidget::editRequested, this,
@@ -396,7 +483,7 @@ ComposeWorkbenchWindow::ComposeWorkbenchWindow(CaseManager *cm,
     connect(m_timeline, &ComposeTimelineWidget::removeRequested, this,
             &ComposeWorkbenchWindow::onBlockRemove);
     connect(m_timeline, &ComposeTimelineWidget::selectionChanged, this,
-            [this](int) { updateAddButtonHint(); });
+            [this](int) { updateGuide(); });
     connect(m_demoRadio, &QRadioButton::toggled, this, &ComposeWorkbenchWindow::onModeChanged);
     connect(browseBtn, &QPushButton::clicked, this, &ComposeWorkbenchWindow::onBrowseOutput);
     connect(m_startBtn, &QPushButton::clicked, this, &ComposeWorkbenchWindow::onStartExport);
@@ -426,6 +513,7 @@ ComposeWorkbenchWindow::ComposeWorkbenchWindow(CaseManager *cm,
             m_playBtn->setEnabled(true);
             m_inBtn->setEnabled(true);
             m_outBtn->setEnabled(true);
+            m_recordBtn->setEnabled(true);
         }
         updateTransport();
     });
@@ -440,6 +528,8 @@ ComposeWorkbenchWindow::ComposeWorkbenchWindow(CaseManager *cm,
     rebuildMaterials();
     updateSuggestedPath();
     onModeChanged();
+    installShortcuts();
+    updateGuide();
 }
 
 ComposeWorkbenchWindow::~ComposeWorkbenchWindow() {
@@ -539,7 +629,7 @@ void ComposeWorkbenchWindow::rebuildMaterials() {
 
     // ---- 顶节点 1：多通道 ----
     auto *multiRoot = new QTreeWidgetItem(m_matTree);
-    multiRoot->setText(0, QStringLiteral("▦ 多通道（机位同屏）"));
+    multiRoot->setText(0, QStringLiteral("▦ 多机位同屏（勾 2~4 个）"));
     multiRoot->setFlags(Qt::ItemIsEnabled);
     int camCount = 0;
     for (int i = 0; i < m_inv.size(); ++i) {
@@ -574,7 +664,7 @@ void ComposeWorkbenchWindow::rebuildMaterials() {
 
     // ---- 顶节点 2：单视频 ----
     auto *singleRoot = new QTreeWidgetItem(m_matTree);
-    singleRoot->setText(0, QStringLiteral("🎞 单视频（含前处理产物）"));
+    singleRoot->setText(0, QStringLiteral("🎞 单个视频（案内全部，含前处理产物）"));
     singleRoot->setFlags(Qt::ItemIsEnabled);
     for (int i = 0; i < m_inv.size(); ++i) {
         const auto &it = m_inv[i];
@@ -643,6 +733,10 @@ void ComposeWorkbenchWindow::stopPreviews() {
     for (auto *t : m_multiTiles)
         t->deleteLater();
     m_multiTiles.clear();
+    m_markIn = m_markOut = -1;
+    if (m_recordBtn)
+        m_recordBtn->setEnabled(false);
+    updateGuide();
 }
 
 void ComposeWorkbenchWindow::loadSinglePreview(const QString &path,
@@ -684,7 +778,8 @@ void ComposeWorkbenchWindow::loadSinglePreview(const QString &path,
     m_inBtn->setEnabled(true);
     m_outBtn->setEnabled(true);
     m_markIn = m_markOut = -1;
-    updateAddButtonHint();
+    m_recordBtn->setEnabled(true);
+    updateGuide();
 }
 
 void ComposeWorkbenchWindow::loadMultiPreview() {
@@ -763,7 +858,8 @@ void ComposeWorkbenchWindow::loadMultiPreview() {
     m_svc->setAudibleLane(0);
     m_svc->pause();
     m_markIn = m_markOut = -1;
-    updateAddButtonHint();
+    m_recordBtn->setEnabled(true);
+    updateGuide();
 }
 
 // ---------------------------------------------------------------------------
@@ -801,15 +897,118 @@ void ComposeWorkbenchWindow::updateTransport() {
         marks += QStringLiteral("出 %1").arg(formatMs(m_markOut));
     }
     m_markLabel->setText(marks);
-    updateAddButtonHint();
+    updateGuide();
 }
 
-void ComposeWorkbenchWindow::updateAddButtonHint() {
-    const bool can = !m_running
-        && (m_multiActive ? (m_svc && m_svc->laneCount() >= 2)
-                          : !m_singlePreviewPath.isEmpty())
-        && previewDurationMs() > 0;
-    m_addBtn->setEnabled(can);
+void ComposeWorkbenchWindow::updateGuide() {
+    const bool hasMaterial = m_multiActive
+        ? (m_svc && m_svc->laneCount() >= 2)
+        : !m_singlePreviewPath.isEmpty();
+    const bool hasSegs = !m_segs.isEmpty();
+    int cur = 0;
+    if (hasMaterial && !hasSegs) cur = 1;
+    else if (hasSegs) cur = 3;
+    static const char *kOn =
+        "color:#fff;background:#3d6b8e;padding:2px 8px;border-radius:3px;font-weight:bold;";
+    static const char *kDone = "color:#7ec97e;padding:2px 8px;font-weight:bold;";
+    static const char *kOff  = "color:#888;padding:2px 8px;font-weight:bold;";
+    const bool done[4] = {hasMaterial, hasSegs, hasSegs, false};
+    for (int i = 0; i < 4; ++i)
+        m_stepLabels[i]->setStyleSheet(QString::fromLatin1(
+            i == cur ? kOn : (done[i] ? kDone : kOff)));
+    if (cur == 0)
+        m_guideHint->setText(QStringLiteral(
+            "先在左边点一个视频；要多机位同屏就勾 2~4 个机位"));
+    else if (cur == 1)
+        m_guideHint->setText(QStringLiteral(
+            "空格播放/暂停，拖到关键画面 → 按 I（或红点）开始，按 O 结束并加入清单；←/→ 逐帧微调"));
+    else
+        m_guideHint->setText(QStringLiteral(
+            "下方清单可拖动排序、双击微调、Delete 删除选中；确认类型后点『开始导出』（Ctrl+E）"));
+    if (m_startBtn)
+        m_startBtn->setEnabled(hasSegs && !m_running);
+    // 记录钮可视状态（armed=已设起点待收点）
+    if (m_recordBtn) {
+        const bool armed = m_markIn >= 0;
+        m_recordBtn->setText(armed ? QStringLiteral("⏹ 到这里，加入清单（O）")
+                                   : QStringLiteral("⏺ 从这里开始（I）"));
+        m_recordBtn->setStyleSheet(
+            armed ? QStringLiteral(
+                "QPushButton{background:#c0392b;color:#fff;font-weight:bold;border-radius:5px;padding:0 14px;}"
+                "QPushButton:disabled{background:#4a3a3a;color:#998;}")
+                  : QStringLiteral(
+                "QPushButton{background:#8c2f2f;color:#fff;font-weight:bold;border-radius:5px;padding:0 14px;}"
+                "QPushButton:disabled{background:#4a3a3a;color:#998;}"));
+    }
+}
+
+void ComposeWorkbenchWindow::onRecordToggle() {
+    // 红点 = 录音笔式单键流：第一下=起点（等价 I），第二下=终点并加入（等价 O）
+    if (m_markIn < 0)
+        onMarkIn();
+    else
+        onMarkOut();
+}
+
+void ComposeWorkbenchWindow::seekPreviewRelative(qint64 deltaMs) {
+    if (!m_slider->isEnabled())
+        return;
+    if (m_multiActive && m_svc) {
+        const qint64 lo = m_svc->contentStartWallMs(), hi = m_svc->contentEndWallMs();
+        m_svc->seekWall(qBound(lo, m_svc->clockWallMs() + deltaMs, hi));
+    } else if (m_singleEngine) {
+        m_singleEngine->seek(qBound<qint64>(0, m_singleEngine->position() + deltaMs,
+                                            m_singleEngine->duration()));
+    }
+    updateTransport();
+}
+
+void ComposeWorkbenchWindow::installShortcuts() {
+    // 键位口径对齐剪映/PR；输入框/下拉聚焦时不抢键（ShortcutOverride 已挡大半，双保险）
+    auto mk = [this](const QKeySequence &ks, std::function<void()> fn) {
+        auto *sc = new QShortcut(ks, this);
+        sc->setContext(Qt::WindowShortcut);
+        connect(sc, &QShortcut::activated, this, [this, fn]() {
+            if (m_running)
+                return;
+            if (QWidget *f = focusWidget())
+                if (qobject_cast<QLineEdit *>(f) || qobject_cast<QAbstractSpinBox *>(f)
+                    || qobject_cast<QComboBox *>(f))
+                    return;
+            fn();
+        });
+    };
+    mk(QKeySequence(Qt::Key_Space), [this] { if (m_playBtn->isEnabled()) onPlayPause(); });
+    mk(QKeySequence(Qt::Key_K),     [this] { if (m_playBtn->isEnabled()) onPlayPause(); });
+    mk(QKeySequence(Qt::Key_I),     [this] { if (m_inBtn->isEnabled()) onMarkIn(); });
+    mk(QKeySequence(Qt::Key_O),     [this] { if (m_outBtn->isEnabled()) onMarkOut(); });
+    mk(QKeySequence(Qt::Key_Return),[this] { if (m_markIn >= 0) onMarkOut(); });
+    mk(QKeySequence(Qt::Key_Enter), [this] { if (m_markIn >= 0) onMarkOut(); });
+    const qint64 frame = qint64(1000.0 / qMax(1.0, m_fps));
+    mk(QKeySequence(Qt::Key_Left),  [this, frame] { seekPreviewRelative(-frame); });
+    mk(QKeySequence(Qt::Key_Right), [this, frame] { seekPreviewRelative(frame); });
+    mk(QKeySequence(Qt::SHIFT | Qt::Key_Left),  [this] { seekPreviewRelative(-1000); });
+    mk(QKeySequence(Qt::SHIFT | Qt::Key_Right), [this] { seekPreviewRelative(1000); });
+    mk(QKeySequence(Qt::Key_J), [this] { seekPreviewRelative(-5000); });
+    mk(QKeySequence(Qt::Key_L), [this] { seekPreviewRelative(5000); });
+    mk(QKeySequence(Qt::Key_Home), [this] {
+        if (m_multiActive && m_svc) m_svc->seekWall(m_svc->contentStartWallMs());
+        else if (m_singleEngine) m_singleEngine->seek(0);
+    });
+    mk(QKeySequence(Qt::Key_End), [this] {
+        if (m_multiActive && m_svc) m_svc->seekWall(m_svc->contentEndWallMs());
+        else if (m_singleEngine && m_singleEngine->duration() > 0)
+            m_singleEngine->seek(m_singleEngine->duration() - 50);
+    });
+    mk(QKeySequence(Qt::Key_Delete), [this] {
+        const int idx = m_timeline->selected();
+        if (idx >= 0)
+            onBlockRemove(idx);
+    });
+    mk(QKeySequence(QStringLiteral("Ctrl+E")), [this] {
+        if (m_startBtn->isEnabled())
+            onStartExport();
+    });
 }
 
 void ComposeWorkbenchWindow::onPlayPause() {
@@ -858,28 +1057,32 @@ void ComposeWorkbenchWindow::onMarkIn() {
 
 void ComposeWorkbenchWindow::onMarkOut() {
     const qint64 pos = previewPosMs();
-    if (m_markIn >= 0 && pos <= m_markIn)
+    if (m_markIn >= 0 && pos <= m_markIn) {
+        m_status->setStyleSheet(QStringLiteral("color:#c0392b;"));
+        m_status->setText(QStringLiteral("终点在起点之前——请拖到起点后面的画面再按 O"));
         return;
+    }
     m_markOut = pos;
     updateTransport();
+    if (m_markIn >= 0)
+        onAddSegment();          // O = 设终点并立即加入清单（一拍成片）
 }
 
 // ---------------------------------------------------------------------------
 // 时间线操作
 // ---------------------------------------------------------------------------
 void ComposeWorkbenchWindow::onAddSegment() {
-    SegmentExportEngine::Params::ComposeSeg seg;
-    const qint64 pos = previewPosMs();
-    qint64 inMs = m_markIn >= 0 ? m_markIn : qMax<qint64>(0, pos - 10000);
-    qint64 outMs = m_markOut >= 0 ? m_markOut : pos;
-    if (m_multiActive && m_svc) {
-        inMs = m_markIn >= 0 ? m_markIn
-                             : qMax<qint64>(m_svc->contentStartWallMs(), pos - 10000);
-        outMs = m_markOut >= 0 ? m_markOut : pos;
+    if (m_markIn < 0) {
+        m_status->setStyleSheet(QStringLiteral("color:#c0392b;"));
+        m_status->setText(QStringLiteral("先按 I（或点红色圆钮）在画面上设起点"));
+        return;
     }
+    SegmentExportEngine::Params::ComposeSeg seg;
+    const qint64 inMs = m_markIn;
+    const qint64 outMs = m_markOut >= 0 ? m_markOut : previewPosMs();
     if (outMs <= inMs) {
         m_status->setStyleSheet(QStringLiteral("color:#c0392b;"));
-        m_status->setText(QStringLiteral("入/出点非法（出点须在入点之后）"));
+        m_status->setText(QStringLiteral("终点须在起点之后"));
         return;
     }
     seg.inMs = inMs;
@@ -894,8 +1097,10 @@ void ComposeWorkbenchWindow::onAddSegment() {
             ? QFileInfo(seg.sourcePath).fileName() : m_singlePreviewName;
     }
     m_segs << seg;
+    m_markIn = m_markOut = -1;   // 提交后清打点，记录钮回到待开始
     syncTimeline();
     m_status->clear();
+    updateGuide();
 }
 
 void ComposeWorkbenchWindow::syncTimeline() {
@@ -1100,6 +1305,7 @@ void ComposeWorkbenchWindow::setExportRunning(bool running, int totalFrames) {
     }
     onModeChanged();
     syncTimeline();
+    updateGuide();
 }
 
 void ComposeWorkbenchWindow::setProgress(int done, int total) {

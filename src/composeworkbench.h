@@ -24,6 +24,7 @@ class QLineEdit;
 class QProgressBar;
 class QStackedWidget;
 class QGridLayout;
+class QToolButton;
 class CamTileWidget;
 class ComposeTimelineWidget;
 class FfmpegVideoEngine;
@@ -66,6 +67,7 @@ private slots:
     void onSliderReleased();
     void onMarkIn();
     void onMarkOut();
+    void onRecordToggle();   ///< 红点单键流：第一下=起点，第二下=终点并加入
     void onAddSegment();
     void onBlockEdit(int idx);
     void onBlockRemove(int idx);
@@ -83,7 +85,9 @@ private:
     qint64 previewDurationMs() const;    ///< 可打点的轴长
     bool previewIsMulti() const;
     void updateTransport();
-    void updateAddButtonHint();
+    void updateGuide();      ///< 四步引导条状态机（选素材/截片段/排顺序/导出）
+    void seekPreviewRelative(qint64 deltaMs);
+    void installShortcuts(); ///< 快捷键（对齐剪映/PR：空格/I/O/←→/Delete/Ctrl+E…）
     QString segDisplayName(const SegmentExportEngine::Params::ComposeSeg &seg) const;
     QString effectivePath(const QString &path) const;
     void syncTimeline();
@@ -125,7 +129,11 @@ private:
     QPushButton *m_playBtn = nullptr;
     QPushButton *m_inBtn = nullptr;
     QPushButton *m_outBtn = nullptr;
-    QPushButton *m_addBtn = nullptr;
+    QPushButton *m_recordBtn = nullptr;   // ⏺/⏹ 录音笔式截取主钮
+    QLabel *m_stepLabels[4] = {};         // 四步引导条
+    QLabel *m_guideHint = nullptr;        // 白话动态提示
+    QToolButton *m_advToggle = nullptr;   // 更多选项折叠开关
+    QWidget *m_advPanel = nullptr;        // 高级选项折叠面板
     ComposeTimelineWidget *m_timeline = nullptr;
     QRadioButton *m_evidenceRadio = nullptr;
     QRadioButton *m_demoRadio = nullptr;
