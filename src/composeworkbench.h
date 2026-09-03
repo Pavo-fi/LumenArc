@@ -107,6 +107,7 @@ private:
     FfmpegVideoEngine *m_singleEngine = nullptr;   // 单路预览引擎
     MultiCamSyncService *m_svc = nullptr;          // 多通道预览服务
     QString m_singlePreviewPath;
+    QString m_singlePreviewName;
     bool m_multiActive = false;
     bool m_sliderScrubbing = false;
 
@@ -131,6 +132,8 @@ private:
     QCheckBox *m_osdCheck = nullptr;
     QCheckBox *m_caseNoCheck = nullptr;
     QCheckBox *m_panelsCheck = nullptr;
+    QCheckBox *m_roiCheck = nullptr;      // P2：ROI 烧录（单视频段，演示模式）
+    QCheckBox *m_chartCheck = nullptr;    // P2：曲线滚动条（单视频段，演示模式）
     QLineEdit *m_outPath = nullptr;
     QProgressBar *m_progress = nullptr;
     QLabel *m_status = nullptr;

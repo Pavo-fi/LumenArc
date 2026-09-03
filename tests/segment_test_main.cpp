@@ -19,9 +19,14 @@ extern "C" {
 
 #include "domain/speed_plan.h"
 #include "infrastructure/segment_export_engine.h"
+#include "infrastructure/compose_render.h"
+#include "infrastructure/tool_paths.h"
 #include "domain/timeline_model.h"
 #include "domain/sync_model.h"
 #include <QTemporaryDir>
+#include <QProcess>
+#include <QPainter>
+#include <cmath>
 
 using speedplan::SpeedPlan;
 
@@ -334,7 +339,7 @@ static void testComposeHelpers()
     CHECK(fc.contains("anullsrc"), "multi 段1 anullsrc 补静");
     CHECK(fc.contains("atrim=start=0:end=3.000"), "multi 段1 静音长度=输出域 3s");
     CHECK(fc.contains("atempo=2.0"), "multi 段2 2x atempo");
-    CHECK(fc.contains("aresample=48000:ocl=stereo:osf=s16"), "multi 全分支归一 48k 立体声");
+    CHECK(fc.contains("aresample=48000:out_chlayout=stereo:osf=s16"), "multi 全分支归一 48k 立体声");
     CHECK(fc.contains("concat=n=3"), "multi concat n=3");
 
     // 证据清单 JSON（纯函数）
@@ -561,6 +566,186 @@ static void msgToFile(QtMsgType, const QMessageLogContext &, const QString &msg)
     }
 }
 
+static void testComposeOverlay()
+{
+    // 造 .vla（2 ROI + 亮度行 + 音量 + 标签）→ loadComposeOverlay 回环
+    const QString vla = QStringLiteral("build_tmp/caltest/overlay_test.vla");
+    TimelineModel model;
+    AnalysisSnapshot snap;
+    QVector<qint64> ts;
+    for (int i = 0; i <= 200; ++i) ts << i * 10;   // 0..2000ms
+    QVector<QVector<qreal>> rows(2);
+    for (int i = 0; i <= 200; ++i) {
+        rows[0] << qreal(50 + 40 * sin(i * 0.1));
+        rows[1] << qreal(100 + 30 * cos(i * 0.07));
+    }
+    DataEntry e0; e0.type = DataEntry::Rect; e0.roiId = 0;
+    DataEntry e1; e1.type = DataEntry::Rect; e1.roiId = 1;
+    snap.setLuminance(ts, rows, {e0, e1});
+    AudioData audio;
+    audio.timeResolutionMs = 20.0;
+    for (int i = 0; i <= 100; ++i) audio.volume << qreal(0.3 + 0.2 * sin(i * 0.2));
+    snap.setAudio(audio);
+    model.setSnapshot(snap);
+    QVector<QRect> regions = {QRect(10, 10, 100, 60), QRect(50, 80, 80, 50)};
+    QVector<ChartLabel> labels = {ChartLabel{500, QStringLiteral("起火"), Qt::red}};
+    CHECK(model.saveToFile(vla, regions, TimeCalibration(), QRect(), labels),
+          "造 overlay vla");
+
+    ComposeOverlay ov = loadComposeOverlay(vla);
+    CHECK(ov.loaded, "overlay 载入");
+    CHECK(ov.rois.size() == 2 && ov.hasLum && ov.hasVol && ov.labels.size() == 1,
+          "overlay 内容齐备");
+
+    // 渲染冒烟：条带游标列有白像素、曲线区非全黑
+    QImage img(800, 200, QImage::Format_RGBA8888);
+    img.fill(Qt::black);
+    {
+        QPainter p(&img);
+        drawChartStrip(p, QRect(0, 0, 800, 200), ov, 1000);
+    }
+    const QRect plot = QRect(0, 0, 800, 200).adjusted(48, 8, -10, 18);
+    const int cx = plot.x() + int((1000 - (1000 - 20000)) / 30000.0 * plot.width());
+    bool cursorWhite = false, curveInk = false;
+    for (int y = plot.top(); y < plot.bottom(); ++y) {
+        const QColor c = img.pixelColor(cx, y);
+        if (c.red() > 200 && c.green() > 200 && c.blue() > 200) cursorWhite = true;
+    }
+    for (int x = plot.left(); x < plot.right() && !curveInk; x += 3)
+        for (int y = plot.top(); y < plot.bottom(); ++y) {
+            const QColor c = img.pixelColor(x, y);
+            if (c.green() > 100 && c.red() < 120) { curveInk = true; break; }   // 音量绿
+        }
+    CHECK(cursorWhite, "条带游标白线");
+    CHECK(curveInk, "条带音量曲线上墨");
+
+    // ROI 叠加冒烟：R1 内部像素带色
+    QImage frame(320, 240, QImage::Format_RGBA8888);
+    frame.fill(Qt::black);
+    {
+        QPainter p(&frame);
+        drawRoiOverlay(p, QRect(0, 0, 320, 240), QSize(320, 240), ov);
+    }
+    CHECK(frame.pixelColor(60, 40) != QColor(0, 0, 0), "ROI R1 上墨");
+    CHECK(frame.pixelColor(300, 220) == QColor(0, 0, 0), "ROI 外不染色");
+    QFile::remove(vla);
+}
+
+static void testComposeOverlayEndToEnd()
+{
+    const QString src = QStringLiteral("build_tmp/caltest/basic.mp4");
+    if (!QFile::exists(src)) {
+        qWarning() << "SKIP overlay e2e: no caltest asset";
+        return;
+    }
+    // 造源配套 .vla（同 testComposeOverlay）
+    const QString vla = QStringLiteral("build_tmp/caltest/overlay_e2e.vla");
+    TimelineModel model;
+    AnalysisSnapshot snap;
+    QVector<qint64> ts;
+    for (int i = 0; i <= 200; ++i) ts << i * 10;
+    QVector<QVector<qreal>> rows(1);
+    for (int i = 0; i <= 200; ++i) rows[0] << qreal(60 + 50 * sin(i * 0.08));
+    DataEntry e0; e0.type = DataEntry::Rect; e0.roiId = 0;
+    snap.setLuminance(ts, rows, {e0});
+    model.setSnapshot(snap);
+    QVector<QRect> regions = {QRect(20, 20, 120, 80)};
+    CHECK(model.saveToFile(vla, regions, TimeCalibration(), QRect(), {}),
+          "造 e2e vla");
+
+    SegmentExportEngine::Params pp;
+    SegmentExportEngine::Params::ComposeSeg seg;
+    seg.sourcePath = src; seg.inMs = 0; seg.outMs = 2000;
+    seg.burnRoi = true; seg.burnChart = true;
+    pp.segments = {seg};
+    pp.outputPath = QStringLiteral("build_tmp/caltest/compose_overlay_e2e.mp4");
+    pp.outFps = 5.0;
+    pp.canvas = QSize(640, 480);
+    pp.demoWatermark = true;
+    pp.vlaPathByPath.insert(src, vla);
+    QFile::remove(pp.outputPath);
+
+    SegmentExportEngine eng;
+    QSignalSpy spy(&eng, &SegmentExportEngine::finished);
+    eng.start(pp);
+    const bool got = spy.wait(90000);
+    CHECK(got, "overlay e2e finished");
+    if (!got) return;
+    if (!spy.first().at(0).toBool()) {
+        CHECK(false, QStringLiteral("overlay e2e 失败：%1")
+                         .arg(spy.first().at(1).toString()));
+        return;
+    }
+    // 抽帧验证：底部条带非全黑（曲线上墨）
+    const QString frame = QStringLiteral("build_tmp/caltest/overlay_e2e_f.png");
+    QProcess proc;
+    proc.start(ToolPaths::findFfmpegPath(),
+               {QStringLiteral("-y"), QStringLiteral("-v"), QStringLiteral("error"),
+                QStringLiteral("-ss"), QStringLiteral("1"),
+                QStringLiteral("-i"), pp.outputPath,
+                QStringLiteral("-frames:v"), QStringLiteral("1"), frame});
+    proc.waitForFinished(30000);
+    QImage shot(frame);
+    CHECK(!shot.isNull(), "抽帧成功");
+    if (!shot.isNull()) {
+        // 底部 150px 条带区：存在非黑像素（曲线/标签/游标）
+        bool stripInk = false;
+        const int sy0 = shot.height() - 150;
+        for (int y = sy0; y < shot.height() && !stripInk; y += 4)
+            for (int x = 50; x < shot.width() - 10; x += 6)
+                if (shot.pixelColor(x, y).lightness() > 40) {
+                    stripInk = true; break;
+                }
+        CHECK(stripInk, "产物底部曲线滚动条上墨");
+    }
+    QFile::remove(frame);
+    QFile::remove(pp.outputPath);
+    QFile::remove(vla);
+}
+
+static void testComposeRealAssetEndToEnd()
+{
+    // 真实病灶素材（PTS 抖动族 LAMerged 91min/15fps/8kHz AAC mono）过合成管线：
+    // 两段 5s+5s → 输出 10s；存在才跑（本机案件素材，CI 无则 SKIP）
+    const QString src = QStringLiteral(
+        "build/Release/cases/20260722-广州增城-a-20260722增城火灾/preprocess/"
+        "20260902_162648/LAMerged_02-04-52_6m_03-39-11.mp4");
+    if (!QFile::exists(src)) {
+        qWarning() << "SKIP realasset e2e: no LAMerged asset";
+        return;
+    }
+    SegmentExportEngine::Params pp;
+    SegmentExportEngine::Params::ComposeSeg s0; s0.sourcePath = src; s0.inMs = 60000;  s0.outMs = 65000;
+    SegmentExportEngine::Params::ComposeSeg s1; s1.sourcePath = src; s1.inMs = 120000; s1.outMs = 125000; s1.rate = 2.0;
+    pp.segments = {s0, s1};
+    pp.outputPath = QStringLiteral("build_tmp/caltest/compose_realasset_e2e.mp4");
+    pp.outFps = 15.0;
+    pp.canvas = QSize(1280, 720);
+    pp.burnOsd = true;
+    pp.demoWatermark = true;
+    pp.caseLabel = QStringLiteral("增城回归");
+    QFile::remove(pp.outputPath);
+
+    SegmentExportEngine eng;
+    QSignalSpy spy(&eng, &SegmentExportEngine::finished);
+    eng.start(pp);
+    const bool got = spy.wait(120000);
+    CHECK(got, "realasset e2e finished");
+    if (!got) return;
+    if (!spy.first().at(0).toBool()) {
+        CHECK(false, QStringLiteral("realasset e2e 失败：%1")
+                         .arg(spy.first().at(1).toString()));
+        return;
+    }
+    // 预期输出：5s@1x + 5s@2x=2.5s → 7.5s
+    bool hasAudio = false;
+    const qint64 dur = probeDurationMs(pp.outputPath, &hasAudio);
+    CHECK(qAbs(dur - 7500) <= 900,
+          QStringLiteral("realasset e2e 时长≈7500ms（实测 %1）").arg(dur));
+    CHECK(hasAudio, "realasset e2e 有音轨（8kHz 源经归一化）");
+    QFile::remove(pp.outputPath);
+}
+
 int main(int argc, char **argv)
 {
     QFile::remove(QStringLiteral("build_tmp/segment_test_out.log"));
@@ -579,6 +764,9 @@ int main(int argc, char **argv)
     testEvidenceEndToEnd();
     testComposeLanesEndToEnd();
     testComposeLanesValidation();
+    testComposeOverlay();
+    testComposeOverlayEndToEnd();
+    testComposeRealAssetEndToEnd();
     testMultiCamEndToEnd();
     testEndToEnd();
     qInfo() << "segment_test:" << g_checks << "checks," << g_failures << "failures";

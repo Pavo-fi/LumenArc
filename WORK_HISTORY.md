@@ -5574,3 +5574,15 @@ P-74 点位图编辑器施工。
   （signInWithSms/reauthPhone 共用，_vtoken 无论 ok 与否都回填）。
 - CloudBase 坑在案：短信码互作废旧码+发码限流；tcb deploy 须 MSYS_NO_PATHCONV=1；
   云函数 zip 不含 node_modules；AUTH_SECRET 在 build_tmp/tcb_deploy/.auth_secret（不入库）。
+
+## 81. 账号系统 v1.3→v1.4：署名=账号档案写死（d75293d→766ee80→57cb075）
+
+- v1.3 SignatureStore 独立值方案（d75293d）**被用户否决**→git revert（766ee80）。
+- **v1.4 拍板**：署名=账号档案姓名/单位，**写死**在案件录入/点位图/报告 docx，
+  各处只读；唯一修改渠道=帮助→账号管理（短信验证码）。
+- 落地：casedialogs 调查员/单位改只读绑定账号档案（新建存快照、编辑只读显示历史
+  快照、悬停提示）；authRegister 响应带 name/org（老用户=服务端档案值）+
+  authHeartbeat 附带档案字段（均已部署+入 docs/cloudbase/functions/）；main.cpp
+  心跳块补齐本地缺失 name/org（自愈旧凭证）；report_service/sitemapeditordialog
+  历史空值兜底当前账号档案。
+- harness profile 链验证通过；资源点结论：SMS=50 点/条唯一大头，先不升级。

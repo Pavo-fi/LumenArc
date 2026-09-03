@@ -27,6 +27,7 @@ extern "C" {
 
 
 #include "infrastructure/tool_paths.h"
+#include "compose_render.h"
 #include "theme.h"
 
 namespace {
@@ -1209,7 +1210,7 @@ QString SegmentExportEngine::buildAudioFilterChainMulti(
                 chain += QLatin1Char(',') + at;
         }
         // 全分支统一 48k 立体声 s16（异构源 concat 防御：8k 单声道 DVR 也能拼）
-        chain += QStringLiteral(",aresample=48000:ocl=stereo:osf=s16[a%1]").arg(i);
+        chain += QStringLiteral(",aresample=48000:out_chlayout=stereo:osf=s16[a%1]").arg(i);
         parts << chain;
     }
     QStringList inputs;
@@ -1381,10 +1382,35 @@ void SegmentExportEngine::runCompose()
                 errMsg = QStringLiteral("多通道段 %1：所有机位均无法解码").arg(si + 1);
                 break;
             }
+            // P2 布局：0=均分宫格；1=主听路大窗（左 2/3）+其余右侧纵列
+            const bool mainBig = (seg.gridLayout == 1) && ln >= 2;
             const int cols = (ln <= 2) ? ln : 2;
             const int rows = (ln + cols - 1) / cols;
             const int cellW = videoRect.width() / cols;
             const int cellH = videoRect.height() / rows;
+            const int mainW = videoRect.width() * 2 / 3;
+            const int sideW = videoRect.width() - mainW;
+            const int sideH = (ln > 1) ? videoRect.height() / (ln - 1) : 0;
+            auto cellRectOf = [&](int i) -> QRect {
+                if (mainBig) {
+                    const int main = qBound(0, seg.audioLane, ln - 1);
+                    if (i == main)
+                        return QRect(videoRect.x() + 2, videoRect.y() + 2,
+                                     mainW - 4, videoRect.height() - 4);
+                    int order = 0;
+                    for (int j = 0; j < ln; ++j) {
+                        if (j == main) continue;
+                        if (j == i)
+                            return QRect(videoRect.x() + mainW + 2,
+                                         videoRect.y() + order * sideH + 2,
+                                         sideW - 4, sideH - 4);
+                        ++order;
+                    }
+                }
+                const int cx = videoRect.x() + (i % cols) * cellW;
+                const int cy = videoRect.y() + (i / cols) * cellH;
+                return QRect(cx + 2, cy + 2, cellW - 4, cellH - 4);
+            };
             int calLane = -1;   // 校正时间基准路：首条已校时路
             for (int i = 0; i < ln; ++i)
                 if (seg.lanes[i].calibrated) { calLane = i; break; }
@@ -1401,9 +1427,7 @@ void SegmentExportEngine::runCompose()
                     painter.setRenderHint(QPainter::SmoothPixmapTransform);
                     // ---- 瓦片宫格 ----
                     for (int i = 0; i < ln; ++i) {
-                        const int cx = videoRect.x() + (i % cols) * cellW;
-                        const int cy = videoRect.y() + (i / cols) * cellH;
-                        const QRect cell(cx + 2, cy + 2, cellW - 4, cellH - 4);
+                        const QRect cell = cellRectOf(i);
                         const SyncLaneData &l = seg.lanes[i];
                         QImage frame;
                         QString placeholder;
@@ -1603,6 +1627,20 @@ void SegmentExportEngine::runCompose()
         // 段校正时间（无校正 → 流内时间回落）
         const TimeCalibration cal = p.calibrationByPath.value(seg.sourcePath);
 
+        // P2：分析成果烧录（ROI + 曲线滚动条；数据自 .vla 一次性载入）
+        const ComposeOverlay overlay = (seg.burnRoi || seg.burnChart)
+            ? loadComposeOverlay(p.vlaPathByPath.value(
+                  seg.sourcePath, seg.sourcePath + QStringLiteral(".vla")))
+            : ComposeOverlay{};
+        const bool stripOn = seg.burnChart && overlay.hasData();
+        QRect segVideoRect = videoRect;
+        QRect stripRect;
+        if (stripOn) {
+            stripRect = QRect(videoRect.x(), videoRect.bottom() - 158,
+                              videoRect.width(), 158);
+            segVideoRect.setBottom(stripRect.top() - 4);
+        }
+
         const qint64 segFrames = composeSegOutFrames(seg, p.outFps);
         for (qint64 k = 0; k < segFrames; ++k) {
             if (m_cancelled) { cancelled = true; break; }
@@ -1623,11 +1661,15 @@ void SegmentExportEngine::runCompose()
             {
                 QPainter painter(&canvas);
                 painter.setRenderHint(QPainter::SmoothPixmapTransform);
-                QImage scaled = curFrame.scaled(videoRect.size(), Qt::KeepAspectRatio,
+                QImage scaled = curFrame.scaled(segVideoRect.size(), Qt::KeepAspectRatio,
                                                 Qt::SmoothTransformation);
-                const int vx = videoRect.x() + (videoRect.width() - scaled.width()) / 2;
-                const int vy = videoRect.y() + (videoRect.height() - scaled.height()) / 2;
+                const int vx = segVideoRect.x() + (segVideoRect.width() - scaled.width()) / 2;
+                const int vy = segVideoRect.y() + (segVideoRect.height() - scaled.height()) / 2;
                 painter.drawImage(vx, vy, scaled);
+                // P2：ROI 烧录（源像素坐标→实际显示矩形映射）
+                if (seg.burnRoi && overlay.loaded)
+                    drawRoiOverlay(painter, QRect(vx, vy, scaled.width(), scaled.height()),
+                                   curFrame.size(), overlay);
 
                 if (p.burnOsd) {
                     QString timeStr;
@@ -1650,8 +1692,8 @@ void SegmentExportEngine::runCompose()
                     f.setPixelSize(22);
                     f.setBold(true);
                     painter.setFont(f);
-                    const QRect osdRect(videoRect.left() + 12, videoRect.bottom() - 40,
-                                        videoRect.width() - 24, 32);
+                    const QRect osdRect(segVideoRect.left() + 12, segVideoRect.bottom() - 40,
+                                        segVideoRect.width() - 24, 32);
                     painter.setPen(Qt::NoPen);
                     painter.setBrush(QColor(0, 0, 0, 140));
                     painter.drawRoundedRect(osdRect.adjusted(-6, -2, 6, 2), 6, 6);
@@ -1674,6 +1716,9 @@ void SegmentExportEngine::runCompose()
                     painter.setPen(QColor(255, 96, 96));
                     painter.drawText(wmRect, Qt::AlignCenter, wm);
                 }
+                // P2：曲线滚动条（跟随游标，窗口 30s）
+                if (stripOn)
+                    drawChartStrip(painter, stripRect, overlay, qint64(target));
             }
             const QByteArray bytes(reinterpret_cast<const char *>(canvas.constBits()),
                                    canvas.sizeInBytes());

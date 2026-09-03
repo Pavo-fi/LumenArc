@@ -5,7 +5,7 @@
 
 ## 表头（每次写完 HANDOVER 与 WORK_HISTORY 后必须同步更新本表头——规则 R2）
 
-- **当前 HEAD**：施工批（2026-09-03 §85 合成导出工作台：素材树+可播放预览+片段块时间线）
+- **当前 HEAD**：施工批（2026-09-03 §86 合成导出 P2：ROI/曲线滚动条+宫格布局+ffmpeg8 排雷+docx 原子写）
 - **构建**：`cmd //c "build_tmp\build_target.bat ALL"`；测试：`QT_QPA_PLATFORM=offscreen`
   + PATH 含 `C:\code\Qt\6.8.0\msvc2022_64\bin`（配置：`build_tmp\reconfigure.bat`）
 - **全回归基线**（18 套，v1.16.1 后）：mw 97 / ui_chain 103 / libav 26（含 av-align/denoise）/
@@ -14,12 +14,14 @@
   改函数后 `cd build_tmp/tcb_deploy && MSYS_NO_PATHCONV=1 tcb fn deploy <name> --force --yes`；
   AUTH_SECRET 在 build_tmp/tcb_deploy/.auth_secret（不入库）；详见 docs/cloudbase/README.md
 - **当前保留批次**（新→旧，R2 限 5 批）：
-  第七十二批 §85（合成导出工作台：素材树+可播放预览+片段块时间线，废表格版）·
-  第七十一批 §84（合成导出器 P1：in-process 多段+证据/演示双模式）·
-  第七十一批 §83（MLT melt MSVC 构建+能力矩阵实测）·
-  第七十一批 §82（v1.16.2 前瞻引擎三连修+拼接工况补全）·
-  第七十一批 §81（账号 v1.4 署名=账号档案写死；v1.3 否决回滚）。
-- **最近归档动作**：2026-09-03 §85 批——§80（账号 v1.2）移入 WORK_HISTORY.md 末尾；
+  第七十三批 §86（合成导出 P2：ROI/曲线滚动条+宫格布局+ffmpeg8 排雷+docx 原子写）·
+  第七十二批 §85（合成导出工作台：素材树+可播放预览+片段块时间线）·
+  第七十一批 §84（P1：in-process 多段+证据/演示双模式）·
+  第七十一批 §83（MLT melt 构建+能力矩阵实测）·
+  第七十一批 §82（v1.16.2 引擎三连修+拼接补全）。
+  （§81 账号 v1.4 署名写死 已归档 WORK_HISTORY——见下）
+- **最近归档动作**：2026-09-03 §86 批——§81（账号 v1.4 署名写死）移入 WORK_HISTORY.md 末尾；
+  早前：2026-09-03 §85 批——§80（账号 v1.2）移入；
   早前：2026-09-03 §84 批——§75~§79 移入；
   早前：2026-08-28 §79 批——第六十五批（§74）移入。
 - **补录说明**：§80~§83 对应提交 93e6d91→434a6ec（2026-08-30~09-03）当时未逐批记录，
@@ -36,6 +38,35 @@
 # ============================================================================
 # 工作记录（2026-09-03，第七十一批）——合成导出器 P1 + 账号 v1.2~v1.4 + 引擎三连修 + MLT 基建
 # ============================================================================
+
+## 86. 合成导出 P2：ROI/曲线滚动条烧录 + 宫格布局 + ffmpeg8 aresample 排雷 + docx 原子写
+
+- **compose_render 新模块**（src/infrastructure/compose_render.h/.cpp）：
+  `loadComposeOverlay(vlaPath)`（TimelineModel::loadFromFile 一次性取 ROI/多边形/
+  标签/亮度行+时间轴/音量通道）+ `drawRoiOverlay`（源像素坐标→KeepAspectRatio
+  显示矩形映射，R1/R2 标号+半透明填充，RoiModel::regionColor 同色）+
+  `drawChartStrip`（30s 窗口游标固定 2/3：亮度逐 ROI 行折线+音量绿曲线+
+  标签同色虚线竖标+白色游标三角柄+窗口起止注记；无数据画占位文）。
+- **引擎**：ComposeSeg +gridLayout(0 均分/1 主听路大窗)/burnRoi/burnChart；
+  Params +vlaPathByPath（工作台填，引擎自载数据）；单段分支 stripOn 时视频区
+  缩短 158px 装曲线条；lanes 分支 cellRectOf 支持主听路大窗布局。
+- **工作台**：导出面板 +「ROI 烧录」「曲线滚动条」勾（演示模式，默认开）；
+  宫格段编辑框 +布局下拉；块副标题显示 ▦N路·主路大窗。
+- **排雷（真实病灶素材 e2e 逮到）**：bundled ffmpeg 8 的 aresample 已删 `ocl`
+  选项（新名 `out_chlayout`）——buildAudioFilterChainMulti 的归一化链
+  `ocl=stereo` 在 8kHz mono 源上直接 filter 报错导出失败；改
+  `aresample=48000:out_chlayout=stereo:osf=s16`。**旧链（buildAudioFilterChain
+  /Ranges）不做归一化未踩雷**（单源自一致）；教训：新滤镜参数必须以 bundled
+  ffmpeg `-h filter=X` 实测为准。
+- **docx 0MB 硬化**：ZipStoreWriter::writeTo 改原子写（同目录 .tmp→flush→
+  大小复核→rename），失败不再留 0 字节残件；报告/点位图等全部 zip 产物受益。
+  Release 0MB docx 根因未能本地复现（写入层失败回 false 本就有弹窗），
+  先以原子写收口，待用户 Release 复测报告生成。
+- **测试**：segment 102 checks 全绿——testComposeOverlay（.vla 回环+游标白线/
+  曲线上墨/ROI 染色像素级断言）+ testComposeOverlayEndToEnd（导出后 ffmpeg
+  抽帧验底部条带）+ testComposeRealAssetEndToEnd（增城病灶 LAMerged 91min
+  PTS 抖动族：60s/120s 各取 5s、段2 2x → 产物 7.5s 精确+音轨归一化）；
+  全回归 9 套绿；手册 PDF 重出（298KB）。
 
 ## 85. 合成导出工作台（P1.5 拍板 v2）：素材树+可播放预览+片段块时间线，废表格对话框
 
@@ -158,15 +189,3 @@
   预览缓存 sws 不重建、纯视频段。
 - 病灶文件（现回归素材）：cases/20260722-广州增城/preprocess/.../LAMerged_02-04-52
   _6m_03-39-11.mp4（91min、15fps、AAC 8kHz mono、PTS 抖动族）。
-
-## 81. 账号系统 v1.3→v1.4：署名=账号档案写死（d75293d→766ee80→57cb075）
-
-- v1.3 SignatureStore 独立值方案（d75293d）**被用户否决**→git revert（766ee80）。
-- **v1.4 拍板**：署名=账号档案姓名/单位，**写死**在案件录入/点位图/报告 docx，
-  各处只读；唯一修改渠道=帮助→账号管理（短信验证码）。
-- 落地：casedialogs 调查员/单位改只读绑定账号档案（新建存快照、编辑只读显示历史
-  快照、悬停提示）；authRegister 响应带 name/org（老用户=服务端档案值）+
-  authHeartbeat 附带档案字段（均已部署+入 docs/cloudbase/functions/）；main.cpp
-  心跳块补齐本地缺失 name/org（自愈旧凭证）；report_service/sitemapeditordialog
-  历史空值兜底当前账号档案。
-- harness profile 链验证通过；资源点结论：SMS=50 点/条唯一大头，先不升级。

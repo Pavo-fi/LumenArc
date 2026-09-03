@@ -1,6 +1,7 @@
 #include "zip_store_writer.h"
 
 #include <QFile>
+#include <QFileInfo>
 #include <QDateTime>
 
 namespace {
@@ -111,8 +112,20 @@ bool ZipStoreWriter::writeTo(const QString &path) const
     putU32(out, cdStart);
     putU16(out, 0);
 
-    QFile f(path);
+    // 原子写（取证口径：失败不留 0 字节残件——P-XX Release 0MB docx 排查硬化）：
+    // 同目录 .tmp 写入 → flush+关闭 → 大小复核 → rename 覆盖
+    const QString tmp = path + QStringLiteral(".tmp");
+    QFile::remove(tmp);
+    QFile f(tmp);
     if (!f.open(QIODevice::WriteOnly))
         return false;
-    return f.write(out) == out.size();
+    const qint64 w = f.write(out);
+    f.flush();
+    f.close();
+    if (w != out.size() || QFileInfo(tmp).size() != out.size()) {
+        QFile::remove(tmp);
+        return false;
+    }
+    QFile::remove(path);                // Windows rename 不覆盖既有文件
+    return QFile::rename(tmp, path);
 }

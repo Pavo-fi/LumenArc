@@ -75,12 +75,20 @@ public:
             QVector<SyncLaneData> lanes;
             int audioLane = -1;          ///< 宫格段主听路（越界/未全程覆盖 → 该段静音）
             QString displayName;         ///< 显示名（时间线块/清单），空=自动
+            /// P2：宫格布局 0=均分宫格（默认） 1=主听路大窗（左 2/3）+其余右侧纵列
+            int gridLayout = 0;
+            /// P2：单视频段烧录开关（演示模式；数据自 Params::vlaPathByPath 载入，
+            /// 无数据自动缺席回落满幅）
+            bool burnRoi = false;        ///< ROI 叠加（矩形+多边形，源像素坐标映射）
+            bool burnChart = false;      ///< 底部曲线滚动条（亮度+音量+标签+跟随游标）
             bool isLanes() const { return !lanes.isEmpty(); }
         };
         /// 非空 = 多段序列模式（plan/chartBase/specBase/labels/放大镜 PIP 全部忽略）
         QVector<ComposeSeg> segments;
         /// 按源路径取校正时间（无校正或缺失 → 角标回落流内时间）
         QHash<QString, TimeCalibration> calibrationByPath;
+        /// P2：按源路径取 .vla 路径（burnRoi/burnChart 段的数据源；缺省=源旁 .vla）
+        QHash<QString, QString> vlaPathByPath;
         /// 演示片强制角标「分析演示材料 · 非原始证据」（右上，不可关）
         bool demoWatermark = false;
         /// 证据模式：无损直拷 + 侧车清单 JSON（不经过合成管线，像素零改动）

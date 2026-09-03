@@ -151,6 +151,7 @@ set(SOURCES
     src/infrastructure/concat_engine.cpp
     src/infrastructure/transcode_engine.cpp
     src/infrastructure/segment_export_engine.cpp   # P-68 选段分段变速导出
+    src/infrastructure/compose_render.cpp          # 合成导出 P2：ROI/曲线滚动条烧录
     src/segmentexportdialog.cpp
     src/composeworkbench.cpp
     src/resources.qrc
@@ -227,6 +228,7 @@ set(HEADERS
     src/infrastructure/concat_engine.h
     src/infrastructure/transcode_engine.h
     src/infrastructure/segment_export_engine.h
+    src/infrastructure/compose_render.h
     src/infrastructure/crash_handler.h
     src/infrastructure/cloud_account.h
     src/infrastructure/credential_store.h
@@ -676,6 +678,8 @@ target_link_libraries(lumenarc_vla_test PRIVATE
 add_executable(lumenarc_segment_test
     tests/segment_test_main.cpp
     src/infrastructure/segment_export_engine.cpp
+    src/infrastructure/compose_render.cpp
+    src/domain/roi_model.cpp
     src/domain/time_calibration.cpp
     src/domain/time_piecewise.cpp
     src/domain/timeline_model.cpp

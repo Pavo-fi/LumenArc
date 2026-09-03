@@ -118,7 +118,9 @@ protected:
                                        ? QStringLiteral("  ×%1").arg(m_segs[i].rate, 0, 'g', 3)
                                        : QString());
             if (lanes)
-                sub += QStringLiteral("  ▦%1路").arg(m_segs[i].lanes.size());
+                sub += QStringLiteral("  ▦%1路%2").arg(m_segs[i].lanes.size())
+                           .arg(m_segs[i].gridLayout == 1 ? QStringLiteral("·主路大窗")
+                                                          : QString());
             p.setPen(QColor(Theme::TextSecond));
             p.drawText(r.adjusted(8, laneH / 2 - 6, -6, -4),
                        Qt::AlignVCenter | Qt::AlignLeft, sub);
@@ -327,12 +329,20 @@ ComposeWorkbenchWindow::ComposeWorkbenchWindow(CaseManager *cm,
     m_panelsCheck = new QCheckBox(QStringLiteral("图表面板"), outBox);
     m_panelsCheck->setChecked(true);
     m_panelsCheck->setToolTip(QStringLiteral("仅单片段、源为当前视频、原速时可用（走全保真复合导出）"));
+    m_roiCheck = new QCheckBox(QStringLiteral("ROI 烧录"), outBox);
+    m_roiCheck->setChecked(true);
+    m_roiCheck->setToolTip(QStringLiteral("单视频段：叠加 .vla 中的矩形/多边形 ROI（无数据自动缺席）"));
+    m_chartCheck = new QCheckBox(QStringLiteral("曲线滚动条"), outBox);
+    m_chartCheck->setChecked(true);
+    m_chartCheck->setToolTip(QStringLiteral("单视频段：底部烧录亮度/音量曲线滚动条（游标跟随，无数据自动缺席）"));
     modeRow->addWidget(m_demoRadio);
     modeRow->addWidget(m_evidenceRadio);
     modeRow->addSpacing(16);
     modeRow->addWidget(m_osdCheck);
     modeRow->addWidget(m_caseNoCheck);
     modeRow->addWidget(m_panelsCheck);
+    modeRow->addWidget(m_roiCheck);
+    modeRow->addWidget(m_chartCheck);
     modeRow->addStretch(1);
     ov->addLayout(modeRow);
 
@@ -628,6 +638,7 @@ void ComposeWorkbenchWindow::stopPreviews() {
     m_singleTile->setEngine(nullptr);
     m_singleTile->clearFrame();
     m_singlePreviewPath.clear();
+    m_singlePreviewName.clear();
     m_multiActive = false;
     for (auto *t : m_multiTiles)
         t->deleteLater();
@@ -639,6 +650,7 @@ void ComposeWorkbenchWindow::loadSinglePreview(const QString &path,
     stopPreviews();
     m_previewStack->setCurrentIndex(0);
     m_singleTile->setLaneName(displayName);
+    m_singlePreviewName = displayName;
     m_singleEngine = makeEngine(this);
     m_singleTile->setEngine(m_singleEngine);
     connect(m_singleEngine, &IVideoEngine::positionChanged, this,
@@ -878,8 +890,8 @@ void ComposeWorkbenchWindow::onAddSegment() {
         seg.displayName = QStringLiteral("机位同屏（%1路）").arg(seg.lanes.size());
     } else {
         seg.sourcePath = effectivePath(m_singlePreviewPath);
-        seg.displayName = m_singleTile->toolTip().isEmpty()
-            ? QFileInfo(seg.sourcePath).fileName() : m_singleTile->toolTip();
+        seg.displayName = m_singlePreviewName.isEmpty()
+            ? QFileInfo(seg.sourcePath).fileName() : m_singlePreviewName;
     }
     m_segs << seg;
     syncTimeline();
@@ -933,6 +945,14 @@ void ComposeWorkbenchWindow::onBlockEdit(int idx) {
     lay->addRow(seg.isLanes() ? QStringLiteral("出点（墙钟）") : QStringLiteral("出点（流内）"),
                 outEdit);
     lay->addRow(QStringLiteral("倍速"), rateSpin);
+    QComboBox *layoutCombo = nullptr;
+    if (seg.isLanes()) {
+        layoutCombo = new QComboBox(&dlg);
+        layoutCombo->addItem(QStringLiteral("均分宫格"));
+        layoutCombo->addItem(QStringLiteral("主听路大窗（左侧 2/3）"));
+        layoutCombo->setCurrentIndex(seg.gridLayout == 1 ? 1 : 0);
+        lay->addRow(QStringLiteral("宫格布局"), layoutCombo);
+    }
     auto *bbox = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dlg);
     lay->addRow(bbox);
     connect(bbox, &QDialogButtonBox::accepted, &dlg, &QDialog::accept);
@@ -950,6 +970,8 @@ void ComposeWorkbenchWindow::onBlockEdit(int idx) {
     seg.inMs = inV;
     seg.outMs = outV;
     seg.rate = rateSpin->value();
+    if (layoutCombo)
+        seg.gridLayout = layoutCombo->currentIndex() == 1 ? 1 : 0;
     syncTimeline();
 }
 
@@ -961,6 +983,8 @@ void ComposeWorkbenchWindow::onModeChanged() {
     m_osdCheck->setEnabled(demo && !m_running);
     m_caseNoCheck->setEnabled(demo && !m_running);
     m_panelsCheck->setEnabled(demo && !m_running);
+    m_roiCheck->setEnabled(demo && !m_running);
+    m_chartCheck->setEnabled(demo && !m_running);
     updateSuggestedPath();
 }
 
@@ -1009,7 +1033,8 @@ SegmentExportEngine::Params ComposeWorkbenchWindow::buildParams(QString *err) {
     if (m_cm && m_cm->isOpen())
         pp.caseLabel = m_caseNoCheck->isChecked() ? m_cm->meta().caseNo : QString();
     // 逐文件校正时间表（演示模式 OSD；宫格段各已校时也入表备用）
-    if (!pp.evidenceCopy && pp.burnOsd) {
+    // + P2：vlaPathByPath（ROI/曲线数据源）
+    if (!pp.evidenceCopy) {
         QStringList seen;
         QStringList paths;
         for (const auto &s : pp.segments) {
@@ -1024,14 +1049,25 @@ SegmentExportEngine::Params ComposeWorkbenchWindow::buildParams(QString *err) {
             seen << sp;
             const QString vlaPath = m_cm
                 ? m_cm->vlaPathFor(sp) : sp + QStringLiteral(".vla");
-            const TimeCalibration cal = TimelineModel::peekCalibrationFromVla(vlaPath);
-            if (cal.isValid())
-                pp.calibrationByPath.insert(sp, cal);
+            pp.vlaPathByPath.insert(sp, vlaPath);
+            if (pp.burnOsd) {
+                const TimeCalibration cal = TimelineModel::peekCalibrationFromVla(vlaPath);
+                if (cal.isValid())
+                    pp.calibrationByPath.insert(sp, cal);
+            }
         }
     }
     const Credential cred = CredentialStore::load();
     pp.operatorName = cred.name;
     pp.operatorOrg = cred.org;
+    // P2：单视频段烧录开关（全局勾选 → 逐段生效；无数据段自动缺席）
+    if (!pp.evidenceCopy) {
+        for (auto &s : pp.segments)
+            if (!s.isLanes()) {
+                s.burnRoi = m_roiCheck->isChecked();
+                s.burnChart = m_chartCheck->isChecked();
+            }
+    }
     return pp;
 }
 
