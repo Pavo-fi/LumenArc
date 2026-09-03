@@ -1948,10 +1948,15 @@ void MainWindow::setupConnections()
     // Chart zoom/pan → spectrogram follows
     connect(m_chartPanel, &ChartPanel::xAxisRangeChanged,
             m_spectrogramEnhanced, &SpectrogramPanelEnhanced::onXAxisRangeChanged);
-    // P-68：A/B 选段存在与否驱动「导出选段」使能
-    connect(m_chartPanel, &ChartPanel::abRegionChanged, this, [this]() {
+    // v1.16.2 P1.5：合成导出工作台不再要求 A/B（素材树+I/O 打点自含）——
+    // 使能改由视频加载/案件打开驱动（见两处加载收口与 caseOpened）
+    connect(m_caseManager, &CaseManager::caseOpened, this, [this]() {
         if (m_exportClipBtn)
-            m_exportClipBtn->setEnabled(m_chartPanel->isABRegionSet());
+            m_exportClipBtn->setEnabled(true);
+    });
+    connect(m_caseManager, &CaseManager::caseClosed, this, [this]() {
+        if (m_exportClipBtn && m_currentVideoPath.isEmpty())
+            m_exportClipBtn->setEnabled(false);
     });
     // Spectrogram zoom → chart follows
     connect(m_spectrogramEnhanced, &SpectrogramPanelEnhanced::xAxisRangeChanged,
@@ -2727,6 +2732,8 @@ void MainWindow::openVideoFile(const QString &filePath)
             m_captureBtn->setEnabled(true);
             if (m_snapshotBtn)
                 m_snapshotBtn->setEnabled(true);
+            if (m_exportClipBtn)
+                m_exportClipBtn->setEnabled(true);
 
             // v1.7.1：案件树高亮正在播放的文件
             if (m_caseDock)
@@ -2777,6 +2784,8 @@ void MainWindow::openVideoFile(const QString &filePath)
         m_captureBtn->setEnabled(true);
         if (m_snapshotBtn)
             m_snapshotBtn->setEnabled(true);
+        if (m_exportClipBtn)
+            m_exportClipBtn->setEnabled(true);
 
         // Check for cached .vla file alongside the video（P-31 T2-A：路径/入案判定来自 planOpen）
         if (!openPlan.cacheVlaPath.isEmpty()) {
