@@ -118,3 +118,12 @@ P-20 2GB 尾帧 seek（已通过）· P-21 DVR 字体抽检（已通过）· P-2
 - ✅ 用户真机验收：P-01~P-15 全部通过、P-16~P-22 全部确认（§39-43 批次正式收口）
 - ✅ 拍板：旋转功能完成（P-23）；Python 引擎再留一版本（P-25）；HTML 报告砍掉（P-26）
 - 🔧 P-27 方案验证：mp4 容器实测支持 pcm_s16le（alaw 数学无损，8k=128kbps 与现 aac 同体积）→ 待实施
+
+## 合成导出器（2026-09-03 拍板，取代分段导出）
+- [x] MLT 基建：melt.exe MSVC 构建（LGPL 白名单模块）+ 冒烟全链打通（docs/mlt/README.md）
+- [ ] P1：CompositionModel（JSON 独立文件）+ MLT XML 生成器 + 合成导出对话框
+      （单轨片段序列 + 校正时间 PNG 角标 + 证据/演示双模式），入口取代分段导出
+- [ ] P2：多机位同屏布局、曲线/语谱滚动条、ROI 烧录
+- [ ] P3：转场/字幕轨；melt 瘦身（自编译 ffmpeg shared 仅留必需编码器）
+- [ ] 打包：pack_release.py 加 mlt/ 目录校验；melt.exe 为 GPL 二进制（x264），
+      需随包附源码说明（docs/mlt/README.md 已述构建来源）

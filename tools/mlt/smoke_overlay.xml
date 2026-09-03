@@ -1,0 +1,19 @@
+<mlt LC_NUMERIC="C" version="7.41.0" title="overlay-smoke">
+ <profile description="la" width="720" height="480" progressive="1" sample_aspect_num="1" sample_aspect_den="1" display_aspect_num="3" display_aspect_den="2" frame_rate_num="15" frame_rate_den="1" colorspace="601"/>
+ <producer id="v0" in="0" out="74">
+  <property name="mlt_service">avformat</property>
+  <property name="resource">C:/code/LumenArc/LumenArc_v1.3.0/build_tmp/mlt_smoke/la_src.mp4</property>
+ </producer>
+ <producer id="ov0" in="0" out="149">
+  <property name="mlt_service">avformat</property>
+  <property name="resource">C:/code/LumenArc/LumenArc_v1.3.0/build_tmp/mlt_smoke/overlay.mov</property>
+ </producer>
+ <playlist id="track0"><entry producer="v0" in="0" out="74"/></playlist>
+ <playlist id="track1"><entry producer="ov0" in="0" out="74"/></playlist>
+ <tractor id="tractor0" title="overlay" in="0" out="74">
+  <track producer="track0"/>
+  <track producer="track1"/>
+  <transition id="mix0"><property name="mlt_service">mix</property><property name="a_track">0</property><property name="b_track">1</property><property name="start">-1</property></transition>
+  <transition id="aff0"><property name="mlt_service">composite</property><property name="a_track">0</property><property name="b_track">1</property></transition>
+ </tractor>
+</mlt>
