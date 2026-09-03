@@ -13,6 +13,7 @@ extern "C" {
 #include <QFile>
 #include <QFileInfo>
 #include <QSignalSpy>
+#include <QJsonDocument>
 #include <QtTest>
 
 
@@ -308,6 +309,146 @@ static void testMultiCamEndToEnd()
     QFile::remove(pp.outputPath);
 }
 
+
+static void testComposeHelpers()
+{
+    // 多段输出帧数（纯函数）
+    SegmentExportEngine::Params::ComposeSeg seg;
+    seg.inMs = 1000; seg.outMs = 11000; seg.rate = 1.0;
+    CHECK(SegmentExportEngine::composeSegOutFrames(seg, 15.0) == 150,
+          "compose 10s@1x@15fps=150 帧");
+    seg.rate = 2.0;
+    CHECK(SegmentExportEngine::composeSegOutFrames(seg, 15.0) == 75,
+          "compose 10s@2x@15fps=75 帧");
+    seg.rate = 0.5;
+    CHECK(SegmentExportEngine::composeSegOutFrames(seg, 15.0) == 300,
+          "compose 10s@0.5x@15fps=300 帧");
+    seg.outMs = seg.inMs;
+    CHECK(SegmentExportEngine::composeSegOutFrames(seg, 15.0) == 0, "空区间=0");
+
+    // 多源音频链：段0 有音轨（标签 1:a）、段1 无音轨（anullsrc 补静）、段2 有音轨 2x
+    const QString fc = SegmentExportEngine::buildAudioFilterChainMulti(
+        {1.0, 1.0, 2.0}, {{1000, 6000}, {0, 3000}, {2000, 6000}},
+        {"1:a", QString(), "2:a"});
+    CHECK(fc.contains("[1:a]atrim=start=1.000:end=6.000"), "multi 段0 atrim");
+    CHECK(fc.contains("anullsrc"), "multi 段1 anullsrc 补静");
+    CHECK(fc.contains("atrim=start=0:end=3.000"), "multi 段1 静音长度=输出域 3s");
+    CHECK(fc.contains("atempo=2.0"), "multi 段2 2x atempo");
+    CHECK(fc.contains("aresample=48000:ocl=stereo:osf=s16"), "multi 全分支归一 48k 立体声");
+    CHECK(fc.contains("concat=n=3"), "multi concat n=3");
+
+    // 证据清单 JSON（纯函数）
+    QVector<SegmentExportEngine::Params::ComposeSeg> segs(1);
+    segs[0].sourcePath = QStringLiteral("/cases/x/a.mp4");
+    segs[0].inMs = 1000; segs[0].outMs = 5000;
+    const QJsonObject m = SegmentExportEngine::buildEvidenceManifest(
+        QStringLiteral("1.16.2"), QStringLiteral("CASE001"),
+        QStringLiteral("张三"), QStringLiteral("某单位"),
+        segs, {QStringLiteral("ab12")}, QStringLiteral("out.mp4"),
+        QStringLiteral("cd34"), 12345);
+    CHECK(m.value("kind").toString() == "evidence_segment_export", "manifest kind");
+    CHECK(m.value("tool_version").toString() == "1.16.2", "manifest 版本");
+    CHECK(m.value("operator").toObject().value("name").toString() == "张三",
+          "manifest 签署人");
+    CHECK(m.value("segments").toArray().size() == 1, "manifest 段数");
+    CHECK(m.value("segments").toArray().first().toObject()
+              .value("in_ms").toDouble() == 1000.0, "manifest 入点");
+    CHECK(m.value("output").toObject().value("sha256").toString() == "cd34",
+          "manifest 产物哈希");
+    CHECK(m.value("integrity_note").toString().contains("像素零改动"),
+          "manifest 完整性声明");
+}
+
+// ---------------------------------------------------------------------------
+// 合成导出 P1 e2e：多段合成（演示模式）+ 证据直拷
+// ---------------------------------------------------------------------------
+static void testComposeEndToEnd()
+{
+    const QString src = QStringLiteral("build_tmp/caltest/basic.mp4");
+    if (!QFile::exists(src)) {
+        qWarning() << "SKIP compose e2e: no caltest asset";
+        return;
+    }
+    // basic.mp4 = 320x240 5fps 2s。两段：0..1000ms + 500..1500ms → 输出 2s @5fps = 10 帧
+    SegmentExportEngine::Params pp;
+    SegmentExportEngine::Params::ComposeSeg s0; s0.sourcePath = src; s0.inMs = 0;   s0.outMs = 1000;
+    SegmentExportEngine::Params::ComposeSeg s1; s1.sourcePath = src; s1.inMs = 500; s1.outMs = 1500;
+    pp.segments = {s0, s1};
+    pp.outputPath = QStringLiteral("build_tmp/caltest/compose_e2e.mp4");
+    pp.outFps = 5.0;
+    pp.canvas = QSize(640, 480);
+    pp.burnOsd = true;          // 流内时间回落（无校正）
+    pp.demoWatermark = true;    // 强制角标
+    pp.caseLabel = QStringLiteral("TEST-CASE");
+    QFile::remove(pp.outputPath);
+
+    SegmentExportEngine eng;
+    QSignalSpy spy(&eng, &SegmentExportEngine::finished);
+    eng.start(pp);
+    const bool got = spy.wait(90000);
+    CHECK(got, "compose e2e finished 信号");
+    if (!got) return;
+    const QList<QVariant> args = spy.takeFirst();
+    if (!args.at(0).toBool()) {
+        CHECK(false, QStringLiteral("compose e2e 导出失败：%1").arg(args.at(1).toString()));
+        return;
+    }
+    bool hasAudio = false;
+    const qint64 dur = probeDurationMs(pp.outputPath, &hasAudio);
+    CHECK(dur > 0, "compose e2e 产物可探测");
+    CHECK(qAbs(dur - 2000) <= 600,
+          QStringLiteral("compose e2e 时长≈2000ms（实测 %1）").arg(dur));
+    CHECK(hasAudio, "compose e2e 有音轨（anullsrc/源混拼）");
+    QFile::remove(pp.outputPath);
+}
+
+static void testEvidenceEndToEnd()
+{
+    const QString src = QStringLiteral("build_tmp/caltest/basic.mp4");
+    if (!QFile::exists(src)) {
+        qWarning() << "SKIP evidence e2e: no caltest asset";
+        return;
+    }
+    SegmentExportEngine::Params pp;
+    SegmentExportEngine::Params::ComposeSeg s0; s0.sourcePath = src; s0.inMs = 0;   s0.outMs = 1000;
+    SegmentExportEngine::Params::ComposeSeg s1; s1.sourcePath = src; s1.inMs = 500; s1.outMs = 1500;
+    pp.segments = {s0, s1};
+    pp.evidenceCopy = true;
+    pp.caseLabel = QStringLiteral("TEST-CASE");
+    pp.operatorName = QStringLiteral("测试员");
+    pp.operatorOrg = QStringLiteral("测试单位");
+    pp.outputPath = QStringLiteral("build_tmp/caltest/evidence_e2e.mp4");
+    QFile::remove(pp.outputPath);
+    QFile::remove(pp.outputPath + QStringLiteral(".forensic.json"));
+
+    SegmentExportEngine eng;
+    QSignalSpy spy(&eng, &SegmentExportEngine::finished);
+    eng.start(pp);
+    const bool got = spy.wait(90000);
+    CHECK(got, "evidence e2e finished 信号");
+    if (!got) return;
+    const QList<QVariant> args = spy.takeFirst();
+    if (!args.at(0).toBool()) {
+        CHECK(false, QStringLiteral("evidence e2e 导出失败：%1").arg(args.at(1).toString()));
+        return;
+    }
+    bool hasAudio = false;
+    const qint64 dur = probeDurationMs(pp.outputPath, &hasAudio);
+    CHECK(dur > 0, "evidence e2e 产物可探测");
+    CHECK(qAbs(dur - 2000) <= 800,
+          QStringLiteral("evidence e2e 时长≈2000ms（关键帧对齐余量，实测 %1）").arg(dur));
+    // 侧车清单
+    QFile jf(pp.outputPath + QStringLiteral(".forensic.json"));
+    CHECK(jf.open(QIODevice::ReadOnly), "侧车清单存在");
+    const QJsonDocument jd = QJsonDocument::fromJson(jf.readAll());
+    CHECK(jd.object().value("kind").toString() == "evidence_segment_export", "侧车 kind");
+    CHECK(jd.object().value("segments").toArray().size() == 2, "侧车 2 段");
+    CHECK(jd.object().value("output").toObject().value("sha256").toString().length() == 64,
+          "侧车含产物 SHA-256");
+    QFile::remove(pp.outputPath);
+    QFile::remove(pp.outputPath + QStringLiteral(".forensic.json"));
+}
+
 int main(int argc, char **argv)
 {
     QApplication app(argc, argv);   // QImage+drawText 需 GUI 应用上下文（字体子系统）
@@ -319,6 +460,9 @@ int main(int argc, char **argv)
     testLayout();
     testVlaRoundtrip();
     testMultiCamAudioMapping();
+    testComposeHelpers();
+    testComposeEndToEnd();
+    testEvidenceEndToEnd();
     testMultiCamEndToEnd();
     testEndToEnd();
     qInfo() << "segment_test:" << g_checks << "checks," << g_failures << "failures";

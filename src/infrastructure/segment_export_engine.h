@@ -16,6 +16,8 @@
 #include <QImage>
 #include <QSize>
 #include <QString>
+#include <QHash>
+#include <QJsonObject>
 #include "domain/speed_plan.h"
 #include "domain/analysis_snapshot.h"   // ChartLabel（导出标签竖标+OSD 5s 烧录）
 #include "domain/time_calibration.h"
@@ -62,6 +64,24 @@ public:
         /// 图表标签（单路模式）：曲线条打竖标 + 播到标签时刻 OSD 烧录
         /// 内容显示 5 秒隐去（真机反馈拍板）
         QVector<ChartLabel> labels;
+
+        // ---- 合成导出 P1（2026-09-03 拍板：多段序列模式，取代分段导出入口）----
+        struct ComposeSeg {
+            QString sourcePath;          ///< 源文件（多段可多源）
+            qint64 inMs = 0, outMs = 0;  ///< 源内毫秒区间 [in, out)
+            double rate = 1.0;           ///< 段速率（0.25~8）
+        };
+        /// 非空 = 多段序列模式（plan/chartBase/specBase/labels/放大镜 PIP 全部忽略）
+        QVector<ComposeSeg> segments;
+        /// 按源路径取校正时间（无校正或缺失 → 角标回落流内时间）
+        QHash<QString, TimeCalibration> calibrationByPath;
+        /// 演示片强制角标「分析演示材料 · 非原始证据」（右上，不可关）
+        bool demoWatermark = false;
+        /// 证据模式：无损直拷 + 侧车清单 JSON（不经过合成管线，像素零改动）
+        bool evidenceCopy = false;
+        /// 证据清单签署人（账号档案姓名/单位；调用方从 CredentialStore 填）
+        QString operatorName;
+        QString operatorOrg;
     };
 
     explicit SegmentExportEngine(QObject *parent = nullptr);
@@ -85,6 +105,23 @@ public:
     /// atempo 级联分解：rate 拆成 ∈[0.5,2.0] 的因子串（0.25→"0.5,0.5"；8→"2,2,2"）
     static QStringList atempoChain(double rate);
 
+    /// 多段模式音频链：逐段独立输入标签（inputLabels[i] 形如 "2:a"；空串 =
+    /// 该段无音轨 → anullsrc 补等长静音）。全分支统一 aresample 到 48k 立体声
+    /// （异构源直拷 concat 要求参数一致；8k 单声道 DVR 与 48k 立体声混拼防御）
+    static QString buildAudioFilterChainMulti(const QVector<double> &rates,
+                                              const QVector<QPair<qint64, qint64>> &streamRanges,
+                                              const QStringList &inputLabels);
+    /// 多段模式单段输出帧数（纯函数，进度总量用）
+    static qint64 composeSegOutFrames(const Params::ComposeSeg &seg, double outFps);
+    /// 证据模式清单 JSON（纯函数，单测直验）：侧车内容与产物/源哈希
+    static QJsonObject buildEvidenceManifest(const QString &appVersion,
+                                             const QString &caseNo,
+                                             const QString &opName, const QString &opOrg,
+                                             const QVector<Params::ComposeSeg> &segs,
+                                             const QStringList &sourceSha256,
+                                             const QString &outFileName,
+                                             const QString &outSha256, qint64 outBytes);
+
     /// 布局计算（纯函数）：给定画布与可用面板数（0~2），返回
     /// {视频区, 曲线区, 语谱区}（不可用面板区为空矩形）。上下布局（拍板 Q1 改判）。
     static void layoutRects(const QSize &canvas, bool hasChart, bool hasSpec,
@@ -98,6 +135,8 @@ signals:
 private:
     void run();   // 工作线程体
     void runMultiCam();   // 多机模式（lanes 非空；墙钟域 plan）
+    void runCompose();        // 合成导出 P1：多段序列（segments 非空）
+    void runEvidenceCopy();   // 证据模式：无损直拷 + 侧车清单
     Params m_params;
     QThread *m_thread = nullptr;
     volatile bool m_cancelled = false;

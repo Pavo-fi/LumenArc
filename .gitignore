@@ -88,3 +88,12 @@ build_tmp/probe_build*/
 # v1.16.0 手册导出物（可由 tools/manual2pdf|manual2docx 再生成，不入库）
 追光者 Lumen Arc — 操作手册.pdf
 追光者 Lumen Arc — 操作手册.docx
+
+# 防误入库（2026-09-03 ef1c63f 事故后补）
+seg_out.txt
+build_tmp/dist/
+build_tmp/mlt_src/
+build_tmp/tcb_deploy/
+build_tmp/avtrace/
+build_tmp/compose_block.cpp
+build_tmp/handover_*.md

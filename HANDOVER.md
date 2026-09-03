@@ -5,7 +5,7 @@
 
 ## 表头（每次写完 HANDOVER 与 WORK_HISTORY 后必须同步更新本表头——规则 R2）
 
-- **当前 HEAD**：施工批（2026-08-28 §79 账号系统客户端 v1 + 云端全链联调）
+- **当前 HEAD**：施工批（2026-09-03 §84 合成导出器 P1 落地；含 §80-§83 补录：账号 v1.2~v1.4 / 引擎三连修 / MLT 基建）
 - **构建**：`cmd //c "build_tmp\build_target.bat ALL"`；测试：`QT_QPA_PLATFORM=offscreen`
   + PATH 含 `C:\code\Qt\6.8.0\msvc2022_64\bin`（配置：`build_tmp\reconfigure.bat`）
 - **全回归基线**（18 套，v1.16.1 后）：mw 97 / ui_chain 103 / libav 26（含 av-align/denoise）/
@@ -14,13 +14,15 @@
   改函数后 `cd build_tmp/tcb_deploy && MSYS_NO_PATHCONV=1 tcb fn deploy <name> --force --yes`；
   AUTH_SECRET 在 build_tmp/tcb_deploy/.auth_secret（不入库）；详见 docs/cloudbase/README.md
 - **当前保留批次**（新→旧，R2 限 5 批）：
-  第七十批 §79（账号与反馈系统 v1：客户端登录闸+云端全链联调）·
-  第六十九批 §78（热修：识图校时偏移丢行回归，版本→1.15.1）·
-  第六十八批 §77（机位组正式化：组织轴心重写，版本→1.15.0）·
-  第六十七批 §76（P-28 收尾：曲线嵌入+哈希进度+P-74 点位图落地）·
-  第六十六批 §75（P-28 批次②：报告聚合+章节映射+生成入口，版本→1.14.0）。
-- **最近归档动作**：2026-08-28 §79 批——第六十五批（§74）移入 WORK_HISTORY.md 末尾；
-  早前：2026-08-24 §78 批——第六十四批（§73）移入；
+  第七十一批 §84（合成导出器 P1：in-process 多段+证据/演示双模式，取代分段导出）·
+  第七十一批 §83（MLT melt MSVC 构建+能力矩阵实测，叠层=PNG 序列协议）·
+  第七十一批 §82（v1.16.2 前瞻引擎三连修+拼接工况补全）·
+  第七十一批 §81（账号 v1.4 署名=账号档案写死；v1.3 独立值否决回滚）·
+  第七十一批 §80（账号 v1.2 账号管理对话框+updateProfile 云函数）。
+- **最近归档动作**：2026-09-03 §84 批——§75~§79（第六十六~七十批）移入 WORK_HISTORY.md 末尾；
+  早前：2026-08-28 §79 批——第六十五批（§74）移入。
+- **补录说明**：§80~§83 对应提交 93e6d91→434a6ec（2026-08-30~09-03）当时未逐批记录，
+  本批一次性补录（每节标注对应提交哈希）。
 - **常用参考导航**（已归档，查 WORK_HISTORY.md）：机位勾选面板（§54）、
   校时落盘双根因修复（§55）、显示旋转 90° 方案 A
   （第三批 §12）、音频时间轴对齐与问题 A/B 定案（深夜批）、项目规则 R1/R2
@@ -29,464 +31,109 @@
   救复速览（〇章）、案件模块 M1-M3（二十三章）。
 - **管理文档**（2026-08-16 §44 建立）：待办唯一登记处 `docs/PENDING.md`；
   文档体系与维护规矩 `docs/DOCS_MAP.md`（规矩 D1-D8，待办必登记 PENDING）。
+
 # ============================================================================
-# 工作记录（2026-08-28，第七十批）——账号与反馈系统 v1：客户端+云端全链联调
+# 工作记录（2026-09-03，第七十一批）——合成导出器 P1 + 账号 v1.2~v1.4 + 引擎三连修 + MLT 基建
 # ============================================================================
 
-## 79. 账号与反馈系统 v1：登录闸/30 天策略/意见反馈 + CloudBase 全链部署联调
+## 84. 合成导出器 P1 落地（in-process 路线修订，取代分段导出入口）
 
-- **服务端（CLI 部署）**：`tcb login`（设备码授权）→ env `lumenarc-prod-d6gcdfb6a8873d906`
-  （上海，体验版）；探针函数实锤文档型云数据库可用并创建 users/invites/feedback 三集合；
-  四函数 + HTTP 触发器全部署；E2E 真测：邀请码激活→心跳→反馈→复用拒绝 全通，
-  authRegister 格式 token 过 heartbeat 验签并触发自动续签。
-- **短信链路实锤**（从 @cloudbase/js-sdk 3.9.0 拦截真实请求挖出）：
-  网关 `https://<env>.api.tcloudbasegateway.com/auth/v1/<ep>?client_id=<env>` + 头 `x-device-id`；
-  流程 verification→verify→signin/signup 得 access_token → 交 authRegister 验（user/me）。
-  cygwin 坑：tcb --path /x 需 MSYS_NO_PATHCONV=1；zip 含 node_modules 会坏服务端 unzip（在线装依赖）。
-- **客户端**：`cloud_account.h/.cpp`（网关+函数双链封装，15s 超时，错误码归一化）、
-  `credential_store.h/.cpp`（QSettings，启动判决 Pass/NeedLogin：token 过期或 ≥30 天未验证→重登）、
-  `logindialog.h/.cpp`（手机号/邀请码双通道，60s 重发倒计时）、`feedbackdialog.h/.cpp`
-  （诊断包仅版本/系统/崩溃标记，无案件数据）；main.cpp 闸（splash 后）+ 启动异步心跳；
-  mainwindow 帮助菜单「意见反馈」。HTTPS 走 Qt Schannel（windeployqt 已带 tls/qschannelbackend.dll，
-  已入 pack_release REQUIRED）。
-- **雷区**：authRegister 初版 token 格式与 heartbeat/feedback 不一致（base64url vs hex sig、
-  uid vs phone 字段）——已统一为 `base64url(JSON{phone,kind,exp,nonce}).HMAC-hex`；
-  跨函数一致性以后改任一函数 token 逻辑时必须三函数一起对。
-- 全量回归绿（mw97/ui103/libav26/case270/denoise/avgap）；提交推送至 github master。
-- **待联调**：真机短信全流程（用户首次启动注册即实测）；副屏全屏多屏真机验收。
+- **路线修订（本批拍板级调整）**：原计划 MLT XML→melt 进程化渲染；侦察发现现有
+  `SegmentExportEngine` 已是完整的进程内合成管线（libav 解码→QPainter 画布→rawvideo
+  管道→ffmpeg.exe 子进程 x264/openh264/h264_mf）。**P1 改为扩展该引擎**：
+  预览一致性最好、进度/取消在进程内、不吃 167MB melt 运行时；melt 保留作 P2+ 多轨备选。
+- **引擎扩展**（segment_export_engine）：
+  - `Params::ComposeSeg{sourcePath,inMs,outMs,rate}` + `segments` 非空=多段模式
+    （plan/charts/PIP 忽略）；`calibrationByPath`（逐文件校正表）；
+    `demoWatermark`（强制红标）/ `evidenceCopy`（证据直拷）；`operatorName/Org`。
+  - `runCompose()`：逐段 open/seek（start_time 归一）→ QPainter 画布（layoutRects
+    全幅视频区）→ OSD 左下（校正北京时间或流内回落+倍速+案件号）+ 右上强制红标
+    「分析演示材料 · 非原始证据」→ rawvideo pipe → ffmpeg.exe（crf18/aac128k/-shortest）。
+  - `runEvidenceCopy()`：逐段 `-ss/-to -c copy -avoid_negative_ts make_zero` →
+    concat demuxer 拼接；流式 SHA-256（源+产物）→ 侧车 `<out>.forensic.json`
+    （kind=evidence_segment_export/段区间/签署人/完整性声明"关键帧对齐·像素零改动"）。
+  - `buildAudioFilterChainMulti()`：逐段输入标签，无音轨段 `anullsrc` 补静（长度=输出域
+    时长/rate），全分支 `aresample=48000:ocl=stereo:osf=s16` 归一 → concat。
+  - 纯函数 `composeSegOutFrames` / `buildEvidenceManifest` 可单测。
+- **新对话框** `src/composeexportdialog.h/.cpp`：片段表（源视频下拉=案内视频+当前、
+  入/出点 h:mm:ss.mmm 文本可编辑、倍速、输出时长列）、添加当前选段/游标起10s/删/
+  上下移；模式单选（证据直拷/分析演示片）；演示选项（校正时间角标/案件号/图表面板）；
+  输出路径（案内 exports/，LACompose_/LAEvidence_ 前缀）；内嵌进度+取消。
+  逐文件校正表由对话框经 `TimelineModel::peekCalibrationFromVla(vlaPathFor(path))`
+  预取填入 `calibrationByPath`；签署人取 CredentialStore（署名写死策略 v1.4）。
+- **主窗接线**：工具栏「导出选段」→「合成导出」（onExportSegmentClip 重写，
+  m_exportDlg→m_composeDlg）；`startComposeExport(pp)` 分发——
+  **单段+源=当前视频+rate=1+勾图表面板+演示模式 → 旧 startSegmentExport 全保真路径
+  （曲线/语谱/放大镜/标签 OSD/分段变速零回归）**，否则走新多段/证据管线。
+  多机窗口（multicamplaybackwindow）仍用旧 SegmentExportDialog，不受影响。
+- **测试**：segment_test 新增——testComposeHelpers（帧数数学/多源音频链/清单 JSON）、
+  testComposeEndToEnd（2 段合成→时长+音轨校验）、testEvidenceEndToEnd（直拷+侧车
+  JSON 字段校验）；全回归绿（segment/mw/case/libav/report/sitemap/ui_chain）。
+- **文档**：MANUAL 七·2 整节重写为「合成导出（多段拼接 · 证据/演示双模式）」并同步
+  速览表/工作流措辞（PDF 已重出）；CHANGELOG v1.16.2 条目；PENDING 勾销 P1 本体。
+- **遗留**：P1 预览无独立合成预览窗（复用主视口手动核对）；MLT 运行时仍在
+  build/Release/mlt/ 但 **P1 不打包 mlt/**（pack_release 不动）；P2 多机位同屏/
+  曲线滚动条/ROI 烧录、P3 melt 瘦身见 PENDING。
 
-## 78. 热修：识图校时偏差永不生效（v1.12.6 引入的丢行回归）
+## 83. MLT 合成引擎基建：melt.exe MSVC 构建跑通 + 能力矩阵实测（434a6ec）
 
-**日期**：2026-08-24｜**版本**：1.15.0 → **1.15.1**｜**触发**：用户重建案件实测——
-北京时间识图校时流程全绿（OCR/确认卡/留痕全正常）但主视口时间轴 13 分钟
-偏移纹丝不动。
+- 定位拍板（2026-09-03）：合成导出器=**分析成果合成导出器**（非通用剪辑器）；
+  P1=单轨片段序列+校正时间角标+证据/演示双模式；入口取代分段导出；不许跨案件混编。
+- **melt 7.41.0 MSVC 构建**（build_tmp/mlt_src = MLT **master** tarball；v7.40 不兼容
+  FFmpeg 8——`AVCodec::sample_fmts/pix_fmts` 已删，master 用 avcodec_get_supported_config）。
+  vcpkg 装 libxml2（github 超时→curl 断点续传塞 downloads）/pkgconf/pthreads/dirent/
+  dlfcn-win32/sdl2/libebur128；`-DVCPKG_MANIFEST_MODE=OFF`（否则自动编 ffmpeg）；
+  `/utf-8` 绕 GBK 吃行（mlt_repository.c 注释含 UTF-8 省略号）；全局 /I 补 pthread.h。
+  配方入 `tools/mlt/build_mlt.bat` + `docs/mlt/README.md`。
+- **许可证白名单**：core/avformat/xml/plus=LGPL ✅；qt/plusgpl/glaxnimate/normalize/
+  resample/rubberband/vidstab/xine/openfx=GPL ❌ 构建即排除（模块运行时 dlopen）。
+- **能力矩阵像素级实测**（build_tmp/mlt_smoke）：✅片段 in/out 裁剪拼接、✅画中画、
+  ✅PNG/PNG 序列 alpha 叠层（composite 半透明数值精确）；❌qtrle(argb) alpha 被
+  chain_normalizers 吞、❌dynamictext/text 滤镜依赖 GPL qt/gtk 模块。
+  → 叠层协议定为 **PNG 序列（QPainter 渲染）**。
+- 运行 env：MLT_REPOSITORY/MLT_DATA/MLT_PROFILES_PATH；依赖 DLL 与 melt.exe 同目录
+  （avdevice-63 易漏）；MLT XML 工程一律绝对路径（相对路径静默失败 rc=3）；
+  CLI 文本角标参数走 GBK 控制台会乱码（集成一律生成 UTF-8 XML）。
+- melt 为 GPL 二进制（x264），若随包发布需附源码说明（docs/mlt/README.md 已述）。
 
-**根因**：`TimeSettingsDialog::onCalibPhotoFinished` 确认卡采用尾巴里
-`const qint64 offset = confirmDlg.offsetMs();` 算完后**从未赋给
-m_working.truthOffsetMs**（孤儿变量）——v1.12.6（986f8f8）确认卡改可编辑
-重构时丢行，v1.12.5 直算是好的。后果：truthSet=true 而偏移恒 0，
-beijingMsOf=wallMsOf+0，轴/快照/多机全口径"不生效"；.vla 留痕照存。
+## 82. v1.16.2 前瞻：引擎三连修 + 拼接工况全景补全（24db060 / df56533）
 
-**排查法备注**：后端管道（probe_timestamps.py calibphoto）合成图实测正常 →
-逐段静态验证显示链全对 → 最终靠"应用 lambda 与状态栏同体、用户流程正常"
-反推 emit 载荷本身有问题，肉眼抓包成功。
+- **①副屏全屏落错屏**（用户双屏 DISPLAY1 1920x1200 + 34G1Q 3440x1440@x=3840）：
+  fsprobe 真机四策略对比，唯一正解=`winId()`+`windowHandle()->setScreen()`+
+  **handle 级** setGeometry+showFullScreen（fullscreenvideowindow.cpp showOnScreen）。
+  坑：QWidget::setGeometry 与 setScreen+move 均落主屏；探针须 qInstallMessageHandler
+  写文件（无控制台）+quitOnLastWindowClosed(false)。
+- **②LAMerged 卡顿+音谱错位**：音频包 PTS 极不规则（180/78/20ms 乱跳），空档补偿
+  阈值播放 40ms/分析 20ms 每包误触发 → 双侧统一 **200ms**，分析侧新增对称重叠裁剪；
+  实测 25s 实播零补偿日志（%TEMP%/lumenarc_audio.log audioDiag）。
+- **③输出设备热跟随**：followDefaultAudioDevice() 每 16 包检测系统默认设备变化
+  热切换续播（用户默认设备被副屏抢成 34G1Q NVIDIA HDMI 实锤）。
+- **拼接工况 8 矩阵补全**：⑥变速≠1x 过拼接空档补偿（pad 量 skew/rate）；⑦异构段
+  直拷（concat -c copy）双侧引擎 swr 输入侧随帧重建（reconfigSwrInput + 分析侧
+  curInRate/Fmt/Mask 快照）。已知边界在案：>10s 空档截断、40-200ms 小空档不补、
+  预览缓存 sws 不重建、纯视频段。
+- 病灶文件（现回归素材）：cases/20260722-广州增城/preprocess/.../LAMerged_02-04-52
+  _6m_03-39-11.mp4（91min、15fps、AAC 8kHz mono、PTS 抖动族）。
 
-**修复**：采用尾巴抽为公有 `adoptPhotoTruth()`（赋值+留痕+emit 单点），
-onCalibPhotoFinished 调之；ui_chain +6 断言直驱锁死（offset 834000 管道/
-留痕字段/人工修正注记/beijingMsOf 反映）。18 套全绿。
+## 81. 账号系统 v1.3→v1.4：署名=账号档案写死（d75293d→766ee80→57cb075）
 
-**补记 26（手册上云管线，方案 A 拍板）**：git 留真源（MANUAL.md），WPS 在线
-文档做阅读/批注/分享端。新增 tools/manual2docx：复用工程零依赖 DocxWriter
-（P-28 报告同款排版），行解析 md 子集（# 标题/表格/列表/引用），行内 **粗体**
-/`代码` 标记剥除（DocxWriter 只支持整段加粗，v1 可接受）。产出「追光者 Lumen
-Arc — 操作手册.docx」（284KB，30 表）已挂 Release v1.16.0 第二资产；PDF/DOCX
-导出物入 .gitignore 不入库（可再生成）。WPS 导入即转在线智能文档。
+- v1.3 SignatureStore 独立值方案（d75293d）**被用户否决**→git revert（766ee80）。
+- **v1.4 拍板**：署名=账号档案姓名/单位，**写死**在案件录入/点位图/报告 docx，
+  各处只读；唯一修改渠道=帮助→账号管理（短信验证码）。
+- 落地：casedialogs 调查员/单位改只读绑定账号档案（新建存快照、编辑只读显示历史
+  快照、悬停提示）；authRegister 响应带 name/org（老用户=服务端档案值）+
+  authHeartbeat 附带档案字段（均已部署+入 docs/cloudbase/functions/）；main.cpp
+  心跳块补齐本地缺失 name/org（自愈旧凭证）；report_service/sitemapeditordialog
+  历史空值兜底当前账号档案。
+- harness profile 链验证通过；资源点结论：SMS=50 点/条唯一大头，先不升级。
 
-**补记 28（v1.16.1，曲线图/语谱图滚轮操作归一化，用户拍板规格）**：
-滚轮=X 轴缩放@鼠标位（两图原有）；Ctrl+滚轮=Y 轴缩放@鼠标位（曲线图新增：
-亮度轴，首用自动关 Y 自动范围，右键菜单恢复；语谱图原有频率轴）；
-Alt+滚轮=X 轴平移（两图新增，上滚向过去，每格 10% 可视宽度，夹取边界）。
-曲线图 X rangeChanged 信号自动联动语谱，语谱 Alt 平移 emit 联动曲线。
-顺手修手册旧错：语谱 Y 平移实为 Ctrl+左键拖拽（非中键）。19 套全绿。
-播放音频降噪方案调研中（afftdn 风格流式谱减 vs RNNoise 对比，待拍板）。
+## 80. 账号系统 v1.1/v1.2：账号管理对话框 + updateProfile 云函数（93e6d91 / 8138ee0）
 
-**补记 29（v1.16.1，P-54b 播放音频降噪落地，用户拍板方案 A）**：
-SpectralGateStream 流式谱门控（audio_denoise.cpp 同类）：跨块 OLA 状态+
-afftdn 式自适应底噪（低于估计立即下跟/高于 0.004/帧慢上浮；运行最小值
-→典型底噪 ×4 标定，实测不标定力度不足 ×0.65→标定后 ×0.20）。
-**音画对齐论证**：输出样本 p 恒为输入 p 降噪版（流重索引），计算滞后
-[1536,2048] 样本（实测 1856=38.7ms@48k）由 1s 设备缓冲吸收（sink
-setBufferSize(1s)）→ 稳态零偏移，无需时钟补偿；内容锚点在首个喂入帧
-relMs（写时锚会偏晚一窗）。引擎插入点：swr_convert 后、音量增益/变速
-重采样前；scrub 旁路；seek/开关 reset。设置菜单开关（默认关，
-QSettings playbackDenoise），强度与语谱滑杆共享；多机窗
-applyPlaybackDenoise 透传全引擎。测试 8 项（离线 4+流式 4：块大小
-不变性逐位一致/长度守恒/降噪有效/滞后有界）。19 套全绿。
-
-**补记 29b（播放降噪强度改原子热更新）**：用户问"是否实时"→发现拖滑杆需点
-应用才下发 + 引擎端改强度会重建处理器（断音）——改 setStrength 原子热更新
-（下一帧生效，状态保留）；configure 只在采样率/声道变化时重建；滑杆
-valueChanged 直推引擎（不用点应用）。「应用」钮只剩分析显示链路语义。
-
-**补记 28b（滚轮归一化三 bug 修复，用户实测）**：①Ctrl+滚轮「轴动线不动」——
-只跑了音频分析时曲线在右侧 dB 音量轴（m_axisYVolume），旧码只缩放左侧亮度轴
-→ 改缩放所有可见 Y 轴（各自独立锚点/边界：亮度[-10,265]、dB[-100,10]）。
-②Alt+滚轮双向都只向前——Windows Alt+滚轮常走横向滚动消息 angleDelta.y()==0
-（delta=0 被判为"下滚"）→ 取非零分量兜底。③语谱图中键拖拽补平移时间轴
-（m_panningX，与曲线图同语义，emit 联动）。
-
-**补记 27（v1.16.1，P-54 音频降噪 libav 原生落地）**：降噪滑杆自 v1.5 默认
-libav 引擎起即空操作（Python 谱减法随 P-25 退役）——本批实装：domain/
-audio_denoise.cpp 谱门控（就地 PCM：STFT N=2048/hop=512 Hann COLA → 等距采样
-2000 帧×频点 25 分位噪声谱 → 谱减增益夹 [0.02,1] → 快攻慢释+频率 3 点平滑 →
-ISTFT OLA Σw² 归一，长度不变）；仅作用于分析显示链路（语谱/音量），播放音频与
-原始数据不动。引擎 setAudioDenoiseStrength 接口（ianalysis 默认空操作）；
-onAudioAnalysis 统一读取滑杆下发；应用钮去 strength>0 守卫（调回 0 重跑=复原）。
-**坑**：avutil av_tx 逆变换 scale 参数被忽略（txprobe 实测 ifft 恒输出 N·x，
-nullptr/1/N 一样）——归一化手动除 N。测试 lumenarc_denoise_test（合成白噪+440Hz：
-底噪 ×0.335、纯音 RMS ×0.937、相关性 0.9964、0 强度旁路）。版本升 v1.16.1。
-
-**补记 26（手册重构 B+C，用户拍板）**：MANUAL.md 全文重写为八章工作流制
-（认识→快速上手→案件与前处理→校时体系→单路分析→多机→产出与移交→附录），
-854→650 行；正文 34 处版本标签/内部语言（P-编号/拍板/日期）全清，演进史剥离至
-新建 CHANGELOG.md（v1.7~v1.16 用户可感知变更）；新增目录+快速上手双场景；
-快照三处散述合并、快捷键附录唯一真源、常见问题过时口径更新；PDF 重出 17 页
-（原 22），Release 资产已换新。
-
-**补记 25（v1.16.0 发布收尾，版本号+手册 PDF+GitHub Release）**：
-①启动画面 splash 版本号曾硬编码 v1.2.0（滞后 14 版）→ APP_VERSION 宏；
-关于框（曾 v1.13.3）/案件包导出说明同改宏——对外版本号单一真源 =
-CMakeLists project(VERSION)。②MANUAL.md → PDF 走 tools/manual2pdf
-（Qt QTextDocument markdown+QPdfWriter，零第三方依赖，表格 yes/22 页）；
-文件名去版本号「追光者 Lumen Arc — 操作手册.pdf」（CMake POST_BUILD 源
-+帮助菜单查找名同步改）；工具源码收 tools/manual2pdf（PDF 本身不入库，
-可再生成）。③GitHub Release v1.16.0 已发（gh CLI）：290MB 便携包，
-打包排除 cases/（5.9GB 真实案件数据红线）+测试程序+日志杂项。
-
-**补记 24（v1.16.0 续，多机返修三点）**：①双播放钮用户实测"没看到"——
-窄面板横排小字不显眼 → 改竖排整行+金色描边加粗高36。②主视窗暂停：开窗时的
-一次暂停挡不住用户回主窗再播 → 新增 onAboutToPlay 回调，多机每次起播前
-（onTogglePlay/ecSetPlayRange）拦停主视口。③多机窗 showMaximized 默认最大化
-（案件/独立两入口）。18 套全绿。
-
-**补记 23（v1.16.0，多机同步播放三优化）**：①时间轴整体下移根因=
-游标时刻气泡画在 y=kTopMargin-20=-12 全被裁——kTopMargin 8→26 内容区整体
-下移气泡可见；刻度标签横向夹取防首末半字裁切；底部留白 14。②对时完成标识：
-syncLaneHasTruth()（cal.truthOffsetMs≠0，直接/间接都算；合并轨任一段有真即
-有）→ 瓦片绿色「✓已对时」角标（camtilewidget setTruthBadge）+ 时间线行标签
-下绿色「✓ 已对时·北京时间」（CamLane.truthSynced）。③同事件对时沙盒双播放
-钮：ecSetPlayRange(lane,on) 收口（-1 全部/>=0 仅该路），③段内「▶ 播放选中
-瓦片」「▶▶ 播放全部」，工具栏播放钮=全部语义。④MANUAL 多机节同步重写。
-18 套全绿。
-
-**补记 22（v1.16.0 热修，快照删除误判报告）**：removeCaseFile 用
-data(kRoleIdx).toInt() 判别——快照条目从不设该 role，无效 QVariant toInt()=0
-→ 误判「报告 #0」：无报告时弹「报告索引越界」（用户实测"索引失败"）；有报告
-时会误删报告 #0 文件（确认框显示快照路径却删别的，数据丢失级）。修：QVariant
-isValid() 判别。另：预览器去「适应窗口」按钮（打开即自适应）+快照右半不烧录
-倍率注记（左半 OSD 已有）。
-
-**补记 21（v1.16.0，快照分屏+软件内图片预览）**：用户拍板 A1+缩略图+通用组件。
-①onSnapshotQuick 分屏：放大镜开着时视频区=左原生全分辨率原帧（标注+金框+
-OSD）+右放大视图同高（标注经 scale∘translate 变换烧入放大坐标系，底部注记
-倍率+时刻），画幅 2× 宽细节零损失；底部"放大镜视图"独立小节取消；放大镜关
-着行为不变。②新通用组件 ImagePreviewDialog（滚轮缩放光标锚点/拖动平移/双击
-复位/适应窗口/1:1/资源管理器；非模态+WA_DeleteOnClose，不持嵌套事件循环——
-吸取导出弹窗教训）。③CaseDock：快照条目 56px 缩略图（QtConcurrent 异步+
-150ms 合批刷新+缓存）+双击预览+右键预览。④版本升 v1.16.0（CMakeLists+标题
-12 处+mac bundle）。18 套全绿。
-
-**补记 20（v1.15.3 续，显著性闸门收紧 30→10 秒/天 + 图解四点再修）**：
-【代码】用户拍板"10 秒内可以接受"——kMinSignificantRateDev 30.0→10.0/86400000
-（time_calibration.h，sidecar 继承处自动跟随）；calibration_test
-testMinThresholdBoundary 低侧用例 20→5 秒/天随迁；18 套全绿。
-【图解】①第四章换算尺图重画：横纵轴同单位（秒），斜率=1 恰为 45° 虚线基准，
-走快更陡/走慢更平三线扇形，起点 offset 标注；②上篇纯原理化——OCR/软件手段
-全部移出（取样="用眼睛看用笔抄也可以"，野点="坏数据不能进计算"，对表="读出
-照片两个时间相减"，接力删"建锚沿链检查"，重建="先粗后细"原理化）；③第九章补
-"原理→软件手段"对应段（OCR 自动取样/确认卡人工可改+原文留档/锚点预览/秒级
-预检自动引导）；④闸门①图文同步 10 秒/天（2 小时录像仅差 0.8 秒）。
-
-**补记 19（v1.15.3 续，图解按用户三点意见重写）**：①全书改科普小文章口吻——
-连贯行文、充分论述，弃要点罗列体；②软件做法全部后置——上篇纯讲校时原理
-（不依赖软件），下篇才讲 LumenArc 实现；实战案例改 outsiders 视角（1/2/3 号机
-外号+完整背景），不再抛案件编号；③图 5-2 用户看不懂且确有错（缺口跳变画成
-时间倒流）——重画为"两条带子映射图"：真实时间带（缺口=带子上的洞）+ 文件
-时间带 + 虚线连接对应关系，直观呈现"同一流内位置 10:00 真实时间 08:20→08:35
-瞬移"。重写后 32KB / 8 幅 SVG / 13 节，结构校验通过。
-
-**补记 18（v1.15.3 续，校时逻辑图解离线 HTML）**：用户拍板把校时探讨沉淀为
-教学文档——docs/calibration_explainer/index.html（单文件离线包，零外部依赖，
-9 幅内联 SVG + 11 章）：三把钟/换算尺/四点校时方法/抽帧压缩特例/晶振与 RC
-专题（含"只会变慢"误解纠正+量级表）/三道可靠性闸门/生效面与红线/术语词典。
-已含实战案例（增城 C01 慢13'54"、C03 rate 异常指向文件特性）。
-
-**补记 17（v1.15.3 续，导出完成弹窗卡死：问题转档交强援）**：用户三次反馈
-「导出完弹窗关不掉/软件卡死」——历次修复（重复 connect 堆叠→一次性、ActionRole
-→AcceptRole→非模态 open()）均未见用户确认生效；关键疑点：open() 版 exe 是否
-已被用户测到未确认（期间多次 LNK1104 占链）。现象从未本地复现（开发机无法
-GUI 操作导出）。已建立完整问题档案 docs/INVESTIGATION_EXPORT_FROZEN_20260825.md
-（症状/时序/已排查/未闭环疑点/代码锚点/接手步骤），供更强专家接手。
-
-**补记 16（v1.15.3 续，导出完成弹窗带「打开所在文件夹」+ 连环弹窗卡死修）**：
-①用户要完成弹窗里直接有打开所在文件夹——QMessageBox 实例化+ActionRole 按钮，
-点击 explorer /select 定位产物（面板内 📂 按钮保留）。②「导出一次后卡住」真凶：
-startSegmentExport 每次导出都 connect finished（UniqueConnection 对 lambda
-无效，每次新地址）→ 槽堆叠，第 N 次完成弹 N 个模态窗堵死界面；改连接只在
-exporter 创建时建一次，产物路径经 m_lastExportPath 传递。18 套全绿。
-
-**补记 15（v1.15.3 续，放大镜导出改主界面同款左右 50% 并列）**：用户拍板——
-带放大镜导出不再右下角小窗：画布左半边原图（源区域金色四角括号+倍率徽章，
-样式复制 OverlayWidget::drawMagnifierIndicator，引擎层自绘不依赖 widget）、
-右半边放大视图（源裁剪→旋转→等比填满，等大同高=主界面观感）；drawPipImage
-保留供多机 laneZooms 用。18 套全绿。
-
-**补记 14（v1.15.3 续，选段导出冻结根因修复——湛江遂溪 D15 实测）**：
-产物画面静止（42.56s 全首帧）。排查链：CLI ffmpeg 抽帧全同误导两次（bash
-select 转义坑抽到前 4 帧）→ engine_test 加软解抽帧钩子证明内嵌解码正常 →
-引擎内 DIAG 打印揪出真凶：**DVR 流包时间戳从 start_time 起算（D15=62585s），
-而 aMs/bMs 是流内毫秒（0 起）**——curPtsMs=62585001 恒压过 target，主循环
-永不拉新帧 → 全产物首帧。修复：startMs=start_time/1000 归一 seek（seekUs=
-startMs×1000+aMs×1000 绝对微秒）与帧位置（pktMs−startMs）；顺带 dec->
-pkt_timebase=tb、seek 改 avformat_seek_file。验证：DIAG curPtsMs 1592841→
-1597961 跟进、产物 250 帧 scene 变化 13 处、抽帧 MAE 5~9 动态。诊断钩子已
-全部还原；18 套全绿。
-
-**补记 13（v1.15.3 续，选段导出两修——湛江遂溪案实测）**：①产物不对：LAClip
-42.56s≠选段 26.95s——根因 onExportClip 对同选段静默沿用上次变速计划（vla
-speed_plan rates[1,0.25,1]，Q5 持久化的副作用）；改默认恒 planFromLabels
-原速 1x，同选段时 setLastPlan 醒目黄条提示+「恢复上次变速」一键钮。②导出完
-毕没提示：finished 只写面板/状态栏——补 QMessageBox 完成弹窗（含产物路径）。
-18 套全绿。
-
-**补记 12（v1.15.3 续，校时卡速率文案人话化）**：用户实测看不懂双锚点确认卡
-——「基本准」与「每 1 天快 621 秒」同卡自相矛盾（根因：①叠加校准时旧校时也
-是 crosscam，两锚同点必差 0，「基本准」无信息量；②「每 1 天快 X 秒」把画面
-时间轴速率差说成钟走快，吓人且概念错）。修：①旧校时为 crosscam 时改述
-「标记瞬间已与基准路对齐（锚点强制）」，不再编「基本准」；②速率行改为「画面
-每走 100 秒，真实约走 X 秒（画面相对真实慢/快 X%），已按此修正——否则离标记
-越远偏得越多（每 1 小时约偏 X 秒）」；③|rate-1|>0.2% 追加警告「速率偏差较大，
-请确认不是变速/抽帧录制」。编译全过（用户测试期 exe 被占用，待重链）。
-
-**补记 11（v1.15.3 续，报告读数准确性与 C03 链完整性）**：用户实测揪出
-①报告把 OCR 原始识别值 12:25:42 当监控显示时间摆出，而照片实为 12:25:47
-（确认卡人工修正，偏移 834000=13:54 与 47 吻合，与 42 差 5 秒自洽）→ truthSet
-分支改为：北京读数−偏移反推修正后监控读数显示于「监控显示时间」列，校准结果
-摆「监控「12:25:42」(OCR 留档) 经确认卡人工修正为 12:25:47 ↔ 北京时间
-「12:39:41」」。②C03 证据已落盘（V02.vla 23:04 source=crosscamevent 锚点
-「骑车白衣男子举手指斜上方」05:52:05 ±33ms）→ 新链桥接：锚点挂在
-「M_C02 烟酒店」合并轨 id 上，把成员（P01/P02）锚点并入别名，接力链
-C03→合并轨→C01→绝对锚 在报告完整展开；camText 剥「M_」前缀。18 套全绿。
-report_test 52。
-
-**补记 10（v1.15.3 续，时间校准加深：差值显式化 + 三路结论）**：用户两点
-①直接对时差值没说清→（二）表新增「监控较北京时间」列；直接路「校准结果」摆
-同框对：监控显示「X」↔ 北京时间「Y」→ 差 13 分 54 秒（flatTruthText 展平 OCR
-原文供报告）。②间接路差值存盘缺口→TimeCalibration 增 calibNote（F3 只加不
-改），onEcSave 把控制器算好的 m_ecCorrText 写入 .vla；报告读出作差值白话；
-另有 crosscamOsdDeltaMs() 读产物 .lumencal.json 在首锚点算「源监控较北京差
-值」（C02 实测 0.0s/+0.3s，<0.5s 显示「一致（±0.5 秒内）」）。③新增「（五）
-校时结论」小节：每路一句差值+接力关系（C03 → C02 → C01 → 标准授时）+整链
-容差。report_test 49→52（差值列/结论小节断言）。18 套全绿（编译已过；用户
-测试期 exe 被占用，需关闭后重链）。
-
-**补记 9（v1.15.3 续，报告「四、时间校准」改版为白话可读）**：用户要求
-报告讲清校时逻辑与结果（以 C02↔C01 为例）。改版：
-（一）校准方法——先白话解释 OSD/墙钟/北京时间关系，分直接对时（照片同框比
-对）与间接对时（多机同事件逐帧对齐）两种方式；间接明说"读出的不是快慢秒数、
-而是两路画面内容同步的证据"。
-（二）校准结果表——由「编号|显示时间|方式|时间差|公式」改为「监控编号(C01
-烟酒店东侧)|显示时间(取样)|校时方式|时间基准(标准授时/参考机位)|校准结果
-白话」；不再出现 epoch 巨型偏移数；间接路时间差=「≈0（依基准）」。
-（四）取证链——参考路用机位编号+名（camNoText）替代 V### 文件名 id；链尾加
-结论「经 N 个特征事件锚点对齐，整链容差 ±X ms，墙钟=基准路(北京)口径」。
-service 新增 camText()（fileId→C## 机位名）；ReportVideoRow 增 camNoText/
-baseRefText/resultText/anchorCount；ReportChain 增 eventHops。report_test 49
-绿（旧断言靠字段回退支撑），18 套全绿。
-
-**补记 8（v1.15.3 续，截图追查两个事实）**：①「快 8 秒」是误读——实读增城案
-案内 .vla（V001）北京时间对时留档：truthOffsetMs=+834000（慢 13 分 54 秒，
-12:25:42 vs 12:39:41 人工修正）；镜像 OSD 反字看花。②顺藤摸到真 bug：
-`buildMergedGroups` 合并轨 label 用归组键（groupId "G002"）而非显示名——
-camNo 落地后显示名已是「C02 烟酒店」而合并轨仍叫 G002（用户截图参考路
-实锤）。修 label=首成员 displayName；sync_test 重构夹具（displayName/groupKey
-分离）+2 回归断言（195→197 口径，实测 195 断言 0 失败）。18 套全绿。
-
-**补记 7（v1.15.3 续，机位独立编号 C 方案拍板）**：用户纠正"多文件组标注
-V01+P02"的信息错位——机位应有**独立编号体系**：CaseCameraGroup 新增 camNo
-（C01/C02 自动排序、高位水位不复用、改名不动；CaseMeta.nextCamSeq 入档+
-载入高水位自愈）；G### 退居纯内部稳定键（点位/同轴引用零迁移）；
-groupDisplayName=「C01 烟酒店」（无名组=「C01」，编号是机位永远存在的身份）；
-点位图标注只显 C01；侧栏/案件树=编号+助记名；迁移：存量组按 createdMs+组 id
-确定性回填（用户当前案件的组自动获得 C01…）。case_test 270（+camNo 断言）。
-18 套全绿。
-
-**补记 6（v1.15.3 续，点位图三拍板）**：①标注大小可调——SiteMapPoint 新增
-labelScale（0.5~3.0，默认不落字段 F3），属性条「%字号」spin + Alt+滚轮快捷，
-渲染字号=短边×0.028×倍率；②图上标注文字=机位编号串（memberIds 以 "+" 连，
-如 V01+P02）而非助记名（侧栏仍示组名助记）；③机位编号改两位（V01/P01，
-超 99 自动扩位；V###/P### 三处格式化点改宽度，高水位解析不受影响；旧案
-三位 id 作为既有字符串继续合法）。case_test 行为断言随迁（V01/P01…），
-sitemap +5（labelScale 夹取/回环/缺省不写字段）。18 套全绿。
-
-**补记 5（v1.15.3 续，用户截图实锤两 bug）**：①「应用预览点完没反应」——
-applyLaneCalibration 只改模型不挪画面，暂停中零视觉反馈；修：预览即
-seekWall 到参考路当前墙钟，两路当场跳齐。②「慢 495740 小时」疯话——
-plainClockDeltaText(refWall-targetStream) 把 epoch 偏移当钟差，目标路已有
-校时时必现（P-73 原生口径 bug）；修：修正量=与目标路**旧校时**在标记瞬间的
-真实墙钟差（无旧校时则如实说「按参考路对齐到墙钟 X」），<1s 说「原本就基本
-准」；锚点列表行尾假 delta 删除（只留 准钟墙钟⇄本路画面 映射）；预览状态条/
-确认卡统一走 m_ecCorrText。
-
-**补记 4（v1.15.3 续，用户实测"退出多机后主页面没打通"）**：onCaseDataChanged
-回调带视频路径——多机窗保存的同事件校时若正中主视口当前视频，主窗重读 .vla
-校时同步 m_calibration+时间轴（peekCalibrationFromVla 轻量只解 META chunk）。
-**关键防回写**：不修的话主窗旧内存校时会在下次自动存盘覆盖掉多机窗刚存的
-新校时（数据丢失级）。两创建点（案件/独立模式）同接线。18 套全绿。
-
-**补记 3（v1.15.3 续，用户拍板）**：同事件对时确认卡改大白话——旧「模式：
-仿射/速率 0.99980/偏移 epoch 毫秒原值/置信 0.80/残差 ms」→ 新「X 将按 Y 对时
-（间接）· 方式：整体平移（1 标记）或平移+快慢（N 标记，每天快/慢 X 秒已修）·
-修正量：目标的钟慢 M 分 S 秒 · 标记对齐误差最大 X 秒 · 可信度如实降档」；
-取证链小节 jargon 翻译（绝对校时锚→基准：已直接对时；容差 ms→对表误差秒；
-累积容差→本次对时最大可能误差）。单锚点可用性向用户再明示（代码本就支持，
-前次"需双锚"实为禁用态保存钮假象）。
-
-**补记 2（v1.15.3 随批，用户实测）**：同事件对时「💾 保存校时」点了无反应
-——根因是样式表绿底不随 setEnabled(false) 变灰，禁用态看着能点、点击零反馈。
-三修：①保存钮常可点，未预览点击出①②③步骤指引（守卫不再静默），样式随
-预览态灰/绿切换（updateEcSaveBtn 单点）；②保存成功强反馈——成功弹窗（目标路
-+累积容差）+ 案件树 ⏰ 徽标即同步（updateCalibrationBadge）+ 主窗回调
-onCaseDataChanged 刷新案件树；③两创建点接线。sync 193 绿，18 套全绿。
-
-**补记（v1.15.2 随批）**：归组对话框 QDialogButtonBox 漏 addWidget——
-按钮成自由子控件飘左上、裁成 90px 碎片（用户盲点"稍后自调"致 P001 未归组）。
-已入布局+最小尺寸 140×36+说明行（"稍后自调"语义写明案件树补归路径）。
-
-**⚠️ 用户侧影响**：v1.12.6~1.15.0 期间做过识图对时的视频，.vla 里存的是
-truthSet=true+truthOffsetMs=0——**需对每个受影响视频重做一次第 2 步**
-（图片/手动均可），无法用旧数据自动修复（偏移值从未落盘）。
-
-## 77. 机位组（Camera Group）正式化：案件组织轴心重写（视频/前处理区分废除）
-
-**日期**：2026-08-24｜**版本**：1.14.0 → **1.15.0**｜**性质**：数据模型级重构（拍板：
-组概念建在案件系统最开始；视频来源=直接导入/前处理生成全部归组；只有同组
-才能同轴播放；内测期迁移从简；案件树=B 组分层）
-
-**数据模型**：`CaseCameraGroup{groupId=G### 稳定不复用, name 可改不作键,
-memberIds, createdMs}` 入 case.json（F3 只加不改；load 白名单+高水位自愈）；
-`CaseModel::findGroup/groupIdOf/groupDisplayName/migrateCameraGroups`——
-迁移：未归组引用按 cameraLabel 聚组（同标签并既有同名组），无标签各自成组，
-幂等；开案时自动迁移置 dirty。
-
-**CaseManager API**：createGroup（重名拒绝）/assignToGroup（摘除旧组+源组掏空
-即清+目标组豁免——曾踩"ungroupRef 无差别清空组误杀新建目标组"bug，
-case_test 抓出）/renameGroup（键不动，cameraLabel 镜像同步全组成员——老读者
-无缝跟随）；addVideo 入案即自成组；removeVideo/removePreprocessOutput 出案
-出组+清空空组。
-
-**同轴闸**：cam_timeline buildCamInventory 的 groupKey 键源从"标签巧合"换成
-正式组 id，displayName=组名。
-
-**CaseDock 树 B（组分层）**：fillCameraGroups——组节点（📷 组名·M 个文件，
-粗体）→成员文件行（V###/P### 同待遇混排，指纹/校时徽标保留）；会话区产物
-行移除（留 sidecar+指引行）；右键：文件行「移到机位组 ▸」（现有组+新建组）、
-组节点「机位组改名/新建机位组」；旧「设置摄像头编号」入口连根移除。
-
-**前处理登记归组对话框**（拍板：产物完毕必选）：preprocesswindow finalize 登记
-成功后逐产物行「归入已有摄像头 ▾（通道名匹配预选）/创建新摄像头…（默认名
-=通道名）」，稍后自调可跳过（案件树补）。
-
-**点位图换键**：点位 laneRef=G###（稳定，改名零牵连——上轮 rename 迁移 hack
-删除）；旧引用（文件 id/旧标签）载入自动升格；侧栏读正式组。
-
-**测试**：case_test +19（建组/重名拒/移组镜像/空组清理/改名键不动/迁移聚组
-幂等）→ **267 断言**；18 套全绿。
-
-## 76. P-28 收尾：曲线光栅嵌入+哈希进度条 + P-74 点位图编辑器落地
-
-**日期**：2026-08-23｜**版本**：1.14.0｜**性质**：功能批次（P-28 收尾 + P-74 落地）
-
-**图表光栅嵌入**：`ReportService::renderChartImages`（GUI 线程离屏）——
-TimelineModel::setSnapshot + ChartPanel::renderToImage(1600×420) 矢量重渲染
-（§14 定论不走 grab）→ 案内 reports/assets/chart_<V###>.png → 报告五（三）
-节逐路嵌入「XX 亮度变化曲线（横轴：北京时间）」。
-
-**哈希进度条**：collect 新增 cb 重载（工作线程安全：仅文件 IO/QProcess，
-QueuedConnection 回投进度）；mainwindow 终生成改 QtConcurrent::run +
-QProgressDialog（可取消，取消即弃稿）+ QEventLoop 等待。
-
-**P-74 点位图编辑器落地**（方案 docs/SITEMAP_EDITOR_DESIGN_CN.md，拍板：
-不画比例尺/扇形扇面可调/一案一张）：
-- `domain/site_map.h`：SiteMapData/Point（归一化坐标+朝向/张角/半径夹取
-  10~180°/3~50%）+ sitemap.json 原子写持久化 + 孤儿点位（机位删了标红
-  「已移除」不自动删，改名跟随最新标签）；
-- `infrastructure/site_map_render`：编辑器画布与成品图**共用** drawPoints
-  （所见即所得）+ renderFramed 标准图框出图（2480×1754 A4@150dpi，双图框+
-  右下标题栏：案件编号/图名/制图/审核/日期/图号 SP-01）；
-- `SiteMapEditorDialog`：工具行（导入底图[复制入案]/适应窗口/删除选中/
-  出图保存）+ 机位侧栏（拖到画布布点，同机位再拖=挪位）+ 画布（空白拖
-  平移/滚轮缩放/滚轮在选中扇面上转朝向/Shift+滚轮调张角）+ 属性条
-  （朝向/张角/半径 spin 即时生效即存盘）；机位色=Theme::DataPalette 与
-  多机时间线同口径；
-- 案件菜单「编辑监控点位图(&M)」（有案使能）；出图存
-  reports/assets/sitemap.png → 报告二（三）节自动嵌入（批次②已留取用）；
-- `sitemap_test` 16 断言（JSON 回环/边界夹取/案内存取/图框成品像素探针：
-  外框墨线/标题栏有墨/扇面橙色可见/无底图不崩）；**测试 17 → 18 套全绿**。
-
-**P-28 报告模块全部拍板项施工完毕**，待用户整体验收（真机：自检→补录→
-生成→Word 版式；点位图编辑器实操；拼接记录核对）。
-
-**P-74 真机返修（同日用户测后四项）**：
-1. **前处理产物 P### 同待遇**：机位侧栏/机位色/标签表/报告检材清单全部改走
-   新 `CaseModel::allCaseRefs`（videos + 各会话 outputRefs）——此前只迭代
-   meta.videos 致 P### 进不了布点清单；报告检材清单同步收录 P###；
-2. **点位标签去框框**：字色=扇形/圆点机位色 + QPainterPath 白色描边晕
-   （深浅底图均可读）；孤儿点位红色「已移除」；
-3. **底图一次裁切+固定**：导入后弹裁切对话框（拖框选区/区外压暗/整张使用
-   或确认裁切/取消放弃导入），确认后统一 PNG 存案；画布底图**固定适配不再
-   可平移缩放**（空白点击=取消选中；未选中扇面滚轮无操作）；
-4. **扇面操作提示加亮**：属性条提示改黄底描边粗体胶囊样式 + 选中点位时
-   画布底部浮出半透明黑底金字横幅「滚轮=转朝向 Shift+滚轮=调张角」。
-
-**P-74 真机返修第二轮（08-24，机位识别问题，截图拍板）**：
-- 问题：侧栏机位编号（V001/P002…）认不出是哪个位置的监控；同物理机位
-  的原件+多次拼接产物（V001/P001、P002/P005…）重复罗列；
-- 方案：**物理机位分组**——同机位标签的 V###/P### 聚为一个布点单位
-  （CamGroup：组键=机位标签，无标签退化 id），侧栏一组一行
-  「明景（3 个文件）」，未自定义名的组附源文件名「P002 ← 明景拼接视频…」
-  + tooltip 列成员全清单（id：文件名）；
-- **机位改名**钮：改名对组内全部成员生效（setCameraLabel 逐成员），
-  既有点位组键跟随迁移；重名组拒绝（防两组混淆）；
-- 点位 laneRef 语义升为**组键**；旧版存文件 id 的点位载入时自动升格；
-- 点位图层级正式定为「物理机位」而非「文件」（报告检材清单仍逐文件，
-  语义各当其位）。
-
-## 75. P-28 批次②：报告数据聚合 + 模板章节映射 + 生成入口（草稿版）
-
-**日期**：2026-08-23｜**版本**：1.13.3 → **1.14.0**｜**性质**：功能批次（P-28 批次②）
-
-**落地**：
-- `domain/report_data.h`：ReportData 聚合模型（检材行/关键节点行/取证链/
-  局限性注记 + 案件元数据 + extraFields 报告扩展位 reviewer/approver）——
-  渲染器唯一输入（远期 HTML 渲染器缝在此）；
-- `domain/report_fmt.h`（header-only）：fmtWall/fmtDuration/fmtSizeMB/
-  fmtTimeDiff（慢/快 X）/calibWayText（Source→中文）；
-- `app/report_service`：聚合器——ffprobe 物理属性（15s 超时）、MD5+SHA-256
-  单遍补算（已有 SHA-256 复用）、校时表数据（wallMsOf 唯一换算入口 C3 +
-  truth 北京时间偏移 + 取样点时间差 + 公式人读）、P-48 错读点→局限性、
-  标签→关键节点（墙钟升序）、P-73 expandChain 取证链（absoluteLaneIds
-  三参口径）、校准证据帧/快照/导出片段/点位图清单；
-- `app/report_docx_builder`：章节映射——封面/静态目录/一基本情况/二检材
-  （来源清单表+逐视频物理属性含双哈希/点位图位）/三依据方法（软件名带
-  版本号）/四时间校准（结果表+证据帧嵌入≤8 张+取证链小节）/五分析过程
-  （标签→火势时间表+逐节点骨架留白）/六分析意见（起火时间由最早节点预填
-  「不晚于」+局限性自动行）/七附件（快照嵌入≤12 张+导出片段清单）/落款留白；
-- 入口：案件菜单「生成分析报告(&G)」（有案才使能）→ 案内
-  `reports/火灾视频分析报告_yyyyMMdd_HHmmss.docx` + 成功卡可打开文件夹；
-- DocxWriter 增补 addCentered（封面）；APP_VERSION 由 CMake
-  PROJECT_VERSION 全局注入（报告落款版本追溯）。
-
-**测试**：新增 `report_test` 37 断言（reportfmt 口径 + 合成 ReportData→DOCX
-解包：封面/目录/七章标题/哈希双列/校准表/取证链/节点/预填/局限性/落款留白/
-版本号/点位图占位）；**测试套数 16 → 17**；期间修 fmtTimeDiff 方向词后
-缺空格 bug（测试抓出）。
-
-**批次③（同日续拍板落地）**：生成前两道闸门——
-- **自检**：`domain/report_preflight.h` 纯函数出检查项（❌阻断：文件缺失/
-  全部未校时/无检材；⚠️放行：未校时/无证据帧/审核批准人空/点位图未绘/
-  无标签节点；ℹ️ 拼接记录计数）；
-- **补录**：`ReportPreflightDialog`（自检树 + 审核/批准/送检人 + 逐路
-  拍摄方向/提取方式/存储介质），`CaseManager::setReportExtra` 持久化到
-  extraFields["report/…"]（F3 只加不改），下次生成记忆；
-- **拼接记录列为证据**（拍板：前处理文件也是分析文件）：聚合
-  preprocess/*/LumenArc_Evidence_*/report.csv（按输出文件分组，列：
-  序号/源文件/时长/处理动作）+ operations.log 关键决策行（素材统计/转码
-  原因等≤5 行）+ 产物案内编号匹配 → 报告新增「二（四）前处理拼接记录」
-  小节 + 附件第 5 条引用原件路径；
-- 自检对话框用 computeHashes=false 快开，终生成才补算哈希（等待光标）；
-- report_test 37 → 49 断言（preflight 阻断/放行/补录列/拼接记录渲染）。
-
-**遗留（后续批）**：图表/语谱图整段光栅嵌入、大文件哈希进度条、
-P-74 点位图编辑器施工。
-
+- 帮助菜单「退出登录」（93e6d91）→ v1.2 升级为「账号管理」对话框（8138ee0，
+  src/accountdialog.h/.cpp）：当前账号展示手机号打码、修改姓名/单位需短信验证码
+  二次验证、退出登录红按钮；邀请码账号修改区灰置；casedialogs 预填登录档案。
+- 新云函数 **updateProfile**（token+access_token 双校验、invite_cannot_edit、
+  phone_mismatch 防护）已部署+入库；cloud_account 重构出 smsAccessToken 复用层
+  （signInWithSms/reauthPhone 共用，_vtoken 无论 ok 与否都回填）。
+- CloudBase 坑在案：短信码互作废旧码+发码限流；tcb deploy 须 MSYS_NO_PATHCONV=1；
+  云函数 zip 不含 node_modules；AUTH_SECRET 在 build_tmp/tcb_deploy/.auth_secret（不入库）。

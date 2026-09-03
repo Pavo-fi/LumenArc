@@ -12,6 +12,7 @@
 
 #include <QMainWindow>
 #include "domain/speed_plan.h"
+#include "infrastructure/segment_export_engine.h"   // ComposeExportDialog 信号携带 Params
 #include <QPointer>
 #include "domain/analysis_snapshot.h"
 #include "domain/timeline_model.h"
@@ -84,7 +85,8 @@ private slots:
     /// 证据快照（2026-08-14）：视频当前帧（所见即所得含画面调节）+
     /// 曲线分析区合成 PNG，OSD 烧录标签/时间码，入案件 snapshots/。
     void onSnapshotQuick();
-    void onExportSegmentClip();   // P-68 导出选段视频（分段变速复合导出）
+    void onExportSegmentClip();   // 合成导出入口（v1.16.2 起：多段+双模式；单段全保真走旧复合路径）
+    void startComposeExport(const SegmentExportEngine::Params &params);
     /// P-68：导出面板「开始导出」执行体（底图采集 + 引擎启动）
     void startSegmentExport(const speedplan::SpeedPlan &plan, bool burnOsd,
                             const QString &outPath);
@@ -328,7 +330,8 @@ protected:
     speedplan::SpeedPlan m_speedPlan;
     class SegmentExportEngine *m_segmentExporter = nullptr;
     QPushButton *m_exportClipBtn = nullptr;
-    class SegmentExportDialog *m_exportDlg = nullptr;   // 非模态导出面板（复用）
+    class SegmentExportDialog *m_exportDlg_legacy = nullptr;  // （已退役，占位防误用）
+    class ComposeExportDialog *m_composeDlg = nullptr;   // 合成导出面板（v1.16.2 起取代分段导出）
     SpectrogramPanelEnhanced *m_spectrogramEnhanced = nullptr;
 
 };

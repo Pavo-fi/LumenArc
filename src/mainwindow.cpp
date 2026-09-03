@@ -46,7 +46,7 @@
 #include "pinnedwidget.h"
 #include "videolistpanel.h"
 #include "preprocesswindow.h"
-#include "segmentexportdialog.h"
+#include "composeexportdialog.h"
 #include "infrastructure/segment_export_engine.h"
 #include <QProgressDialog>
 #include "spectrogrampanel_enhanced.h"
@@ -1466,9 +1466,9 @@ void MainWindow::createToolBar()
     toolBar->addWidget(m_snapshotBtn);
     toolBar->addWidget(m_adjustBtn);
     // P-68 导出选段视频（A/B 选段存在时可用；分段变速+图表语谱同框）
-    m_exportClipBtn = new QPushButton(lang("导出选段", "Export Clip"), this);
-    m_exportClipBtn->setToolTip(lang("导出 A-B 选段：分段变速 + 亮度曲线/语谱同框合成 MP4",
-                                     "Export A-B selection: variable-speed + chart/spectrogram composite MP4"));
+    m_exportClipBtn = new QPushButton(lang("合成导出", "Compose Export"), this);
+    m_exportClipBtn->setToolTip(lang("合成导出：多段拼接 + 证据直拷/演示烧录双模式",
+                                     "Compose export: multi-segment + evidence/demo modes"));
     m_exportClipBtn->setFixedHeight(32);
     m_exportClipBtn->setEnabled(false);
     connect(m_exportClipBtn, &QPushButton::clicked,
@@ -2942,63 +2942,81 @@ void MainWindow::onLoadAnalysis()
 // ---------------------------------------------------------------------------
 void MainWindow::onExportSegmentClip()
 {
-    if (!m_chartPanel || !m_chartPanel->isABRegionSet()
-        || m_currentVideoPath.isEmpty()
+    // 合成导出器（2026-09-03 拍板：取代分段导出；多段序列 + 证据/演示双模式）
+    if (m_currentVideoPath.isEmpty()
         || m_currentVideoPath.endsWith(".vla", Qt::CaseInsensitive))
         return;
-    const qint64 aMs = m_chartPanel->abPointA();
-    const qint64 bMs = m_chartPanel->abPointB();
+    const bool hasAB = m_chartPanel && m_chartPanel->isABRegionSet();
+    const qint64 aMs = hasAB ? m_chartPanel->abPointA() : 0;
+    const qint64 bMs = hasAB ? m_chartPanel->abPointB() : 0;
+    const double fps = (m_videoEngine && m_videoEngine->fps() > 0.0f)
+                           ? double(m_videoEngine->fps()) : 25.0;
+    const qint64 cursor = m_videoEngine ? m_videoEngine->position() : 0;
 
-    // 初值方案：v1.15.3 改为默认恒原速（1x + 选段内标签分段）。
-    // 上次导出的变速计划不再静默沿用——同选段时通过 setLastPlan 醒目提示，
-    // 用户可一键恢复（避免“导出的文件不对”）。
-    speedplan::SpeedPlan plan;
-    {
-        QVector<qint64> labelTimes;
-        for (const ChartLabel &lb : m_chartPanel->labels())
-            labelTimes.append(lb.timeMs);
-        plan = speedplan::planFromLabels(aMs, bMs, labelTimes);
-    }
-
-    // 建议输出路径：案件模式 = 案内 exports/；独立模式 = 源旁
-    const QString base = QFileInfo(m_currentVideoPath).completeBaseName();
-    const QString name = QStringLiteral("LAClip_%1_%2-%3.mp4")
-                             .arg(base).arg(aMs).arg(bMs);
-    QString dir = QFileInfo(m_currentVideoPath).absolutePath();
-    if (m_caseManager && m_caseManager->isOpen()) {
-        dir = m_caseManager->caseDir() + QStringLiteral("/exports");
-        QDir().mkpath(dir);
-    }
-    const QString suggested = QDir(dir).filePath(name);
-
-    // 非模态浮窗（用户反馈②③）：打开后可继续播放/拖游标，分段实时取游标；
-    // 进度内嵌面板、可最小化
-    if (!m_exportDlg) {
-        m_exportDlg = new SegmentExportDialog(plan,
-                                              m_videoEngine ? m_videoEngine->position() : 0,
-                                              suggested, this);
+    if (!m_composeDlg) {
+        m_composeDlg = new ComposeExportDialog(m_caseManager, m_currentVideoPath,
+                                               aMs, bMs, cursor, fps, this);
         connect(m_videoEngine, &IVideoEngine::positionChanged,
-                m_exportDlg, &SegmentExportDialog::setCursorMs);
-        connect(m_exportDlg, &SegmentExportDialog::exportRequested, this,
-                [this](const speedplan::SpeedPlan &planIn, bool burnOsd,
-                       const QString &outPath) {
-                    startSegmentExport(planIn, burnOsd, outPath);
+                m_composeDlg, &ComposeExportDialog::setCursorMs);
+        connect(m_composeDlg, &ComposeExportDialog::exportRequested, this,
+                [this](const SegmentExportEngine::Params &pp) {
+                    startComposeExport(pp);
                 });
-        connect(m_exportDlg, &SegmentExportDialog::cancelRequested, this, [this]() {
+        connect(m_composeDlg, &ComposeExportDialog::cancelRequested, this, [this]() {
             if (m_segmentExporter)
                 m_segmentExporter->cancel();
         });
     } else {
-        m_exportDlg->setPlan(plan, suggested);
-        m_exportDlg->setCursorMs(m_videoEngine ? m_videoEngine->position() : 0);
+        m_composeDlg->refreshContext(m_currentVideoPath, aMs, bMs, cursor, fps);
     }
-    m_exportDlg->show();
-    m_exportDlg->raise();
-    m_exportDlg->activateWindow();
-    // v1.15.3：同选段且上次有变速 → 醒目提示（默认已不再沿用）
-    m_exportDlg->setLastPlan(
-        (m_speedPlan.isValid() && m_speedPlan.aMs == aMs && m_speedPlan.bMs == bMs)
-            ? m_speedPlan : speedplan::SpeedPlan{});
+    m_composeDlg->show();
+    m_composeDlg->raise();
+    m_composeDlg->activateWindow();
+}
+
+/// 合成导出入口（v1.16.2）：双模式分发——证据直拷 / 多段合成走新管线；
+/// 单段+当前视频+原速+图表面板勾选 → 旧复合导出路径（曲线/语谱/放大镜全保真）
+void MainWindow::startComposeExport(const SegmentExportEngine::Params &ppIn)
+{
+    if (!m_composeDlg)
+        return;
+    if (m_segmentExporter && m_segmentExporter->isRunning()) {
+        m_composeDlg->setResult(false, lang("已有导出进行中", "Export already running"));
+        return;
+    }
+    if (ppIn.segments.size() == 1 && !ppIn.evidenceCopy
+        && ppIn.segments.first().sourcePath == m_currentVideoPath
+        && qAbs(ppIn.segments.first().rate - 1.0) < 0.01
+        && m_composeDlg->wantPanels()) {
+        // 旧复合路径（图表/语谱/放大镜/标签 OSD 全套，v1.15.3 行为冻结）
+        QVector<qint64> labelTimes;
+        for (const ChartLabel &lb : m_chartPanel->labels())
+            labelTimes.append(lb.timeMs);
+        const speedplan::SpeedPlan plan = speedplan::planFromLabels(
+            ppIn.segments.first().inMs, ppIn.segments.first().outMs, labelTimes);
+        startSegmentExport(plan, ppIn.burnOsd, ppIn.outputPath);
+        return;
+    }
+    if (!m_segmentExporter) {
+        m_segmentExporter = new SegmentExportEngine(this);
+        // 连接只在创建时建一次（v1.15.3 卡死修同款教训）
+        connect(m_segmentExporter, &SegmentExportEngine::progress, m_composeDlg,
+                &ComposeExportDialog::setProgress);
+        connect(m_segmentExporter, &SegmentExportEngine::finished, this,
+                [this](bool ok, const QString &msg) {
+                    if (m_composeDlg)
+                        m_composeDlg->setResult(ok, msg);
+                    if (ok)
+                        showOperationStatus(lang("合成导出完成", "Compose export done"));
+                });
+    }
+    const bool evidence = ppIn.evidenceCopy;
+    qint64 total = 0;
+    if (!evidence)
+        for (const auto &s : ppIn.segments)
+            total += SegmentExportEngine::composeSegOutFrames(s, ppIn.outFps);
+    m_composeDlg->setExportRunning(true, evidence ? 100 : int(qMax<qint64>(1, total)));
+    m_segmentExporter->start(ppIn);
 }
 
 /// P-68：面板「开始导出」→ 采集底图 + 引擎启动（进度回报回面板）
@@ -3006,7 +3024,7 @@ void MainWindow::startSegmentExport(const speedplan::SpeedPlan &planIn,
                                     bool burnOsd, const QString &outPath)
 {
     if (m_segmentExporter && m_segmentExporter->isRunning()) {
-        m_exportDlg->setResult(false, lang("已有导出进行中", "Export already running"));
+        m_composeDlg->setResult(false, lang("已有导出进行中", "Export already running"));
         return;
     }
     speedplan::SpeedPlan plan = planIn;
@@ -3056,12 +3074,12 @@ void MainWindow::startSegmentExport(const speedplan::SpeedPlan &planIn,
         // v1.15.3 卡死修：连接只在创建时建一次——旧代码每次导出都 connect，
         // Qt::UniqueConnection 对 lambda 无效（每次新地址），finished 槽逐次
         // 堆叠：第一次完成弹 1 窗、第二次 2 窗……模态窗堵死界面=“不能再导出”。
-        connect(m_segmentExporter, &SegmentExportEngine::progress, m_exportDlg,
-                &SegmentExportDialog::setProgress);
+        connect(m_segmentExporter, &SegmentExportEngine::progress, m_composeDlg,
+                &ComposeExportDialog::setProgress);
         connect(m_segmentExporter, &SegmentExportEngine::finished, this,
                 [this](bool ok, const QString &msg) {
-                    if (m_exportDlg)
-                        m_exportDlg->setResult(ok, msg);
+                    if (m_composeDlg)
+                        m_composeDlg->setResult(ok, msg);
                     if (ok)
                         showOperationStatus(lang("选段视频导出完成", "Clip exported"));
                     // v1.15.3 用户拍板：不要完成弹窗（QMessageBox 在该机器上
@@ -3071,7 +3089,7 @@ void MainWindow::startSegmentExport(const speedplan::SpeedPlan &planIn,
                 });
     }
     SegmentExportEngine *eng = m_segmentExporter;
-    m_exportDlg->setExportRunning(true, int(plan.outputFrameCount(pp.outFps)));
+    m_composeDlg->setExportRunning(true, int(plan.outputFrameCount(pp.outFps)));
     eng->start(pp);
 }
 

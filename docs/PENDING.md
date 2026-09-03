@@ -121,9 +121,12 @@ P-20 2GB 尾帧 seek（已通过）· P-21 DVR 字体抽检（已通过）· P-2
 
 ## 合成导出器（2026-09-03 拍板，取代分段导出）
 - [x] MLT 基建：melt.exe MSVC 构建（LGPL 白名单模块）+ 冒烟全链打通（docs/mlt/README.md）
-- [ ] P1：CompositionModel（JSON 独立文件）+ MLT XML 生成器 + 合成导出对话框
-      （单轨片段序列 + 校正时间 PNG 角标 + 证据/演示双模式），入口取代分段导出
+- [x] P1（路线修订为进程内扩展 SegmentExportEngine，非 melt）：多段片段序列
+      （跨案内视频+逐段倍速）+ 校正时间角标（逐文件校时表）+ 强制「非原始证据」红标
+      + 证据无损直拷（-c copy 关键帧对齐+SHA-256 侧车清单 JSON）；
+      合成导出对话框入口取代分段导出；单段全保真走旧复合路径零回归（HANDOVER §84）
+- [ ] P1 验收：用户实测合成导出对话框（多段拼接/证据清单/角标烧录）
 - [ ] P2：多机位同屏布局、曲线/语谱滚动条、ROI 烧录
 - [ ] P3：转场/字幕轨；melt 瘦身（自编译 ffmpeg shared 仅留必需编码器）
-- [ ] 打包：pack_release.py 加 mlt/ 目录校验；melt.exe 为 GPL 二进制（x264），
-      需随包附源码说明（docs/mlt/README.md 已述构建来源）
+- [ ] 打包：P1 不打 mlt/（进程内路线）；若 P2+ 启用 melt 再加 pack_release 校验
+      （melt.exe 为 GPL 二进制 x264，需附源码说明）
