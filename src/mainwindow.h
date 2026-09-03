@@ -12,7 +12,7 @@
 
 #include <QMainWindow>
 #include "domain/speed_plan.h"
-#include "infrastructure/segment_export_engine.h"   // ComposeExportDialog 信号携带 Params
+#include "infrastructure/segment_export_engine.h"   // 合成导出工作台信号携带 Params
 #include <QPointer>
 #include "domain/analysis_snapshot.h"
 #include "domain/timeline_model.h"
@@ -330,8 +330,7 @@ protected:
     speedplan::SpeedPlan m_speedPlan;
     class SegmentExportEngine *m_segmentExporter = nullptr;
     QPushButton *m_exportClipBtn = nullptr;
-    class SegmentExportDialog *m_exportDlg_legacy = nullptr;  // （已退役，占位防误用）
-    class ComposeExportDialog *m_composeDlg = nullptr;   // 合成导出面板（v1.16.2 起取代分段导出）
+    class ComposeWorkbenchWindow *m_workbench = nullptr;   // 合成导出工作台（v1.16.2 P1.5）
     SpectrogramPanelEnhanced *m_spectrogramEnhanced = nullptr;
 
 };

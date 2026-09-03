@@ -67,9 +67,15 @@ public:
 
         // ---- 合成导出 P1（2026-09-03 拍板：多段序列模式，取代分段导出入口）----
         struct ComposeSeg {
-            QString sourcePath;          ///< 源文件（多段可多源）
-            qint64 inMs = 0, outMs = 0;  ///< 源内毫秒区间 [in, out)
+            QString sourcePath;          ///< 单视频段源文件（多段可多源；lanes 非空时忽略）
+            qint64 inMs = 0, outMs = 0;  ///< 单视频段=流内毫秒 [in,out)；多通道段=墙钟毫秒
             double rate = 1.0;           ///< 段速率（0.25~8）
+            /// P1.5（2026-09-03 拍板）：多通道宫格段——非空即多机位同屏段
+            /// （SyncLaneData 快照，与多机播放窗同口径；暂不支持合并轨 lane）
+            QVector<SyncLaneData> lanes;
+            int audioLane = -1;          ///< 宫格段主听路（越界/未全程覆盖 → 该段静音）
+            QString displayName;         ///< 显示名（时间线块/清单），空=自动
+            bool isLanes() const { return !lanes.isEmpty(); }
         };
         /// 非空 = 多段序列模式（plan/chartBase/specBase/labels/放大镜 PIP 全部忽略）
         QVector<ComposeSeg> segments;

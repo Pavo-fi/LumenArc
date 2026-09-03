@@ -152,7 +152,7 @@ set(SOURCES
     src/infrastructure/transcode_engine.cpp
     src/infrastructure/segment_export_engine.cpp   # P-68 选段分段变速导出
     src/segmentexportdialog.cpp
-    src/composeexportdialog.cpp
+    src/composeworkbench.cpp
     src/resources.qrc
 )
 
@@ -234,7 +234,7 @@ set(HEADERS
     src/feedbackdialog.h
     src/accountdialog.h
     src/segmentexportdialog.h
-    src/composeexportdialog.h
+    src/composeworkbench.h
 )
 
 # --- Headless engine test harness ---

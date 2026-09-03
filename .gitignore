@@ -97,3 +97,16 @@ build_tmp/tcb_deploy/
 build_tmp/avtrace/
 build_tmp/compose_block.cpp
 build_tmp/handover_*.md
+build_tmp/mlt_install/
+build_tmp/mlt_smoke/
+build_tmp/ffmpeg_shared*
+build_tmp/cloudtest/
+build_tmp/txprobe/
+build_tmp/fsprobe/
+build_tmp/wb_part*.cpp
+build_tmp/compose_lanes_block.cpp
+build_tmp/manual2pdf/
+build_tmp/manual_*.pdf
+build_tmp/mlt_build/
+build_tmp/mlt_master.tar.gz
+build_tmp/segment_test_out.log

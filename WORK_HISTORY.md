@@ -5563,3 +5563,14 @@ QProgressDialog（可取消，取消即弃稿）+ QEventLoop 等待。
 
 **遗留（后续批）**：图表/语谱图整段光栅嵌入、大文件哈希进度条、
 P-74 点位图编辑器施工。
+
+## 80. 账号系统 v1.1/v1.2：账号管理对话框 + updateProfile 云函数（93e6d91 / 8138ee0）
+
+- 帮助菜单「退出登录」（93e6d91）→ v1.2 升级为「账号管理」对话框（8138ee0，
+  src/accountdialog.h/.cpp）：当前账号展示手机号打码、修改姓名/单位需短信验证码
+  二次验证、退出登录红按钮；邀请码账号修改区灰置；casedialogs 预填登录档案。
+- 新云函数 **updateProfile**（token+access_token 双校验、invite_cannot_edit、
+  phone_mismatch 防护）已部署+入库；cloud_account 重构出 smsAccessToken 复用层
+  （signInWithSms/reauthPhone 共用，_vtoken 无论 ok 与否都回填）。
+- CloudBase 坑在案：短信码互作废旧码+发码限流；tcb deploy 须 MSYS_NO_PATHCONV=1；
+  云函数 zip 不含 node_modules；AUTH_SECRET 在 build_tmp/tcb_deploy/.auth_secret（不入库）。

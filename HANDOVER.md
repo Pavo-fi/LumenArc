@@ -5,7 +5,7 @@
 
 ## 表头（每次写完 HANDOVER 与 WORK_HISTORY 后必须同步更新本表头——规则 R2）
 
-- **当前 HEAD**：施工批（2026-09-03 §84 合成导出器 P1 落地；含 §80-§83 补录：账号 v1.2~v1.4 / 引擎三连修 / MLT 基建）
+- **当前 HEAD**：施工批（2026-09-03 §85 合成导出工作台：素材树+可播放预览+片段块时间线）
 - **构建**：`cmd //c "build_tmp\build_target.bat ALL"`；测试：`QT_QPA_PLATFORM=offscreen`
   + PATH 含 `C:\code\Qt\6.8.0\msvc2022_64\bin`（配置：`build_tmp\reconfigure.bat`）
 - **全回归基线**（18 套，v1.16.1 后）：mw 97 / ui_chain 103 / libav 26（含 av-align/denoise）/
@@ -14,12 +14,13 @@
   改函数后 `cd build_tmp/tcb_deploy && MSYS_NO_PATHCONV=1 tcb fn deploy <name> --force --yes`；
   AUTH_SECRET 在 build_tmp/tcb_deploy/.auth_secret（不入库）；详见 docs/cloudbase/README.md
 - **当前保留批次**（新→旧，R2 限 5 批）：
-  第七十一批 §84（合成导出器 P1：in-process 多段+证据/演示双模式，取代分段导出）·
-  第七十一批 §83（MLT melt MSVC 构建+能力矩阵实测，叠层=PNG 序列协议）·
+  第七十二批 §85（合成导出工作台：素材树+可播放预览+片段块时间线，废表格版）·
+  第七十一批 §84（合成导出器 P1：in-process 多段+证据/演示双模式）·
+  第七十一批 §83（MLT melt MSVC 构建+能力矩阵实测）·
   第七十一批 §82（v1.16.2 前瞻引擎三连修+拼接工况补全）·
-  第七十一批 §81（账号 v1.4 署名=账号档案写死；v1.3 独立值否决回滚）·
-  第七十一批 §80（账号 v1.2 账号管理对话框+updateProfile 云函数）。
-- **最近归档动作**：2026-09-03 §84 批——§75~§79（第六十六~七十批）移入 WORK_HISTORY.md 末尾；
+  第七十一批 §81（账号 v1.4 署名=账号档案写死；v1.3 否决回滚）。
+- **最近归档动作**：2026-09-03 §85 批——§80（账号 v1.2）移入 WORK_HISTORY.md 末尾；
+  早前：2026-09-03 §84 批——§75~§79 移入；
   早前：2026-08-28 §79 批——第六十五批（§74）移入。
 - **补录说明**：§80~§83 对应提交 93e6d91→434a6ec（2026-08-30~09-03）当时未逐批记录，
   本批一次性补录（每节标注对应提交哈希）。
@@ -35,6 +36,49 @@
 # ============================================================================
 # 工作记录（2026-09-03，第七十一批）——合成导出器 P1 + 账号 v1.2~v1.4 + 引擎三连修 + MLT 基建
 # ============================================================================
+
+## 85. 合成导出工作台（P1.5 拍板 v2）：素材树+可播放预览+片段块时间线，废表格对话框
+
+- **用户反馈表格对话框「不是剪辑的感觉」→ 拍板 v2**：①预览区可播放（B 方案）
+  ②废表格改片段块（双击弹小编辑框精调）③非模态；素材分「多通道（机位同屏）/
+  单视频（案内全量含前处理产物）」两类。
+- **新窗 `src/composeworkbench.h/.cpp`**（ComposeWorkbenchWindow，~1100 行）：
+  - 素材树：多通道节点=机位清单逐路勾选（≤4；未校时=临时路提示；合并轨组禁用
+    同多机口径）；单视频节点=`buildCamInventory` 全量（视频+前处理产物 ⚙标记）
+    + 案外当前视频伪条目。
+  - 预览：单路=自建 FfmpegVideoEngine（QSettings 硬解口径同主窗工厂）；多通道=
+    MultiCamSyncService+CamTileWidget 宫格（瓦片点击切主听路）。CamTileWidget
+    同时当单路显示器用（frameReady/ack 契约现成）。窗口 hide/close 自动
+    stopPreviews（引擎不残留）。
+  - 走带：播放/暂停+进度条（多通道走 svc beginScrub/scrubTo/endScrub，单路 seek）；
+    `I/O` 打点（域：单路=流内 ms、多通道=墙钟 ms）；「+ 加入时间线」无打点默认
+    游标前 10s。
+  - 时间线 ComposeTimelineWidget（cpp 内 Q_OBJECT，`#include "composeworkbench.moc"`）：
+    块宽∝输出时长、色板按序、点选/拖拽排序（>24px 触发）/双击参数框（入出点文本
+    h:mm:ss.mmm + 倍速 spin）/右键菜单/滚轮缩放 0.004~2px/ms。
+  - 导出面板：演示/证据双模式（时间线含宫格段→证据自动禁用回演示）、校正时间/
+    案件号/图表面板勾（图表面板 tooltip 注明仅单段当前视频原速）、案内 exports/
+    默认路径、内嵌进度。
+- **引擎扩 ComposeSeg**：`lanes`（SyncLaneData 快照）+`audioLane`+`displayName`，
+  isLanes() 即多通道段；start() 校验——证据模式拒宫格段、宫格段 2~4 路、
+  合并轨拒、未校时非临时路拒；runCompose 宫格分支（逐路 SeqDecoder+宫格绘制，
+  瓦片画法与 runMultiCam 孪生但**刻意不共改其 v1.15.3 冻结路径**；多段模式无覆盖条）；
+  音轨=主听路两端覆盖才映射（部分覆盖退化整段静音，细分留 P2）；OSD 基准=
+  首条已校时路墙钟→北京时间，无则「未校时·墙钟 Ns」。
+- **旧 ComposeExportDialog（表格版）删除**：文件/CMake/主窗引用全清；
+  主窗 m_composeDlg→m_workbench，startComposeExport 分发逻辑不变
+  （单段+当前视频+原速+图表面板→旧复合路径保留）。
+- **测试**：segment_test 新增 lanes 宫格 e2e（双临时路同素材→时长/无音轨校验）
+  +3 个校验拒绝用例；**修 harness 两个潜伏坑**：①`QSignalSpy::wait` 对同步
+  （直连接）已发出的信号返回 false → 校验类用 `count()+first()`；②测试须在
+  **仓库根目录**跑（相对路径 build_tmp/caltest 资产）——此前从 build/Release 跑
+  时 e2e 曾静默 SKIP 未被察觉；给 segment_test 装了 qInstallMessageHandler 写
+  build_tmp/segment_test_out.log（控制台吞输出环境的诊断通道）。
+  基线更正：basic.mp4 **无音轨**（此前 compose e2e 的 hasAudio 预期写反，
+  从根目录真跑后暴露修正）。88 checks 0 failures；全回归绿
+  （mw/case/report/sitemap/ui_chain/libav/sync）。
+- **遗留**：多通道段部分覆盖音轨细分 P2；宫格段无覆盖条（P2 可补）；
+  工作台无独立「证据+宫格」组合（物理上矛盾）；块时间线无播放头联动（P2）。
 
 ## 84. 合成导出器 P1 落地（in-process 路线修订，取代分段导出入口）
 
@@ -126,14 +170,3 @@
   心跳块补齐本地缺失 name/org（自愈旧凭证）；report_service/sitemapeditordialog
   历史空值兜底当前账号档案。
 - harness profile 链验证通过；资源点结论：SMS=50 点/条唯一大头，先不升级。
-
-## 80. 账号系统 v1.1/v1.2：账号管理对话框 + updateProfile 云函数（93e6d91 / 8138ee0）
-
-- 帮助菜单「退出登录」（93e6d91）→ v1.2 升级为「账号管理」对话框（8138ee0，
-  src/accountdialog.h/.cpp）：当前账号展示手机号打码、修改姓名/单位需短信验证码
-  二次验证、退出登录红按钮；邀请码账号修改区灰置；casedialogs 预填登录档案。
-- 新云函数 **updateProfile**（token+access_token 双校验、invite_cannot_edit、
-  phone_mismatch 防护）已部署+入库；cloud_account 重构出 smsAccessToken 复用层
-  （signInWithSms/reauthPhone 共用，_vtoken 无论 ok 与否都回填）。
-- CloudBase 坑在案：短信码互作废旧码+发码限流；tcb deploy 须 MSYS_NO_PATHCONV=1；
-  云函数 zip 不含 node_modules；AUTH_SECRET 在 build_tmp/tcb_deploy/.auth_secret（不入库）。
