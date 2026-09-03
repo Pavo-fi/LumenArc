@@ -5,7 +5,7 @@
 
 ## 表头（每次写完 HANDOVER 与 WORK_HISTORY 后必须同步更新本表头——规则 R2）
 
-- **当前 HEAD**：施工批（2026-09-03 §87 工作台四步引导改版+快捷键对齐剪映/PR）
+- **当前 HEAD**：施工批（2026-09-03 §88 合成导出收官：覆盖条/部分覆盖音轨/播放头联动+v1.16.2 打包）
 - **构建**：`cmd //c "build_tmp\build_target.bat ALL"`；测试：`QT_QPA_PLATFORM=offscreen`
   + PATH 含 `C:\code\Qt\6.8.0\msvc2022_64\bin`（配置：`build_tmp\reconfigure.bat`）
 - **全回归基线**（18 套，v1.16.1 后）：mw 97 / ui_chain 103 / libav 26（含 av-align/denoise）/
@@ -14,14 +14,14 @@
   改函数后 `cd build_tmp/tcb_deploy && MSYS_NO_PATHCONV=1 tcb fn deploy <name> --force --yes`；
   AUTH_SECRET 在 build_tmp/tcb_deploy/.auth_secret（不入库）；详见 docs/cloudbase/README.md
 - **当前保留批次**（新→旧，R2 限 5 批）：
+  第七十五批 §88（合成导出收官：覆盖条/部分覆盖音轨/播放头联动+v1.16.2 打包）·
   第七十四批 §87（工作台四步引导改版+快捷键对齐剪映/PR）·
   第七十三批 §86（合成导出 P2：ROI/曲线滚动条+宫格布局+ffmpeg8 排雷+docx 原子写）·
   第七十二批 §85（合成导出工作台：素材树+可播放预览+片段块时间线）·
-  第七十一批 §84（P1：in-process 多段+证据/演示双模式）·
-  第七十一批 §83（MLT melt 构建+能力矩阵实测）。
-  （§82 引擎三连修 已归档 WORK_HISTORY——见下）
-  （§81 账号 v1.4 署名写死 已归档 WORK_HISTORY——见下）
-- **最近归档动作**：2026-09-03 §87 批——§82（引擎三连修）移入 WORK_HISTORY.md 末尾；
+  第七十一批 §84（P1：in-process 多段+证据/演示双模式）。
+  （§83 MLT 构建 已归档 WORK_HISTORY——见下）
+- **最近归档动作**：2026-09-03 §88 批——§83（MLT melt 构建）移入 WORK_HISTORY.md 末尾；
+  早前：2026-09-03 §87 批——§82（引擎三连修）移入；
   早前：2026-09-03 §86 批——§81（账号 v1.4 署名写死）移入；
   早前：2026-09-03 §85 批——§80（账号 v1.2）移入；
   早前：2026-09-03 §84 批——§75~§79 移入；
@@ -40,6 +40,26 @@
 # ============================================================================
 # 工作记录（2026-09-03，第七十一批）——合成导出器 P1 + 账号 v1.2~v1.4 + 引擎三连修 + MLT 基建
 # ============================================================================
+
+## 88. 合成导出 P2.6 收官：覆盖条/部分覆盖音轨/播放头联动 + v1.16.2 打包排雷
+
+- **宫格段覆盖条**（runCompose lanes 分支）：画面顶部每路一行 3px 彩条（段内覆盖
+  区间=syncLaneWallStart/End ∩ [in,out]，Theme::DataPalette 与机位名同色）+白竖线
+  游标；右上水印 350px 让位。无画面格本就有「该时刻无画面」占位（§85）。
+- **部分覆盖音轨细分**：新增 `AudioSegPart{label,inMs,outMs,rate}` +
+  `buildAudioFilterChainV2`（段=子片序列：有源片 atrim/atempo/aresample 归一，
+  盲区片 anullsrc 等长静音，段内 concat 再段间 concat）；runCompose 宫格段映射改为
+  盲区头/有源中/盲区尾三片（全盖/全盲退化为单片，单视频段单片不变——旧
+  buildAudioFilterChainMulti 保留供既有断言）。**e2e 实锤**：LAMerged 主听路只盖
+  前半 → ffprobe astats 覆盖区 RMS -65dB（监控音本低）vs 盲区 -120dB 死寂。
+- **播放头联动**：ComposeTimelineWidget::setPlaySeg——预览位置落入段源区间时块顶
+  画 ▼（单路按 sourcePath+in/out 匹配，多通道按墙钟覆盖）。
+- **v1.16.2 打包排雷**：pack_release.py 此前 EXCLUDE_DIRS 仅 cases → mlt/ 385 条目
+  ~160MB 混进 zip；+mlt 排除后 v1.16.2 包 290MB、mlt 0 条目、必含 13/13。
+  CMakeLists project(VERSION) → 1.16.2。
+- **测试**：segment 115 全绿（V2 链 7 断言+部分覆盖 RMS e2e）；全回归 9 套绿。
+- **教训**：ffmpeg astats 判静音用 "-inf" 解析；监控源 RMS 绝对值低，须用
+  覆盖/盲区差值判定（≥25dB）而非绝对阈值。
 
 ## 87. 工作台四步引导改版（新手向重构）+ 快捷键对齐剪映/PR
 
@@ -174,24 +194,3 @@
 - **遗留**：P1 预览无独立合成预览窗（复用主视口手动核对）；MLT 运行时仍在
   build/Release/mlt/ 但 **P1 不打包 mlt/**（pack_release 不动）；P2 多机位同屏/
   曲线滚动条/ROI 烧录、P3 melt 瘦身见 PENDING。
-
-## 83. MLT 合成引擎基建：melt.exe MSVC 构建跑通 + 能力矩阵实测（434a6ec）
-
-- 定位拍板（2026-09-03）：合成导出器=**分析成果合成导出器**（非通用剪辑器）；
-  P1=单轨片段序列+校正时间角标+证据/演示双模式；入口取代分段导出；不许跨案件混编。
-- **melt 7.41.0 MSVC 构建**（build_tmp/mlt_src = MLT **master** tarball；v7.40 不兼容
-  FFmpeg 8——`AVCodec::sample_fmts/pix_fmts` 已删，master 用 avcodec_get_supported_config）。
-  vcpkg 装 libxml2（github 超时→curl 断点续传塞 downloads）/pkgconf/pthreads/dirent/
-  dlfcn-win32/sdl2/libebur128；`-DVCPKG_MANIFEST_MODE=OFF`（否则自动编 ffmpeg）；
-  `/utf-8` 绕 GBK 吃行（mlt_repository.c 注释含 UTF-8 省略号）；全局 /I 补 pthread.h。
-  配方入 `tools/mlt/build_mlt.bat` + `docs/mlt/README.md`。
-- **许可证白名单**：core/avformat/xml/plus=LGPL ✅；qt/plusgpl/glaxnimate/normalize/
-  resample/rubberband/vidstab/xine/openfx=GPL ❌ 构建即排除（模块运行时 dlopen）。
-- **能力矩阵像素级实测**（build_tmp/mlt_smoke）：✅片段 in/out 裁剪拼接、✅画中画、
-  ✅PNG/PNG 序列 alpha 叠层（composite 半透明数值精确）；❌qtrle(argb) alpha 被
-  chain_normalizers 吞、❌dynamictext/text 滤镜依赖 GPL qt/gtk 模块。
-  → 叠层协议定为 **PNG 序列（QPainter 渲染）**。
-- 运行 env：MLT_REPOSITORY/MLT_DATA/MLT_PROFILES_PATH；依赖 DLL 与 melt.exe 同目录
-  （avdevice-63 易漏）；MLT XML 工程一律绝对路径（相对路径静默失败 rc=3）；
-  CLI 文本角标参数走 GBK 控制台会乱码（集成一律生成 UTF-8 XML）。
-- melt 为 GPL 二进制（x264），若随包发布需附源码说明（docs/mlt/README.md 已述）。

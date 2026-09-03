@@ -1221,6 +1221,53 @@ QString SegmentExportEngine::buildAudioFilterChainMulti(
     return parts.join(QStringLiteral(";"));
 }
 
+QString SegmentExportEngine::buildAudioFilterChainV2(
+    const QVector<QVector<AudioSegPart>> &segs)
+{
+    QStringList parts;
+    QStringList segLabels;
+    for (int i = 0; i < segs.size(); ++i) {
+        const auto &sp = segs[i];
+        QStringList subLabels;
+        for (int j = 0; j < sp.size(); ++j) {
+            const AudioSegPart &pt = sp[j];
+            const QString out = (sp.size() == 1)
+                ? QStringLiteral("[a%1]").arg(i)
+                : QStringLiteral("[a%1_%2]").arg(i).arg(j);
+            QString chain;
+            if (pt.inputLabel.isEmpty()) {
+                // 静音片：anullsrc 补等长（长度 = 区间 / rate，输出域）
+                const double durS = (pt.outMs - pt.inMs) / 1000.0 / qMax(0.01, pt.rate);
+                chain = QStringLiteral("anullsrc=r=48000:cl=stereo,atrim=start=0:end=%1,"
+                                       "asetpts=PTS-STARTPTS")
+                            .arg(durS, 0, 'f', 3);
+            } else {
+                chain = QStringLiteral("[%1]atrim=start=%2:end=%3,asetpts=PTS-STARTPTS")
+                            .arg(pt.inputLabel)
+                            .arg(pt.inMs / 1000.0, 0, 'f', 3)
+                            .arg(pt.outMs / 1000.0, 0, 'f', 3);
+                for (const QString &at : atempoChain(pt.rate))
+                    chain += QLatin1Char(',') + at;
+            }
+            // 全分支统一 48k 立体声 s16（异构源 concat 防御）
+            chain += QStringLiteral(",aresample=48000:out_chlayout=stereo:osf=s16") + out;
+            parts << chain;
+            subLabels << out;
+        }
+        if (sp.size() == 1) {
+            segLabels << QStringLiteral("[a%1]").arg(i);
+        } else {
+            const QString segOut = QStringLiteral("[as%1]").arg(i);
+            parts << QStringLiteral("%1concat=n=%2:v=0:a=1%3")
+                         .arg(subLabels.join(QString()), QString::number(sp.size()), segOut);
+            segLabels << segOut;
+        }
+    }
+    parts << QStringLiteral("%1concat=n=%2:v=0:a=1[aout]")
+                 .arg(segLabels.join(QString()), QString::number(segs.size()));
+    return parts.join(QStringLiteral(";"));
+}
+
 void SegmentExportEngine::runCompose()
 {
     const Params &p = m_params;
@@ -1278,40 +1325,49 @@ void SegmentExportEngine::runCompose()
         for (const QString &f : uniqFiles)
             args << QStringLiteral("-i") << f;
     if (anyAudio) {
-        QVector<double> rates;
-        QVector<QPair<qint64, qint64>> ranges;
-        QStringList labels;
+        // P2.6：分段音频部件模型——单视频段 1 片；宫格段按主听路覆盖细分为
+        // 「静音头/有源中/静音尾」（部分覆盖不再整段静音）
+        QVector<QVector<AudioSegPart>> segParts;
         for (const auto &s : p.segments) {
-            rates << s.rate;
+            QVector<AudioSegPart> sp;
             if (s.isLanes()) {
-                // 宫格段：音轨=主听路。两端覆盖才映射（部分覆盖的细分留 P2，
-                // 未覆盖退化为整段静音——标签空走 anullsrc，长度=输出域）
-                QString label;
-                QPair<qint64, qint64> rng{s.inMs, s.outMs};
+                AudioSegPart mid;
+                bool midOk = false;
                 if (s.audioLane >= 0 && s.audioLane < s.lanes.size()) {
                     const SyncLaneData &al = s.lanes[s.audioLane];
-                    if (hasAudioOf.value(al.path, false)
-                        && syncLaneCovers(al, s.inMs) && syncLaneCovers(al, s.outMs)) {
-                        const qint64 ss = syncStreamOf(al, s.inMs);
-                        const qint64 se = syncStreamOf(al, s.outMs);
-                        if (ss >= 0 && se > ss) {
-                            rng = {ss, se};
-                            label = QStringLiteral("%1:a")
-                                        .arg(uniqFiles.indexOf(al.path) + 1);
+                    if (hasAudioOf.value(al.path, false)) {
+                        const qint64 covA = qMax(s.inMs, syncLaneWallStart(al));
+                        const qint64 covB = qMin(s.outMs, syncLaneWallEnd(al));
+                        if (covB > covA) {
+                            const qint64 ss = syncStreamOf(al, covA);
+                            const qint64 se = syncStreamOf(al, covB);
+                            if (ss >= 0 && se > ss) {
+                                if (covA > s.inMs)   // 盲区头
+                                    sp << AudioSegPart{QString(), s.inMs, covA, s.rate};
+                                mid.inputLabel = QStringLiteral("%1:a")
+                                    .arg(uniqFiles.indexOf(al.path) + 1);
+                                mid.inMs = ss; mid.outMs = se; mid.rate = s.rate;
+                                sp << mid;
+                                midOk = true;
+                                if (covB < s.outMs)  // 盲区尾
+                                    sp << AudioSegPart{QString(), covB, s.outMs, s.rate};
+                            }
                         }
                     }
                 }
-                ranges.append(rng);
-                labels << label;
+                if (!midOk)   // 完全未覆盖/无音轨 → 整段静音片
+                    sp = {AudioSegPart{QString(), s.inMs, s.outMs, s.rate}};
             } else {
-                ranges.append({s.inMs, s.outMs});
-                labels << (hasAudioOf.value(s.sourcePath, false)
-                               ? QStringLiteral("%1:a").arg(uniqFiles.indexOf(s.sourcePath) + 1)
-                               : QString());
+                sp << AudioSegPart{
+                    hasAudioOf.value(s.sourcePath, false)
+                        ? QStringLiteral("%1:a").arg(uniqFiles.indexOf(s.sourcePath) + 1)
+                        : QString(),
+                    s.inMs, s.outMs, s.rate};
             }
+            segParts << sp;
         }
         args << QStringLiteral("-filter_complex")
-             << buildAudioFilterChainMulti(rates, ranges, labels)
+             << buildAudioFilterChainV2(segParts)
              << QStringLiteral("-map") << QStringLiteral("0:v")
              << QStringLiteral("-map") << QStringLiteral("[aout]");
     } else {
@@ -1466,6 +1522,38 @@ void SegmentExportEngine::runCompose()
                         painter.setPen(QPen(QColor(Theme::Border), 1));
                         painter.setBrush(Qt::NoBrush);
                         painter.drawRect(cell);
+                    }
+                    // ---- P2.6 覆盖条：每路一行（灰底+彩色覆盖区间），白线=当前时刻 ----
+                    {
+                        const int stripH = 8 + ln * 6;
+                        QRect strip(videoRect.x() + 6, videoRect.y() + 6,
+                                    videoRect.width() - 12, stripH);
+                        if (p.demoWatermark)   // 右上水印 340px 防叠
+                            strip.setRight(strip.right() - 350);
+                        painter.setPen(Qt::NoPen);
+                        painter.setBrush(QColor(0, 0, 0, 130));
+                        painter.drawRoundedRect(strip, 4, 4);
+                        const double span = double(qMax<qint64>(1, seg.outMs - seg.inMs));
+                        for (int i = 0; i < ln; ++i) {
+                            const SyncLaneData &l = seg.lanes[i];
+                            const int ry = strip.y() + 4 + i * 6;
+                            painter.setBrush(QColor(70, 73, 82));
+                            painter.drawRect(strip.x() + 6, ry, strip.width() - 12, 3);
+                            const double a = double(qMax(syncLaneWallStart(l), seg.inMs)
+                                                    - seg.inMs) / span;
+                            const double b = double(qMin(syncLaneWallEnd(l), seg.outMs)
+                                                    - seg.inMs) / span;
+                            if (b > a) {
+                                painter.setBrush(QColor(Theme::DataPalette[
+                                    i % Theme::DataPalette.size()]));
+                                painter.drawRect(strip.x() + 6 + int(a * (strip.width() - 12)),
+                                                 ry, int((b - a) * (strip.width() - 12)), 3);
+                            }
+                        }
+                        const double cx = (wall - seg.inMs) / span;
+                        painter.fillRect(strip.x() + 6 + int(cx * (strip.width() - 12)),
+                                         strip.y() + 2, 2, strip.height() - 4,
+                                         QColor(255, 255, 255));
                     }
                     // ---- 信息角标（校正时间=基准路墙钟→北京时间）----
                     if (p.burnOsd) {

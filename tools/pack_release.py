@@ -16,7 +16,8 @@ SRC = os.path.join(ROOT, "build", "Release")
 OUT_DIR = os.path.join(ROOT, "build_tmp", "dist")
 
 # ---- 红线排除 ----
-EXCLUDE_DIRS = {"cases"}                      # 真实案件数据，永远不入包
+EXCLUDE_DIRS = {"cases",                      # 真实案件数据，永远不入包
+                "mlt"}                        # MLT/melt 调研基建：进程内路线不进包（拍板 2026-09-03）
 EXCLUDE_FILES = {
     "case.json.lock", "lightchaser.jpg",       # 锁文件；splash 图已内嵌 qrc
     "Qt6Test.dll", "Qt6Testd.dll",             # 仅测试程序需要

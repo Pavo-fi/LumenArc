@@ -125,6 +125,16 @@ public:
     static QString buildAudioFilterChainMulti(const QVector<double> &rates,
                                               const QVector<QPair<qint64, qint64>> &streamRanges,
                                               const QStringList &inputLabels);
+
+    /// P2.6 部分覆盖细分：一段 = 若干「有源/静音」子片顺序拼接
+    /// （宫格段主听路只盖住选段一部分时：覆盖区映射真音轨、盲区补等长静音）
+    struct AudioSegPart {
+        QString inputLabel;   ///< 空 = 静音片（anullsrc 补等长）
+        qint64 inMs = 0;      ///< 有源片：源流内区间
+        qint64 outMs = 0;
+        double rate = 1.0;    ///< 输出变速（静音片长度 = 区间长 / rate）
+    };
+    static QString buildAudioFilterChainV2(const QVector<QVector<AudioSegPart>> &segs);
     /// 多段模式单段输出帧数（纯函数，进度总量用）
     static qint64 composeSegOutFrames(const Params::ComposeSeg &seg, double outFps);
     /// 证据模式清单 JSON（纯函数，单测直验）：侧车内容与产物/源哈希

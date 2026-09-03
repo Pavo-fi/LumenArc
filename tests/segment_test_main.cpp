@@ -26,6 +26,7 @@ extern "C" {
 #include <QTemporaryDir>
 #include <QProcess>
 #include <QPainter>
+#include <QRegularExpression>
 #include <cmath>
 
 using speedplan::SpeedPlan;
@@ -746,6 +747,105 @@ static void testComposeRealAssetEndToEnd()
     QFile::remove(pp.outputPath);
 }
 
+static void testAudioChainV2()
+{
+    using SEE = SegmentExportEngine;
+    // 单片有源：与旧 multi 形态一致（直出 [a0]）
+    const QString one = SEE::buildAudioFilterChainV2(
+        {{SEE::AudioSegPart{QStringLiteral("1:a"), 1000, 3000, 1.0}}});
+    CHECK(one.contains(QStringLiteral("[1:a]atrim=start=1.000:end=3.000")), "V2 单片有源 atrim");
+    CHECK(one.contains(QStringLiteral("concat=n=1")), "V2 单段总拼");
+    // 部分覆盖三片：静音头 + 有源中(2x) + 静音尾
+    const QString part = SEE::buildAudioFilterChainV2({{
+        SEE::AudioSegPart{QString(), 0, 1000, 2.0},
+        SEE::AudioSegPart{QStringLiteral("2:a"), 60000, 62500, 2.0},
+        SEE::AudioSegPart{QString(), 3500, 5000, 2.0}}});
+    CHECK(part.contains(QStringLiteral("anullsrc=r=48000:cl=stereo,atrim=start=0:end=0.500")),
+          "V2 静音头 1000ms/2x=0.5s");
+    CHECK(part.contains(QStringLiteral("[2:a]atrim=start=60.000:end=62.500")), "V2 中片取流");
+    CHECK(part.contains(QStringLiteral("atempo=2.0")), "V2 中片变速");
+    CHECK(part.contains(QStringLiteral("atrim=start=0:end=0.750")),
+          "V2 静音尾 1500ms/2x=0.75s");
+    CHECK(part.contains(QStringLiteral("concat=n=3:v=0:a=1[as0]")), "V2 段内三拼");
+    CHECK(part.contains(QStringLiteral("[as0]concat=n=1:v=0:a=1[aout]")), "V2 段间总拼");
+}
+
+/// 抽产物某窗口音频 RMS（dB）；静音 → -inf（返回 -120）
+static double probeRmsDb(const QString &path, double startS, double durS)
+{
+    QProcess proc;
+    proc.start(ToolPaths::findFfmpegPath(),
+               {QStringLiteral("-v"), QStringLiteral("info"),
+                QStringLiteral("-ss"), QString::number(startS),
+                QStringLiteral("-t"), QString::number(durS),
+                QStringLiteral("-i"), path,
+                QStringLiteral("-af"), QStringLiteral("astats"),
+                QStringLiteral("-f"), QStringLiteral("null"), QStringLiteral("-")});
+    proc.waitForFinished(60000);
+    const QString out = QString::fromLocal8Bit(proc.readAllStandardError());
+    static const QRegularExpression re(QStringLiteral("RMS level dB:\\s*(-?[0-9.]+|-inf)"));
+    const auto m = re.match(out);
+    if (!m.hasMatch())
+        return -120.0;
+    const QString v = m.captured(1);
+    return v == QStringLiteral("-inf") ? -120.0 : v.toDouble();
+}
+
+static void testComposeLanesPartialAudioEndToEnd()
+{
+    // 部分覆盖细分 e2e：主听路（LAMerged 8kHz 有声）只盖段前半，后半静音
+    const QString la = QStringLiteral(
+        "build/Release/cases/20260722-广州增城-a-20260722增城火灾/preprocess/"
+        "20260902_162648/LAMerged_02-04-52_6m_03-39-11.mp4");
+    const QString basic = QStringLiteral("build_tmp/caltest/basic.mp4");
+    if (!QFile::exists(la) || !QFile::exists(basic)) {
+        qWarning() << "SKIP partial-audio e2e: assets missing";
+        return;
+    }
+    SyncLaneData l0;
+    l0.id = QStringLiteral("A"); l0.path = la; l0.displayName = QStringLiteral("A");
+    l0.temporary = true; l0.durationMs = 2500;   // 只盖 [0,2500)
+    SyncLaneData l1;
+    l1.id = QStringLiteral("B"); l1.path = basic; l1.displayName = QStringLiteral("B");
+    l1.temporary = true; l1.durationMs = 2000;
+    SegmentExportEngine::Params pp;
+    SegmentExportEngine::Params::ComposeSeg seg;
+    seg.lanes = {l0, l1};
+    seg.audioLane = 0;
+    seg.inMs = 0; seg.outMs = 4000;
+    pp.segments = {seg};
+    pp.outputPath = QStringLiteral("build_tmp/caltest/compose_partial_audio.mp4");
+    pp.outFps = 5.0;
+    pp.canvas = QSize(640, 480);
+    pp.demoWatermark = true;
+    QFile::remove(pp.outputPath);
+
+    SegmentExportEngine eng;
+    QSignalSpy spy(&eng, &SegmentExportEngine::finished);
+    eng.start(pp);
+    const bool got = spy.wait(120000);
+    CHECK(got, "partial-audio e2e finished");
+    if (!got) return;
+    if (!spy.first().at(0).toBool()) {
+        CHECK(false, QStringLiteral("partial-audio e2e 失败：%1")
+                         .arg(spy.first().at(1).toString()));
+        return;
+    }
+    bool hasAudio = false;
+    const qint64 dur = probeDurationMs(pp.outputPath, &hasAudio);
+    CHECK(qAbs(dur - 4000) <= 900,
+          QStringLiteral("partial-audio 时长≈4000ms（实测 %1）").arg(dur));
+    CHECK(hasAudio, "partial-audio 有音轨");
+    // 前半（主听路覆盖）应有声，后半（盲区）应静音：RMS 差 ≥15dB
+    const double rCovered = probeRmsDb(pp.outputPath, 0.8, 1.2);
+    const double rSilent = probeRmsDb(pp.outputPath, 3.0, 0.9);
+    CHECK(rCovered > -85.0,
+          QStringLiteral("覆盖区非死寂（RMS %1 dB；监控源本身音量低）").arg(rCovered));
+    CHECK(rCovered - rSilent >= 25.0,
+          QStringLiteral("盲区显著静音（覆盖 %1 / 盲区 %2 dB）").arg(rCovered).arg(rSilent));
+    QFile::remove(pp.outputPath);
+}
+
 int main(int argc, char **argv)
 {
     QFile::remove(QStringLiteral("build_tmp/segment_test_out.log"));
@@ -767,6 +867,8 @@ int main(int argc, char **argv)
     testComposeOverlay();
     testComposeOverlayEndToEnd();
     testComposeRealAssetEndToEnd();
+    testAudioChainV2();
+    testComposeLanesPartialAudioEndToEnd();
     testMultiCamEndToEnd();
     testEndToEnd();
     qInfo() << "segment_test:" << g_checks << "checks," << g_failures << "failures";

@@ -68,6 +68,9 @@ public:
         update();
     }
     int selected() const { return m_selected; }
+    void setPlaySeg(int idx) {          // P2.6 播放头联动：预览位置落在哪段
+        if (m_playSeg != idx) { m_playSeg = idx; update(); }
+    }
     qint64 totalOutMs() const {
         qint64 t = 0;
         for (int i = 0; i < m_segs.size(); ++i)
@@ -107,6 +110,15 @@ protected:
                 p.setPen(QPen(QColor(Theme::Accent), 2));
                 p.setBrush(Qt::NoBrush);
                 p.drawRoundedRect(r.adjusted(1, 1, -1, -1), 5, 5);
+            }
+            if (m_playSeg == i) {   // 预览正在放这段：顶部▼标记
+                p.setPen(Qt::NoPen);
+                p.setBrush(QColor(Theme::Accent));
+                const int cx0 = r.center().x();
+                const QPoint tri[3] = {QPoint(cx0 - 5, r.top() - 12),
+                                       QPoint(cx0 + 5, r.top() - 12),
+                                       QPoint(cx0, r.top() - 3)};
+                p.drawPolygon(tri, 3);
             }
             p.setPen(QColor(Theme::TextPrimary));
             QFont f = p.font();
@@ -219,6 +231,7 @@ private:
 
     QVector<SegmentExportEngine::Params::ComposeSeg> m_segs;
     QStringList m_names;
+    int m_playSeg = -1;
     double m_pxPerMs = 0.05;   // 1s ≈ 50px
     int m_selected = -1;
     int m_dragFrom = -1;
@@ -897,6 +910,25 @@ void ComposeWorkbenchWindow::updateTransport() {
         marks += QStringLiteral("出 %1").arg(formatMs(m_markOut));
     }
     m_markLabel->setText(marks);
+    // P2.6 播放头联动：预览位置落在哪个片段块 → 顶部▼标记
+    int playIdx = -1;
+    if (!m_segs.isEmpty()) {
+        const qint64 pos = previewPosMs();
+        if (m_multiActive) {
+            for (int i = 0; i < m_segs.size(); ++i)
+                if (m_segs[i].isLanes() && m_segs[i].inMs <= pos && pos < m_segs[i].outMs) {
+                    playIdx = i; break;
+                }
+        } else if (!m_singlePreviewPath.isEmpty()) {
+            const QString eff = effectivePath(m_singlePreviewPath);
+            for (int i = 0; i < m_segs.size(); ++i)
+                if (!m_segs[i].isLanes() && m_segs[i].sourcePath == eff
+                    && m_segs[i].inMs <= pos && pos < m_segs[i].outMs) {
+                    playIdx = i; break;
+                }
+        }
+    }
+    m_timeline->setPlaySeg(playIdx);
     updateGuide();
 }
 

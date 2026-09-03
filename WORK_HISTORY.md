@@ -5605,3 +5605,24 @@ P-74 点位图编辑器施工。
   预览缓存 sws 不重建、纯视频段。
 - 病灶文件（现回归素材）：cases/20260722-广州增城/preprocess/.../LAMerged_02-04-52
   _6m_03-39-11.mp4（91min、15fps、AAC 8kHz mono、PTS 抖动族）。
+
+## 83. MLT 合成引擎基建：melt.exe MSVC 构建跑通 + 能力矩阵实测（434a6ec）
+
+- 定位拍板（2026-09-03）：合成导出器=**分析成果合成导出器**（非通用剪辑器）；
+  P1=单轨片段序列+校正时间角标+证据/演示双模式；入口取代分段导出；不许跨案件混编。
+- **melt 7.41.0 MSVC 构建**（build_tmp/mlt_src = MLT **master** tarball；v7.40 不兼容
+  FFmpeg 8——`AVCodec::sample_fmts/pix_fmts` 已删，master 用 avcodec_get_supported_config）。
+  vcpkg 装 libxml2（github 超时→curl 断点续传塞 downloads）/pkgconf/pthreads/dirent/
+  dlfcn-win32/sdl2/libebur128；`-DVCPKG_MANIFEST_MODE=OFF`（否则自动编 ffmpeg）；
+  `/utf-8` 绕 GBK 吃行（mlt_repository.c 注释含 UTF-8 省略号）；全局 /I 补 pthread.h。
+  配方入 `tools/mlt/build_mlt.bat` + `docs/mlt/README.md`。
+- **许可证白名单**：core/avformat/xml/plus=LGPL ✅；qt/plusgpl/glaxnimate/normalize/
+  resample/rubberband/vidstab/xine/openfx=GPL ❌ 构建即排除（模块运行时 dlopen）。
+- **能力矩阵像素级实测**（build_tmp/mlt_smoke）：✅片段 in/out 裁剪拼接、✅画中画、
+  ✅PNG/PNG 序列 alpha 叠层（composite 半透明数值精确）；❌qtrle(argb) alpha 被
+  chain_normalizers 吞、❌dynamictext/text 滤镜依赖 GPL qt/gtk 模块。
+  → 叠层协议定为 **PNG 序列（QPainter 渲染）**。
+- 运行 env：MLT_REPOSITORY/MLT_DATA/MLT_PROFILES_PATH；依赖 DLL 与 melt.exe 同目录
+  （avdevice-63 易漏）；MLT XML 工程一律绝对路径（相对路径静默失败 rc=3）；
+  CLI 文本角标参数走 GBK 控制台会乱码（集成一律生成 UTF-8 XML）。
+- melt 为 GPL 二进制（x264），若随包发布需附源码说明（docs/mlt/README.md 已述）。
