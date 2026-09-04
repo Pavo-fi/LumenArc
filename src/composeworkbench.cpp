@@ -27,7 +27,9 @@
 #include <QLabel>
 #include <QLineEdit>
 #include <QMenu>
+#include <QDesktopServices>
 #include <QMouseEvent>
+#include <QUrl>
 #include <QAbstractSpinBox>
 #include <QComboBox>
 #include <QKeySequence>
@@ -649,6 +651,10 @@ ComposeWorkbenchWindow::ComposeWorkbenchWindow(CaseManager *cm,
     m_cancelBtn->setFocusPolicy(Qt::NoFocus);
     m_closeBtn = new QPushButton(QStringLiteral("关 闭"), outBox);
     m_closeBtn->setFocusPolicy(Qt::NoFocus);
+    m_openOutBtn = new QPushButton(QStringLiteral("📂 打开输出文件夹"), outBox);
+    m_openOutBtn->setFocusPolicy(Qt::NoFocus);
+    m_openOutBtn->setVisible(false);
+    progRow->addWidget(m_openOutBtn);
     progRow->addWidget(m_startBtn);
     progRow->addWidget(m_cancelBtn);
     progRow->addWidget(m_closeBtn);
@@ -708,6 +714,10 @@ ComposeWorkbenchWindow::ComposeWorkbenchWindow(CaseManager *cm,
     connect(m_closeBtn, &QPushButton::clicked, this, [this]() {
         if (!m_running)
             hide();
+    });
+    connect(m_openOutBtn, &QPushButton::clicked, this, [this]() {
+        QDesktopServices::openUrl(
+            QUrl::fromLocalFile(QFileInfo(m_outPath->text()).absolutePath()));
     });
 
     // 多通道预览服务（引擎工厂与主窗同口径）
@@ -1717,6 +1727,8 @@ void ComposeWorkbenchWindow::setExportRunning(bool running, int totalFrames) {
         m_progress->setValue(0);
         m_progress->setMaximum(qMax(1, totalFrames));
         m_elapsed.start();
+        if (m_openOutBtn)
+            m_openOutBtn->setVisible(false);
         if (m_etaLabel)
             m_etaLabel->setText(QStringLiteral("已用 0:00 · 估算中…"));
         m_status->setStyleSheet(QStringLiteral("color:#666;"));
@@ -1759,6 +1771,7 @@ void ComposeWorkbenchWindow::setResult(bool ok, const QString &msg) {
     if (ok) {
         m_status->setStyleSheet(QStringLiteral("color:#27ae60;"));
         m_status->setText(QStringLiteral("✔ 导出完成：%1").arg(msg));
+        m_openOutBtn->setVisible(true);
     } else {
         m_status->setStyleSheet(QStringLiteral("color:#c0392b;"));
         m_status->setText(QStringLiteral("✖ %1").arg(msg));

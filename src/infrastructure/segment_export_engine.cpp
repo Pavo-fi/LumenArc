@@ -1861,7 +1861,8 @@ void SegmentExportEngine::runCompose()
                 }
                 // P2：曲线滚动条（跟随游标，窗口 30s）
                 if (stripOn)
-                    drawChartStrip(painter, stripRect, overlay, qint64(target));
+                    drawChartStrip(painter, stripRect, overlay, qint64(target),
+                                   seg.inMs, seg.outMs);
             }
             const QByteArray bytes(reinterpret_cast<const char *>(canvas.constBits()),
                                    canvas.sizeInBytes());

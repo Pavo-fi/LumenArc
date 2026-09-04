@@ -43,8 +43,9 @@ void drawAnnotations(QPainter &painter, const QRect &dispRect, const QImage &fra
                      const QVector<SegmentExportEngine::Params::ComposeAnno> &annos,
                      qint64 srcMs);
 
-/// 曲线滚动条：windowMs 宽窗口、游标固定在 2/3 处（跟随 centerMs 流内时刻）。
-/// 亮度逐行折线（ROI 同色）+ 音量曲线（绿）+ 标签竖标+游标三角柄。
-/// 无数据时画「无分析数据」占位。
+/// 曲线条（P2.8 全量时间段口径，对齐主窗图表）：[rangeStartMs,rangeEndMs) 整段铺显
+/// 不滚动不缩放，游标=当前时刻白线贯穿语谱+曲线两区；语谱带（蓝→红热力，低频在下）
+/// +亮度逐行折线（ROI 同色）+音量曲线（绿）+标签竖标。无数据时画「无分析数据」占位。
 void drawChartStrip(QPainter &painter, const QRect &stripRect,
-                    const ComposeOverlay &ov, qint64 centerMs, qint64 windowMs = 30000);
+                    const ComposeOverlay &ov, qint64 cursorMs,
+                    qint64 rangeStartMs, qint64 rangeEndMs);

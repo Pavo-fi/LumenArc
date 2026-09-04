@@ -92,7 +92,8 @@ void drawRoiOverlay(QPainter &painter, const QRect &dstRect, const QSize &srcSiz
 }
 
 void drawChartStrip(QPainter &painter, const QRect &stripRect,
-                    const ComposeOverlay &ov, qint64 centerMs, qint64 windowMs)
+                    const ComposeOverlay &ov, qint64 cursorMs,
+                    qint64 rangeStartMs, qint64 rangeEndMs)
 {
     painter.save();
     painter.fillRect(stripRect, QColor(Theme::BgPanel));
@@ -103,18 +104,56 @@ void drawChartStrip(QPainter &painter, const QRect &stripRect,
     if (!ov.hasData()) {
         painter.setPen(QColor(Theme::TextMuted));
         painter.drawText(plot, Qt::AlignCenter,
-                         QStringLiteral("（该片段无 .vla 分析数据，曲线滚动条缺席）"));
+                         QStringLiteral("（该片段无 .vla 分析数据，曲线条缺席）"));
         painter.restore();
         return;
     }
-    // 窗口：游标固定在 2/3 处（回看 2/3，前瞻 1/3）
-    const qint64 winStart = centerMs - windowMs * 2 / 3;
-    const qint64 winEnd = centerMs + windowMs / 3;
+    // P2.8：全量时间段铺显（不滚动不缩放，对齐主窗图表/旧版导出口径）+ 游标移动
+    if (rangeEndMs <= rangeStartMs)
+        rangeEndMs = rangeStartMs + 1;
+    const qint64 winStart = rangeStartMs, winEnd = rangeEndMs;
     auto xOf = [&](qint64 t) {
-        return plot.x() + double(t - winStart) / double(windowMs) * plot.width();
+        return plot.x() + double(t - winStart) / double(winEnd - winStart) * plot.width();
     };
 
-    // ---- 音量曲线（绿，0..maxV 自适应）----
+    // ---- 语谱带（顶部 40% 高，低频在下；蓝→红热力）----
+    QRect curvePlot = plot;
+    if (ov.audio.hasSpectrogram()) {
+        const int specH = qMax(24, plot.height() * 2 / 5);
+        const QRect specRect(plot.x(), plot.y(), plot.width(), specH);
+        curvePlot.setTop(plot.y() + specH + 4);
+        const auto &sg = ov.audio.spectrogram;      // [freq][time]
+        const int fb = sg.size();
+        const int tf = sg[0].size();
+        const double tRes = ov.audio.safeTimeResolutionMs();
+        // 该段时间轴对应的语谱帧范围
+        const int f0 = qBound(0, int(winStart / tRes), tf - 1);
+        const int f1 = qBound(f0 + 1, int(winEnd / tRes) + 1, tf);
+        const double vMin = ov.audio.specMin, vMax = ov.audio.specMax;
+        const double vSpan = (vMax > vMin) ? (vMax - vMin) : 1.0;
+        QImage img(specRect.size(), QImage::Format_RGB32);
+        for (int x = 0; x < specRect.width(); ++x) {
+            const int fi = f0 + int(double(x) / specRect.width() * (f1 - f0));
+            const int fiC = qBound(f0, fi, f1 - 1);
+            for (int y = 0; y < specRect.height(); ++y) {
+                const int bi = qBound(0, int((1.0 - double(y) / specRect.height()) * fb),
+                                      fb - 1);
+                const qreal v = (sg[bi].size() > fiC) ? sg[bi][fiC] : vMin;
+                const double n = qBound(0.0, double((v - vMin) / vSpan), 1.0);
+                // 简易热力：暗蓝→青→黄→红
+                const int r = int(255 * qBound(0.0, n * 2.0 - 0.6, 1.0));
+                const int g = int(255 * qBound(0.0, n * 1.6 - 0.2, 1.0));
+                const int b = int(120 * (1.0 - n) + 30);
+                img.setPixelColor(x, y, QColor(r, g, b));
+            }
+        }
+        painter.drawImage(specRect, img);
+        painter.setPen(QPen(QColor(Theme::Border), 1));
+        painter.setBrush(Qt::NoBrush);
+        painter.drawRect(specRect);
+    }
+
+    // ---- 音量曲线（绿，0..maxV 自适应；画在曲线区 curvePlot）----
     if (ov.hasVol) {
         const auto pts = ov.audio.volumePointsForViewport(winStart, winEnd, 1200);
         if (pts.size() >= 2) {
@@ -124,7 +163,7 @@ void drawChartStrip(QPainter &painter, const QRect &stripRect,
             QPolygonF line;
             for (const auto &pt : pts)
                 line << QPointF(xOf(qint64(pt.x())),
-                                plot.bottom() - pt.y() / maxV * plot.height());
+                                curvePlot.bottom() - pt.y() / maxV * curvePlot.height());
             painter.setPen(QPen(QColor(80, 200, 120, 200), 1.5));
             painter.drawPolyline(line);
         }
@@ -144,7 +183,7 @@ void drawChartStrip(QPainter &painter, const QRect &stripRect,
                 if (t < winStart || t > winEnd || i >= row.size())
                     continue;
                 line << QPointF(xOf(t),
-                                plot.bottom() - row[i] / maxY * plot.height());
+                                curvePlot.bottom() - row[i] / maxY * curvePlot.height());
             }
             if (line.size() >= 2) {
                 painter.setPen(QPen(RoiModel::regionColor(r), 1.5));
@@ -158,16 +197,16 @@ void drawChartStrip(QPainter &painter, const QRect &stripRect,
             continue;
         const qreal x = xOf(lb.timeMs);
         painter.setPen(QPen(lb.color, 1.5, Qt::DashLine));
-        painter.drawLine(QPointF(x, plot.top()), QPointF(x, plot.bottom()));
+        painter.drawLine(QPointF(x, curvePlot.top()), QPointF(x, curvePlot.bottom()));
         painter.setPen(lb.color);
         QFont f = painter.font();
         f.setPixelSize(11);
         painter.setFont(f);
-        painter.drawText(QRectF(x + 2, plot.top(), 120, 14),
+        painter.drawText(QRectF(x + 2, curvePlot.top(), 120, 14),
                          Qt::AlignLeft | Qt::AlignTop, lb.text);
     }
-    // ---- 游标（2/3 处，白线+顶三角柄）----
-    const qreal cx = xOf(centerMs);
+    // ---- 游标（跟随当前时刻，贯穿语谱+曲线全区；白线+顶三角柄）----
+    const qreal cx = xOf(qBound(winStart, cursorMs, winEnd));
     painter.setPen(QPen(Qt::white, 2));
     painter.drawLine(QPointF(cx, plot.top()), QPointF(cx, plot.bottom()));
     QPolygonF tri;
@@ -274,24 +313,31 @@ void drawAnnotations(QPainter &painter, const QRect &dispRect, const QImage &fra
             continue;
         }
 
-        // Spotlight：剩余区变暗（前 500ms 淡入/末 400ms 淡出）+聚焦框平滑放大至满幅
+        // Spotlight（P2.8 拍板：放大上限=屏幕 50% 面积而非满屏）：
+        // 剩余区变暗（前 500ms 淡入/末 400ms 淡出，全程保持）+聚焦框平滑放大至
+        // 居中 50% 面积（等比）——突出重点同时保留周边情境
         const double dimIn = qBound(0.0, tRel / 500.0, 1.0);
         const double dimOut = qBound(0.0, (D - tRel) / 400.0, 1.0);
         const double dimP = qMin(dimIn, dimOut);
         const double zoomSpan = qMax(600.0, D - 900.0);
         const double zoomP = easeInOut(qBound(0.0, (tRel - 400.0) / zoomSpan, 1.0));
-        if (dimP > 0.01 && zoomP < 0.97) {
+        // 终点矩形：dispRect 居中、面积约 50%（边长 ×0.7071），保持聚焦框自身宽高比
+        const double boxW = dispRect.width() * 0.7071, boxH = dispRect.height() * 0.7071;
+        const double fit = qMin(boxW / qMax(1.0, tgtDisp.width()),
+                                boxH / qMax(1.0, tgtDisp.height()));
+        const QRectF endRect(dispRect.center().x() - tgtDisp.width() * fit / 2,
+                             dispRect.center().y() - tgtDisp.height() * fit / 2,
+                             tgtDisp.width() * fit, tgtDisp.height() * fit);
+        if (dimP > 0.01) {
             painter.setPen(Qt::NoPen);
             painter.setBrush(QColor(0, 0, 0, int(145 * dimP)));
             painter.drawRect(dispRect);   // 剩余区域变暗（聚焦区随后提亮覆盖）
         }
-        const QRectF dest = lerpRect(tgtDisp, QRectF(dispRect), zoomP);
+        const QRectF dest = lerpRect(tgtDisp, endRect, zoomP);
         painter.drawImage(dest, frame, tgtSrc);
-        if (zoomP < 0.97) {             // 未放满时画聚焦框边
-            painter.setPen(QPen(color, 3));
-            painter.setBrush(Qt::NoBrush);
-            painter.drawRect(dest);
-        }
+        painter.setPen(QPen(color, 3));   // 聚焦框边常驻
+        painter.setBrush(Qt::NoBrush);
+        painter.drawRect(dest);
     }
     painter.restore();
 }

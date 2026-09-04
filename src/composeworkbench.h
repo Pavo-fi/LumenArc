@@ -163,6 +163,7 @@ private:
     QPushButton *m_startBtn = nullptr;
     QPushButton *m_cancelBtn = nullptr;
     QPushButton *m_closeBtn = nullptr;
+    QPushButton *m_openOutBtn = nullptr;   // 导出成功后现身：打开输出文件夹
     QPushButton *m_splitBtn = nullptr;
     QPushButton *m_annoSpotBtn = nullptr;
     QPushButton *m_annoArrowBtn = nullptr;

@@ -603,10 +603,10 @@ static void testComposeOverlay()
     img.fill(Qt::black);
     {
         QPainter p(&img);
-        drawChartStrip(p, QRect(0, 0, 800, 200), ov, 1000);
+        drawChartStrip(p, QRect(0, 0, 800, 200), ov, 1000, 0, 2000);
     }
     const QRect plot = QRect(0, 0, 800, 200).adjusted(48, 8, -10, 18);
-    const int cx = plot.x() + int((1000 - (1000 - 20000)) / 30000.0 * plot.width());
+    const int cx = plot.x() + int(1000.0 / 2000.0 * plot.width());   // 全量区间中点
     bool cursorWhite = false, curveInk = false;
     for (int y = plot.top(); y < plot.bottom(); ++y) {
         const QColor c = img.pixelColor(cx, y);

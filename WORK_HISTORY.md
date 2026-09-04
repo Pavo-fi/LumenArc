@@ -5665,3 +5665,46 @@ P-74 点位图编辑器施工。
 - **遗留**：P1 预览无独立合成预览窗（复用主视口手动核对）；MLT 运行时仍在
   build/Release/mlt/ 但 **P1 不打包 mlt/**（pack_release 不动）；P2 多机位同屏/
   曲线滚动条/ROI 烧录、P3 melt 瘦身见 PENDING。
+
+## 85. 合成导出工作台（P1.5 拍板 v2）：素材树+可播放预览+片段块时间线，废表格对话框
+
+- **用户反馈表格对话框「不是剪辑的感觉」→ 拍板 v2**：①预览区可播放（B 方案）
+  ②废表格改片段块（双击弹小编辑框精调）③非模态；素材分「多通道（机位同屏）/
+  单视频（案内全量含前处理产物）」两类。
+- **新窗 `src/composeworkbench.h/.cpp`**（ComposeWorkbenchWindow，~1100 行）：
+  - 素材树：多通道节点=机位清单逐路勾选（≤4；未校时=临时路提示；合并轨组禁用
+    同多机口径）；单视频节点=`buildCamInventory` 全量（视频+前处理产物 ⚙标记）
+    + 案外当前视频伪条目。
+  - 预览：单路=自建 FfmpegVideoEngine（QSettings 硬解口径同主窗工厂）；多通道=
+    MultiCamSyncService+CamTileWidget 宫格（瓦片点击切主听路）。CamTileWidget
+    同时当单路显示器用（frameReady/ack 契约现成）。窗口 hide/close 自动
+    stopPreviews（引擎不残留）。
+  - 走带：播放/暂停+进度条（多通道走 svc beginScrub/scrubTo/endScrub，单路 seek）；
+    `I/O` 打点（域：单路=流内 ms、多通道=墙钟 ms）；「+ 加入时间线」无打点默认
+    游标前 10s。
+  - 时间线 ComposeTimelineWidget（cpp 内 Q_OBJECT，`#include "composeworkbench.moc"`）：
+    块宽∝输出时长、色板按序、点选/拖拽排序（>24px 触发）/双击参数框（入出点文本
+    h:mm:ss.mmm + 倍速 spin）/右键菜单/滚轮缩放 0.004~2px/ms。
+  - 导出面板：演示/证据双模式（时间线含宫格段→证据自动禁用回演示）、校正时间/
+    案件号/图表面板勾（图表面板 tooltip 注明仅单段当前视频原速）、案内 exports/
+    默认路径、内嵌进度。
+- **引擎扩 ComposeSeg**：`lanes`（SyncLaneData 快照）+`audioLane`+`displayName`，
+  isLanes() 即多通道段；start() 校验——证据模式拒宫格段、宫格段 2~4 路、
+  合并轨拒、未校时非临时路拒；runCompose 宫格分支（逐路 SeqDecoder+宫格绘制，
+  瓦片画法与 runMultiCam 孪生但**刻意不共改其 v1.15.3 冻结路径**；多段模式无覆盖条）；
+  音轨=主听路两端覆盖才映射（部分覆盖退化整段静音，细分留 P2）；OSD 基准=
+  首条已校时路墙钟→北京时间，无则「未校时·墙钟 Ns」。
+- **旧 ComposeExportDialog（表格版）删除**：文件/CMake/主窗引用全清；
+  主窗 m_composeDlg→m_workbench，startComposeExport 分发逻辑不变
+  （单段+当前视频+原速+图表面板→旧复合路径保留）。
+- **测试**：segment_test 新增 lanes 宫格 e2e（双临时路同素材→时长/无音轨校验）
+  +3 个校验拒绝用例；**修 harness 两个潜伏坑**：①`QSignalSpy::wait` 对同步
+  （直连接）已发出的信号返回 false → 校验类用 `count()+first()`；②测试须在
+  **仓库根目录**跑（相对路径 build_tmp/caltest 资产）——此前从 build/Release 跑
+  时 e2e 曾静默 SKIP 未被察觉；给 segment_test 装了 qInstallMessageHandler 写
+  build_tmp/segment_test_out.log（控制台吞输出环境的诊断通道）。
+  基线更正：basic.mp4 **无音轨**（此前 compose e2e 的 hasAudio 预期写反，
+  从根目录真跑后暴露修正）。88 checks 0 failures；全回归绿
+  （mw/case/report/sitemap/ui_chain/libav/sync）。
+- **遗留**：多通道段部分覆盖音轨细分 P2；宫格段无覆盖条（P2 可补）；
+  工作台无独立「证据+宫格」组合（物理上矛盾）；块时间线无播放头联动（P2）。
