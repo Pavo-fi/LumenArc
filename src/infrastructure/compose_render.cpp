@@ -7,6 +7,7 @@
 #include <QFileInfo>
 #include <QPainter>
 #include <QtMath>
+#include <cmath>
 
 ComposeOverlay loadComposeOverlay(const QString &vlaPath)
 {
@@ -188,5 +189,109 @@ void drawChartStrip(QPainter &painter, const QRect &stripRect,
                      fmtS(winStart));
     painter.drawText(stripRect.adjusted(0, 0, -4, -2), Qt::AlignRight | Qt::AlignBottom,
                      fmtS(winEnd));
+    painter.restore();
+}
+
+// ============================================================================
+// P2.7 标注轨：聚光灯 / 箭头 / 字幕
+// ============================================================================
+namespace {
+/// 平滑插值（smoothstep 缓入缓出）
+inline double easeInOut(double t) {
+    t = qBound(0.0, t, 1.0);
+    return t * t * (3.0 - 2.0 * t);
+}
+inline QRectF lerpRect(const QRectF &a, const QRectF &b, double t) {
+    return QRectF(a.x() + (b.x() - a.x()) * t,
+                  a.y() + (b.y() - a.y()) * t,
+                  a.width() + (b.width() - a.width()) * t,
+                  a.height() + (b.height() - a.height()) * t);
+}
+}  // namespace
+
+void drawAnnotations(QPainter &painter, const QRect &dispRect, const QImage &frame,
+                     const QVector<SegmentExportEngine::Params::ComposeAnno> &annos,
+                     qint64 srcMs)
+{
+    using ComposeAnno = SegmentExportEngine::Params::ComposeAnno;
+    if (dispRect.isEmpty() || frame.isNull())
+        return;
+    painter.save();
+    for (const auto &a : annos) {
+        if (srcMs < a.inMs || srcMs >= a.outMs)
+            continue;
+        const QColor color = QColor::fromRgb(a.colorRgb);
+        const double D = double(a.outMs - a.inMs);
+        const double tRel = double(srcMs - a.inMs);
+
+        if (a.type == ComposeAnno::Caption) {
+            // 底部黑带白字（显示区底上方 64px，避开 OSD/曲线条）
+            QFont f = painter.font();
+            f.setPixelSize(qBound(18, dispRect.height() / 22, 44));
+            f.setBold(true);
+            painter.setFont(f);
+            const QRect band(dispRect.x() + 10, dispRect.bottom() - 70,
+                             dispRect.width() - 20, 40);
+            painter.setPen(Qt::NoPen);
+            painter.setBrush(QColor(0, 0, 0, 165));
+            painter.drawRoundedRect(band, 5, 5);
+            painter.setPen(Qt::white);
+            painter.drawText(band, Qt::AlignCenter,
+                             painter.fontMetrics().elidedText(a.text, Qt::ElideRight,
+                                                              band.width() - 24));
+            continue;
+        }
+
+        // 归一化 → 显示矩形 / 源帧像素
+        const QRectF tgtDisp(dispRect.x() + a.rect.x() * dispRect.width(),
+                             dispRect.y() + a.rect.y() * dispRect.height(),
+                             a.rect.width() * dispRect.width(),
+                             a.rect.height() * dispRect.height());
+        const QRectF tgtSrc(a.rect.x() * frame.width(), a.rect.y() * frame.height(),
+                            a.rect.width() * frame.width(),
+                            a.rect.height() * frame.height());
+
+        if (a.type == ComposeAnno::Arrow) {
+            // rect 左上=起点，右下=终点
+            const QPointF pa(dispRect.x() + a.rect.left() * dispRect.width(),
+                             dispRect.y() + a.rect.top() * dispRect.height());
+            const QPointF pb(dispRect.x() + a.rect.right() * dispRect.width(),
+                             dispRect.y() + a.rect.bottom() * dispRect.height());
+            painter.setPen(QPen(color, 5, Qt::SolidLine, Qt::RoundCap));
+            painter.drawLine(pa, pb);
+            // 箭头头
+            const double ang = std::atan2(pb.y() - pa.y(), pb.x() - pa.x());
+            const double hl = 20.0;
+            QVector<QPointF> head;
+            head << pb
+                 << QPointF(pb.x() - hl * std::cos(ang - 0.42),
+                            pb.y() - hl * std::sin(ang - 0.42))
+                 << QPointF(pb.x() - hl * std::cos(ang + 0.42),
+                            pb.y() - hl * std::sin(ang + 0.42));
+            painter.setPen(Qt::NoPen);
+            painter.setBrush(color);
+            painter.drawPolygon(QPolygonF(head));
+            continue;
+        }
+
+        // Spotlight：剩余区变暗（前 500ms 淡入/末 400ms 淡出）+聚焦框平滑放大至满幅
+        const double dimIn = qBound(0.0, tRel / 500.0, 1.0);
+        const double dimOut = qBound(0.0, (D - tRel) / 400.0, 1.0);
+        const double dimP = qMin(dimIn, dimOut);
+        const double zoomSpan = qMax(600.0, D - 900.0);
+        const double zoomP = easeInOut(qBound(0.0, (tRel - 400.0) / zoomSpan, 1.0));
+        if (dimP > 0.01 && zoomP < 0.97) {
+            painter.setPen(Qt::NoPen);
+            painter.setBrush(QColor(0, 0, 0, int(145 * dimP)));
+            painter.drawRect(dispRect);   // 剩余区域变暗（聚焦区随后提亮覆盖）
+        }
+        const QRectF dest = lerpRect(tgtDisp, QRectF(dispRect), zoomP);
+        painter.drawImage(dest, frame, tgtSrc);
+        if (zoomP < 0.97) {             // 未放满时画聚焦框边
+            painter.setPen(QPen(color, 3));
+            painter.setBrush(Qt::NoBrush);
+            painter.drawRect(dest);
+        }
+    }
     painter.restore();
 }

@@ -52,6 +52,8 @@ public:
     bool isSelected() const { return m_selected; }
 
     qreal zoom() const { return m_zoom; }
+    /// 帧在控件内的等比适配矩形（标注框选坐标映射用；缩放>1 时语义不含缩放平移）
+    QRectF videoFitRect() const { return frameFitRect(); }
     QPointF zoomCenter() const { return m_center; }  ///< 归一化源坐标（导出 PIP 快照用）
 
 signals:

@@ -5626,3 +5626,42 @@ P-74 点位图编辑器施工。
   （avdevice-63 易漏）；MLT XML 工程一律绝对路径（相对路径静默失败 rc=3）；
   CLI 文本角标参数走 GBK 控制台会乱码（集成一律生成 UTF-8 XML）。
 - melt 为 GPL 二进制（x264），若随包发布需附源码说明（docs/mlt/README.md 已述）。
+
+## 84. 合成导出器 P1 落地（in-process 路线修订，取代分段导出入口）
+
+- **路线修订（本批拍板级调整）**：原计划 MLT XML→melt 进程化渲染；侦察发现现有
+  `SegmentExportEngine` 已是完整的进程内合成管线（libav 解码→QPainter 画布→rawvideo
+  管道→ffmpeg.exe 子进程 x264/openh264/h264_mf）。**P1 改为扩展该引擎**：
+  预览一致性最好、进度/取消在进程内、不吃 167MB melt 运行时；melt 保留作 P2+ 多轨备选。
+- **引擎扩展**（segment_export_engine）：
+  - `Params::ComposeSeg{sourcePath,inMs,outMs,rate}` + `segments` 非空=多段模式
+    （plan/charts/PIP 忽略）；`calibrationByPath`（逐文件校正表）；
+    `demoWatermark`（强制红标）/ `evidenceCopy`（证据直拷）；`operatorName/Org`。
+  - `runCompose()`：逐段 open/seek（start_time 归一）→ QPainter 画布（layoutRects
+    全幅视频区）→ OSD 左下（校正北京时间或流内回落+倍速+案件号）+ 右上强制红标
+    「分析演示材料 · 非原始证据」→ rawvideo pipe → ffmpeg.exe（crf18/aac128k/-shortest）。
+  - `runEvidenceCopy()`：逐段 `-ss/-to -c copy -avoid_negative_ts make_zero` →
+    concat demuxer 拼接；流式 SHA-256（源+产物）→ 侧车 `<out>.forensic.json`
+    （kind=evidence_segment_export/段区间/签署人/完整性声明"关键帧对齐·像素零改动"）。
+  - `buildAudioFilterChainMulti()`：逐段输入标签，无音轨段 `anullsrc` 补静（长度=输出域
+    时长/rate），全分支 `aresample=48000:ocl=stereo:osf=s16` 归一 → concat。
+  - 纯函数 `composeSegOutFrames` / `buildEvidenceManifest` 可单测。
+- **新对话框** `src/composeexportdialog.h/.cpp`：片段表（源视频下拉=案内视频+当前、
+  入/出点 h:mm:ss.mmm 文本可编辑、倍速、输出时长列）、添加当前选段/游标起10s/删/
+  上下移；模式单选（证据直拷/分析演示片）；演示选项（校正时间角标/案件号/图表面板）；
+  输出路径（案内 exports/，LACompose_/LAEvidence_ 前缀）；内嵌进度+取消。
+  逐文件校正表由对话框经 `TimelineModel::peekCalibrationFromVla(vlaPathFor(path))`
+  预取填入 `calibrationByPath`；签署人取 CredentialStore（署名写死策略 v1.4）。
+- **主窗接线**：工具栏「导出选段」→「合成导出」（onExportSegmentClip 重写，
+  m_exportDlg→m_composeDlg）；`startComposeExport(pp)` 分发——
+  **单段+源=当前视频+rate=1+勾图表面板+演示模式 → 旧 startSegmentExport 全保真路径
+  （曲线/语谱/放大镜/标签 OSD/分段变速零回归）**，否则走新多段/证据管线。
+  多机窗口（multicamplaybackwindow）仍用旧 SegmentExportDialog，不受影响。
+- **测试**：segment_test 新增——testComposeHelpers（帧数数学/多源音频链/清单 JSON）、
+  testComposeEndToEnd（2 段合成→时长+音轨校验）、testEvidenceEndToEnd（直拷+侧车
+  JSON 字段校验）；全回归绿（segment/mw/case/libav/report/sitemap/ui_chain）。
+- **文档**：MANUAL 七·2 整节重写为「合成导出（多段拼接 · 证据/演示双模式）」并同步
+  速览表/工作流措辞（PDF 已重出）；CHANGELOG v1.16.2 条目；PENDING 勾销 P1 本体。
+- **遗留**：P1 预览无独立合成预览窗（复用主视口手动核对）；MLT 运行时仍在
+  build/Release/mlt/ 但 **P1 不打包 mlt/**（pack_release 不动）；P2 多机位同屏/
+  曲线滚动条/ROI 烧录、P3 melt 瘦身见 PENDING。

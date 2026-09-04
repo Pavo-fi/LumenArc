@@ -46,6 +46,85 @@
 #include <QWheelEvent>
 
 // ============================================================================
+// 标注框选覆盖层：聚光灯/箭头在预览画面上拖框（归一化内容坐标输出）
+// ============================================================================
+class ComposeWorkbenchWindow::AnnoPickOverlay : public QWidget
+{
+public:
+    explicit AnnoPickOverlay(QWidget *parent, CamTileWidget *tile,
+                             std::function<void(QRectF)> onPick,
+                             std::function<void()> onCancel)
+        : QWidget(parent), m_tile(tile), m_onPick(std::move(onPick)),
+          m_onCancel(std::move(onCancel)) {
+        setAttribute(Qt::WA_TransparentForMouseEvents, false);
+        setCursor(Qt::CrossCursor);
+        hide();
+    }
+    void beginPick() { m_dragging = false; m_rect = QRectF(); show(); raise(); }
+
+protected:
+    void paintEvent(QPaintEvent *) override {
+        QPainter p(this);
+        p.fillRect(rect(), QColor(0, 0, 0, 40));
+        p.setPen(QColor(255, 225, 77));
+        p.drawText(rect().adjusted(12, 8, -12, 0), Qt::AlignTop | Qt::AlignLeft,
+                   QStringLiteral("在画面上拖出一个框（右键/Esc 取消）"));
+        if (!m_rect.isNull()) {
+            p.setPen(QPen(QColor(255, 225, 77), 2, Qt::DashLine));
+            p.setBrush(QColor(255, 225, 77, 40));
+            p.drawRect(m_rect);
+        }
+    }
+    void mousePressEvent(QMouseEvent *e) override {
+        if (e->button() == Qt::RightButton) { cancel(); return; }
+        if (e->button() == Qt::LeftButton) {
+            m_dragging = true;
+            m_start = e->pos();
+            m_rect = QRectF();
+            update();
+        }
+    }
+    void mouseMoveEvent(QMouseEvent *e) override {
+        if (m_dragging) {
+            m_rect = QRectF(m_start, e->pos()).normalized();
+            update();
+        }
+    }
+    void mouseReleaseEvent(QMouseEvent *e) override {
+        if (!m_dragging || e->button() != Qt::LeftButton)
+            return;
+        m_dragging = false;
+        m_rect = QRectF(m_start, e->pos()).normalized();
+        if (m_rect.width() < 12 || m_rect.height() < 12) {   // 太小=误触
+            m_rect = QRectF();
+            update();
+            return;
+        }
+        // 控件坐标 → 归一化内容坐标（经瓦片适配矩形）
+        const QRectF fit = m_tile->videoFitRect();
+        if (fit.isEmpty()) { cancel(); return; }
+        QRectF n((m_rect.left() - fit.x()) / fit.width(),
+                 (m_rect.top() - fit.y()) / fit.height(),
+                 m_rect.width() / fit.width(), m_rect.height() / fit.height());
+        n = n.intersected(QRectF(0, 0, 1, 1));
+        hide();
+        if (n.width() > 0.01 && n.height() > 0.01)
+            m_onPick(n);
+    }
+    void keyPressEvent(QKeyEvent *e) override {
+        if (e->key() == Qt::Key_Escape) cancel();
+    }
+private:
+    void cancel() { hide(); m_onCancel(); }
+    CamTileWidget *m_tile;
+    std::function<void(QRectF)> m_onPick;
+    std::function<void()> m_onCancel;
+    bool m_dragging = false;
+    QPointF m_start;
+    QRectF m_rect;
+};
+
+// ============================================================================
 // 片段块时间线控件：块=片段，宽∝输出时长；点选/拖排序/双击精调/右键删/滚轮缩放
 // ============================================================================
 class ComposeTimelineWidget : public QWidget
@@ -83,6 +162,8 @@ signals:
     void moveRequested(int from, int to);
     void editRequested(int idx);
     void removeRequested(int idx);
+    void rateRequested(int idx, double rate);      // P2.7 右键倍速预设
+    void annoRemoveRequested(int segIdx, int annoIdx);
 
 protected:
     void paintEvent(QPaintEvent *) override {
@@ -143,12 +224,44 @@ protected:
                        Qt::AlignVCenter | Qt::AlignLeft, sub);
             x += w;
         }
-        // 末尾总时长
+        // 末尾总时长（右对齐，左区留给标注 chips）
         p.setPen(QColor(Theme::TextMuted));
-        p.drawText(QRect(8, 2, width() - 16, 18), Qt::AlignVCenter | Qt::AlignLeft,
+        p.drawText(QRect(8, 2, width() - 16, 18), Qt::AlignVCenter | Qt::AlignRight,
                    QStringLiteral("共 %1 段 · 输出 %2")
                        .arg(m_segs.size())
                        .arg(ComposeWorkbenchWindow::formatMs(totalOutMs())));
+        // P2.7 标注 chips 行（块上方）：🎯聚光灯 ↗箭头 💬字幕
+        QFont cf = p.font();
+        cf.setPixelSize(11);
+        p.setFont(cf);
+        for (int i = 0; i < m_segs.size(); ++i) {
+            const auto &sg = m_segs[i];
+            if (sg.annos.isEmpty())
+                continue;
+            const QRect br = blockRect(i);
+            const double span = double(qMax<qint64>(1, sg.outMs - sg.inMs));
+            for (int j = 0; j < sg.annos.size(); ++j) {
+                const auto &an = sg.annos[j];
+                const double f0 = double(an.inMs - sg.inMs) / span;
+                const double f1 = double(an.outMs - sg.inMs) / span;
+                const int cx = br.x() + int(f0 * br.width());
+                const int cw = qMax(16, int((f1 - f0) * br.width()));
+                const QRect chip(cx, 3, cw, 16);
+                QString icon;
+                switch (an.type) {
+                case SegmentExportEngine::Params::ComposeAnno::Spotlight: icon = QStringLiteral("🎯"); break;
+                case SegmentExportEngine::Params::ComposeAnno::Arrow:     icon = QStringLiteral("↗"); break;
+                default:                                                  icon = QStringLiteral("💬"); break;
+                }
+                p.setPen(Qt::NoPen);
+                p.setBrush(QColor::fromRgb(an.colorRgb).darker(150));
+                p.drawRoundedRect(chip, 3, 3);
+                p.setPen(Qt::white);
+                p.drawText(chip, Qt::AlignCenter,
+                           icon + (an.type == SegmentExportEngine::Params::ComposeAnno::Caption
+                                       ? an.text.left(6) : QString()));
+            }
+        }
     }
 
     void mousePressEvent(QMouseEvent *e) override {
@@ -187,6 +300,18 @@ protected:
     }
 
     void contextMenuEvent(QContextMenuEvent *e) override {
+        // 标注 chip 优先
+        const auto chip = hitChip(e->pos());
+        if (chip.first >= 0) {
+            QMenu menu(this);
+            const auto &an = m_segs[chip.first].annos[chip.second];
+            QAction *rmAnno = menu.addAction(QStringLiteral("删除该标注"));
+            menu.addAction(QStringLiteral("（双击块可改时间段）"))->setEnabled(false);
+            if (menu.exec(e->globalPos()) == rmAnno)
+                emit annoRemoveRequested(chip.first, chip.second);
+            Q_UNUSED(an);
+            return;
+        }
         const int idx = hitBlock(e->pos());
         if (idx < 0)
             return;
@@ -194,13 +319,24 @@ protected:
         emit selectionChanged(idx);
         update();
         QMenu menu(this);
-        QAction *editAct = menu.addAction(QStringLiteral("编辑参数…"));
+        QAction *editAct = menu.addAction(QStringLiteral("编辑参数（双击同效）…"));
+        // P2.7 倍速预设子菜单（简便调速）
+        QMenu *rateMenu = menu.addMenu(QStringLiteral("倍速"));
+        const double curRate = m_segs[idx].rate;
+        for (double r : {0.5, 1.0, 1.25, 1.5, 2.0, 4.0}) {
+            QAction *a = rateMenu->addAction(QStringLiteral("×%1").arg(r, 0, 'g', 3));
+            a->setCheckable(true);
+            a->setChecked(qAbs(curRate - r) < 0.01);
+            a->setData(r);
+        }
         QAction *rmAct = menu.addAction(QStringLiteral("删除该段"));
         QAction *sel = menu.exec(e->globalPos());
         if (sel == editAct)
             emit editRequested(idx);
         else if (sel == rmAct)
             emit removeRequested(idx);
+        else if (sel && rateMenu->actions().contains(sel))
+            emit rateRequested(idx, sel->data().toDouble());
     }
 
     void wheelEvent(QWheelEvent *e) override {
@@ -227,6 +363,26 @@ private:
             if (blockRect(i).contains(pos))
                 return i;
         return -1;
+    }
+    /// 命中标注 chip（chips 行 y 3..19）
+    QPair<int, int> hitChip(const QPoint &pos) const {
+        if (pos.y() < 3 || pos.y() > 19)
+            return {-1, -1};
+        for (int i = 0; i < m_segs.size(); ++i) {
+            const auto &sg = m_segs[i];
+            if (sg.annos.isEmpty())
+                continue;
+            const QRect br = blockRect(i);
+            const double span = double(qMax<qint64>(1, sg.outMs - sg.inMs));
+            for (int j = 0; j < sg.annos.size(); ++j) {
+                const auto &an = sg.annos[j];
+                const int cx = br.x() + int(double(an.inMs - sg.inMs) / span * br.width());
+                const int cw = qMax(16, int(double(an.outMs - an.inMs) / span * br.width()));
+                if (QRect(cx, 3, cw, 16).contains(pos))
+                    return {i, j};
+            }
+        }
+        return {-1, -1};
     }
 
     QVector<SegmentExportEngine::Params::ComposeSeg> m_segs;
@@ -366,6 +522,13 @@ ComposeWorkbenchWindow::ComposeWorkbenchWindow(CaseManager *cm,
     cutRow->addSpacing(12);
     cutRow->addWidget(m_inBtn);
     cutRow->addWidget(m_outBtn);
+    m_splitBtn = new QPushButton(QStringLiteral("✂ 在此切开（Ctrl+B）"), this);
+    m_splitBtn->setObjectName(QStringLiteral("wbSplitBtn"));
+    m_splitBtn->setEnabled(false);
+    m_splitBtn->setFocusPolicy(Qt::NoFocus);
+    m_splitBtn->setToolTip(QStringLiteral(
+        "把预览当前位置所在的片段一切为二（对齐剪映 Ctrl+B 分割）；两半各自可调倍速"));
+    cutRow->addWidget(m_splitBtn);
     cutRow->addWidget(m_markLabel);
     cutRow->addStretch(1);
     auto *keysHint = new QLabel(
@@ -373,6 +536,30 @@ ComposeWorkbenchWindow::ComposeWorkbenchWindow(CaseManager *cm,
     keysHint->setStyleSheet(QStringLiteral("color:#777;"));
     cutRow->addWidget(keysHint);
     center->addLayout(cutRow);
+
+    // 标注条（P2.7 标注轨：挂到预览位置所在的单视频片段块上）
+    auto *annoRow = new QHBoxLayout();
+    auto *annoCap = new QLabel(QStringLiteral("标注："), this);
+    annoCap->setStyleSheet(QStringLiteral("color:#999;"));
+    annoRow->addWidget(annoCap);
+    m_annoSpotBtn = new QPushButton(QStringLiteral("🎯 聚光灯"), this);
+    m_annoSpotBtn->setToolTip(QStringLiteral(
+        "在画面上拖框 → 该区域提亮、其余变暗，并平滑放大至满屏（突出重点区域）"));
+    m_annoArrowBtn = new QPushButton(QStringLiteral("↗ 箭头"), this);
+    m_annoArrowBtn->setToolTip(QStringLiteral("在画面上从起点拖到终点 → 烧录指示箭头"));
+    m_annoCapBtn = new QPushButton(QStringLiteral("💬 字幕"), this);
+    m_annoCapBtn->setToolTip(QStringLiteral("底部黑带白字解说词，指定起止时间"));
+    for (auto *b : {m_annoSpotBtn, m_annoArrowBtn, m_annoCapBtn}) {
+        b->setEnabled(false);
+        b->setFocusPolicy(Qt::NoFocus);
+        annoRow->addWidget(b);
+    }
+    auto *annoHint = new QLabel(
+        QStringLiteral("标注挂在「预览位置所在」的片段块上；时间线块上方出小标，右键可删"), this);
+    annoHint->setStyleSheet(QStringLiteral("color:#777;"));
+    annoRow->addWidget(annoHint);
+    annoRow->addStretch(1);
+    center->addLayout(annoRow);
 
     // 片段块时间线
     auto *tlCap = new QLabel(
@@ -447,6 +634,10 @@ ComposeWorkbenchWindow::ComposeWorkbenchWindow(CaseManager *cm,
     m_progress = new QProgressBar(outBox);
     m_progress->setRange(0, 100);
     progRow->addWidget(m_progress, 1);
+    m_etaLabel = new QLabel(QString(), outBox);
+    m_etaLabel->setStyleSheet(QStringLiteral("color:#999;"));
+    m_etaLabel->setMinimumWidth(190);
+    progRow->addWidget(m_etaLabel);
     m_startBtn = new QPushButton(QStringLiteral("开始导出（Ctrl+E）"), outBox);
     m_startBtn->setObjectName(QStringLiteral("wbStartBtn"));
     m_startBtn->setMinimumHeight(34);
@@ -463,6 +654,7 @@ ComposeWorkbenchWindow::ComposeWorkbenchWindow(CaseManager *cm,
     progRow->addWidget(m_closeBtn);
     ov->addLayout(progRow);
     m_status = new QLabel(QString(), outBox);
+    m_status->setObjectName(QStringLiteral("wbStatus"));
     m_status->setWordWrap(true);
     ov->addWidget(m_status);
     root->addWidget(outBox);
@@ -497,6 +689,17 @@ ComposeWorkbenchWindow::ComposeWorkbenchWindow(CaseManager *cm,
             &ComposeWorkbenchWindow::onBlockRemove);
     connect(m_timeline, &ComposeTimelineWidget::selectionChanged, this,
             [this](int) { updateGuide(); });
+    connect(m_timeline, &ComposeTimelineWidget::rateRequested, this,
+            &ComposeWorkbenchWindow::onBlockRate);
+    connect(m_timeline, &ComposeTimelineWidget::annoRemoveRequested, this,
+            &ComposeWorkbenchWindow::onAnnoRemove);
+    connect(m_splitBtn, &QPushButton::clicked, this, &ComposeWorkbenchWindow::onSplitBlock);
+    connect(m_annoSpotBtn, &QPushButton::clicked, this,
+            &ComposeWorkbenchWindow::onAnnoToolSpotlight);
+    connect(m_annoArrowBtn, &QPushButton::clicked, this,
+            &ComposeWorkbenchWindow::onAnnoToolArrow);
+    connect(m_annoCapBtn, &QPushButton::clicked, this,
+            &ComposeWorkbenchWindow::onAnnoToolCaption);
     connect(m_demoRadio, &QRadioButton::toggled, this, &ComposeWorkbenchWindow::onModeChanged);
     connect(browseBtn, &QPushButton::clicked, this, &ComposeWorkbenchWindow::onBrowseOutput);
     connect(m_startBtn, &QPushButton::clicked, this, &ComposeWorkbenchWindow::onStartExport);
@@ -929,6 +1132,26 @@ void ComposeWorkbenchWindow::updateTransport() {
         }
     }
     m_timeline->setPlaySeg(playIdx);
+    m_playSegIdx = playIdx;
+    // 切割钮：预览位置严格落在某段内部（两端留 200ms）才可用
+    bool canSplit = false;
+    if (playIdx >= 0 && !m_running) {
+        const auto &sg = m_segs[playIdx];
+        const qint64 pos = previewPosMs();
+        canSplit = (pos - sg.inMs > 200) && (sg.outMs - pos > 200);
+    }
+    if (m_splitBtn)
+        m_splitBtn->setEnabled(canSplit);
+    // 标注钮：预览位置落在单视频段内（v1 宫格段不支持标注）
+    const bool canAnno = canSplit || (playIdx >= 0 && !m_running
+                                      && !m_segs[playIdx].isLanes());
+    const bool annoSingle = playIdx >= 0 && !m_running && !m_segs[playIdx].isLanes();
+    if (m_annoSpotBtn) {
+        m_annoSpotBtn->setEnabled(annoSingle);
+        m_annoArrowBtn->setEnabled(annoSingle);
+        m_annoCapBtn->setEnabled(annoSingle);
+    }
+    Q_UNUSED(canAnno);
     updateGuide();
 }
 
@@ -1036,6 +1259,10 @@ void ComposeWorkbenchWindow::installShortcuts() {
         const int idx = m_timeline->selected();
         if (idx >= 0)
             onBlockRemove(idx);
+    });
+    mk(QKeySequence(QStringLiteral("Ctrl+B")), [this] {   // 剪映同款分割
+        if (m_splitBtn->isEnabled())
+            onSplitBlock();
     });
     mk(QKeySequence(QStringLiteral("Ctrl+E")), [this] {
         if (m_startBtn->isEnabled())
@@ -1148,6 +1375,154 @@ void ComposeWorkbenchWindow::syncTimeline() {
     if (hasLanes && m_evidenceRadio->isChecked())
         m_demoRadio->setChecked(true);
     updateSuggestedPath();
+}
+
+int ComposeWorkbenchWindow::segIndexAtPreviewPos() const {
+    return m_playSegIdx;
+}
+
+void ComposeWorkbenchWindow::onSplitBlock() {
+    const int idx = segIndexAtPreviewPos();
+    if (idx < 0 || idx >= m_segs.size())
+        return;
+    const qint64 cut = previewPosMs();
+    auto &sg = m_segs[idx];
+    if (cut - sg.inMs <= 200 || sg.outMs - cut <= 200) {
+        m_status->setStyleSheet(QStringLiteral("color:#c0392b;"));
+        m_status->setText(QStringLiteral("切点太靠近片段边缘（两端至少留 0.2 秒）"));
+        return;
+    }
+    auto right = sg;                 // 右半：同素材/同倍速/同宫格
+    sg.outMs = cut;                  // 左半收尾
+    right.inMs = cut;                // 右半起刀
+    // 标注按切点分家：整段在左→左；整段在右→右；跨界→两边各留夹取副本
+    QVector<SegmentExportEngine::Params::ComposeAnno> leftAn, rightAn;
+    for (const auto &an : sg.annos) {
+        if (an.outMs <= cut) leftAn << an;
+        else if (an.inMs >= cut) rightAn << an;
+        else {
+            auto a1 = an; a1.outMs = cut; leftAn << a1;
+            auto a2 = an; a2.inMs = cut; rightAn << a2;
+        }
+    }
+    sg.annos = leftAn;
+    right.annos = rightAn;
+    m_segs.insert(idx + 1, right);
+    syncTimeline();
+    m_status->setStyleSheet(QStringLiteral("color:#7ec97e;"));
+    m_status->setText(QStringLiteral("已在此切成 %1 段（两半可各自右键调倍速）")
+                          .arg(m_segs.size()));
+}
+
+void ComposeWorkbenchWindow::onBlockRate(int idx, double rate) {
+    if (idx >= 0 && idx < m_segs.size()) {
+        m_segs[idx].rate = rate;
+        syncTimeline();
+    }
+}
+
+void ComposeWorkbenchWindow::onAnnoRemove(int segIdx, int annoIdx) {
+    if (segIdx >= 0 && segIdx < m_segs.size()
+        && annoIdx >= 0 && annoIdx < m_segs[segIdx].annos.size()) {
+        m_segs[segIdx].annos.removeAt(annoIdx);
+        syncTimeline();
+    }
+}
+
+// ---------------------------------------------------------------------------
+// 标注轨（P2.7）
+// ---------------------------------------------------------------------------
+void ComposeWorkbenchWindow::appendAnnoFromDialog(int type, const QRectF &normRect) {
+    const int idx = segIndexAtPreviewPos();
+    if (idx < 0 || m_segs[idx].isLanes())
+        return;
+    auto &sg = m_segs[idx];
+    const qint64 pos = qBound(sg.inMs, previewPosMs(), sg.outMs);
+
+    QDialog dlg(this);
+    dlg.setWindowTitle(type == 2 ? QStringLiteral("添加字幕")
+                                 : (type == 0 ? QStringLiteral("添加聚光灯")
+                                              : QStringLiteral("添加箭头")));
+    auto *lay = new QFormLayout(&dlg);
+    auto *inEdit = new QLineEdit(formatMs(qMax(sg.inMs, pos - 1500)), &dlg);
+    auto *outEdit = new QLineEdit(formatMs(qMin(sg.outMs, pos + 1500)), &dlg);
+    lay->addRow(QStringLiteral("开始（该视频时刻）"), inEdit);
+    lay->addRow(QStringLiteral("结束"), outEdit);
+    QLineEdit *textEdit = nullptr;
+    if (type == 2) {
+        textEdit = new QLineEdit(&dlg);
+        textEdit->setPlaceholderText(QStringLiteral("解说词，如：起火点位于画面中央"));
+        lay->addRow(QStringLiteral("字幕文本"), textEdit);
+    }
+    auto *colorCombo = new QComboBox(&dlg);
+    colorCombo->addItem(QStringLiteral("黄"), 0xffe14d);
+    colorCombo->addItem(QStringLiteral("红"), 0xff6060);
+    colorCombo->addItem(QStringLiteral("蓝"), 0x64b4ff);
+    colorCombo->addItem(QStringLiteral("绿"), 0x7ec97e);
+    if (type == 1) colorCombo->setCurrentIndex(1);
+    if (type != 2)
+        lay->addRow(QStringLiteral("颜色"), colorCombo);
+    auto *btns = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel,
+                                      &dlg);
+    lay->addRow(btns);
+    connect(btns, &QDialogButtonBox::accepted, &dlg, &QDialog::accept);
+    connect(btns, &QDialogButtonBox::rejected, &dlg, &QDialog::reject);
+    if (dlg.exec() != QDialog::Accepted)
+        return;
+
+    bool ok1 = false, ok2 = false;
+    const qint64 a = parseMs(inEdit->text(), &ok1);
+    const qint64 b = parseMs(outEdit->text(), &ok2);
+    if (!ok1 || !ok2 || b - a < 200) {
+        m_status->setStyleSheet(QStringLiteral("color:#c0392b;"));
+        m_status->setText(QStringLiteral("标注起止非法（至少 0.2 秒）"));
+        return;
+    }
+    SegmentExportEngine::Params::ComposeAnno an;
+    an.type = type == 0 ? SegmentExportEngine::Params::ComposeAnno::Spotlight
+                        : (type == 1 ? SegmentExportEngine::Params::ComposeAnno::Arrow
+                                     : SegmentExportEngine::Params::ComposeAnno::Caption);
+    an.inMs = qBound(sg.inMs, a, sg.outMs);
+    an.outMs = qBound(sg.inMs, b, sg.outMs);
+    an.rect = normRect;
+    an.colorRgb = quint32(colorCombo->currentData().toInt());
+    if (textEdit) {
+        an.text = textEdit->text().trimmed();
+        if (an.text.isEmpty())
+            return;
+    }
+    sg.annos << an;
+    syncTimeline();
+    m_status->setStyleSheet(QStringLiteral("color:#7ec97e;"));
+    m_status->setText(QStringLiteral("标注已加入（仅演示片烧录；证据片段画面零改动不携带）"));
+}
+
+void ComposeWorkbenchWindow::onAnnoToolSpotlight() {
+    if (m_singleTile->zoom() > 1.01) {
+        m_status->setStyleSheet(QStringLiteral("color:#c0392b;"));
+        m_status->setText(QStringLiteral("先中键复位画面缩放再框选标注"));
+        return;
+    }
+    if (!m_pickOverlay) {
+        auto *page = m_previewStack->widget(0);
+        m_pickOverlay = new AnnoPickOverlay(
+            page, m_singleTile,
+            [this](const QRectF &n) { appendAnnoFromDialog(m_annoPickMode, n); },
+            [this]() {});
+        m_pickOverlay->setGeometry(m_singleTile->geometry());
+    }
+    m_annoPickMode = 0;
+    m_pickOverlay->setGeometry(m_singleTile->geometry());
+    m_pickOverlay->beginPick();
+}
+
+void ComposeWorkbenchWindow::onAnnoToolArrow() {
+    onAnnoToolSpotlight();          // 同一框选流（起点→终点=框对角线）
+    m_annoPickMode = 1;
+}
+
+void ComposeWorkbenchWindow::onAnnoToolCaption() {
+    appendAnnoFromDialog(2, QRectF(0, 0, 1, 1));   // 字幕无需框选
 }
 
 void ComposeWorkbenchWindow::onBlockMove(int from, int to) {
@@ -1309,6 +1684,15 @@ SegmentExportEngine::Params ComposeWorkbenchWindow::buildParams(QString *err) {
 }
 
 void ComposeWorkbenchWindow::onStartExport() {
+    if (m_evidenceRadio->isChecked()) {
+        int annoCount = 0;
+        for (const auto &sg : m_segs) annoCount += sg.annos.size();
+        if (annoCount > 0) {
+            m_status->setStyleSheet(QStringLiteral("color:#d4a017;"));
+            m_status->setText(QStringLiteral(
+                "提示：%1 条标注只在演示片烧录，证据片段画面零改动不会携带。").arg(annoCount));
+        }
+    }
     if (m_running)
         return;
     QString err;
@@ -1332,6 +1716,9 @@ void ComposeWorkbenchWindow::setExportRunning(bool running, int totalFrames) {
     if (running) {
         m_progress->setValue(0);
         m_progress->setMaximum(qMax(1, totalFrames));
+        m_elapsed.start();
+        if (m_etaLabel)
+            m_etaLabel->setText(QStringLiteral("已用 0:00 · 估算中…"));
         m_status->setStyleSheet(QStringLiteral("color:#666;"));
         m_status->setText(QStringLiteral("导出进行中…"));
     }
@@ -1341,6 +1728,20 @@ void ComposeWorkbenchWindow::setExportRunning(bool running, int totalFrames) {
 }
 
 void ComposeWorkbenchWindow::setProgress(int done, int total) {
+    if (m_etaLabel && m_elapsed.isValid() && total > 0) {
+        const qint64 el = m_elapsed.elapsed();
+        auto mmss = [](qint64 ms) {
+            return QStringLiteral("%1:%2").arg(ms / 60000, 2, 10, QLatin1Char('0'))
+                                          .arg(ms / 1000 % 60, 2, 10, QLatin1Char('0'));
+        };
+        if (done > 24 && done < total) {
+            const qint64 eta = qint64(double(total - done) * double(el) / double(done));
+            m_etaLabel->setText(QStringLiteral("已用 %1 · 预计剩余 %2")
+                                    .arg(mmss(el), mmss(eta)));
+        } else if (done >= total) {
+            m_etaLabel->setText(QStringLiteral("共用时 %1").arg(mmss(el)));
+        }
+    }
     if (total > 0)
         m_progress->setMaximum(total);
     m_progress->setValue(qMin(done, m_progress->maximum()));

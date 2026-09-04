@@ -9,8 +9,10 @@
 #include <QImage>
 #include <QPolygon>
 #include <QRect>
+#include <QRectF>
 #include <QVector>
 #include "domain/analysis_snapshot.h"
+#include "infrastructure/segment_export_engine.h"
 
 class QPainter;
 
@@ -34,6 +36,12 @@ ComposeOverlay loadComposeOverlay(const QString &vlaPath);
 /// 等比映射与 drawImage KeepAspectRatio 同式）。矩形 R1/R2… 标号+多边形描边。
 void drawRoiOverlay(QPainter &painter, const QRect &dstRect, const QSize &srcSize,
                     const ComposeOverlay &ov);
+
+/// 标注轨（P2.7）：聚光灯（剩余区变暗+聚焦框平滑放大至满幅）/箭头（起→止）/
+/// 字幕（底部黑带白字）。dispRect=帧在画布上的实际显示矩形；srcMs=当前源域时刻。
+void drawAnnotations(QPainter &painter, const QRect &dispRect, const QImage &frame,
+                     const QVector<SegmentExportEngine::Params::ComposeAnno> &annos,
+                     qint64 srcMs);
 
 /// 曲线滚动条：windowMs 宽窗口、游标固定在 2/3 处（跟随 centerMs 流内时刻）。
 /// 亮度逐行折线（ROI 同色）+ 音量曲线（绿）+ 标签竖标+游标三角柄。

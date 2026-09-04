@@ -35,6 +35,7 @@
 #include <QSlider>
 #include <QCheckBox>
 #include <QPushButton>
+#include <QLabel>
 #include <QSplitter>
 #include <QProcess>
 #include <QEventLoop>
@@ -1034,9 +1035,8 @@ static void testComposeWorkbench(QApplication &app)
             QCoreApplication::processEvents();
             QTest::qWait(600);   // 引擎载入首帧
             CHECK(recBtn->isEnabled(), "点选视频后红点可用");
-            // 快捷键烟（不崩即过；焦点在树上时字母键可能被搜索吃掉，不验状态）
+            // 快捷键烟（不崩即过；不按 Space——会真播放干扰后续打点确定性）
             tree->clearFocus();
-            QTest::keyClick(&wb, Qt::Key_Space);
             QTest::keyClick(&wb, Qt::Key_Left);
             QTest::keyClick(&wb, Qt::Key_Delete);
             QCoreApplication::processEvents();
@@ -1044,7 +1044,7 @@ static void testComposeWorkbench(QApplication &app)
             QTest::mouseClick(recBtn, Qt::LeftButton);
             CHECK(recBtn->text().contains(QStringLiteral("加入清单")),
                   "首按红点后进入待收点状态");
-            slider->setValue(400);
+            emit slider->sliderMoved(1200);   // setValue 不发 sliderMoved，直发信号走接线
             QCoreApplication::processEvents();
             QTest::qWait(1500);   // seek 异部解码到位
             QCoreApplication::processEvents();
@@ -1052,6 +1052,21 @@ static void testComposeWorkbench(QApplication &app)
             CHECK(recBtn->text().contains(QStringLiteral("从这里开始")),
                   "再按红点后回到待开始");
             CHECK(startBtn->isEnabled(), "加入片段后开始导出亮起");
+            // ✂ 切割：游标回段内 → 切开 → 状态提示两段
+            auto *splitBtn = wb.findChild<QPushButton *>(QStringLiteral("wbSplitBtn"));
+            auto *statusLb = wb.findChild<QLabel *>(QStringLiteral("wbStatus"));
+            CHECK(splitBtn && statusLb, "切割钮/状态行存在");
+            if (splitBtn && statusLb) {
+                emit slider->sliderMoved(600);
+                QCoreApplication::processEvents();
+                QTest::qWait(1200);
+                QCoreApplication::processEvents();
+                CHECK(splitBtn->isEnabled(), "游标入段后切割钮可用");
+                QTest::mouseClick(splitBtn, Qt::LeftButton);
+                QCoreApplication::processEvents();
+                CHECK(statusLb->text().contains(QStringLiteral("已在此切成 2 段")),
+                      "切割成功提示");
+            }
         }
     }
     wb.hide();

@@ -5,7 +5,7 @@
 
 ## 表头（每次写完 HANDOVER 与 WORK_HISTORY 后必须同步更新本表头——规则 R2）
 
-- **当前 HEAD**：施工批（2026-09-03 §88 合成导出收官：覆盖条/部分覆盖音轨/播放头联动+v1.16.2 打包）
+- **当前 HEAD**：施工批（2026-09-04 §89 切割/倍速/ETA/编码提速+标注轨 v1）
 - **构建**：`cmd //c "build_tmp\build_target.bat ALL"`；测试：`QT_QPA_PLATFORM=offscreen`
   + PATH 含 `C:\code\Qt\6.8.0\msvc2022_64\bin`（配置：`build_tmp\reconfigure.bat`）
 - **全回归基线**（18 套，v1.16.1 后）：mw 97 / ui_chain 103 / libav 26（含 av-align/denoise）/
@@ -14,13 +14,14 @@
   改函数后 `cd build_tmp/tcb_deploy && MSYS_NO_PATHCONV=1 tcb fn deploy <name> --force --yes`；
   AUTH_SECRET 在 build_tmp/tcb_deploy/.auth_secret（不入库）；详见 docs/cloudbase/README.md
 - **当前保留批次**（新→旧，R2 限 5 批）：
-  第七十五批 §88（合成导出收官：覆盖条/部分覆盖音轨/播放头联动+v1.16.2 打包）·
+  第七十六批 §89（切割/倍速/ETA/编码提速+标注轨 v1 聚光灯/箭头/字幕）·
+  第七十五批 §88（覆盖条/部分覆盖音轨/播放头联动+v1.16.2 打包）·
   第七十四批 §87（工作台四步引导改版+快捷键对齐剪映/PR）·
-  第七十三批 §86（合成导出 P2：ROI/曲线滚动条+宫格布局+ffmpeg8 排雷+docx 原子写）·
-  第七十二批 §85（合成导出工作台：素材树+可播放预览+片段块时间线）·
-  第七十一批 §84（P1：in-process 多段+证据/演示双模式）。
-  （§83 MLT 构建 已归档 WORK_HISTORY——见下）
-- **最近归档动作**：2026-09-03 §88 批——§83（MLT melt 构建）移入 WORK_HISTORY.md 末尾；
+  第七十三批 §86（ROI/曲线滚动条+宫格布局+ffmpeg8 排雷+docx 原子写）·
+  第七十二批 §85（工作台本体：素材树+可播放预览+片段块时间线）。
+  （§84 P1 引擎多段双模式 已归档 WORK_HISTORY——见下）
+- **最近归档动作**：2026-09-04 §89 批——§84（P1 引擎多段双模式）移入 WORK_HISTORY.md 末尾；
+  早前：2026-09-03 §88 批——§83（MLT melt 构建）移入；
   早前：2026-09-03 §87 批——§82（引擎三连修）移入；
   早前：2026-09-03 §86 批——§81（账号 v1.4 署名写死）移入；
   早前：2026-09-03 §85 批——§80（账号 v1.2）移入；
@@ -40,6 +41,32 @@
 # ============================================================================
 # 工作记录（2026-09-03，第七十一批）——合成导出器 P1 + 账号 v1.2~v1.4 + 引擎三连修 + MLT 基建
 # ============================================================================
+
+## 89. 工作台 P2.7：切割/倍速/ETA/编码提速 + 标注轨 v1（聚光灯/箭头/字幕）
+
+- **用户实测反馈六连**：①要切割按钮 ②倍速要更简便 ③导出慢 ④进度要已用/预计
+  ⑤导出是否无损 ⑥要聚光灯/箭头/字幕轨。
+- **切割**：✂按钮+Ctrl+B（剪映同款），预览位置严格落段内（两端≥200ms）才可切；
+  两半继承素材/倍速/宫格；标注按切点分家（跨界标注两边各留夹取副本）。
+- **倍速简化**：块右键「倍速」子菜单 ×0.5/1/1.25/1.5/2/4（当前档打勾）+双击自定义不变。
+- **编码提速**（慢的根因=软编 medium）：pickH264EncoderFast——候选逐一**实跑冒烟**
+  （testsrc2 1s→null，防 nvenc 在名单但无驱动运行期炸）→ h264_nvenc(p4/cq21)
+  → libx264 veryfast/crf18 → openh264 → h264_mf；作用于 runCompose+旧复合路径；
+  **runMultiCam 冻结路径刻意不动**。本机 RTX 5080 冒烟 nvenc rc=0。
+- **ETA**：setExportRunning 起 QElapsedTimer，setProgress 报「已用 m:ss · 预计剩余 m:ss」。
+- **标注轨 v1**：ComposeAnno{Spotlight,Arrow,Caption; inMs/outMs 源域; rect 归一化;
+  text; colorRgb} 挂 ComposeSeg.annos；引擎单视频段逐帧烧录（compose_render
+  drawAnnotations：聚光灯=剩余区 145α 变暗淡入淡出+聚焦框 smoothstep 放大至满幅；
+  箭头=起→止 5px+三角头；字幕=底部黑带白字 64px 上偏移避 OSD/曲线条）。
+  UI：标注条三钮（预览位置落单视频段才亮）→ 🎯/↗ 起 AnnoPickOverlay 拖框
+  （CamTileWidget 新增 videoFitRect 公开映射，zoom>1 先复位提示）→ 弹窗起止/颜色/
+  文本；时间线块上方 chips 行（🎯↗💬，右键删）；💬免框选直弹窗。证据模式有标注→
+  黄字提示不携带；有标注段自动绕开旧复合全保真路径（走新管线才烧得出）。
+- **测试**：segment 120 全绿（标注 e2e：字幕亮像素/红箭头像素/聚光灯四角压暗Δ≥20，
+  KEEP_ANNO_FRAMES 调试位）；mw 110 全绿（切割 e2e：直发 sliderMoved——
+  **setValue 不发 sliderMoved 信号**，qWait 等 seek；Space 从 smoke 撤下防真播放漂移）。
+- **陷阱**：offscreen 环境无 CJK 字体→字幕断言用 ASCII；ffmpeg 抽帧 -ss 放 -i 后
+  （精确 seek 防尾帧空帧）。
 
 ## 88. 合成导出 P2.6 收官：覆盖条/部分覆盖音轨/播放头联动 + v1.16.2 打包排雷
 
@@ -155,42 +182,3 @@
   （mw/case/report/sitemap/ui_chain/libav/sync）。
 - **遗留**：多通道段部分覆盖音轨细分 P2；宫格段无覆盖条（P2 可补）；
   工作台无独立「证据+宫格」组合（物理上矛盾）；块时间线无播放头联动（P2）。
-
-## 84. 合成导出器 P1 落地（in-process 路线修订，取代分段导出入口）
-
-- **路线修订（本批拍板级调整）**：原计划 MLT XML→melt 进程化渲染；侦察发现现有
-  `SegmentExportEngine` 已是完整的进程内合成管线（libav 解码→QPainter 画布→rawvideo
-  管道→ffmpeg.exe 子进程 x264/openh264/h264_mf）。**P1 改为扩展该引擎**：
-  预览一致性最好、进度/取消在进程内、不吃 167MB melt 运行时；melt 保留作 P2+ 多轨备选。
-- **引擎扩展**（segment_export_engine）：
-  - `Params::ComposeSeg{sourcePath,inMs,outMs,rate}` + `segments` 非空=多段模式
-    （plan/charts/PIP 忽略）；`calibrationByPath`（逐文件校正表）；
-    `demoWatermark`（强制红标）/ `evidenceCopy`（证据直拷）；`operatorName/Org`。
-  - `runCompose()`：逐段 open/seek（start_time 归一）→ QPainter 画布（layoutRects
-    全幅视频区）→ OSD 左下（校正北京时间或流内回落+倍速+案件号）+ 右上强制红标
-    「分析演示材料 · 非原始证据」→ rawvideo pipe → ffmpeg.exe（crf18/aac128k/-shortest）。
-  - `runEvidenceCopy()`：逐段 `-ss/-to -c copy -avoid_negative_ts make_zero` →
-    concat demuxer 拼接；流式 SHA-256（源+产物）→ 侧车 `<out>.forensic.json`
-    （kind=evidence_segment_export/段区间/签署人/完整性声明"关键帧对齐·像素零改动"）。
-  - `buildAudioFilterChainMulti()`：逐段输入标签，无音轨段 `anullsrc` 补静（长度=输出域
-    时长/rate），全分支 `aresample=48000:ocl=stereo:osf=s16` 归一 → concat。
-  - 纯函数 `composeSegOutFrames` / `buildEvidenceManifest` 可单测。
-- **新对话框** `src/composeexportdialog.h/.cpp`：片段表（源视频下拉=案内视频+当前、
-  入/出点 h:mm:ss.mmm 文本可编辑、倍速、输出时长列）、添加当前选段/游标起10s/删/
-  上下移；模式单选（证据直拷/分析演示片）；演示选项（校正时间角标/案件号/图表面板）；
-  输出路径（案内 exports/，LACompose_/LAEvidence_ 前缀）；内嵌进度+取消。
-  逐文件校正表由对话框经 `TimelineModel::peekCalibrationFromVla(vlaPathFor(path))`
-  预取填入 `calibrationByPath`；签署人取 CredentialStore（署名写死策略 v1.4）。
-- **主窗接线**：工具栏「导出选段」→「合成导出」（onExportSegmentClip 重写，
-  m_exportDlg→m_composeDlg）；`startComposeExport(pp)` 分发——
-  **单段+源=当前视频+rate=1+勾图表面板+演示模式 → 旧 startSegmentExport 全保真路径
-  （曲线/语谱/放大镜/标签 OSD/分段变速零回归）**，否则走新多段/证据管线。
-  多机窗口（multicamplaybackwindow）仍用旧 SegmentExportDialog，不受影响。
-- **测试**：segment_test 新增——testComposeHelpers（帧数数学/多源音频链/清单 JSON）、
-  testComposeEndToEnd（2 段合成→时长+音轨校验）、testEvidenceEndToEnd（直拷+侧车
-  JSON 字段校验）；全回归绿（segment/mw/case/libav/report/sitemap/ui_chain）。
-- **文档**：MANUAL 七·2 整节重写为「合成导出（多段拼接 · 证据/演示双模式）」并同步
-  速览表/工作流措辞（PDF 已重出）；CHANGELOG v1.16.2 条目；PENDING 勾销 P1 本体。
-- **遗留**：P1 预览无独立合成预览窗（复用主视口手动核对）；MLT 运行时仍在
-  build/Release/mlt/ 但 **P1 不打包 mlt/**（pack_release 不动）；P2 多机位同屏/
-  曲线滚动条/ROI 烧录、P3 melt 瘦身见 PENDING。

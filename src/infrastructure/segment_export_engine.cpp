@@ -55,6 +55,65 @@ QString pickH264Encoder(const QString &ffmpegPath)
     cache.insert(ffmpegPath, enc);
     return enc;
 }
+
+/// P2.7 提速：编码器实跑冒烟（1s testsrc2 → null）。nvenc 在名单≠能用（无 GPU/驱动崩
+/// 会在运行期才炸），故逐候选实编码验证；结果按 ffmpeg 路径缓存。
+bool encoderWorks(const QString &ffmpegPath, const QString &enc)
+{
+    QProcess p;
+    p.start(ffmpegPath, {QStringLiteral("-v"), QStringLiteral("error"),
+                         QStringLiteral("-f"), QStringLiteral("lavfi"),
+                         QStringLiteral("-i"),
+                         QStringLiteral("testsrc2=size=320x240:rate=5:duration=1"),
+                         QStringLiteral("-c:v"), enc,
+                         QStringLiteral("-pix_fmt"), QStringLiteral("yuv420p"),
+                         QStringLiteral("-f"), QStringLiteral("null"),
+                         QStringLiteral("-")});
+    if (!p.waitForFinished(15000)) {
+        p.kill();
+        p.waitForFinished(2000);
+        return false;
+    }
+    return p.exitCode() == 0;
+}
+
+/// 速度优先选型（合成/复合导出用；runMultiCam 冻结路径仍用 pickH264Encoder）：
+/// h264_nvenc（硬编，RTX 系数倍速）→ libx264 veryfast → openh264 → h264_mf
+QString pickH264EncoderFast(const QString &ffmpegPath)
+{
+    static QHash<QString, QString> cache;
+    const auto it = cache.constFind(ffmpegPath);
+    if (it != cache.constEnd())
+        return it.value();
+    QString enc = QStringLiteral("h264_mf");
+    QProcess probe;
+    probe.start(ffmpegPath, {QStringLiteral("-hide_banner"),
+                             QStringLiteral("-encoders")});
+    QString listed;
+    if (probe.waitForFinished(8000))
+        listed = QString::fromLocal8Bit(probe.readAllStandardOutput());
+    for (const QString &cand : {QStringLiteral("h264_nvenc"), QStringLiteral("libx264"),
+                                QStringLiteral("libopenh264"), QStringLiteral("h264_mf")}) {
+        if (listed.contains(cand) && encoderWorks(ffmpegPath, cand)) {
+            enc = cand;
+            break;
+        }
+    }
+    cache.insert(ffmpegPath, enc);
+    return enc;
+}
+
+/// 各编码器画质/速度参数（演示片口径：视觉无损优先，体积其次）
+QStringList h264QualityArgsFast(const QString &enc)
+{
+    if (enc == QStringLiteral("h264_nvenc"))
+        return {QStringLiteral("-preset"), QStringLiteral("p4"),
+                QStringLiteral("-cq"), QStringLiteral("21")};
+    if (enc == QStringLiteral("libx264"))
+        return {QStringLiteral("-preset"), QStringLiteral("veryfast"),
+                QStringLiteral("-crf"), QStringLiteral("18")};
+    return {QStringLiteral("-b:v"), QStringLiteral("8M")};
+}
 }
 
 SegmentExportEngine::SegmentExportEngine(QObject *parent)
@@ -454,14 +513,10 @@ void SegmentExportEngine::run()
     } else {
         args << QStringLiteral("-map") << QStringLiteral("0:v");
     }
-    const QString encoder = pickH264Encoder(ffmpeg);
+    const QString encoder = pickH264EncoderFast(ffmpeg);
     args << QStringLiteral("-c:v") << encoder
          << QStringLiteral("-pix_fmt") << QStringLiteral("yuv420p");
-    if (encoder == QStringLiteral("libx264"))
-        args << QStringLiteral("-preset") << QStringLiteral("medium")
-             << QStringLiteral("-crf") << QStringLiteral("18");
-    else
-        args << QStringLiteral("-b:v") << QStringLiteral("8M");
+    args << h264QualityArgsFast(encoder);
     if (hasAudio)
         args << QStringLiteral("-c:a") << QStringLiteral("aac")
              << QStringLiteral("-b:a") << QStringLiteral("128k")
@@ -1373,14 +1428,10 @@ void SegmentExportEngine::runCompose()
     } else {
         args << QStringLiteral("-map") << QStringLiteral("0:v");
     }
-    const QString encoder = pickH264Encoder(ffmpeg);
+    const QString encoder = pickH264EncoderFast(ffmpeg);
     args << QStringLiteral("-c:v") << encoder
          << QStringLiteral("-pix_fmt") << QStringLiteral("yuv420p");
-    if (encoder == QStringLiteral("libx264"))
-        args << QStringLiteral("-preset") << QStringLiteral("medium")
-             << QStringLiteral("-crf") << QStringLiteral("18");
-    else
-        args << QStringLiteral("-b:v") << QStringLiteral("8M");
+    args << h264QualityArgsFast(encoder);
     if (anyAudio)
         args << QStringLiteral("-c:a") << QStringLiteral("aac")
              << QStringLiteral("-b:a") << QStringLiteral("128k")
@@ -1758,6 +1809,10 @@ void SegmentExportEngine::runCompose()
                 if (seg.burnRoi && overlay.loaded)
                     drawRoiOverlay(painter, QRect(vx, vy, scaled.width(), scaled.height()),
                                    curFrame.size(), overlay);
+                // P2.7：标注轨（聚光灯/箭头/字幕，源域时刻驱动）
+                if (!seg.annos.isEmpty())
+                    drawAnnotations(painter, QRect(vx, vy, scaled.width(), scaled.height()),
+                                    curFrame, seg.annos, qint64(target));
 
                 if (p.burnOsd) {
                     QString timeStr;

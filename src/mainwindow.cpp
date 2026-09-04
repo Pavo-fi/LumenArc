@@ -2990,6 +2990,7 @@ void MainWindow::startComposeExport(const SegmentExportEngine::Params &ppIn)
     if (ppIn.segments.size() == 1 && !ppIn.evidenceCopy
         && ppIn.segments.first().sourcePath == m_currentVideoPath
         && qAbs(ppIn.segments.first().rate - 1.0) < 0.01
+        && ppIn.segments.first().annos.isEmpty()   // 有标注 → 新管线烧录
         && m_workbench->wantPanels()) {
         // 旧复合路径（图表/语谱/放大镜/标签 OSD 全套，v1.15.3 行为冻结）
         QVector<qint64> labelTimes;

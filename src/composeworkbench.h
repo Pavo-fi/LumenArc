@@ -9,6 +9,7 @@
 ///        导出执行复用 SegmentExportEngine（多段/宫格段/证据直拷均已支持）。
 
 #include <QDialog>
+#include <QElapsedTimer>
 #include <QVector>
 #include "app/cam_timeline.h"             // CamInventoryItem / buildCamInventory
 #include "infrastructure/segment_export_engine.h"
@@ -67,7 +68,13 @@ private slots:
     void onSliderReleased();
     void onMarkIn();
     void onMarkOut();
-    void onRecordToggle();   ///< 红点单键流：第一下=起点，第二下=终点并加入
+    void onRecordToggle();
+    void onSplitBlock();                       /// ✂ 在预览位置切开选中/所在段（Ctrl+B）
+    void onBlockRate(int idx, double rate);    /// 右键倍速预设
+    void onAnnoRemove(int segIdx, int annoIdx);
+    void onAnnoToolSpotlight();
+    void onAnnoToolArrow();
+    void onAnnoToolCaption();   ///< 红点单键流：第一下=起点，第二下=终点并加入
     void onAddSegment();
     void onBlockEdit(int idx);
     void onBlockRemove(int idx);
@@ -85,7 +92,9 @@ private:
     qint64 previewDurationMs() const;    ///< 可打点的轴长
     bool previewIsMulti() const;
     void updateTransport();
-    void updateGuide();      ///< 四步引导条状态机（选素材/截片段/排顺序/导出）
+    void updateGuide();
+    int segIndexAtPreviewPos() const;   /// 预览位置落入的片段下标（-1=无）
+    void appendAnnoFromDialog(int type, const QRectF &normRect);      ///< 四步引导条状态机（选素材/截片段/排顺序/导出）
     void seekPreviewRelative(qint64 deltaMs);
     void installShortcuts(); ///< 快捷键（对齐剪映/PR：空格/I/O/←→/Delete/Ctrl+E…）
     QString segDisplayName(const SegmentExportEngine::Params::ComposeSeg &seg) const;
@@ -117,6 +126,12 @@ private:
 
     // ---- 打点 ----
     qint64 m_markIn = -1, m_markOut = -1;
+    int m_playSegIdx = -1;            // 预览位置所在片段块（播放头联动/切割/标注共用）
+
+    // ---- 标注轨（P2.7）----
+    class AnnoPickOverlay;
+    AnnoPickOverlay *m_pickOverlay = nullptr;
+    int m_annoPickMode = 0;           // 0=无 1=聚光灯 2=箭头
 
     // ---- 片段序列（导出模型，引擎同款结构）----
     QVector<SegmentExportEngine::Params::ComposeSeg> m_segs;
@@ -148,5 +163,11 @@ private:
     QPushButton *m_startBtn = nullptr;
     QPushButton *m_cancelBtn = nullptr;
     QPushButton *m_closeBtn = nullptr;
+    QPushButton *m_splitBtn = nullptr;
+    QPushButton *m_annoSpotBtn = nullptr;
+    QPushButton *m_annoArrowBtn = nullptr;
+    QPushButton *m_annoCapBtn = nullptr;
+    QLabel *m_etaLabel = nullptr;      // 已用/预计剩余
+    QElapsedTimer m_elapsed;
     bool m_running = false;
 };

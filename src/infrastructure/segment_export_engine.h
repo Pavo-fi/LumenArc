@@ -17,6 +17,7 @@
 #include <QSize>
 #include <QString>
 #include <QHash>
+#include <QRectF>
 #include <QJsonObject>
 #include "domain/speed_plan.h"
 #include "domain/analysis_snapshot.h"   // ChartLabel（导出标签竖标+OSD 5s 烧录）
@@ -65,6 +66,17 @@ public:
         /// 内容显示 5 秒隐去（真机反馈拍板）
         QVector<ChartLabel> labels;
 
+        /// P2.7 标注（演示片烧录）：聚光灯/箭头/字幕；时间=源域流内 ms（与段 in/out 同轴），
+        /// 坐标=归一化内容坐标 0..1（spotlight=聚焦框；arrow=起点→终点；caption 忽略坐标）
+        struct ComposeAnno {
+            enum Type { Spotlight, Arrow, Caption };
+            Type type = Spotlight;
+            qint64 inMs = 0, outMs = 0;
+            QRectF rect = QRectF(0.0, 0.0, 1.0, 1.0);
+            QString text;                 ///< caption 文本
+            quint32 colorRgb = 0xffe14d;  ///< 标注色（默认黄）
+        };
+
         // ---- 合成导出 P1（2026-09-03 拍板：多段序列模式，取代分段导出入口）----
         struct ComposeSeg {
             QString sourcePath;          ///< 单视频段源文件（多段可多源；lanes 非空时忽略）
@@ -81,6 +93,7 @@ public:
             /// 无数据自动缺席回落满幅）
             bool burnRoi = false;        ///< ROI 叠加（矩形+多边形，源像素坐标映射）
             bool burnChart = false;      ///< 底部曲线滚动条（亮度+音量+标签+跟随游标）
+            QVector<ComposeAnno> annos;  ///< P2.7：标注轨（单视频段；聚光灯/箭头/字幕）
             bool isLanes() const { return !lanes.isEmpty(); }
         };
         /// 非空 = 多段序列模式（plan/chartBase/specBase/labels/放大镜 PIP 全部忽略）

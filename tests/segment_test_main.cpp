@@ -846,6 +846,99 @@ static void testComposeLanesPartialAudioEndToEnd()
     QFile::remove(pp.outputPath);
 }
 
+static void testComposeAnnoEndToEnd()
+{
+    const QString src = QStringLiteral("build_tmp/caltest/basic.mp4");
+    if (!QFile::exists(src)) {
+        qWarning() << "SKIP anno e2e: no caltest asset";
+        return;
+    }
+    using SEE = SegmentExportEngine;
+    SEE::Params pp;
+    SEE::Params::ComposeSeg seg;
+    seg.sourcePath = src; seg.inMs = 0; seg.outMs = 2000;
+    SEE::Params::ComposeAnno cap;   // 全程字幕
+    cap.type = SEE::Params::ComposeAnno::Caption;
+    cap.inMs = 0; cap.outMs = 2000; cap.text = QStringLiteral("FIRE POINT A");   // ASCII（offscreen 无 CJK 字体防豆腐块）
+    SEE::Params::ComposeAnno arr;   // 0.6s 起红箭头
+    arr.type = SEE::Params::ComposeAnno::Arrow;
+    arr.inMs = 600; arr.outMs = 2000;
+    arr.rect = QRectF(0.2, 0.2, 0.5, 0.5);
+    arr.colorRgb = 0xff6060;
+    SEE::Params::ComposeAnno spot;  // 1.0s 起聚光灯（中央 50%）
+    spot.type = SEE::Params::ComposeAnno::Spotlight;
+    spot.inMs = 1000; spot.outMs = 2000;
+    spot.rect = QRectF(0.25, 0.25, 0.5, 0.5);
+    seg.annos = {cap, arr, spot};
+    pp.segments = {seg};
+    pp.outputPath = QStringLiteral("build_tmp/caltest/compose_anno_e2e.mp4");
+    pp.outFps = 5.0;
+    pp.canvas = QSize(640, 480);
+    pp.demoWatermark = false;
+    QFile::remove(pp.outputPath);
+
+    SEE eng;
+    QSignalSpy spy(&eng, &SEE::finished);
+    eng.start(pp);
+    const bool got = spy.wait(90000);
+    CHECK(got, "anno e2e finished");
+    if (!got) return;
+    if (!spy.first().at(0).toBool()) {
+        CHECK(false, QStringLiteral("anno e2e 失败：%1").arg(spy.first().at(1).toString()));
+        return;
+    }
+    auto grab = [&](double tS, const QString &out) {
+        QProcess proc;
+        proc.start(ToolPaths::findFfmpegPath(),
+                   {QStringLiteral("-y"), QStringLiteral("-v"), QStringLiteral("error"),
+                    QStringLiteral("-i"), pp.outputPath,
+                    QStringLiteral("-ss"), QString::number(tS),
+                    QStringLiteral("-frames:v"), QStringLiteral("1"), out});
+        proc.waitForFinished(30000);
+        return QImage(out);
+    };
+    const QString dir = QStringLiteral("build_tmp/caltest/");
+    const QImage f03 = grab(0.3, dir + "anno_f03.png");   // 仅字幕
+    const QImage f16 = grab(1.6, dir + "anno_f16.png");   // 字幕+箭头+聚光灯变暗峰值（dim 满）
+    const QImage f18 = grab(1.8, dir + "anno_f18.png");   // 聚光灯接近放满
+    CHECK(!f03.isNull() && !f16.isNull() && !f18.isNull(), "anno 抽帧成功");
+    if (!f03.isNull()) {
+        // 字幕：底部黑带区有亮色文字像素（全宽扫，防栅格采样错过 1px 笔画）
+        int white = 0;
+        for (int x = 0; x < 640; x += 2)
+            for (int y = 405; y < 432; ++y)
+                if (f03.pixelColor(x, y).lightness() > 150) ++white;
+        CHECK(white > 50, QStringLiteral("字幕上墨（亮像素 %1）").arg(white));
+    }
+    if (!f16.isNull()) {
+        // 红箭头像素
+        int red = 0;
+        for (int x = 0; x < 640; x += 2)
+            for (int y = 0; y < 480; y += 2) {
+                const QColor c = f16.pixelColor(x, y);
+                if (c.red() > 170 && c.green() < 130 && c.blue() < 130) ++red;
+            }
+        CHECK(red > 40, QStringLiteral("箭头上墨（红像素 %1）").arg(red));
+        // 聚光灯变暗峰值（1.6s 处 dim 满 145）：四角显著压暗
+        if (!f03.isNull()) {
+            auto cornerMean = [](const QImage &im) {
+                double s = 0; int n = 0;
+                for (int x = 4; x < 40; x += 4)
+                    for (int y = 4; y < 40; y += 4) { s += im.pixelColor(x, y).lightness(); ++n; }
+                return s / qMax(1, n);
+            };
+            CHECK(cornerMean(f16) < cornerMean(f03) - 20,
+                  QStringLiteral("聚光灯半程压暗四角（%1 vs %2）")
+                      .arg(cornerMean(f16)).arg(cornerMean(f03)));
+        }
+    }
+    if (!qEnvironmentVariableIsSet("KEEP_ANNO_FRAMES"))
+        for (const QString &f : {dir + "anno_f03.png", dir + "anno_f16.png", dir + "anno_f18.png"})
+            QFile::remove(f);
+    if (!qEnvironmentVariableIsSet("KEEP_ANNO_FRAMES"))
+        QFile::remove(pp.outputPath);
+}
+
 int main(int argc, char **argv)
 {
     QFile::remove(QStringLiteral("build_tmp/segment_test_out.log"));
@@ -869,6 +962,7 @@ int main(int argc, char **argv)
     testComposeRealAssetEndToEnd();
     testAudioChainV2();
     testComposeLanesPartialAudioEndToEnd();
+    testComposeAnnoEndToEnd();
     testMultiCamEndToEnd();
     testEndToEnd();
     qInfo() << "segment_test:" << g_checks << "checks," << g_failures << "failures";
