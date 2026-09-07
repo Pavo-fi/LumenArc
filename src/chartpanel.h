@@ -58,6 +58,9 @@ public:
     QValueAxis *axisX() const { return m_axisX; }
     /// P-31 T5（R3 收口）：外部轴范围设置入口（替代穿透 axisX()->setRange）
     void setXAxisRange(qreal min, qreal max);
+    /// v1.17.0 P-76（R3 收口）：外部轴范围只读入口（替代穿透 axisX()->min()/max()）
+    /// 轴不存在时返回 (0,0)，与调用方旧防御式写法语义一致
+    QPair<qreal, qreal> xAxisRange() const;
 
     /// Toggle Y-axis auto-range on/off
     void setAutoYRange(bool enabled);

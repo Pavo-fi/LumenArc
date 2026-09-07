@@ -123,7 +123,7 @@ void MainWindow::onExportSegmentClip()
         m_videoEngine->pause();
 
     if (!m_workbench) {
-        m_workbench = new ComposeWorkbenchWindow(m_caseManager, m_currentVideoPath,
+        m_workbench = new ComposeWorkbenchWindow(m_caseManager, m_sessionMgr->currentVideoPath(),
                                                  fps, this);
         connect(m_workbench, &ComposeWorkbenchWindow::exportRequested, this,
                 [this](const SegmentExportEngine::Params &pp) {
@@ -134,7 +134,7 @@ void MainWindow::onExportSegmentClip()
                 m_segmentExporter->cancel();
         });
     } else {
-        m_workbench->refreshContext(m_currentVideoPath, fps);
+        m_workbench->refreshContext(m_sessionMgr->currentVideoPath(), fps);
     }
     m_workbench->show();
     m_workbench->raise();
@@ -153,7 +153,7 @@ void MainWindow::startComposeExport(const SegmentExportEngine::Params &ppIn)
         return;
     }
     if (ppIn.segments.size() == 1 && !ppIn.evidenceCopy
-        && ppIn.segments.first().sourcePath == m_currentVideoPath
+        && ppIn.segments.first().sourcePath == m_sessionMgr->currentVideoPath()
         && qAbs(ppIn.segments.first().rate - 1.0) < 0.01
         && ppIn.segments.first().annos.isEmpty()   // 有标注 → 新管线烧录
         && m_workbench->wantPanels()) {
@@ -206,18 +206,17 @@ void MainWindow::startSegmentExport(const speedplan::SpeedPlan &planIn,
     // 2x 超采样保清晰度；渲染后恢复视口。无数据面板 = 空图（拍板 Q3 隐藏）。
     QImage chartBase, specBase;
     const AnalysisSnapshot snap = m_timelineModel->snapshot();
-    QValueAxis *ax = m_chartPanel->axisX();
-    const qreal oldMin = ax ? ax->min() : 0, oldMax = ax ? ax->max() : 0;
+    // v1.17.0 P-76（R3 收口）：轴范围改走公开只读接口（替代 axisX() 穿透）
+    const QPair<qreal, qreal> oldRange = m_chartPanel->xAxisRange();
     m_chartPanel->setXAxisRange(plan.aMs, plan.bMs);
     if (!snap.timestamps.isEmpty())
         chartBase = m_chartPanel->renderToImage(QSize(3840, 420));
     if (snap.audioData().hasSpectrogram())
         specBase = m_spectrogramEnhanced->renderHeatmapImage(QSize(3840, 400));
-    if (ax)
-        m_chartPanel->setXAxisRange(oldMin, oldMax);
+    m_chartPanel->setXAxisRange(oldRange.first, oldRange.second);
 
     SegmentExportEngine::Params pp;
-    pp.sourcePath = m_currentVideoPath;
+    pp.sourcePath = m_sessionMgr->currentVideoPath();
     pp.outputPath = outPath;
     pp.plan = plan;
     pp.outFps = (m_videoEngine && m_videoEngine->fps() > 0.0f)

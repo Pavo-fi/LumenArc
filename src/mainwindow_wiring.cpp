@@ -3,6 +3,7 @@
  * @brief v1.17.0 P-79：自 mainwindow.cpp 按职责域拆出（行为冻结纯移动，定义仍属 MainWindow）
  */
 #include "mainwindow.h"
+#include "keyguardfilter.h"
 #include "videowidget.h"
 #include "chartpanel.h"
 #include "domain/roi_model.h"
@@ -173,8 +174,8 @@ void MainWindow::setupAudioSpectrogramConnections()
 
     // Noise reduction slider
     connect(m_noiseReductionSlider, &QSlider::valueChanged, this, [this](int value) {
-        m_noiseReductionStrength = value / 10.0;
-        m_noiseReductionValueLabel->setText(QString::number(m_noiseReductionStrength, 'f', 1));
+        m_playbackSettings->setNoiseReductionStrength(value / 10.0);
+        m_noiseReductionValueLabel->setText(QString::number(m_playbackSettings->noiseReductionStrength(), 'f', 1));
         // P-54b：播放降噪强度实时跟随（原子热更新，下一帧生效，不用点应用）；
         // 分析显示链路仍需「应用」重跑（图是离线数据渲染的）
         applyPlaybackDenoiseSetting();
@@ -184,7 +185,7 @@ void MainWindow::setupAudioSpectrogramConnections()
         // P-54（v1.16.1 落地）：libav 引擎原生谱门控降噪——
         // 强度随任务下发引擎（onAudioAnalysis 内统一读取滑杆值）；
         // 调回 0 再应用 = 重跑干净分析复原。
-        if (!m_currentVideoPath.isEmpty())
+        if (!m_sessionMgr->currentVideoPath().isEmpty())
             onAudioAnalysis();
     });
 
@@ -248,10 +249,10 @@ void MainWindow::setupMagnifierConnections()
             this, &MainWindow::showVideoContextMenu);
 
     // Install event filter for global shortcut handling
-    overlay->installEventFilter(this);
-    menuBar()->installEventFilter(this);
-    this->installEventFilter(this);  // Global shortcut handling
-    m_videoListPanel->listWidget()->installEventFilter(this);  // 视频列表快捷键
+    overlay->installEventFilter(m_keyGuard);
+    menuBar()->installEventFilter(m_keyGuard);
+    this->installEventFilter(m_keyGuard);  // Global shortcut handling
+    m_videoListPanel->listWidget()->installEventFilter(m_keyGuard);  // 视频列表快捷键
 
     // Forward video frames to magnifier and pinned
     connect(m_videoEngine, &IVideoEngine::frameReady,
@@ -556,7 +557,7 @@ void MainWindow::setupVideoListConnections()
                 m_videoEngine->unload();   // 彻底卸载：停线程+释放文件+duration 归零
                                           // （仅 stop() 时空格快捷键仍可继续播放——现场反馈）
                 removeMagnifier();
-                m_currentVideoPath.clear();
+                m_sessionMgr->setCurrentVideoPath(QString());
                 m_uiState->beginVideo(0);
 
                 m_roiModel->clearRegions();
@@ -586,7 +587,7 @@ void MainWindow::setupVideoListConnections()
                 // clearFrame 之后到达又把帧画回去（现场反馈：第二次清空画面留存）。
                 // unload 已停线程不会再产生新帧，事件循环尾部再清一次即可兜住。
                 QTimer::singleShot(0, this, [this]() {
-                    if (m_videoWidget && m_currentVideoPath.isEmpty())
+                    if (m_videoWidget && m_sessionMgr->currentVideoPath().isEmpty())
                         m_videoWidget->clearFrame();
                 });
 
@@ -635,7 +636,7 @@ void MainWindow::setupCaseConnections()
             m_exportClipBtn->setEnabled(true);
     });
     connect(m_caseManager, &CaseManager::caseClosed, this, [this]() {
-        if (m_exportClipBtn && m_currentVideoPath.isEmpty())
+        if (m_exportClipBtn && m_sessionMgr->currentVideoPath().isEmpty())
             m_exportClipBtn->setEnabled(false);
     });
 }

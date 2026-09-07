@@ -2392,3 +2392,10 @@ void ChartPanel::setXAxisRange(qreal min, qreal max)
     if (auto *ax = axisX())
         ax->setRange(min, max);
 }
+
+QPair<qreal, qreal> ChartPanel::xAxisRange() const
+{
+    if (auto *ax = axisX())
+        return qMakePair(ax->min(), ax->max());
+    return qMakePair(0.0, 0.0);
+}

@@ -30,6 +30,14 @@ public:
 
     VideoStateManager *stateManager() const { return m_states; }
 
+    // v1.17.0 P-77（R5 收口）：当前视频路径 SSOT——原 MainWindow::m_currentVideoPath
+    // 47 处引用统一收口至此。三条边界不变量：
+    //  ① .vla 直载不覆写（openVideoFile 的 .vla 分支不调 setter）
+    //  ② videoRelocated 双写跟随（migrateKey + setCurrentVideoPath 同点）
+    //  ③ 视频列表清空时清零
+    QString currentVideoPath() const { return m_currentVideoPath; }
+    void setCurrentVideoPath(const QString &path) { m_currentVideoPath = path; }
+
     /// 保存当前视频现场（VideoState 由 UI 层收集，值拷贝装配）
     void saveCurrentState(const QString &videoPath, const VideoState &state);
 
@@ -56,4 +64,5 @@ public:
 
 private:
     VideoStateManager *m_states = nullptr;   // 持有（parent 本对象）
+    QString m_currentVideoPath;              // v1.17.0 P-77：当前视频路径 SSOT
 };

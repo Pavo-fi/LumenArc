@@ -19,6 +19,8 @@
 #include "domain/time_calibration.h"
 #include "videolistpanel.h"
 #include "app/project_io.h"
+#include "app/video_session_manager.h"
+#include "app/playback_settings.h"
 #include "videostatemanager.h"
 
 class TimeSettingsDialog;
@@ -34,10 +36,10 @@ class PinnedWidget;
 class IVideoEngine;
 class IAnalysisEngine;
 class CalibrationService;
+class KeyGuardFilter;
 class CaseManager;
 class CaseDock;
 class CaseOpenPanel;
-class RoiModel;
 class RoiModel;
 class GuideLineModel;
 class QPushButton;
@@ -57,6 +59,10 @@ class MainWindow : public QMainWindow
 public:
     explicit MainWindow(QWidget *parent = nullptr);
     ~MainWindow();
+
+    /// v1.17.0 P-77（R5）：当前视频路径公开只读入口（真身在 VideoSessionManager SSOT）
+    QString currentVideoPath() const
+    { return m_sessionMgr ? m_sessionMgr->currentVideoPath() : QString(); }
 
     // v1.8.0 P1a：AnalysisPhase 硬编码两阶段枚举已删（PENDING P-32 勾销）——
     // 分析流程状态由 AnalysisTaskService 状态机持有（R7/R8），MainWindow 仅响应任务信号
@@ -216,6 +222,9 @@ protected:
     void closeEvent(QCloseEvent *event) override;
     void resizeEvent(QResizeEvent *event) override;   // 打开面板居中（2026-08）
     bool eventFilter(QObject *watched, QEvent *event) override;
+    /// v1.17.0 P-78（Q5）：18 键快捷键路由（共享处理函数；
+    /// eventFilter 本体只经 KeyGuardFilter 转发，不写大 switch）
+    bool handleGlobalShortcut(QKeyEvent *e);
 
     VideoWidget *m_videoWidget = nullptr;
     MagnifierWidget *m_magnifier = nullptr;
@@ -232,6 +241,10 @@ protected:
     class AnalysisTaskService *m_taskService = nullptr;
     /// v1.9.0 P-31 T4：视频时长 SSOT（消 m_trusted/m_current 两副本，P-37）
     class UiState *m_uiState = nullptr;
+    /// v1.17.0 P-77：播放倍速 + 降噪强度 SSOT（消 m_currentSpeed/m_noiseReductionStrength）
+    PlaybackSettings *m_playbackSettings = nullptr;
+    /// v1.17.0 P-78（Q5）：快捷键守卫（18 键 switch 经 handleGlobalShortcut 转发）
+    KeyGuardFilter *m_keyGuard = nullptr;
     /// v1.9.0 P-31 T2-A：视频会话（VideoStateManager 归属 + 打开决策数据面）
     class VideoSessionManager *m_sessionMgr = nullptr;
     /// v1.9.0 P-31 T1：工程读写（vla/CSV/时间戳ROI记忆/徽标文案）
@@ -286,9 +299,7 @@ protected:
     QPushButton *m_adjustBtn = nullptr;      ///< 画面调节面板开关
     class PlaybackAdjustPanel *m_adjustPanel = nullptr;
     QPushButton *m_speedBtn = nullptr;
-    float m_currentSpeed = 1.0f;
 
-    QString m_currentVideoPath;
     QTimer *m_seekThrottleTimer = nullptr;  // 拖拽 seek 节流（50ms leading+trailing）
     qint64 m_pendingSeekMs = -1;
     qint64 m_lastIssuedSeekMs = -1;
@@ -307,7 +318,6 @@ protected:
     QSlider *m_noiseReductionSlider = nullptr;
     QLabel *m_noiseReductionLabel = nullptr;
     QLabel *m_noiseReductionValueLabel = nullptr;
-    qreal m_noiseReductionStrength = 0.0;
     QPushButton *m_nrApplyBtn = nullptr;
     QPushButton *m_toggleVideoListBtn = nullptr;
     QPushButton *m_chartCollapseBtn = nullptr;

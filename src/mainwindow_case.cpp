@@ -206,7 +206,7 @@ void MainWindow::closeCaseWithPrompt()
     if (!m_caseManager || !m_caseManager->isOpen())
         return;
     // 记录现场后关案（不中断播放，拍板§8-6）
-    if (const auto *v = m_caseManager->videoByPath(m_currentVideoPath))
+    if (const auto *v = m_caseManager->videoByPath(m_sessionMgr->currentVideoPath()))
         m_caseManager->setLastVideoId(v->id);
     if (m_caseManager->isDirty()) {
         const auto reply = QMessageBox::question(this,
@@ -233,7 +233,7 @@ void MainWindow::closeEvent(QCloseEvent *event)
 {
     // 退出前案件 dirty 检查（取证：未保存变更须明示；取消则中止退出）
     if (m_caseManager && m_caseManager->isOpen() && m_caseManager->isDirty()) {
-        if (const auto *v = m_caseManager->videoByPath(m_currentVideoPath))
+        if (const auto *v = m_caseManager->videoByPath(m_sessionMgr->currentVideoPath()))
             m_caseManager->setLastVideoId(v->id);
         const auto reply = QMessageBox::question(this,
             lang("退出", "Exit"),
@@ -436,9 +436,9 @@ void MainWindow::onMultiCamView()
     win->onCaseDataChanged = [this](const QString &path) {
         if (m_caseDock)
             m_caseDock->refreshTree();
-        if (!path.isEmpty() && !m_currentVideoPath.isEmpty()
+        if (!path.isEmpty() && !m_sessionMgr->currentVideoPath().isEmpty()
             && QString::compare(QDir::cleanPath(path),
-                                QDir::cleanPath(m_currentVideoPath),
+                                QDir::cleanPath(m_sessionMgr->currentVideoPath()),
                                 Qt::CaseInsensitive) == 0) {
             const TimeCalibration cal = TimelineModel::peekCalibrationFromVla(
                 m_caseManager->vlaPathFor(path));
@@ -465,7 +465,7 @@ void MainWindow::onMultiCamView()
         // P-54b：多机窗继承播放降噪设置
         QSettings s("LumenArc", "LumenArc");
         win->applyPlaybackDenoise(s.value("playbackDenoise", false).toBool(),
-                                  m_noiseReductionStrength);
+                                  m_playbackSettings->noiseReductionStrength());
     }
     win->setAttribute(Qt::WA_DeleteOnClose);
     win->showMaximized();   // v1.16.0 拍板：多机窗默认最大化（多路铺屏）
@@ -495,9 +495,9 @@ void MainWindow::onMultiCamStandalone()
             m_caseDock->refreshTree();
         // 多机窗保存的校时若正中主视口当前视频：同步内存+时间轴，
         // 防主窗旧 m_calibration 后续自动存盘回写覆盖 .vla 新校时
-        if (!path.isEmpty() && !m_currentVideoPath.isEmpty()
+        if (!path.isEmpty() && !m_sessionMgr->currentVideoPath().isEmpty()
             && QString::compare(QDir::cleanPath(path),
-                                QDir::cleanPath(m_currentVideoPath),
+                                QDir::cleanPath(m_sessionMgr->currentVideoPath()),
                                 Qt::CaseInsensitive) == 0) {
             const TimeCalibration cal = TimelineModel::peekCalibrationFromVla(
                 m_caseManager->vlaPathFor(path));
@@ -518,7 +518,7 @@ void MainWindow::onMultiCamStandalone()
     {
         QSettings s("LumenArc", "LumenArc");   // P-54b 同上
         win->applyPlaybackDenoise(s.value("playbackDenoise", false).toBool(),
-                                  m_noiseReductionStrength);
+                                  m_playbackSettings->noiseReductionStrength());
     }
     win->setAttribute(Qt::WA_DeleteOnClose);
     win->showMaximized();   // v1.16.0：默认最大化

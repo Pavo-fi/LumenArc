@@ -188,7 +188,7 @@ void MainWindow::onSnapshotQuick()
         lines << line2;
         if (!labelText.isEmpty())
             lines << labelText;
-        const QString fileName = QFileInfo(m_currentVideoPath).fileName();
+        const QString fileName = QFileInfo(m_sessionMgr->currentVideoPath()).fileName();
         if (!fileName.isEmpty())
             lines << fileName;   // 最上方一行
         for (int i = 0; i < lines.size(); ++i) {
@@ -349,13 +349,13 @@ void MainWindow::onSnapshotQuick()
                     QString::number(rotation));
 
     // ---- 保存：案件 snapshots/ 优先；无案件则视频同目录 snapshots/ ----
-    const QString base = QFileInfo(m_currentVideoPath).completeBaseName();
+    const QString base = QFileInfo(m_sessionMgr->currentVideoPath()).completeBaseName();
     QString dir;
     const bool inCase = m_caseManager && m_caseManager->isOpen();
     if (inCase)
         dir = m_caseManager->caseDir() + QStringLiteral("/snapshots");
-    else if (!m_currentVideoPath.isEmpty())
-        dir = QFileInfo(m_currentVideoPath).absolutePath()
+    else if (!m_sessionMgr->currentVideoPath().isEmpty())
+        dir = QFileInfo(m_sessionMgr->currentVideoPath()).absolutePath()
               + QStringLiteral("/snapshots");
     else
         dir = QDir::homePath() + QStringLiteral("/LumenArc_Snapshots");

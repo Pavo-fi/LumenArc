@@ -9,6 +9,7 @@
  * Licensed under the Apache License, Version 2.0
  */
 #include "mainwindow.h"
+#include "keyguardfilter.h"
 #include "build_stamp.h"
 #include "videowidget.h"
 #include "chartpanel.h"
@@ -288,6 +289,9 @@ void MainWindow::resizeEvent(QResizeEvent *event)
 
 void MainWindow::openVideoFile(const QString &filePath)
 {
+
+
+
     if (filePath.isEmpty())
         return;
 
@@ -306,7 +310,7 @@ void MainWindow::openVideoFile(const QString &filePath)
         if (m_projectIo->loadVla(filePath, &loaded)) {
         applyAnalysisArtifacts(loaded);
 
-        // Do NOT overwrite m_currentVideoPath with the .vla path: it is an
+        // Do NOT overwrite m_sessionMgr->currentVideoPath() with the .vla path: it is an
         // analysis file, not a playable video, and it keys VideoStateManager.
         setWindowTitle(windowTitleWithCase("Lumen Arc v1.16.1 - [Loaded: " +
                            QFileInfo(filePath).fileName() + "]"));
@@ -319,7 +323,7 @@ void MainWindow::openVideoFile(const QString &filePath)
     }
 
     // Save current video state before switching（P-31 T2-A：装配归会话管理器）
-    if (!m_currentVideoPath.isEmpty()) {
+    if (!m_sessionMgr->currentVideoPath().isEmpty()) {
         VideoState cur;
         cur.snapshot = m_timelineModel->snapshot();
         cur.regions = m_roiModel->regions();
@@ -338,11 +342,11 @@ void MainWindow::openVideoFile(const QString &filePath)
         cur.abLoop = m_chartPanel->isABLoop();
         cur.display = m_adjustPanel ? m_adjustPanel->adjust() : DisplayAdjust();
         cur.displayRotation = m_adjustPanel ? m_adjustPanel->rotation() : 0;
-        m_sessionMgr->saveCurrentState(m_currentVideoPath, cur);
+        m_sessionMgr->saveCurrentState(m_sessionMgr->currentVideoPath(), cur);
     }
 
     removeMagnifier();
-    m_currentVideoPath = filePath;
+    m_sessionMgr->setCurrentVideoPath(filePath);
     m_uiState->beginVideo(trustedDurationFor(filePath));   // 等待 durationChanged 校准
     // 案件现场跟踪（v1.3.0 M2：开案恢复 lastVideoId 的数据源）
     if (const auto *cv = m_caseManager->videoByPath(filePath))
@@ -409,7 +413,7 @@ void MainWindow::openVideoFile(const QString &filePath)
             // 校时徽标以 .vla 为 SSOT：空校时模型（旧 v7 迁移 offset=0）同步
             // 熄灭案件里误亮的 ⏰（用户实测反馈）
             m_caseManager->updateCalibrationBadge(
-                m_currentVideoPath, m_calibration.isEffective(),
+                m_sessionMgr->currentVideoPath(), m_calibration.isEffective(),
                 ProjectIO::calibrationBadgeSummary(m_calibration));
             m_chartPanel->setLabels(savedState.labels);
             m_chartPanel->setChartGuideLinesData(savedState.chartGuideLines);
@@ -468,7 +472,7 @@ void MainWindow::openVideoFile(const QString &filePath)
 
             // v1.7.1：案件树高亮正在播放的文件
             if (m_caseDock)
-                m_caseDock->setCurrentVideoPath(m_currentVideoPath);
+                m_caseDock->setCurrentVideoPath(m_sessionMgr->currentVideoPath());
             onPlay();
             return;
         }
@@ -582,7 +586,7 @@ void MainWindow::openVideoFile(const QString &filePath)
 
         // v1.7.1：案件树高亮正在播放的文件（无缓存/继承路径同待遇）
         if (m_caseDock)
-            m_caseDock->setCurrentVideoPath(m_currentVideoPath);
+            m_caseDock->setCurrentVideoPath(m_sessionMgr->currentVideoPath());
         onPlay();
     } else {
         QMessageBox::critical(this, lang("错误", "Error"),
@@ -600,7 +604,7 @@ void MainWindow::onSaveAnalysis()
     }
 
     // P-31 T1：路径分流与写出归 ProjectIO（行为冻结）
-    QString defaultPath = m_projectIo->suggestSavePath(m_currentVideoPath);
+    QString defaultPath = m_projectIo->suggestSavePath(m_sessionMgr->currentVideoPath());
     QString filePath = QFileDialog::getSaveFileName(this,
         lang("保存分析结果", "Save Analysis Result"), defaultPath,
         lang("VLA 文件 (*.vla)", "VLA Files (*.vla)"));
@@ -610,11 +614,11 @@ void MainWindow::onSaveAnalysis()
     if (m_projectIo->saveVlaNow(filePath, collectVlaSaveRequest())) {
         // VLA2：频谱已内嵌于文件中，无需 .spec 伴随文件
         // 存入案件管理路径时同步刷新校时徽标缓存（.vla 为 SSOT）
-        if (!m_currentVideoPath.isEmpty()
+        if (!m_sessionMgr->currentVideoPath().isEmpty()
             && QFileInfo(filePath).absoluteFilePath()
-                   == QFileInfo(m_caseManager->vlaPathFor(m_currentVideoPath)).absoluteFilePath()) {
+                   == QFileInfo(m_caseManager->vlaPathFor(m_sessionMgr->currentVideoPath())).absoluteFilePath()) {
             m_caseManager->updateCalibrationBadge(
-                m_currentVideoPath, m_calibration.isEffective(),
+                m_sessionMgr->currentVideoPath(), m_calibration.isEffective(),
                 ProjectIO::calibrationBadgeSummary(m_calibration));
         }
         QMessageBox::information(this, lang("保存", "Save"),
@@ -629,9 +633,9 @@ void MainWindow::onSaveAnalysis()
 void MainWindow::onLoadAnalysis()
 {
     // v1.3.0 路径分流：入案视频从案件 videos/ 目录起始浏览
-    const QString startDir = m_currentVideoPath.isEmpty()
+    const QString startDir = m_sessionMgr->currentVideoPath().isEmpty()
         ? QString()
-        : QFileInfo(m_caseManager->vlaPathFor(m_currentVideoPath)).absolutePath();
+        : QFileInfo(m_caseManager->vlaPathFor(m_sessionMgr->currentVideoPath())).absolutePath();
     QString filePath = QFileDialog::getOpenFileName(this,
         "Load Analysis Result", startDir,
         "VLA Files (*.vla);;All Files (*)");
@@ -664,7 +668,7 @@ void MainWindow::onLoadAnalysis()
             for (const GuideLine &line : loadedGuideLines)
                 m_guideLineModel->addLine(line);
 
-            // Do NOT overwrite m_currentVideoPath with the .vla path (see openVideoFile).
+            // Do NOT overwrite m_sessionMgr->currentVideoPath() with the .vla path (see openVideoFile).
         setWindowTitle(windowTitleWithCase("Lumen Arc v1.16.1 - [Loaded: " +
                        QFileInfo(filePath).fileName() + "]"));
         QMessageBox::information(this, lang("已加载", "Loaded"),
@@ -715,14 +719,14 @@ void MainWindow::onLoadOverlayImage()
 /// v1.9.0 P-31 T1：写出与参数组装归 ProjectIO（行为冻结）。
 void MainWindow::saveCurrentVlaAsync()
 {
-    if (m_currentVideoPath.isEmpty()
-        || m_currentVideoPath.endsWith(".vla", Qt::CaseInsensitive))
+    if (m_sessionMgr->currentVideoPath().isEmpty()
+        || m_sessionMgr->currentVideoPath().endsWith(".vla", Qt::CaseInsensitive))
         return;
-    m_projectIo->saveVlaAsync(m_caseManager->vlaPathFor(m_currentVideoPath),
+    m_projectIo->saveVlaAsync(m_caseManager->vlaPathFor(m_sessionMgr->currentVideoPath()),
                               collectVlaSaveRequest());
     // 同步刷新案件校时徽标缓存（.vla 为 SSOT；案件模式空指针安全）
     m_caseManager->updateCalibrationBadge(
-        m_currentVideoPath, m_calibration.isEffective(),
+        m_sessionMgr->currentVideoPath(), m_calibration.isEffective(),
         ProjectIO::calibrationBadgeSummary(m_calibration));
 }
 
@@ -756,7 +760,7 @@ void MainWindow::onSetStartTime()
 {
     // v1.2.1 非模态校时窗口：重建/识别在后台进行，主窗口可继续操作；
     // 关闭窗口不取消任务，重开可见进度与结果（Q-3 候选语义不变）。
-    if (m_currentVideoPath.isEmpty())
+    if (m_sessionMgr->currentVideoPath().isEmpty())
         return;
     // 已开窗口：置顶返回（此前无 return 照样新建 → 双窗共存，框选确认只
     // 推进最后打开的窗口，先开的永远卡在「框选完了不抵达下一步」）
@@ -768,16 +772,16 @@ void MainWindow::onSetStartTime()
     const qint64 curPos = m_videoEngine ? m_videoEngine->position() : 0;
     QString sidecarWarning;
     if (m_calibration.source == TimeCalibration::Source::Inherited)
-        CalibrationService::loadSidecar(m_currentVideoPath, nullptr,
+        CalibrationService::loadSidecar(m_sessionMgr->currentVideoPath(), nullptr,
                                         &sidecarWarning);
     auto *dlg = new TimeSettingsDialog(
-        m_currentVideoPath, curPos,
+        m_sessionMgr->currentVideoPath(), curPos,
         m_uiState->effectiveDurationMs(),
         m_calibration, sidecarWarning, m_calibrationService, this);
     dlg->setAttribute(Qt::WA_DeleteOnClose);
     m_calibrationDialog = dlg;
     // 恢复已保存的时间戳区域（同一摄像头自动复用）
-    const QRectF savedRoi = m_projectIo->savedTimestampRoi(m_currentVideoPath);
+    const QRectF savedRoi = m_projectIo->savedTimestampRoi(m_sessionMgr->currentVideoPath());
     if (savedRoi.isValid())
         dlg->setTimestampRoi(savedRoi);
     // 应用校时（与旧模态路径等价：应用后更新图表与状态栏）
@@ -785,7 +789,7 @@ void MainWindow::onSetStartTime()
     connect(dlg, &TimeSettingsDialog::requestTimestampRoi,
             this, [this, dlg]() {
                 // 优先用已保存的区域（同一摄像头复用）；无则给右上角默认框
-                QRectF saved = m_projectIo->savedTimestampRoi(m_currentVideoPath);
+                QRectF saved = m_projectIo->savedTimestampRoi(m_sessionMgr->currentVideoPath());
                 m_videoWidget->beginTimestampRoiSelection(saved);
                 m_roiDialog = dlg;
             });
@@ -928,7 +932,7 @@ void MainWindow::onPause()
 void MainWindow::onStop()
 {
     m_videoEngine->stop();
-    m_currentSpeed = 1.0f;
+    m_playbackSettings->setSpeed(1.0f);
     m_speedBtn->setText("1x");
     m_videoEngine->setRate(1.0f);
     updatePlaybackButtons();
@@ -945,7 +949,7 @@ void MainWindow::adjustSpeed(float delta)
     // Find current speed index
     int idx = 0;
     for (int i = 0; i < count; ++i) {
-        if (qAbs(m_currentSpeed - speeds[i]) < 0.01f) {
+        if (qAbs(m_playbackSettings->speed() - speeds[i]) < 0.01f) {
             idx = i;
             break;
         }
@@ -969,7 +973,7 @@ void MainWindow::cycleSpeed()
     // Find current speed index
     int idx = 0;
     for (int i = 0; i < count; ++i) {
-        if (qAbs(m_currentSpeed - speeds[i]) < 0.01f) {
+        if (qAbs(m_playbackSettings->speed() - speeds[i]) < 0.01f) {
             idx = i;
             break;
         }
@@ -983,19 +987,19 @@ void MainWindow::cycleSpeed()
 /// @brief 统一应用播放速度并更新 UI 和状态提示
 void MainWindow::applySpeed(float speed)
 {
-    m_currentSpeed = speed;
+    m_playbackSettings->setSpeed(speed);
 
     // Format display text: integers show "2x", decimals show "0.5x"
     QString speedText;
-    if (m_currentSpeed == static_cast<int>(m_currentSpeed))
-        speedText = QString("%1x").arg(static_cast<int>(m_currentSpeed));
+    if (m_playbackSettings->speed() == static_cast<int>(m_playbackSettings->speed()))
+        speedText = QString("%1x").arg(static_cast<int>(m_playbackSettings->speed()));
     else
-        speedText = QString("%1x").arg(m_currentSpeed, 0, 'f', 2).replace(".00", "");
+        speedText = QString("%1x").arg(m_playbackSettings->speed(), 0, 'f', 2).replace(".00", "");
 
     m_speedBtn->setText(speedText);
-    m_videoEngine->setRate(m_currentSpeed);
+    m_videoEngine->setRate(m_playbackSettings->speed());
     QString speedStatus = QString(lang("倍速 %1", "Speed %1")).arg(speedText);
-    if (qAbs(m_currentSpeed - 1.0f) > 0.01f && !m_videoEngine->supportsRateAudio())
+    if (qAbs(m_playbackSettings->speed() - 1.0f) > 0.01f && !m_videoEngine->supportsRateAudio())
         speedStatus += lang("（音频已静音）", " (audio muted)");
     showOperationStatus(speedStatus);
 }
@@ -1016,7 +1020,7 @@ void MainWindow::updatePlaybackButtons()
 /// @brief 启动离线分析：前置检查→状态栏进度→Python进程
 void MainWindow::onAnalyze()
 {
-    if (m_currentVideoPath.isEmpty()) {
+    if (m_sessionMgr->currentVideoPath().isEmpty()) {
         QMessageBox::information(this, lang("亮度分析", "Luminance Analysis"),
             lang("请先打开一个视频文件。", "Please open a video file first."));
         return;
@@ -1040,7 +1044,7 @@ void MainWindow::onAnalyze()
         polygonRoiIds.append(m_roiModel->polygonRoiIdAt(i));
 
     // v1.8.0 P1a：状态机接管（前置校验/忙检查在服务内，失败经 taskFailed 弹窗）
-    m_taskService->start(AnalysisChannels::luminance(), m_currentVideoPath,
+    m_taskService->start(AnalysisChannels::luminance(), m_sessionMgr->currentVideoPath(),
                          regions, polygons, rectRoiIds, polygonRoiIds);
 }
 
@@ -1051,14 +1055,14 @@ void MainWindow::applyPlaybackDenoiseSetting()
     QSettings s("LumenArc", "LumenArc");
     const bool on = s.value("playbackDenoise", false).toBool();
     if (m_videoEngine)
-        m_videoEngine->setPlaybackDenoise(on, m_noiseReductionStrength);
+        m_videoEngine->setPlaybackDenoise(on, m_playbackSettings->noiseReductionStrength());
     if (m_multiCamWin)
-        m_multiCamWin->applyPlaybackDenoise(on, m_noiseReductionStrength);
+        m_multiCamWin->applyPlaybackDenoise(on, m_playbackSettings->noiseReductionStrength());
 }
 
 void MainWindow::onAudioAnalysis()
 {
-    if (m_currentVideoPath.isEmpty()) {
+    if (m_sessionMgr->currentVideoPath().isEmpty()) {
         QMessageBox::information(this, lang("音频分析", "Audio Analysis"),
             lang("请先打开一个视频文件。", "Please open a video file first."));
         return;
@@ -1068,9 +1072,9 @@ void MainWindow::onAudioAnalysis()
     // v1.8.0 P1a：音频无前置条件（无 ROI 要求），状态机接管
     // P-54：降噪强度随任务下发（0=干净分析；滑杆调回 0 再应用即复原）
     if (m_analysisEngine)
-        m_analysisEngine->setAudioDenoiseStrength(m_noiseReductionStrength);
+        m_analysisEngine->setAudioDenoiseStrength(m_playbackSettings->noiseReductionStrength());
     applyPlaybackDenoiseSetting();   // 滑杆可能变了：播放 DSP 同步强度
-    m_taskService->start(AnalysisChannels::audio(), m_currentVideoPath,
+    m_taskService->start(AnalysisChannels::audio(), m_sessionMgr->currentVideoPath(),
                          {}, {}, {}, {});
 }
 
@@ -1330,8 +1334,8 @@ void MainWindow::onDurationChanged(qint64 durationMs)
     m_chartPanel->setFrameDuration(fpsNow > 0.0f ? qint64(1000.0 / fpsNow + 0.5) : 0);
 
     // v0.3: Sync duration to VideoListPanel
-    if (!m_currentVideoPath.isEmpty() && m_videoListPanel) {
-        m_videoListPanel->updateDuration(m_currentVideoPath, effectiveDur);
+    if (!m_sessionMgr->currentVideoPath().isEmpty() && m_videoListPanel) {
+        m_videoListPanel->updateDuration(m_sessionMgr->currentVideoPath(), effectiveDur);
     }
 
     updateTimeDisplay();
@@ -1504,174 +1508,183 @@ void MainWindow::restoreAnalysisState(const QVector<QRect> &regions,
  */
 bool MainWindow::eventFilter(QObject *watched, QEvent *event)
 {
-    if (event->type() == QEvent::KeyPress) {
-        auto *e = static_cast<QKeyEvent *>(event);
-        int key = e->key();
-        QWidget *fw = focusWidget();
-
-        // Protection: Don't intercept text input widgets
-        if (qobject_cast<QLineEdit*>(fw) || qobject_cast<QTextEdit*>(fw)) {
-            return QMainWindow::eventFilter(watched, event);
-        }
-
-        // Check if video engine is available
-        if (!m_videoEngine || !m_videoEngine->duration())
-            return QMainWindow::eventFilter(watched, event);
-
-        // Handle all shortcuts globally
-        switch (key) {
-        case Qt::Key_Space:
-            if (m_videoEngine->state() == PlaybackState::Playing) {
-                m_videoEngine->pause();
-                showOperationStatus(lang("暂停", "Paused"));
-            } else {
-                m_videoEngine->play();
-                showOperationStatus(lang("播放", "Playing"));
-            }
-            updatePlaybackButtons();
+    // v1.17.0 P-78（Q5 收口）：eventFilter 本体只做"放行/转发"——
+    // 18 键 switch 搬入 handleGlobalShortcut（KeyGuardFilter 仅守卫+转发）。
+    // 行为冻结：消费 = return true（原各 case 的 return true 路径）；
+    // 未消费 = 落回 QMainWindow::eventFilter（原 fall-through 路径）。
+    if (event->type() == QEvent::KeyPress && m_keyGuard)
+        if (m_keyGuard->filterKeyPress(watched, static_cast<QKeyEvent *>(event)))
             return true;
-
-        case Qt::Key_Left: {
-            float f = m_videoEngine->fps();
-            qint64 frameStep = static_cast<qint64>(1000.0f / f);
-            if (frameStep < 1) frameStep = 33;
-            m_videoEngine->seek(m_videoEngine->position() - frameStep);
-            showOperationStatus(lang("帧 -1", "Frame -1"));
-            return true;
-        }
-        case Qt::Key_Right: {
-            float f = m_videoEngine->fps();
-            qint64 frameStep = static_cast<qint64>(1000.0f / f);
-            if (frameStep < 1) frameStep = 33;
-            m_videoEngine->seek(m_videoEngine->position() + frameStep);
-            showOperationStatus(lang("帧 +1", "Frame +1"));
-            return true;
-        }
-
-        case Qt::Key_Up: {
-            const int cur = m_videoEngine->volume();
-            // v1.7.1：突破 200% 时给一次提示（每次会话仅一次，防重复打扰）
-            if (cur <= 200 && cur + 5 > 200 && !m_volumeWarnShown) {
-                m_volumeWarnShown = true;
-                QMessageBox::information(this, lang("音量", "Volume"),
-                    lang("音量即将超过 200%。继续增大可能造成声音失真（削波），\n"
-                         "建议仅在原始素材音量过低时使用。",
-                         "Volume will exceed 200%. Further increase may cause "
-                         "clipping distortion.\nRecommended only for very quiet "
-                         "source material."));
-            }
-            m_videoEngine->setVolume(cur + 5);   // 上限 500%
-            showOperationStatus(QString(lang("音量 +5，现音量：%1%", "Volume +5, Current: %1%"))
-                                    .arg(m_videoEngine->volume()));
-            return true;
-        }
-        case Qt::Key_Down:
-            m_videoEngine->setVolume(m_videoEngine->volume() - 5);
-            showOperationStatus(QString(lang("音量 -5，现音量：%1%", "Volume -5, Current: %1%"))
-                                    .arg(m_videoEngine->volume()));
-            return true;
-
-        case Qt::Key_C:
-            adjustSpeed(1.0f);
-            return true;
-        case Qt::Key_X:
-            adjustSpeed(-1.0f);
-            return true;
-        case Qt::Key_Z:
-            m_currentSpeed = 1.0f;
-            m_speedBtn->setText("1x");
-            m_videoEngine->setRate(1.0f);
-            showOperationStatus(lang("倍速 1x", "Speed 1x"));
-            return true;
-
-        case Qt::Key_N: {
-            if (m_videoEngine->duration() > 0) {
-                // Pause while the modal label dialog is open; otherwise the
-                // video keeps playing (and short clips reach the end).
-                bool wasPlaying = (m_videoEngine->state() == PlaybackState::Playing);
-                if (wasPlaying)
-                    m_videoEngine->pause();
-                qint64 pos = m_videoEngine->position();
-                // 标签一律流内时间存储（显示时走校时换算）。修复：旧代码把
-                // 显示偏移加进存储值，设置过时间后标签错位一个 offset 且
-                // 悬停/导出时间加了两次 offset。
-                m_chartPanel->addLabelAtTime(pos);
-                if (wasPlaying)
-                    m_videoEngine->play();
-                showOperationStatus(lang("标签已添加", "Label added"));
-            }
-            return true;
-        }
-
-        case Qt::Key_A: {
-            if (m_videoEngine->duration() > 0) {
-                qint64 pos = m_videoEngine->position();
-                m_chartPanel->setPointA(pos);
-                showOperationStatus(lang("A 点已设置", "Point A set"));
-            }
-            return true;
-        }
-        case Qt::Key_B: {
-            if (m_videoEngine->duration() > 0) {
-                qint64 pos = m_videoEngine->position();
-                m_chartPanel->setPointB(pos);
-                showOperationStatus(lang("B 点已设置", "Point B set"));
-            }
-            return true;
-        }
-        case Qt::Key_S:
-            onSnapshotQuick();   // 证据快照（2026-08-14）
-            return true;
-        case Qt::Key_J:
-            adjustSpeed(-1.0f);
-            return true;
-        case Qt::Key_K:
-            if (m_videoEngine->state() == PlaybackState::Playing) {
-                m_videoEngine->pause();
-                showOperationStatus(lang("暂停", "Paused"));
-            } else {
-                m_videoEngine->play();
-                showOperationStatus(lang("播放", "Playing"));
-            }
-            updatePlaybackButtons();
-            return true;
-        case Qt::Key_L:
-            adjustSpeed(1.0f);
-            return true;
-
-        case Qt::Key_Escape:
-            // 如果OverlayWidget在辅助线模式或多边形模式，不处理，让OverlayWidget处理
-            if (m_videoWidget->overlay()->isGuideLineMode() ||
-                m_videoWidget->overlay()->isPolygonMode()) {
-                return false;  // 让事件继续传递给OverlayWidget
-            }
-            // 否则关闭放大镜
-            removeMagnifier();
-            showOperationStatus(lang("放大镜已关闭", "Magnifier closed"));
-            return true;
-
-        case Qt::Key_P:
-            // 切换矩形/多边形模式
-            if (m_videoWidget->overlay()->isPolygonMode()) {
-                onRectMode();
-            } else {
-                onPolygonMode();
-            }
-            return true;
-
-        case Qt::Key_G:
-            // 切换辅助线模式
-            if (m_videoWidget->overlay()->isGuideLineMode()) {
-                onRectMode();
-            } else {
-                onGuideLineMode();
-            }
-            return true;
-        }
-    }
-
     return QMainWindow::eventFilter(watched, event);
 }
+
+bool MainWindow::handleGlobalShortcut(QKeyEvent *e)
+{
+    int key = e->key();
+    QWidget *fw = focusWidget();
+    // Protection: Don't intercept text input widgets
+    if (qobject_cast<QLineEdit*>(fw) || qobject_cast<QTextEdit*>(fw)) {
+        return false;
+    }
+
+    // Check if video engine is available
+    if (!m_videoEngine || !m_videoEngine->duration())
+        return false;
+
+    // Handle all shortcuts globally
+    switch (key) {
+    case Qt::Key_Space:
+        if (m_videoEngine->state() == PlaybackState::Playing) {
+            m_videoEngine->pause();
+            showOperationStatus(lang("暂停", "Paused"));
+        } else {
+            m_videoEngine->play();
+            showOperationStatus(lang("播放", "Playing"));
+        }
+        updatePlaybackButtons();
+        return true;
+
+    case Qt::Key_Left: {
+        float f = m_videoEngine->fps();
+        qint64 frameStep = static_cast<qint64>(1000.0f / f);
+        if (frameStep < 1) frameStep = 33;
+        m_videoEngine->seek(m_videoEngine->position() - frameStep);
+        showOperationStatus(lang("帧 -1", "Frame -1"));
+        return true;
+    }
+    case Qt::Key_Right: {
+        float f = m_videoEngine->fps();
+        qint64 frameStep = static_cast<qint64>(1000.0f / f);
+        if (frameStep < 1) frameStep = 33;
+        m_videoEngine->seek(m_videoEngine->position() + frameStep);
+        showOperationStatus(lang("帧 +1", "Frame +1"));
+        return true;
+    }
+
+    case Qt::Key_Up: {
+        const int cur = m_videoEngine->volume();
+        // v1.7.1：突破 200% 时给一次提示（每次会话仅一次，防重复打扰）
+        if (cur <= 200 && cur + 5 > 200 && !m_volumeWarnShown) {
+            m_volumeWarnShown = true;
+            QMessageBox::information(this, lang("音量", "Volume"),
+                lang("音量即将超过 200%。继续增大可能造成声音失真（削波），\n"
+                     "建议仅在原始素材音量过低时使用。",
+                     "Volume will exceed 200%. Further increase may cause "
+                     "clipping distortion.\nRecommended only for very quiet "
+                     "source material."));
+        }
+        m_videoEngine->setVolume(cur + 5);   // 上限 500%
+        showOperationStatus(QString(lang("音量 +5，现音量：%1%", "Volume +5, Current: %1%"))
+                                .arg(m_videoEngine->volume()));
+        return true;
+    }
+    case Qt::Key_Down:
+        m_videoEngine->setVolume(m_videoEngine->volume() - 5);
+        showOperationStatus(QString(lang("音量 -5，现音量：%1%", "Volume -5, Current: %1%"))
+                                .arg(m_videoEngine->volume()));
+        return true;
+
+    case Qt::Key_C:
+        adjustSpeed(1.0f);
+        return true;
+    case Qt::Key_X:
+        adjustSpeed(-1.0f);
+        return true;
+    case Qt::Key_Z:
+        m_playbackSettings->setSpeed(1.0f);
+        m_speedBtn->setText("1x");
+        m_videoEngine->setRate(1.0f);
+        showOperationStatus(lang("倍速 1x", "Speed 1x"));
+        return true;
+
+    case Qt::Key_N: {
+        if (m_videoEngine->duration() > 0) {
+            // Pause while the modal label dialog is open; otherwise the
+            // video keeps playing (and short clips reach the end).
+            bool wasPlaying = (m_videoEngine->state() == PlaybackState::Playing);
+            if (wasPlaying)
+                m_videoEngine->pause();
+            qint64 pos = m_videoEngine->position();
+            // 标签一律流内时间存储（显示时走校时换算）。修复：旧代码把
+            // 显示偏移加进存储值，设置过时间后标签错位一个 offset 且
+            // 悬停/导出时间加了两次 offset。
+            m_chartPanel->addLabelAtTime(pos);
+            if (wasPlaying)
+                m_videoEngine->play();
+            showOperationStatus(lang("标签已添加", "Label added"));
+        }
+        return true;
+    }
+
+    case Qt::Key_A: {
+        if (m_videoEngine->duration() > 0) {
+            qint64 pos = m_videoEngine->position();
+            m_chartPanel->setPointA(pos);
+            showOperationStatus(lang("A 点已设置", "Point A set"));
+        }
+        return true;
+    }
+    case Qt::Key_B: {
+        if (m_videoEngine->duration() > 0) {
+            qint64 pos = m_videoEngine->position();
+            m_chartPanel->setPointB(pos);
+            showOperationStatus(lang("B 点已设置", "Point B set"));
+        }
+        return true;
+    }
+    case Qt::Key_S:
+        onSnapshotQuick();   // 证据快照（2026-08-14）
+        return true;
+    case Qt::Key_J:
+        adjustSpeed(-1.0f);
+        return true;
+    case Qt::Key_K:
+        if (m_videoEngine->state() == PlaybackState::Playing) {
+            m_videoEngine->pause();
+            showOperationStatus(lang("暂停", "Paused"));
+        } else {
+            m_videoEngine->play();
+            showOperationStatus(lang("播放", "Playing"));
+        }
+        updatePlaybackButtons();
+        return true;
+    case Qt::Key_L:
+        adjustSpeed(1.0f);
+        return true;
+
+    case Qt::Key_Escape:
+        // 如果OverlayWidget在辅助线模式或多边形模式，不处理，让OverlayWidget处理
+        if (m_videoWidget->overlay()->isGuideLineMode() ||
+            m_videoWidget->overlay()->isPolygonMode()) {
+            return false;  // 让事件继续传递给OverlayWidget
+        }
+        // 否则关闭放大镜
+        removeMagnifier();
+        showOperationStatus(lang("放大镜已关闭", "Magnifier closed"));
+        return true;
+
+    case Qt::Key_P:
+        // 切换矩形/多边形模式
+        if (m_videoWidget->overlay()->isPolygonMode()) {
+            onRectMode();
+        } else {
+            onPolygonMode();
+        }
+        return true;
+
+    case Qt::Key_G:
+        // 切换辅助线模式
+        if (m_videoWidget->overlay()->isGuideLineMode()) {
+            onRectMode();
+        } else {
+            onGuideLineMode();
+        }
+        return true;
+    }
+
+    return false;
+}
+
 
 
 void MainWindow::onVideoSelected(int index)

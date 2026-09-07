@@ -14,6 +14,7 @@
 #include "app/uistate.h"
 #include "app/project_io.h"
 #include "app/video_session_manager.h"
+#include "app/playback_settings.h"
 #include "app/case_manager.h"
 #include "domain/timeline_model.h"
 #include "app/case_manager.h"
@@ -583,6 +584,76 @@ static void testMainWindowBranches(QApplication &app)
     CHECK(true, "mw: missing file error path no crash");
 }
 
+// v1.17.0 P-77（R5）：当前视频路径 SSOT 回归闸
+//  ① 单元：VideoSessionManager 路径 SSOT set/get/clear
+//  ② 单元：PlaybackSettings 倍速/降噪强度 set/get
+//  ③ 集成：视频载入建路径 → .vla 直载不覆写路径（不变量①）
+static void testCurrentPathSsot(QApplication &app)
+{
+    // ① 单元：路径 SSOT
+    VideoSessionManager mgr;
+    CHECK(mgr.currentVideoPath().isEmpty(), "ssot: initial path empty");
+    mgr.setCurrentVideoPath(QStringLiteral("/tmp/a.mp4"));
+    CHECK(mgr.currentVideoPath() == QStringLiteral("/tmp/a.mp4"),
+          "ssot: path set/get");
+    mgr.setCurrentVideoPath(QString());
+    CHECK(mgr.currentVideoPath().isEmpty(), "ssot: path clear");
+
+    // ② 单元：播放参数 SSOT
+    PlaybackSettings ps;
+    CHECK(qFuzzyCompare(ps.speed(), 1.0f), "ps: default speed 1.0");
+    ps.setSpeed(2.5f);
+    CHECK(ps.speed() == 2.5f, "ps: speed set/get");
+    CHECK(ps.noiseReductionStrength() == 0.0, "ps: default nr 0");
+    ps.setNoiseReductionStrength(3.0);
+    CHECK(ps.noiseReductionStrength() == 3.0, "ps: nr set/get");
+
+    // ③ 集成：.vla 直载不覆写（不变量①）——需可播放视频，无 ffmpeg 则 SKIP
+    QDir tmp(QDir::tempPath() + "/lumenarc_p77_ssot");
+    tmp.removeRecursively();
+    QDir().mkpath(tmp.path());
+    const QString clip = tmp.path() + "/ssot.mp4";
+    const QString ffmpeg = QCoreApplication::applicationDirPath()
+        + QStringLiteral("/ffmpeg/ffmpeg.exe");
+    if (!QFile::exists(ffmpeg)) {
+        fprintf(stderr, "[ssot] SKIP integration (bundled ffmpeg not found)\n");
+        return;
+    }
+    QProcess proc;
+    proc.start(ffmpeg, {QStringLiteral("-y"), QStringLiteral("-f"),
+                        QStringLiteral("lavfi"), QStringLiteral("-i"),
+                        QStringLiteral("testsrc=size=320x240:rate=5:duration=1"),
+                        QStringLiteral("-c:v"), QStringLiteral("libx264"),
+                        QStringLiteral("-pix_fmt"), QStringLiteral("yuv420p"),
+                        clip});
+    if (!proc.waitForFinished(30000) || !QFile::exists(clip)) {
+        fprintf(stderr, "[ssot] SKIP integration (clip synth failed)\n");
+        return;
+    }
+
+    // .vla fixture（同 testMainWindowBranches 模式）
+    const QString vlaF = tmp.path() + "/ssot_fixture.vla";
+    {
+        TimelineModel m;
+        m.setData({0, 1000}, {{5.0, 6.0}}, {DataEntry{DataEntry::Rect, 1}});
+        m.saveToFile(vlaF, {QRect(2, 2, 10, 10)}, TimeCalibration());
+    }
+
+    MainWindow mw;
+    mw.resize(1280, 800);
+    mw.show();
+    pump(app);
+
+    QMetaObject::invokeMethod(&mw, "openVideoFile", Q_ARG(QString, clip));
+    pump(app, 800);
+    CHECK(mw.currentVideoPath() == clip, "ssot: video load sets current path");
+
+    QMetaObject::invokeMethod(&mw, "openVideoFile", Q_ARG(QString, vlaF));
+    pump(app, 800);
+    CHECK(mw.currentVideoPath() == clip,
+          "ssot: vla direct load does NOT overwrite current path");
+}
+
 // ---------------------------------------------------------------------------
 // 亮度分析完整链路（点击「亮度分析」复现路径：打开视频→缓存 vla 询问(Yes)→
 // ROI 恢复→onAnalyze→进度/完成/气泡/自动保存）
@@ -1085,6 +1156,7 @@ int main(int argc, char **argv)
     testPreprocessGoChain();
     testSidecarInheritOpen(app);
     testMainWindowBranches(app);
+    testCurrentPathSsot(app);
     testMultiCamWindow(app);
     testMultiCamCaseFlow(app);
     testLumaFullChain(app);

@@ -3,6 +3,7 @@
  * @brief v1.17.0 P-79：自 mainwindow.cpp 拆出——构造体（分域构建方法）/菜单/工具栏
  */
 #include "mainwindow.h"
+#include "keyguardfilter.h"
 #include "build_stamp.h"
 #include "videowidget.h"
 #include "chartpanel.h"
@@ -114,6 +115,8 @@
 MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent)
 {
+
+
     loadLanguage();
     setWindowTitle(lang("追光者 Lumen Arc v1.16.1", "Lumen Arc v1.16.1") + buildStamp());
     resize(1280, 720);
@@ -122,6 +125,11 @@ MainWindow::MainWindow(QWidget *parent)
     m_guideLineModel = new GuideLineModel(this);
     m_timelineModel = new TimelineModel(this);
     m_sessionMgr = new VideoSessionManager(this);
+    // v1.17.0 P-77：播放参数 SSOT（倍速+降噪强度）——必须早于 applyPlaybackDenoiseSetting()（引擎块内调用）
+    m_playbackSettings = new PlaybackSettings(this);
+    // v1.17.0 P-78（Q5）：快捷键守卫（18 键 switch 经 handleGlobalShortcut 转发）
+    m_keyGuard = new KeyGuardFilter(this);
+    m_keyGuard->setHandler([this](QKeyEvent *e) { return handleGlobalShortcut(e); });
 
     // 播放引擎：自研 FFmpeg 内核（硬解设置经 QSettings 持久化）
     {
@@ -178,14 +186,29 @@ MainWindow::MainWindow(QWidget *parent)
     // v1.17.0 P-79：构造体逐字抽取为分域构建方法（行为冻结：调用序与原构造一致；
     // 共享样式串经参数传递，不重复定义）
     buildCentralLayout(titleBarStyle, collapseBtnStyle, titleLabelStyle);
+
+
     buildVideoListDock(collapseBtnStyle);
+
+
     buildStatusBar();
     setAcceptDrops(true);
     buildServices();
+
+
     buildCaseUi(collapseBtnStyle);
+
+
     createMenus();
+
+
     createToolBar();
+
+
     setupConnections();
+
+
+
 
     // v1.3.0 M2 任务11：启动欢迎面板（2026-08 改为页面内居中非模态，
     // 迁自模态起始页；可勾选不再显示；独立模式 = v1.2.2 行为）
@@ -197,6 +220,8 @@ MainWindow::MainWindow(QWidget *parent)
 
 MainWindow::~MainWindow()
 {
+
+
     disconnect(m_analysisEngine, nullptr, this, nullptr);
     m_analysisEngine->cancelAnalysis();
 }
@@ -892,7 +917,7 @@ void MainWindow::createToolBar()
     for (QWidget *w : m_adjustPanel->findChildren<QWidget *>()) {
         if (qobject_cast<QSlider *>(w) || qobject_cast<QSpinBox *>(w)
             || qobject_cast<QDoubleSpinBox *>(w) || qobject_cast<QPushButton *>(w))
-            w->installEventFilter(this);
+            w->installEventFilter(m_keyGuard);
     }
     addDockWidget(Qt::RightDockWidgetArea, m_adjustPanel);
     m_adjustPanel->hide();
@@ -1009,8 +1034,8 @@ void MainWindow::buildCentralLayout(const QString &titleBarStyle,
     specTitleLayout->addWidget(m_noiseReductionValueLabel);
 
     // 安装事件过滤器，使全局快捷键（方向键、空格等）不被 Slider 拦截
-    m_noiseFloorSlider->installEventFilter(this);
-    m_noiseReductionSlider->installEventFilter(this);
+    m_noiseFloorSlider->installEventFilter(m_keyGuard);
+    m_noiseReductionSlider->installEventFilter(m_keyGuard);
 
     m_nrApplyBtn = new QPushButton(lang("应用", "Apply"), specTitleBar);
     m_nrApplyBtn->setFixedSize(40, 22);
@@ -1375,7 +1400,7 @@ void MainWindow::buildCaseUi(const QString &collapseBtnStyle)
     // 过滤器须装在具体控件上；文本输入控件由 eventFilter 保护放行）
     for (QWidget *w : m_caseDock->findChildren<QWidget *>()) {
         if (qobject_cast<QTreeWidget *>(w) || qobject_cast<QPushButton *>(w))
-            w->installEventFilter(this);
+            w->installEventFilter(m_keyGuard);
     }
     addDockWidget(Qt::LeftDockWidgetArea, m_caseDock);
     resizeDocks({m_caseDock}, {250}, Qt::Horizontal);
@@ -1478,9 +1503,9 @@ void MainWindow::buildCaseUi(const QString &collapseBtnStyle)
                    const QString &newPath) {
                 if (m_sessionMgr)
                     m_sessionMgr->migrateKey(oldPath, newPath);
-                if (QDir::cleanPath(m_currentVideoPath)
+                if (QDir::cleanPath(m_sessionMgr->currentVideoPath())
                     == QDir::cleanPath(oldPath))
-                    m_currentVideoPath = newPath;
+                    m_sessionMgr->setCurrentVideoPath(newPath);
             });
     // 状态栏📁标识（模式出口三：点击 = 关闭案件）
     m_caseStatusBtn = new QPushButton(this);
@@ -1508,14 +1533,14 @@ void MainWindow::buildCaseUi(const QString &collapseBtnStyle)
 
     // 时间戳框选信号（v1.2.1）：永久连接一次——此前挂在 onSetStartTime 里，
     // 每开一次校时窗重复 connect 一份（lambda 永久累积在 VideoWidget 上）。
-    // lambda 只读成员（m_roiDialog/m_currentVideoPath/m_videoWidget），
+    // lambda 只读成员（m_roiDialog/m_sessionMgr->currentVideoPath()/m_videoWidget），
     // 与单次连接语义自洽。
     // v1.2.x UX：拖拽松开/叠加层「确认」→ timestampRoiReady → 校时窗恢复并
     // 提供「确认并开始校时」（ready 与 confirmed 由按钮同时发，接 ready 即可）
     connect(m_videoWidget, &VideoWidget::timestampRoiReady,
             this, [this](const QRectF &norm) {
                 if (m_roiDialog) {
-                    m_projectIo->saveTimestampRoi(m_currentVideoPath, norm);
+                    m_projectIo->saveTimestampRoi(m_sessionMgr->currentVideoPath(), norm);
                     m_roiDialog->stageTimestampRoi(norm);
                 }
                 m_videoWidget->endTimestampRoiSelection();
