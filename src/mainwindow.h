@@ -127,6 +127,25 @@ private:
     void createMenus();
     void createToolBar();
     void setupConnections();
+    // v1.17.0 P-79：多 TU 拆分——构造体逐字抽取的分域构建方法（定义在
+    // mainwindow_ui.cpp；共享样式串经参数传递；调用序与原构造一致，行为冻结）
+    void buildCentralLayout(const QString &titleBarStyle,
+                            const QString &collapseBtnStyle,
+                            const QString &titleLabelStyle);
+    void buildVideoListDock(const QString &collapseBtnStyle);
+    void buildStatusBar();
+    void buildServices();
+    void buildCaseUi(const QString &collapseBtnStyle);
+    // v1.17.0 P-79：setupConnections 按职责域拆分（定义在 mainwindow_wiring.cpp；
+    // connect 集合零改动，各 (信号, 槽) 对唯一，跨域注册顺序行为中性）
+    void setupTransportConnections();
+    void setupAudioSpectrogramConnections();
+    void setupAnalysisConnections();
+    void setupMagnifierConnections();
+    void setupRoiConnections();
+    void setupSnapshotFusionConnections();
+    void setupVideoListConnections();
+    void setupCaseConnections();
     void toggleFullscreenOnScreen(QScreen *screen);   // 副屏全屏：指定屏开关
     void toggleFullscreenLastScreen();                // F11：上次选择/非主屏
     void updateTimeDisplay();

@@ -65,6 +65,12 @@ message(STATUS "FFmpeg libraries: ${FFMPEG_LIBRARIES}")
 set(SOURCES
     src/main.cpp
     src/mainwindow.cpp
+    src/mainwindow_ui.cpp          # v1.17.0 P-79：构造体/菜单/工具栏（多 TU 拆分）
+    src/mainwindow_wiring.cpp      # v1.17.0 P-79：信号接线 8 域
+    src/mainwindow_case.cpp        # v1.17.0 P-79：案件 UI 群+多机入口
+    src/mainwindow_magnifier.cpp   # v1.17.0 P-79：放大镜群
+    src/mainwindow_snapshot.cpp    # v1.17.0 P-79：证据快照
+    src/mainwindow_export.cpp      # v1.17.0 P-79：导出三入口
     src/videowidget.cpp
     src/chartpanel.cpp
     src/magnifierwidget.cpp
