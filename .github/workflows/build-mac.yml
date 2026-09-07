@@ -34,7 +34,9 @@ jobs:
             -DFFMPEG_SDK_PATH="/opt/homebrew"
 
       - name: Build
-        timeout-minutes: 180
+        # 2026-09-07：180→240——run 34129123727 实锤 180 分钟时构建到 91%（≈197-205min 完成），
+        # 180 上限会在完成前杀 Build（"The action 'Build' has timed out after 180 minutes"）
+        timeout-minutes: 240
         run: cmake --build build --parallel --verbose
 
       - name: Bundle relocatable Python (python-build-standalone)
