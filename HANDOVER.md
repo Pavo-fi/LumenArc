@@ -5,22 +5,28 @@
 
 ## 表头（每次写完 HANDOVER 与 WORK_HISTORY 后必须同步更新本表头——规则 R2）
 
-- **当前 HEAD**：施工批（2026-09-04 §90 P2.8 实测修订：聚光灯 50%/条带全量化+语谱/打开输出文件夹）
+- **当前 HEAD**：施工批（2026-09-07 §91 v1.17.0 MainWindow 拆解收官：四阶段五提交，
+  P-76~P-80 全勾销）
 - **构建**：`cmd //c "build_tmp\build_target.bat ALL"`；测试：`QT_QPA_PLATFORM=offscreen`
   + PATH 含 `C:\code\Qt\6.8.0\msvc2022_64\bin`（配置：`build_tmp\reconfigure.bat`）
-- **全回归基线**（18 套，v1.16.1 后）：mw 97 / ui_chain 103 / libav 26（含 av-align/denoise）/
-  case 270 / engine（avgap/play/seek-matrix）/ denoise / docx / report / sitemap / sync 等全绿
+- **全回归基线**（19 套，v1.17.0 后）：mw 113 / ui_chain 103（2 已知遗留）/
+  libav 26 / case 270 / case_e2e 51 / segment 120 / sync 195 / preprocess 268 /
+  calibration 99 / piecewise 129 / report 52 / docx 23 / roi 23 / sidecar 34 /
+  task 41 / v17 37 / snapshot 36（新增）/ vla PASS / denoise ALL PASS
+  （sitemap 127 = 环境遗留，旧 exe 同表现）
 - **云端**（CloudBase）：env `lumenarc-prod-d6gcdfb6a8873d906`；四函数已部署+HTTP 触发器已通；
   改函数后 `cd build_tmp/tcb_deploy && MSYS_NO_PATHCONV=1 tcb fn deploy <name> --force --yes`；
   AUTH_SECRET 在 build_tmp/tcb_deploy/.auth_secret（不入库）；详见 docs/cloudbase/README.md
 - **当前保留批次**（新→旧，R2 限 5 批）：
+  第七十八批 §91（v1.17.0 MainWindow 拆解收官：四阶段五提交）·
   第七十七批 §90（P2.8：聚光灯 50%/条带全量化+语谱/打开输出文件夹）·
   第七十六批 §89（切割/倍速/ETA/编码提速+标注轨 v1）·
   第七十五批 §88（覆盖条/部分覆盖音轨/播放头联动+v1.16.2 打包）·
-  第七十四批 §87（四步引导改版+快捷键对齐剪映/PR）·
-  第七十三批 §86（ROI/曲线滚动条+宫格布局+ffmpeg8 排雷+docx 原子写）。
-  （§85 工作台本体 已归档 WORK_HISTORY——见下）
-- **最近归档动作**：2026-09-04 §90 批——§85（工作台本体）移入 WORK_HISTORY.md 末尾；
+  第七十四批 §87（四步引导改版+快捷键对齐剪映/PR）。
+  （§86 ROI/曲线滚动条 批 已归档 WORK_HISTORY——见下）
+- **最近归档动作**：2026-09-07 §91 批——§86（合成导出 P2：ROI/曲线滚动条+宫格
+  +ffmpeg8 排雷+docx 原子写）移入 WORK_HISTORY.md 末尾（R2 限 5 批）；
+  早前：2026-09-04 §90 批——§85（工作台本体）移入 WORK_HISTORY.md 末尾；
   早前：2026-09-04 §89 批——§84（P1 引擎多段双模式）移入；
   早前：2026-09-03 §88 批——§83（MLT melt 构建）移入；
   早前：2026-09-03 §87 批——§82（引擎三连修）移入；
@@ -42,6 +48,36 @@
 # ============================================================================
 # 工作记录（2026-09-03，第七十一批）——合成导出器 P1 + 账号 v1.2~v1.4 + 引擎三连修 + MLT 基建
 # ============================================================================
+
+## 91. v1.17.0 MainWindow 拆解收官：四阶段五提交（P-76~P-80 全勾销）
+
+- **背景**：v1.9 拆 app 层后 UI 壳复胖至 mainwindow.cpp 4770 行 + R3/R5/Q5
+  三笔红线债。方案 `docs/DEVELOPMENT_PLAN_V1.17_CN.md`（2026-09-06 用户 Q1~Q7
+  全按推荐拍板）；回退点 `safety/pre-mw-split-20260906` 标签 @ `7d66ce0`。
+- **阶段 A（`e99c947`）multi-TU 拆分**（P-79）：4770 行 → 7 翻译单元
+  （core 1819 / ui 1532 / wiring 640 / case 555 / magnifier 343 / snapshot 389 /
+  export 266）；单类 API 零变化（public 区零 diff 门槛）；buildStamp 迁
+  build_stamp.h inline。纯移动零重写，头文件只 +private 声明。
+- **阶段 B（`01ad822`）红线债收口**：B1 ChartPanel::xAxisRange() 只读 getter
+  消 R3 穿透；B2 currentVideoPath → VideoSessionManager SSOT + PlaybackSettings
+  组件（R5，47+10+3 处收口，三条边界不变量保留并有 testCurrentPathSsot 闸）；
+  B3 KeyGuardFilter 守卫+转发（Q5，18 键 switch 搬 handleGlobalShortcut，
+  禁 QShortcut 拍板保留）。
+- **阶段 C（`e30d534`）SnapshotComposer**（P-80）：C0 六个渲染函数自
+  OverlayWidget 静态成员迁 FrameAnnotation 纯模块（R1 方向修正，含
+  segment_export_engine/ui_chain 调用方）；C1 SnapshotInputs 输入集闭合，
+  onSnapshotQuick 280 行 → 95 行薄壳；C2 lumenarc_snapshot_test 像素断言
+  36 checks（映射单元/OSD/分段几何/分屏/PNG 元数据）。
+- **阶段 D（`0e4e2e5`）切换/恢复闸 + 扇出瘦身**：先补 testSwitchRestore
+  （双合成视频 a→b→a，Key_A/Key_B 端到端）——**逮住 B3 遗留真 bug**：
+  KeyGuardFilter 只写 filterKeyPress 未 override eventFilter 本体，8 处
+  installEventFilter 改挂后全局快捷键实际失效（B 阶段无键路测试漏过）；
+  修复后 openVideoFile 恢复/清空扇出抽 applyRestoredState/resetForNewVideo/
+  enableVideoActions（305 → ~150 行，行为冻结由 D1 闸验证）。
+- **回归基线**：19 套全绿（见表头）；版本 bump 1.17.0（CMake 单一真源）；
+  PENDING P-76~P-80 勾销。
+- **留用户**：RELEASE_CHECKLIST_V1.7 真机点检（行为冻结对照：开/切视频、
+  校时、案件、多机、快照、导出各 1 条 + 聚焦控件按键 1 条）。
 
 ## 90. P2.8 实测修订：聚光灯 50% 上限 / 条带全量化+语谱 / 打开输出文件夹
 
@@ -125,31 +161,3 @@
 - **测试**：mw 107 全绿（工作台引导流 e2e：点视频→红点 arm→seek→提交→导出钮亮；
   快捷键 smoke 不崩）；手册七·2 整节重写（四步流+快捷键表）+PDF 重出。
 
-## 86. 合成导出 P2：ROI/曲线滚动条烧录 + 宫格布局 + ffmpeg8 aresample 排雷 + docx 原子写
-
-- **compose_render 新模块**（src/infrastructure/compose_render.h/.cpp）：
-  `loadComposeOverlay(vlaPath)`（TimelineModel::loadFromFile 一次性取 ROI/多边形/
-  标签/亮度行+时间轴/音量通道）+ `drawRoiOverlay`（源像素坐标→KeepAspectRatio
-  显示矩形映射，R1/R2 标号+半透明填充，RoiModel::regionColor 同色）+
-  `drawChartStrip`（30s 窗口游标固定 2/3：亮度逐 ROI 行折线+音量绿曲线+
-  标签同色虚线竖标+白色游标三角柄+窗口起止注记；无数据画占位文）。
-- **引擎**：ComposeSeg +gridLayout(0 均分/1 主听路大窗)/burnRoi/burnChart；
-  Params +vlaPathByPath（工作台填，引擎自载数据）；单段分支 stripOn 时视频区
-  缩短 158px 装曲线条；lanes 分支 cellRectOf 支持主听路大窗布局。
-- **工作台**：导出面板 +「ROI 烧录」「曲线滚动条」勾（演示模式，默认开）；
-  宫格段编辑框 +布局下拉；块副标题显示 ▦N路·主路大窗。
-- **排雷（真实病灶素材 e2e 逮到）**：bundled ffmpeg 8 的 aresample 已删 `ocl`
-  选项（新名 `out_chlayout`）——buildAudioFilterChainMulti 的归一化链
-  `ocl=stereo` 在 8kHz mono 源上直接 filter 报错导出失败；改
-  `aresample=48000:out_chlayout=stereo:osf=s16`。**旧链（buildAudioFilterChain
-  /Ranges）不做归一化未踩雷**（单源自一致）；教训：新滤镜参数必须以 bundled
-  ffmpeg `-h filter=X` 实测为准。
-- **docx 0MB 硬化**：ZipStoreWriter::writeTo 改原子写（同目录 .tmp→flush→
-  大小复核→rename），失败不再留 0 字节残件；报告/点位图等全部 zip 产物受益。
-  Release 0MB docx 根因未能本地复现（写入层失败回 false 本就有弹窗），
-  先以原子写收口，待用户 Release 复测报告生成。
-- **测试**：segment 102 checks 全绿——testComposeOverlay（.vla 回环+游标白线/
-  曲线上墨/ROI 染色像素级断言）+ testComposeOverlayEndToEnd（导出后 ffmpeg
-  抽帧验底部条带）+ testComposeRealAssetEndToEnd（增城病灶 LAMerged 91min
-  PTS 抖动族：60s/120s 各取 5s、段2 2x → 产物 7.5s 精确+音轨归一化）；
-  全回归 9 套绿；手册 PDF 重出（298KB）。

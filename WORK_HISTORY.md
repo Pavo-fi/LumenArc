@@ -15,7 +15,9 @@
 > v1.2.x（含 08-12 救复四连修）· v1.2.2 收尾 · v1.3.0 案件模块 M1-M3 全记录 ·
 > v1.3.1 封版自检与 08-14 上午修复系列（§23.11~23.23）
 >
-> **最近归档动作**：2026-08-20——HANDOVER 第四十六批（§55，P-59 校时落盘
+> **最近归档动作**：2026-09-07——§91 批——§86（合成导出 P2：ROI/曲线
+> 滚动条+宫格布局+ffmpeg8 排雷+docx 原子写）移入本文件末尾（R2 限 5 批）。
+> 早前：2026-08-20——HANDOVER 第四十六批（§55，P-59 校时落盘
 > 双根因修复）移入本文件末尾（R2 限 5 批）；同日早前：第四十五批（§54）。
 > 早前：2026-08-16——HANDOVER 第五批（§14）至第二十九批（§38）
 > 共 25 批整体移入本文件末尾（原文未删改；归档前 HANDOVER 表头自第十一批
@@ -5708,3 +5710,34 @@ P-74 点位图编辑器施工。
   （mw/case/report/sitemap/ui_chain/libav/sync）。
 - **遗留**：多通道段部分覆盖音轨细分 P2；宫格段无覆盖条（P2 可补）；
   工作台无独立「证据+宫格」组合（物理上矛盾）；块时间线无播放头联动（P2）。
+
+---
+
+## 86. 合成导出 P2：ROI/曲线滚动条烧录 + 宫格布局 + ffmpeg8 aresample 排雷 + docx 原子写
+
+- **compose_render 新模块**（src/infrastructure/compose_render.h/.cpp）：
+  `loadComposeOverlay(vlaPath)`（TimelineModel::loadFromFile 一次性取 ROI/多边形/
+  标签/亮度行+时间轴/音量通道）+ `drawRoiOverlay`（源像素坐标→KeepAspectRatio
+  显示矩形映射，R1/R2 标号+半透明填充，RoiModel::regionColor 同色）+
+  `drawChartStrip`（30s 窗口游标固定 2/3：亮度逐 ROI 行折线+音量绿曲线+
+  标签同色虚线竖标+白色游标三角柄+窗口起止注记；无数据画占位文）。
+- **引擎**：ComposeSeg +gridLayout(0 均分/1 主听路大窗)/burnRoi/burnChart；
+  Params +vlaPathByPath（工作台填，引擎自载数据）；单段分支 stripOn 时视频区
+  缩短 158px 装曲线条；lanes 分支 cellRectOf 支持主听路大窗布局。
+- **工作台**：导出面板 +「ROI 烧录」「曲线滚动条」勾（演示模式，默认开）；
+  宫格段编辑框 +布局下拉；块副标题显示 ▦N路·主路大窗。
+- **排雷（真实病灶素材 e2e 逮到）**：bundled ffmpeg 8 的 aresample 已删 `ocl`
+  选项（新名 `out_chlayout`）——buildAudioFilterChainMulti 的归一化链
+  `ocl=stereo` 在 8kHz mono 源上直接 filter 报错导出失败；改
+  `aresample=48000:out_chlayout=stereo:osf=s16`。**旧链（buildAudioFilterChain
+  /Ranges）不做归一化未踩雷**（单源自一致）；教训：新滤镜参数必须以 bundled
+  ffmpeg `-h filter=X` 实测为准。
+- **docx 0MB 硬化**：ZipStoreWriter::writeTo 改原子写（同目录 .tmp→flush→
+  大小复核→rename），失败不再留 0 字节残件；报告/点位图等全部 zip 产物受益。
+  Release 0MB docx 根因未能本地复现（写入层失败回 false 本就有弹窗），
+  先以原子写收口，待用户 Release 复测报告生成。
+- **测试**：segment 102 checks 全绿——testComposeOverlay（.vla 回环+游标白线/
+  曲线上墨/ROI 染色像素级断言）+ testComposeOverlayEndToEnd（导出后 ffmpeg
+  抽帧验底部条带）+ testComposeRealAssetEndToEnd（增城病灶 LAMerged 91min
+  PTS 抖动族：60s/120s 各取 5s、段2 2x → 产物 7.5s 精确+音轨归一化）；
+  全回归 9 套绿；手册 PDF 重出（298KB）。

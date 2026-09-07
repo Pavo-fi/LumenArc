@@ -1,5 +1,8 @@
 # v1.17.0 MainWindow 拆解施工方案（PENDING P-76~P-80）
 
+> **状态（2026-09-07）：四阶段全部完成**（`e99c947`→`01ad822`→`e30d534`→`0e4e2e5`），
+> P-76~P-80 已勾销；阶段 D 额外抓出并修复 B3 的 KeyGuardFilter eventFilter 遗漏（快捷键失效）。
+
 > **状态：已拍板（2026-09-06 用户确认：Q1~Q7 全部按推荐敲定；**每阶段完成后提交 git**）→ 施工中**
 > 基线：HEAD `7d66ce0`（v1.16.2）。安全回退点：分支+标签 `safety/pre-mw-split-20260906`。
 > 定位：规范§八「MainWindow 上帝类」收口第二批。v1.9（P-31）已拆出四组件
@@ -63,7 +66,7 @@
 
 ## 三、阶段设计（每阶段=独立提交组+全回归门槛+可独立回退）
 
-### 阶段 A：multi-TU 拆分（P-79）~2-3 天
+### 阶段 A：multi-TU 拆分（P-79）~2-3 天 ✅ 完成 `e99c947`（2026-09-07）
 
 MainWindow 保持单一类，.cpp 按职责域拆 7 个翻译单元（成员函数定义跨 TU，
 CMake 显式源列表 :66-127 加 6 行）：
@@ -85,7 +88,7 @@ CMake 显式源列表 :66-127 加 6 行）：
   不删不改既有行）+ 全回归 18 套绿 + 手工点检（开视频/切视频/菜单工具栏观感）
 - buildStamp（:120 唯一 file-local static）改 `build_stamp.h` inline（Q7）
 
-### 阶段 B：红线债收口（P-76/P-77/P-78）~1-2 天（顺序 B1→B2→B3）
+### 阶段 B：红线债收口（P-76/P-77/P-78）~1-2 天（顺序 B1→B2→B3）✅ 完成 `01ad822`（2026-09-07）
 
 - **B1 R3**：ChartPanel 加 `xAxisRange() const`（setXAxisRange 先例
   chartpanel.cpp:2390）；:3043 改调；确认 :1962-1964 语谱→曲线联动信号路径不受影响
@@ -98,7 +101,7 @@ CMake 显式源列表 :66-127 加 6 行）：
   18 键 switch 搬入共享处理函数；保留「全局键优先于聚焦滑块/列表/树」语义
 - 门槛：全回归 + mw_test + 新增单测 + 手工点检（含「聚焦滑块/视频列表时按 ←→/空格」）
 
-### 阶段 C：SnapshotComposer（P-80）~2-3 天
+### 阶段 C：SnapshotComposer（P-80）~2-3 天 ✅ 完成 `e30d534`（2026-09-07）
 
 - **C0**：`OverlayWidget::burnAnnotations/drawMagnifierIndicator/mapStoredRectToFrame`
   （videowidget.cpp:359+ 静态渲染函数）迁至非 Widgets 模块（R1 前提；
@@ -110,7 +113,7 @@ CMake 显式源列表 :66-127 加 6 行）：
   offscreen 无 CJK 字体→ASCII 断言，§89 先例）
 - 门槛：snapshot_test 全绿 + 全回归 + 手工点检（证据快照观感截图对照基线）
 
-### 阶段 D：openVideoFile 瘦身（restore 扇出下沉）~3-4 天
+### 阶段 D：openVideoFile 瘦身（restore 扇出下沉）~3-4 天 ✅ 完成 `0e4e2e5`（2026-09-07）
 
 - **D1 闸先行**：新增 mw_test switch-restore 用例——a→b→a 切换值保真 +
   无状态清场零泄漏断言（复用 :471-496 ffmpeg 合成视频模式）+ .vla 直载断路径未覆写
@@ -122,10 +125,10 @@ CMake 显式源列表 :66-127 加 6 行）：
 
 ### 收尾
 
-- 版本 bump v1.17.0（CMake 单一真源）；用户无感知变更（手册不动）
-- HANDOVER/WORK_HISTORY/PENDING 勾销/DOCS_MAP（D1/D2/D6/D7）
+- 版本 bump v1.17.0（CMake 单一真源）；用户无感知变更（手册不动）✅
+- HANDOVER/WORK_HISTORY/PENDING 勾销/DOCS_MAP（D1/D2/D6/D7）✅
 - RELEASE_CHECKLIST_V1.7 真机点检（行为冻结对照：开/切视频/校时/案件/多机/
-  快照/导出 各 1 条 + 聚焦控件按键 1 条）
+  快照/导出 各 1 条 + 聚焦控件按键 1 条）⏳ 留用户真机执行
 
 **总预估 9-12 天（2 周左右），与 v1.9 拆分周期一致。**
 
