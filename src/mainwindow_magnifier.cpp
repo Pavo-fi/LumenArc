@@ -130,6 +130,14 @@ void MainWindow::createMagnifier()
     if (m_adjustPanel)
         m_magnifier->setDisplayAdjust(m_adjustPanel->adjust());
 
+    // v1.17.x：逐视频恢复放大镜源区域——magnifierRect 自 v1.0 起逐视频写入
+    // .vla，但读路径从未接线（restoreFromRect 为既有孤儿 API）。切回本视频
+    // 重开放大镜时指回上次位置/倍率；未存过则保持 setVideoSize 默认（中心 2x）。
+    QRect savedMagRect;
+    if (m_sessionMgr && m_sessionMgr->stateManager()->magnifierRectOf(
+            m_sessionMgr->currentVideoPath(), savedMagRect))
+        m_magnifier->restoreFromRect(savedMagRect, vw, vh);
+
     // 放大镜来源标识框（§14 Q1）：源区域变化实时同步到主画面 overlay；
     // 初始值立即下发（setVideoSize 的信号早于 connect）
     connect(m_magnifier, &MagnifierWidget::sourceRectChanged,

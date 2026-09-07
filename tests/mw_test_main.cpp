@@ -9,6 +9,7 @@
  * offscreen 下模态框由定时器自动关闭（activeModalWidget→close）。
  */
 #include "mainwindow.h"
+#include "magnifierwidget.h"
 #include "composeworkbench.h"
 #include <QTreeWidget>
 #include "app/uistate.h"
@@ -753,6 +754,86 @@ static void testSwitchRestore(QApplication &app)
     }
 }
 
+// v1.17.x：逐视频放大镜源区域恢复（magnifierRect 自 v1.0 只存不恢复，
+// 本次接线 createMagnifier ← 会话状态；孤儿 API restoreFromRect 启用）。
+// 判别法：重开后轮一步——接了线起点=存值 2.25 → 2.5；没接线起点=默认 2.0 → 2.25。
+static void testMagnifierRestore(QApplication &app)
+{
+    QDir tmp(QDir::tempPath() + "/lumenarc_mag_restore");
+    tmp.removeRecursively();
+    QDir().mkpath(tmp.path());
+    const QString clipA = tmp.path() + "/a.mp4";
+    const QString clipB = tmp.path() + "/b.mp4";
+    const QString ffmpeg = QCoreApplication::applicationDirPath()
+        + QStringLiteral("/ffmpeg/ffmpeg.exe");
+    if (!QFile::exists(ffmpeg)) {
+        fprintf(stderr, "[mag-restore] SKIP (bundled ffmpeg not found)\n");
+        return;
+    }
+    auto synth = [&](const QString &out) -> bool {
+        QProcess proc;
+        proc.start(ffmpeg, {QStringLiteral("-y"), QStringLiteral("-f"),
+                            QStringLiteral("lavfi"), QStringLiteral("-i"),
+                            QStringLiteral("testsrc=size=320x240:rate=5:duration=3"),
+                            QStringLiteral("-c:v"), QStringLiteral("libx264"),
+                            QStringLiteral("-pix_fmt"), QStringLiteral("yuv420p"),
+                            out});
+        return proc.waitForFinished(30000) && QFile::exists(out);
+    };
+    if (!synth(clipA) || !synth(clipB)) {
+        fprintf(stderr, "[mag-restore] SKIP (clip synth failed)\n");
+        return;
+    }
+
+    MainWindow mw;
+    mw.resize(1280, 800);
+    mw.show();
+    pump(app);
+
+    auto wheel = [&mw, &app](int delta, QPoint pos) {
+        QMetaObject::invokeMethod(&mw, "onMagnifierWheelZoom",
+                                  Q_ARG(int, delta), Q_ARG(QPoint, pos));
+        pump(app, 150);
+    };
+
+    QMetaObject::invokeMethod(&mw, "openVideoFile", Q_ARG(QString, clipA));
+    pump(app, 2000);
+
+    // 首开：中心 (160,120) 滚一格 → 2.0+0.25=2.25（矩形取偶网格，中心±1）
+    wheel(1, QPoint(160, 120));
+    auto *mag = mw.findChild<MagnifierWidget *>();
+    CHECK(mag != nullptr, "mag: created by wheel");
+    if (!mag) return;
+    CHECK(qFuzzyCompare(double(mag->zoomLevel()), 2.25),
+          "mag: first open zoom 2.25");
+    CHECK(mag->currentSourceRect().width() == 142,
+          "mag: first open width 320/2.25→142(偶)");
+    CHECK(qAbs(mag->currentSourceRect().center().x() - 160) <= 2
+         && qAbs(mag->currentSourceRect().center().y() - 120) <= 2,
+          "mag: first open anchored at cursor (±1 偶数网格)");
+
+    // A→B→A（离 A 时 saveCurrentState 抓取放大镜区域）
+    QMetaObject::invokeMethod(&mw, "openVideoFile", Q_ARG(QString, clipB));
+    pump(app, 2000);
+    QMetaObject::invokeMethod(&mw, "openVideoFile", Q_ARG(QString, clipA));
+    pump(app, 2000);
+
+    // 重开（同位同幅）：接线 → ≈2.25+0.25≈2.5；未接线 → 默认 2.0+0.25=2.25
+    // （restoreFromRect 的倍率由矩形比例反推，±0.01；2.25 与 ≈2.5 区间不交）
+    wheel(1, QPoint(160, 120));
+    mag = mw.findChild<MagnifierWidget *>();
+    CHECK(mag != nullptr, "mag: re-created after switch");
+    if (!mag) return;
+    const double z = double(mag->zoomLevel());
+    CHECK(z > 2.4 && z < 2.6,
+          "mag: re-open starts from saved zoom (restore wired, expect ~2.5 not 2.25)");
+    CHECK(mag->currentSourceRect().width() < 142,
+          "mag: re-open zoomed in beyond saved rect");
+    CHECK(qAbs(mag->currentSourceRect().center().x() - 160) <= 4
+         && qAbs(mag->currentSourceRect().center().y() - 120) <= 4,
+          "mag: re-open anchored near saved center");
+}
+
 // ---------------------------------------------------------------------------
 // 亮度分析完整链路（点击「亮度分析」复现路径：打开视频→缓存 vla 询问(Yes)→
 // ROI 恢复→onAnalyze→进度/完成/气泡/自动保存）
@@ -1257,6 +1338,7 @@ int main(int argc, char **argv)
     testMainWindowBranches(app);
     testCurrentPathSsot(app);
     testSwitchRestore(app);
+    testMagnifierRestore(app);
     testMultiCamWindow(app);
     testMultiCamCaseFlow(app);
     testLumaFullChain(app);

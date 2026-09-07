@@ -65,6 +65,15 @@ bool VideoStateManager::hasState(const QString &videoPath) const
     return m_states.contains(videoPath);
 }
 
+bool VideoStateManager::magnifierRectOf(const QString &videoPath, QRect &out) const
+{
+    auto it = m_states.constFind(videoPath);
+    if (it == m_states.constEnd())
+        return false;
+    out = it.value().magnifierRect;
+    return out.isValid();
+}
+
 void VideoStateManager::removeState(const QString &videoPath)
 {
     m_states.remove(videoPath);

@@ -68,6 +68,9 @@ public:
 
     bool restoreState(const QString &videoPath, VideoState &state) const;
     bool hasState(const QString &videoPath) const;
+    /// v1.17.x：定向读取某视频的放大镜源区域（不受 hasData() 门控——
+    /// 某视频可能只存了放大镜区域而无其他数据；打开放大镜时恢复用）
+    bool magnifierRectOf(const QString &videoPath, QRect &out) const;
     void removeState(const QString &videoPath);
     /// 键迁移（v1.3.0 M3 任务13：重定位后内存状态跟随新路径）
     void migrateKey(const QString &oldPath, const QString &newPath);
