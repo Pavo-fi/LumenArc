@@ -36,12 +36,13 @@
 | docs/V1_ERA_TECH_PLAN_CN.md | v1 时代总体方案（v1.2~v1.9 + Q-1~Q-20 决策） | ⚠️ 已修正 §1.3 版本表（.vla 现 v9；v1.8 改 v10） |
 | docs/DEVELOPMENT_PLAN_V1.3_CN.md | v1.3 案件模块施工方案 | ✅ 已实施封版（v1.3.0） |
 | docs/DEVELOPMENT_PLAN_V1.7_CN.md | v1.7 前处理 v2 施工方案 | ✅ 已修正状态：已实施（dfb4f7c），Q1-Q6 回填 |
-| docs/DEVELOPMENT_PLAN_V1.6_CN.md | v1.6 GPU 显示管线 Stage 1 施工方案（P-29） | ✅ 已拍板（2026-08-17，待施工） |
+| docs/DEVELOPMENT_PLAN_V1.6_CN.md | v1.6 GPU 显示管线 Stage 1 施工方案（P-29） | 🔨 T1~T3 已施工（2026-09-07，reviewer APPROVE）；待 T4 真机验收 + T5 文档 |
 | docs/DEVELOPMENT_PLAN_V1.8_CN.md | v1.8 P1a/P1b 任务化+通道化施工方案（P-30，.vla v10 + Python 退役） | ✅ 已实施（2026-08-17 施工完成，待真机点检） |
 | docs/RELEASE_CHECKLIST_V1.8_CN.md | v1.8 手工点检 A-E | ⚠️ 待真机执行（离线项已自动验证） |
 | docs/DEVELOPMENT_PLAN_V1.9_CN.md | v1.9 P2 MainWindow 拆分施工方案（P-31，四组件 + R2/R3/R5 收口） | ✅ 已实施（2026-08-17 施工完成，待真机点检） |
 | docs/DEVELOPMENT_PLAN_V1.17_CN.md | v1.17.0 MainWindow 拆解施工方案（P-76~P-80：7 TU 拆分 + R3/R5/Q5 收口 + SnapshotComposer + restore 下沉） | ✅ 已实施（2026-09-07 四阶段完成 `e99c947`→`0e4e2e5`，待真机点检） |
 | docs/RELEASE_CHECKLIST_V1.17_CN.md | v1.17.0 手工点检（行为冻结 7 条 + 快捷键 9 键 + 顺带修复 2 项） | ✅ 已点检通过（2026-09-07，v1.17.0 封板） |
+| docs/RELEASE_CHECKLIST_V1.6_CN.md | v1.6.0 手工点检（首节：P-29 GPU Stage 1 性能验收 + 15 项功能回归） | ⚠️ 待真机执行（离线项已由 ui_chain 场景 0d 覆盖） |
 | docs/RELEASE_CHECKLIST_V1.9_CN.md | v1.9 手工点检 A-F（行为冻结对照） | ⚠️ 待真机执行（离线项已自动验证） |
 | docs/PREPROCESSING_TECH_DESIGN_CN.md | 前处理技术设计 | ✅ 现行 |
 | docs/MULTICAM_PLAYBACK_TECH_DESIGN_CN.md | 多视频同步播放（多机时间线合并）技术方案（P-57） | ✅ v0.3 已拍板，**v1.10.0 已施工待真机**（2026-08-18） |

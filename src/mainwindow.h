@@ -34,6 +34,7 @@ class ChartPanel;
 class SnapshotOverlay;
 class PinnedWidget;
 class IVideoEngine;
+class QTimer;
 class IAnalysisEngine;
 class CalibrationService;
 class KeyGuardFilter;
@@ -312,6 +313,7 @@ protected:
     qint64 m_pendingSeekMs = -1;
     qint64 m_lastIssuedSeekMs = -1;
     QLabel *m_operationLabel = nullptr;   // 操作反馈标签（状态栏左侧）
+    QTimer *m_statusClearTimer = nullptr; // 操作标签清除定时器（重启语义，防旧定时器累积）
     QLabel *m_statusLabel = nullptr;
     QLabel *m_hwAdapterLabel = nullptr;   // 硬解适配器名称（状态栏右侧）
     QProgressBar *m_progressBar = nullptr;

@@ -1382,10 +1382,13 @@ VideoWidget::VideoWidget(QWidget *parent)
             this, &VideoWidget::timestampRoiReady);
 
     // P-29 Stage 1：GPU 显示模式（QSettings video/gpuDisplay，默认 auto）。
-    // GL 面惰性构造（首帧到达），此处不建——offscreen/CI 永不进 GL 分支。
+    // GL 面首帧前不建；offscreen/CI 下无 3.3 core 上下文 → 初始化失败/未执行
+    // → glActive() 恒 false → 渲染分支 100% 走 CPU（测试零 GL 依赖）。
     QSettings s(QStringLiteral("LumenArc"), QStringLiteral("LumenArc"));
-    m_gpuDisplayMode = s.value(QStringLiteral("video/gpuDisplay"),
-                               QStringLiteral("auto")).toString();
+    QString mode = s.value(QStringLiteral("video/gpuDisplay"),
+                           QStringLiteral("auto")).toString().toLower();
+    m_gpuDisplayMode = (mode == QLatin1String("on") || mode == QLatin1String("off"))
+        ? mode : QStringLiteral("auto");   // 坏值归一（大小写/非法值）
 }
 
 VideoWidget::~VideoWidget() = default;
@@ -1616,9 +1619,12 @@ void VideoWidget::paintEvent(QPaintEvent *event)
             // P-29 Stage 1：视频帧 + 截图融合由 GL 面同层绘制（z 序保持：
             // GL 面在 OverlayWidget 之下、VideoWidget 自绘之上）。
             // 融合缓存重建逻辑与 CPU 路径共用 ensureAdjustedSnapshot。
+            // 注：不按缓存重建 gate 下发（opacity 不在缓存键中——拖动滑杆时
+            // 必须实时生效；纹理重传由 GlVideoSurface 侧 constBits 去重防抖）。
             if (m_snapshot.isNull()) {
                 m_gl->clearSnapshotOverlay();
-            } else if (ensureAdjustedSnapshot()) {
+            } else {
+                ensureAdjustedSnapshot();   // 缓存键变化时重建
                 m_gl->presentSnapshotOverlay(
                     m_adjustedSnapshot, 1.0 - m_snapshotOpacity / 100.0);
             }
@@ -1633,7 +1639,7 @@ void VideoWidget::paintEvent(QPaintEvent *event)
                 painter.setOpacity(1.0);
             }
         }
-    } else if (m_frameImage.isNull()) {
+    } else {
         // 品牌空状态：logo 水印 + 引导语（加载大视频期间显示“导入中…”）
         if (m_loading) {
             // 导入中卡片：旋转金色圆弧 + 标题/副标题（大视频解析数秒期间的反馈）
@@ -1734,6 +1740,13 @@ void VideoWidget::setGpuDisplayMode(const QString &mode)
     } else if (glActive() && !m_frameImage.isNull()) {
         glPresentCurrent();   // 从 off 切回：立即恢复上屏
     }
+    if (m == QLatin1String("on") && m_glFailed) {
+        // 切到 on 时若 GL 此前已失败：按 Q3 语义表面化（失败时弹提示）
+        QMessageBox::warning(this,
+                             lang("GPU 显示不可用", "GPU Display Unavailable"),
+                             lang("已回退 CPU 软件渲染。", "Fell back to CPU software rendering. ")
+                                 + m_glFailReason);
+    }
 }
 
 void VideoWidget::ensureGlSurface()
@@ -1751,6 +1764,7 @@ void VideoWidget::ensureGlSurface()
 void VideoWidget::onGlFailed(const QString &reason)
 {
     m_glFailed = true;   // 本进程不再尝试（Q3 auto 语义）
+    m_glFailReason = reason;
     qWarning() << "[VideoWidget] GPU 显示不可用，永久回退 CPU 软件渲染：" << reason;
     if (m_gl)
         m_gl->hide();
@@ -1764,6 +1778,11 @@ void VideoWidget::onGlFailed(const QString &reason)
 bool VideoWidget::glActive() const
 {
     return m_gl && !m_glFailed && m_gl->glHealthy() && m_gl->isVisible();
+}
+
+bool VideoWidget::glHealthy() const
+{
+    return m_gl && m_gl->glHealthy();
 }
 
 void VideoWidget::glPresentCurrent()

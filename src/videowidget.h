@@ -263,6 +263,10 @@ public:
     QString gpuDisplayMode() const { return m_gpuDisplayMode; }
     /// GL 面是否正在上屏（GL 初始化成功且可见）
     bool gpuDisplayActive() const { return glActive(); }
+    /// P-29 测试缝：GL 面是否已构造 / 是否已降级（失败注入过程锚定）
+    bool glSurfaceCreated() const { return m_gl != nullptr; }
+    bool glFailed() const { return m_glFailed; }
+    bool glHealthy() const;   // 头文件仅前向声明 GlVideoSurface，实现在 .cpp
 
 signals:
     void frameSnapshotReady(const QImage &image);
@@ -311,11 +315,13 @@ private:
     // ------------------------------------------------------------------
     GlVideoSurface *m_gl = nullptr;   ///< 惰性构造（首帧），非 GL 环境永不建
     bool m_glFailed = false;                ///< 本进程永久回退标志（Q3 auto 语义）
+    QString m_glFailReason;                 ///< 降级原因（on 模式切换时表面化）
     QString m_gpuDisplayMode = QStringLiteral("auto");
     void ensureGlSurface();                 ///< 首帧惰性构造（mode≠off 且未失败）
     void onGlFailed(const QString &reason); ///< 降级：隐藏 GL 面 + 日志（on 模式弹提示）
     bool glActive() const;                  ///< GL 面正在上屏的判定
     void glPresentCurrent();                ///< 向 GL 面下发当前帧（COW，O(1)）
-    /// 截图融合缓存重建；返回本次是否重建（GL 分支据此决定是否重传纹理）
+    /// 截图融合缓存重建；CPU/GL 两路共用（GL 纹理重传去重由
+    /// GlVideoSurface 侧 constBits 自行判定，不依赖本函数返回值）
     bool ensureAdjustedSnapshot();
 };

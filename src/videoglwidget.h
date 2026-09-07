@@ -50,7 +50,8 @@ public:
     void setDisplayRect(const QRect &r);
 
     /// 采样：true=GL_LINEAR（默认，视觉优于现状最近邻）/ false=GL_NEAREST
-    /// （用户偏好现状锐利感时的一键切换兜底，Q2 拍板项）
+    /// （用户偏好现状锐利感时的一键切换兜底，Q2 拍板项；
+    ///  Stage 1 未接设置 UI，留待 v1.6.0 后续任务接线或移除）
     void setFilterLinear(bool linear);
 
     /// 降级判定：false = GL 不可用（VideoWidget 收到 glFailed 后永久回退 CPU）

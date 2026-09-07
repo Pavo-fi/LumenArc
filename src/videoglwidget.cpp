@@ -4,7 +4,8 @@
  *
  * 每帧成本：CPU 侧仅纹理上传（1440p ≈11MB，PCIe ~1ms）；
  * 缩放在 GPU 光栅化阶段（双线性），替代 CPU 光栅 ~10ms/帧。
- * 纹理复用：帧尺寸不变 → glTexSubImage2D 原地更新，不销毁重建。
+ * 纹理复用：帧尺寸不变 → 纹理对象存续（glTexImage2D 原地更新数据，
+ * 不 create/destroy），变尺寸才重建。
  * 行对齐：QImage 转换后行打包（bytesPerLine = w×3），无需 UNPACK_ROW_LENGTH。
  * 降级红线：initializeGL 失败 → glFailed（VideoWidget 永久回退 CPU），
  * 本控件随即被隐藏；paintGL 在 !m_glOk 时直接返回。
@@ -75,18 +76,17 @@ GlVideoSurface::GlVideoSurface(QWidget *parent)
 
 GlVideoSurface::~GlVideoSurface()
 {
-    if (m_glOk) {
-        if (context())
-            makeCurrent();
-        delete m_frameTex;
-        delete m_snapTex;
-        delete m_blackTex;
-        delete m_program;
-        delete m_vao;
-        delete m_vbo;
-        if (context())
-            doneCurrent();
-    }
+    // 全部显式删（纹理/缓冲无 parent 参数可用）；有上下文时先 makeCurrent
+    if (context())
+        makeCurrent();
+    delete m_frameTex;
+    delete m_snapTex;
+    delete m_blackTex;
+    delete m_program;
+    delete m_vao;
+    delete m_vbo;
+    if (context())
+        doneCurrent();
 }
 
 void GlVideoSurface::initializeGL()
@@ -118,9 +118,12 @@ void GlVideoSurface::initializeGL()
     m_glOk = true;
 }
 
-void GlVideoSurface::resizeGL(int, int)
+void GlVideoSurface::resizeGL(int w, int h)
 {
-    // 缩放目标矩形以 clip space uniform 下发，无需 viewport/缓冲状态变更
+    // QOpenGLWidget 的 FBO 是物理像素（×dpr）：viewport 必须用物理尺寸，
+    // 否则 HiDPI（dpr≠1）下视频缩至 1/dpr² 且 glClear 只覆盖左上角
+    // （语谱图面板同款处理，spectrogrampanel_enhanced resizeGL/paintGL）。
+    glViewport(0, 0, w, h);
 }
 
 void GlVideoSurface::ensureProgram()
@@ -150,7 +153,7 @@ void GlVideoSurface::ensureQuad()
     m_vao = new QOpenGLVertexArrayObject(this);
     m_vao->create();
     m_vao->bind();
-    m_vbo = new QOpenGLBuffer(QOpenGLBuffer::VertexBuffer);
+    m_vbo = new QOpenGLBuffer(QOpenGLBuffer::VertexBuffer);   // 非 QObject，析构显式删
     m_vbo->create();
     m_vbo->allocate(kQuad, sizeof(kQuad));
     const int stride = static_cast<int>(sizeof(QuadVertex));
@@ -172,9 +175,15 @@ void GlVideoSurface::presentFrame(const QImage &frame)
 
 void GlVideoSurface::presentSnapshotOverlay(const QImage &snapshot, qreal opacity)
 {
+    // 图像身份去重：opacity 不在纹理里（uniform 每次 paint 取新值），
+    // 只有图像本体变化才需重传（防每帧 11MB 级重上传）
+    const bool imgChanged = (snapshot.constBits() != m_pendingSnap.constBits())
+        || snapshot.size() != m_pendingSnap.size();
     m_pendingSnap = snapshot;
     m_snapOpacity = qBound(0.0, opacity, 1.0);
-    m_snapDirty = true;
+    // 边缘：某快照首次 present 恰逢 alpha=0（融合滑杆=100，纹理从未上传），
+    // 之后拖回 <100 时 imgChanged=false 不会重传 → 黑占位；该情形强制重传
+    m_snapDirty = imgChanged || (m_snapOpacity > 0.0f && !m_snapTex);
     update();
 }
 
@@ -297,8 +306,11 @@ void GlVideoSurface::paintGL()
     if (!m_glOk)
         return;   // 已降级：VideoWidget 收到 glFailed 后隐藏本控件走 CPU 路径
 
-    glViewport(0, 0, width(), height());
     glClearColor(kBgR, kBgG, kBgB, 1.0f);
+    // HiDPI：FBO 为物理像素（×dpr），viewport 用物理尺寸（u_rect 的
+    // clip 换算中 dpr 代数相消，逻辑坐标即可，见下方 cx/cy 推导）
+    const qreal dpr = devicePixelRatioF();
+    glViewport(0, 0, int(width() * dpr), int(height() * dpr));
     glClear(GL_COLOR_BUFFER_BIT);
 
     if (m_frameDirty)
@@ -347,7 +359,7 @@ void GlVideoSurface::paintGL()
     if (m_blackTex)
         m_blackTex->release();
 
-    // GL 状态清理（防干扰后续 raster 合成，语谱图面板同款 :256-258）
+    // GL 状态清理（防干扰后续 raster 合成，语谱图面板同款 :288-290）
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, 0);
     glUseProgram(0);
