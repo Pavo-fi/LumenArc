@@ -35,7 +35,7 @@ P-20 2GB 尾帧 seek（已通过）· P-21 DVR 字体抽检（已通过）· P-2
 | # | 版本 | 内容 | 前置 | 状态 |
 |---|---|---|---|---|
 | P-28 | v1.4.0 | 分析报告模块（DOCX：案件信息/时间基准/哈希清单/逐视频章节/签署盖章位）——**2026-08-23 拍板启动**：只出 DOCX（MD5+SHA256 双列/静态目录无页码/向导入口/章节一~七重排）；远期 HTML 渲染器接口预留。模板=用户《火灾视频分析报告模板.md》。批次①DOCX 地基已落（ZipStoreWriter 手写 store zip + DocxWriter 极简 OPC：标题/段落/表格/图片/分页，docx_test 23 断言） | 校时+案件 ✅ | 🔨 全部批次施工完 ✅ v1.14.0（批次①②③+曲线光栅嵌入+哈希进度条+P-74 点位图，docx23/report49/sitemap16 断言）；**待用户整体验收**（HANDOVER §74-§76） |
-| P-29 | v1.6.0 | GPU 显示管线 Stage 1（QOpenGLWidget 纹理缩放，消 uiDrops）；Stage 2 已砍 | 独立 | ☐ 方案已拍板 2026-08-17（DEVELOPMENT_PLAN_V1.6_CN.md） |
+| P-29 | v1.6.0 | GPU 显示管线 Stage 1（QOpenGLWidget 纹理缩放，消 uiDrops）；Stage 2 已砍 | 独立 | 🔨 2026-09-07 施工启动（安全点 safety/pre-gpu-pipeline-20260907；方案 Q1~Q4 已拍板，见 DEVELOPMENT_PLAN_V1.6_CN.md §8） |
 | P-30 | v1.8.0 | P1a/P1b 任务化+通道化（TaskRegistry / 通道字典 / **.vla v10**）+ Python 引擎退役 | v1.5 ✅ | ✅ 2026-08-17 已实施（任务化+通道化+v10+退役全落地，待真机点检 RELEASE_CHECKLIST_V1.8） |
 | P-31 | v1.9.0 | P2 MainWindow 拆分（AnalysisController/VideoSessionManager/ProjectIO/UiState；收口 R2/R3/R5） | 前序全部 | ✅ 2026-08-17 已实施（四组件落地+时长 SSOT+R3 收口；待真机点检 RELEASE_CHECKLIST_V1.9） |
 
@@ -67,14 +67,14 @@ P-20 2GB 尾帧 seek（已通过）· P-21 DVR 字体抽检（已通过）· P-2
 | P-43 | 弱边界加密点分配精度（±1 粗间隔 ≈74s） | WORK_HISTORY 21.5 | ☐ |
 | P-44 | bundled ffmpeg nightly → 稳定版（可选） | WORK_HISTORY 18.3 | ☐ |
 | P-45 | 旋转+LUT 单趟合并优化（性能余量） | 归档 batch3 | ☐ |
-| P-46 | 发版点检清单补前处理四幕流程 | WORK_HISTORY 13.7 | ☐ |
+| P-46 | 发版点检清单补前处理四幕流程 | WORK_HISTORY 13.7 | ✅ 2026-09-07 用户确认：前处理四幕已多批次真机验证（P-60/P-61/P-63 等），无需再补独立点检项 |
 
 ## 七、发布/环境遗留
 
 | # | 项 | 来源 | 状态 |
 |---|---|---|---|
 | P-47 | RELEASE_CHECKLIST_V1.3 A-H 手工矩阵（用户已实测案件主要路径，完整矩阵待补） | 归档 batch1 | ☐ |
-| P-48 | ⚠错读点"OSD 疑似错读，时间不可信"随报告标注 | WORK_HISTORY 22.6 | ☐（随 P-28） |
+| P-48 | ⚠错读点"OSD 疑似错读，时间不可信"随报告标注 | WORK_HISTORY 22.6 | ✅ 已实现（report_service.cpp:336-343，`9082cad` v1.14.0 报告批次②）——2026-09-07 侦察核码确认，补勾销 |
 | P-49 | B3 黄金素材放回原路径恢复 reconstruction 集成测试 | WORK_HISTORY 21.5 | ☐ |
 | P-50 | 拼接假成功修复待真机：损坏素材重跑 → 报"产物时长异常"且不落盘坏文件（已修 `c1aa169`；§46 实测已拦截） | HANDOVER §45/§46 | ✅ 2026-08-17 用户确认 |
 | P-51 | 后门对面 33 个坏源文件（20250726×31/20250727×2）需重新导出；清单已生成桌面 `后门对面_损坏文件清单.txt`，剔除后重跑拼接 | HANDOVER §46 | ✅ 2026-08-17 用户重新导出并重跑通过 |
