@@ -4,6 +4,7 @@
 //   → 路由三点 → 自动应用
 // MainWindow 接线块逐字复刻 + 真实 VideoWidget/对话框/CalibrationService/OCR
 #include <QApplication>
+#include "frame_annotation.h"
 #include <QPushButton>
 #include <QSettings>
 #include <QtTest/QtTest>
@@ -527,7 +528,7 @@ static bool runMagnifierIndicatorScenario()
         canvas.fill(qRgb(30, 30, 30));
         {
             QPainter p(&canvas);
-            OverlayWidget::drawMagnifierIndicator(p, QRect(50, 50, 100, 80), 2.0, 2, 12);
+            FrameAnnotation::drawMagnifierIndicator(p, QRect(50, 50, 100, 80), 2.0, 2, 12);
         }
         const QColor accent(Theme::Accent);
         auto isAccent = [&](QRgb px) {
@@ -577,7 +578,7 @@ static bool runMagnifierIndicatorScenario()
         f0.fill(bg);
         {
             QPainter p(&f0);
-            OverlayWidget::burnAnnotations(p, f0.size(), QSize(400, 200), 0,
+            FrameAnnotation::burnAnnotations(p, f0.size(), QSize(400, 200), 0,
                                            &brm, &bpm, &bgm, 1);
         }
         // 矩形上边：y=10 附近，颜色更接近 regionColor(0) 而非背景
@@ -605,7 +606,7 @@ static bool runMagnifierIndicatorScenario()
         f90.fill(bg);
         {
             QPainter p(&f90);
-            OverlayWidget::burnAnnotations(p, f90.size(), QSize(400, 200), 90,
+            FrameAnnotation::burnAnnotations(p, f90.size(), QSize(400, 200), 90,
                                            &brm, nullptr, nullptr, 1);
         }
         // 矩形 (10,10,100,50) rot90：角点 (10,10)->(189,10) (109,59)->(140,109)

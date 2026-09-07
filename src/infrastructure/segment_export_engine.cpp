@@ -199,7 +199,7 @@ QString SegmentExportEngine::buildAudioFilterChainRanges(
 /// 上限 45% 高），Accent 描边 + 「放大镜 ×N」角标（真机反馈：导出画面
 /// 应包含放大镜画面）
 /// v1.15.3 主界面同款放大镜源区域标记：金色四角括号（衬影+主体）+ 倍率徽章。
-/// 样式复制自 OverlayWidget::drawMagnifierIndicator（引擎层不依赖 widget）。
+/// 样式复制自 FrameAnnotation::drawMagnifierIndicator（v1.17.0 C0 前为 OverlayWidget 静态；引擎层不依赖 widget）。
 static void drawMagnifierBrackets(QPainter &painter, const QRect &rect,
                                   qreal zoom, int penWidth, int fontPx)
 {

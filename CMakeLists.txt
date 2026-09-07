@@ -91,6 +91,8 @@ set(SOURCES
     src/preprocesswindow.cpp
     src/cliptimelinewidget.cpp
     src/spectrogrampanel_enhanced.cpp
+    src/frame_annotation.cpp   # v1.17.0 P-80 C0：帧映射/覆盖层烧录纯模块（自 OverlayWidget 迁出）
+    src/app/snapshot_composer.cpp   # v1.17.0 P-80 C1：证据快照合成纯模块
     src/videostatemanager.cpp
     src/domain/roi_model.cpp
     src/domain/guide_line_model.cpp
@@ -680,6 +682,26 @@ target_link_libraries(lumenarc_vla_test PRIVATE
     Qt6::OpenGLWidgets
 )
 
+# --- v1.17.0 P-80 C2：快照合成纯模块回归闸（映射单元 + 像素断言 + PNG 元数据）---
+add_executable(lumenarc_snapshot_test
+    tests/snapshot_test_main.cpp
+    src/frame_annotation.cpp
+    src/app/snapshot_composer.cpp
+    src/domain/roi_model.cpp
+    src/domain/guide_line_model.cpp
+    src/domain/time_calibration.cpp
+    src/domain/time_piecewise.cpp
+    src/i18n.cpp
+)
+target_include_directories(lumenarc_snapshot_test PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+)
+target_link_libraries(lumenarc_snapshot_test PRIVATE
+    Qt6::Core
+    Qt6::Gui
+    Qt6::Widgets
+)
+
 # --- P-68 选段导出套件（speedplan 纯函数 + 引擎静态函数 + caltest e2e）---
 add_executable(lumenarc_segment_test
     tests/segment_test_main.cpp
@@ -745,6 +767,7 @@ add_executable(lumenarc_ui_chain_test
     src/timesettingsdialog.cpp
     src/calibphotodialog.cpp        # v1.12.5 校时图片框选（对话框依赖）
     src/videowidget.cpp
+    src/frame_annotation.cpp   # v1.17.0 P-80 C0：ui_chain 像素场景直接调用其纯函数
     src/magnifierwidget.cpp
     src/displayadjust.cpp
     src/app/calibration_service.cpp
