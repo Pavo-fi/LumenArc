@@ -26,6 +26,7 @@
 #include "infrastructure/ivideo_engine.h"
 #include "i18n.h"
 #include <QApplication>
+#include <QKeyEvent>
 #include <QTimer>
 #include <QTest>
 #include <QMessageBox>
@@ -654,6 +655,77 @@ static void testCurrentPathSsot(QApplication &app)
           "ssot: vla direct load does NOT overwrite current path");
 }
 
+// v1.17.0 D1：逐视频现场切换/恢复回归闸（a→b→a）
+// 旧恢复链只在 testLumaFullChain 里受 LUMENARC_REPRO_VIDEO 门控，常规回归跑不到；
+// 此测试用两个合成可播放视频覆盖 hasMemoryState 恢复链 + 无状态清空链。
+static void testSwitchRestore(QApplication &app)
+{
+    QDir tmp(QDir::tempPath() + "/lumenarc_d1_switch");
+    tmp.removeRecursively();
+    QDir().mkpath(tmp.path());
+    const QString clipA = tmp.path() + "/a.mp4";
+    const QString clipB = tmp.path() + "/b.mp4";
+    const QString ffmpeg = QCoreApplication::applicationDirPath()
+        + QStringLiteral("/ffmpeg/ffmpeg.exe");
+    if (!QFile::exists(ffmpeg)) {
+        fprintf(stderr, "[switch-restore] SKIP (bundled ffmpeg not found)\n");
+        return;
+    }
+    auto synth = [&](const QString &out) -> bool {
+        QProcess proc;
+        proc.start(ffmpeg, {QStringLiteral("-y"), QStringLiteral("-f"),
+                            QStringLiteral("lavfi"), QStringLiteral("-i"),
+                            QStringLiteral("testsrc=size=320x240:rate=5:duration=3"),
+                            QStringLiteral("-c:v"), QStringLiteral("libx264"),
+                            QStringLiteral("-pix_fmt"), QStringLiteral("yuv420p"),
+                            out});
+        return proc.waitForFinished(30000) && QFile::exists(out);
+    };
+    if (!synth(clipA) || !synth(clipB)) {
+        fprintf(stderr, "[switch-restore] SKIP (clip synth failed)\n");
+        return;
+    }
+
+    MainWindow mw;
+    mw.resize(1280, 800);
+    mw.show();
+    pump(app);
+
+    auto sendKey = [&](Qt::Key k) {
+        QKeyEvent ev(QEvent::KeyPress, k, Qt::NoModifier, QChar());
+        QApplication::sendEvent(&mw, &ev);
+        pump(app, 200);
+    };
+
+    // ① 开 A，设 A 点（Key_A 非模态，走 P-78 全局快捷键链）
+    QMetaObject::invokeMethod(&mw, "openVideoFile", Q_ARG(QString, clipA));
+    pump(app, 2000);
+    CHECK(mw.abPointA() < 0, "switch: A point unset initially");
+    sendKey(Qt::Key_A);
+    CHECK(mw.abPointA() >= 0, "switch: A point set via Key_A");
+
+    // ② 切 B（A 现场应被保存；B 无状态 → 清空链，A/B 点不得泄漏）
+    QMetaObject::invokeMethod(&mw, "openVideoFile", Q_ARG(QString, clipB));
+    pump(app, 2000);
+    CHECK(mw.abPointA() < 0 && mw.abPointB() < 0,
+          "switch: B clean (no A/B leak from A)");
+
+    // ③ 回 A（hasMemoryState 恢复链：A 点应恢复）
+    QMetaObject::invokeMethod(&mw, "openVideoFile", Q_ARG(QString, clipA));
+    pump(app, 2000);
+    CHECK(mw.abPointA() >= 0, "switch: A point restored via memory state");
+
+    // ④ 补设 B 点 → 切走 → 回 A：两点都在
+    sendKey(Qt::Key_B);
+    CHECK(mw.abPointB() >= 0, "switch: B point set");
+    QMetaObject::invokeMethod(&mw, "openVideoFile", Q_ARG(QString, clipB));
+    pump(app, 2000);
+    QMetaObject::invokeMethod(&mw, "openVideoFile", Q_ARG(QString, clipA));
+    pump(app, 2000);
+    CHECK(mw.abPointA() >= 0 && mw.abPointB() >= 0,
+          "switch: A both points restored");
+}
+
 // ---------------------------------------------------------------------------
 // 亮度分析完整链路（点击「亮度分析」复现路径：打开视频→缓存 vla 询问(Yes)→
 // ROI 恢复→onAnalyze→进度/完成/气泡/自动保存）
@@ -1157,6 +1229,7 @@ int main(int argc, char **argv)
     testSidecarInheritOpen(app);
     testMainWindowBranches(app);
     testCurrentPathSsot(app);
+    testSwitchRestore(app);
     testMultiCamWindow(app);
     testMultiCamCaseFlow(app);
     testLumaFullChain(app);

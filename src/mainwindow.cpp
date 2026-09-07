@@ -287,6 +287,153 @@ void MainWindow::resizeEvent(QResizeEvent *event)
 
 
 
+qint64 MainWindow::abPointA() const
+{
+    return m_chartPanel ? m_chartPanel->abPointA() : -1;
+}
+
+qint64 MainWindow::abPointB() const
+{
+    return m_chartPanel ? m_chartPanel->abPointB() : -1;
+}
+
+void MainWindow::applyRestoredState(const VideoState &st)
+{
+    // v1.17.0 D2：自 openVideoFile hasMemoryState 分支逐字抽取（行为冻结）
+        // 带 roiId 恢复：保持与分析数据 dataEntries 的 roi_id 对齐
+    if (st.regionRoiIds.size() == st.regions.size())
+        m_roiModel->restoreRegions(st.regions, st.regionRoiIds);
+    else {
+        m_roiModel->clearRegions();
+        for (const QRect &rc : st.regions)
+            m_roiModel->addRegion(rc);
+    }
+
+    if (st.polygonRoiIds.size() == st.polygons.size())
+        m_roiModel->restorePolygons(st.polygons, st.polygonRoiIds);
+    else {
+        m_roiModel->clearPolygons();
+        for (const QPolygon &poly : st.polygons)
+            m_roiModel->addPolygon(poly);
+    }
+
+    m_guideLineModel->clearLines();
+    for (const GuideLine &line : st.guideLines)
+        m_guideLineModel->addLine(line);
+
+    m_timelineModel->setData(
+        QVector<qint64>(st.snapshot.timestamps),
+        QVector<QVector<qreal>>(st.snapshot.lumRows()),
+        QVector<DataEntry>(st.snapshot.lumEntries()),
+        st.snapshot.audioData()
+    );
+
+    m_calibration = st.calibration;
+    m_chartPanel->setCalibration(m_calibration);
+    // 校时徽标以 .vla 为 SSOT：空校时模型（旧 v7 迁移 offset=0）同步
+    // 熄灭案件里误亮的 ⏰（用户实测反馈）
+    m_caseManager->updateCalibrationBadge(
+        m_sessionMgr->currentVideoPath(), m_calibration.isEffective(),
+        ProjectIO::calibrationBadgeSummary(m_calibration));
+    m_chartPanel->setLabels(st.labels);
+    m_chartPanel->setChartGuideLinesData(st.chartGuideLines);
+
+    // Restore A/B region
+    if (st.abPointA >= 0) m_chartPanel->setPointA(st.abPointA);
+    if (st.abPointB >= 0) m_chartPanel->setPointB(st.abPointB);
+    if (st.abLoop) m_chartPanel->setABLoop(true);
+
+    if (!st.pinnedRect.isEmpty())
+        m_pinnedRect = st.pinnedRect;
+
+    m_snapshotFusion = st.snapshotFusion;
+    if (st.snapshotFusion.isValid() && !st.snapshotFusion.imageData.isNull()) {
+        m_snapshotOverlay->setSnapshot(st.snapshotFusion.imageData);
+        m_snapshotOverlay->setParameters(
+            st.snapshotFusion.brightness,
+            st.snapshotFusion.contrast,
+            st.snapshotFusion.opacity);
+        m_editBtn->setEnabled(true);
+        m_placeBtn->setEnabled(true);
+    }
+
+    // 恢复播放画面调节（逐视频记忆：亮度/对比度/伽马/色阶/反色/旋转）
+    if (m_adjustPanel) {
+        m_adjustPanel->setValues(st.display,
+                                 st.displayRotation);
+        const QByteArray lut = st.display.buildLut();
+        m_videoWidget->setDisplayAdjust(st.display);
+        m_videoWidget->setDisplayRotation(st.displayRotation);
+        if (m_magnifier) {
+            m_magnifier->setDisplayAdjust(st.display);
+            m_magnifier->setDisplayRotation(st.displayRotation);
+        }
+        if (m_pinned) {
+            m_pinned->setDisplayLut(lut);
+            m_pinned->setDisplayRotation(st.displayRotation);
+        }
+    }
+
+    if (m_spectrogramEnhanced && st.snapshot.hasAudio())
+        m_spectrogramEnhanced->setSpectrogramData(st.snapshot.audioData());
+
+
+}
+
+void MainWindow::resetForNewVideo()
+{
+    // v1.17.0 D2：自 openVideoFile 无状态分支逐字抽取（行为冻结）
+m_roiModel->clearRegions();
+m_roiModel->clearPolygons();
+m_guideLineModel->clearLines();
+m_timelineModel->clearData();
+if (m_spectrogramEnhanced)
+    m_spectrogramEnhanced->clear();
+
+// Also reset chart-level state so labels/time axis/A-B/pinned/fusion
+// from the previous video do not leak into this one.
+m_chartPanel->setLabels({});
+m_chartPanel->clearChartGuideLines();
+m_calibration = TimeCalibration();
+m_chartPanel->setCalibration(m_calibration);
+m_chartPanel->clearAB();
+m_pinnedRect = QRect();
+m_snapshotFusion = SnapshotFusionData();
+// 无状态视频：画面调节回默认（防跨视频泄漏）
+if (m_adjustPanel) {
+    m_adjustPanel->setValues(DisplayAdjust(), 0);
+    m_videoWidget->setDisplayAdjust(DisplayAdjust());
+    m_videoWidget->setDisplayRotation(0);
+    if (m_magnifier)
+        m_magnifier->setDisplayAdjust(DisplayAdjust());
+    if (m_pinned)
+        m_pinned->setDisplayLut(QByteArray());
+}
+if (m_snapshotOverlay)
+    m_snapshotOverlay->clearSnapshot();
+if (m_videoWidget)
+    m_videoWidget->clearSnapshot();
+
+
+}
+
+void MainWindow::enableVideoActions()
+{
+    // v1.17.0 D2：两分支共用的按钮启用块（逐字抽取，消除重复）
+    m_playBtn->setEnabled(true);
+    m_pauseBtn->setEnabled(true);
+    m_stopBtn->setEnabled(true);
+    m_speedBtn->setEnabled(true);
+    m_analyzeBtn->setEnabled(true);
+    m_audioAnalysisBtn->setEnabled(true);
+    m_setTimeBtn->setEnabled(true);
+    m_captureBtn->setEnabled(true);
+    if (m_snapshotBtn)
+        m_snapshotBtn->setEnabled(true);
+    if (m_exportClipBtn)
+        m_exportClipBtn->setEnabled(true);
+}
+
 void MainWindow::openVideoFile(const QString &filePath)
 {
 
@@ -379,97 +526,9 @@ void MainWindow::openVideoFile(const QString &filePath)
         }
         // Check if we have a saved state for this video (memory state takes priority)
         if (openPlan.hasMemoryState) {
-            const VideoState &savedState = openPlan.memoryState;
-            // 带 roiId 恢复：保持与分析数据 dataEntries 的 roi_id 对齐
-            if (savedState.regionRoiIds.size() == savedState.regions.size())
-                m_roiModel->restoreRegions(savedState.regions, savedState.regionRoiIds);
-            else {
-                m_roiModel->clearRegions();
-                for (const QRect &rc : savedState.regions)
-                    m_roiModel->addRegion(rc);
-            }
-
-            if (savedState.polygonRoiIds.size() == savedState.polygons.size())
-                m_roiModel->restorePolygons(savedState.polygons, savedState.polygonRoiIds);
-            else {
-                m_roiModel->clearPolygons();
-                for (const QPolygon &poly : savedState.polygons)
-                    m_roiModel->addPolygon(poly);
-            }
-
-            m_guideLineModel->clearLines();
-            for (const GuideLine &line : savedState.guideLines)
-                m_guideLineModel->addLine(line);
-
-            m_timelineModel->setData(
-                QVector<qint64>(savedState.snapshot.timestamps),
-                QVector<QVector<qreal>>(savedState.snapshot.lumRows()),
-                QVector<DataEntry>(savedState.snapshot.lumEntries()),
-                savedState.snapshot.audioData()
-            );
-
-            m_calibration = savedState.calibration;
-            m_chartPanel->setCalibration(m_calibration);
-            // 校时徽标以 .vla 为 SSOT：空校时模型（旧 v7 迁移 offset=0）同步
-            // 熄灭案件里误亮的 ⏰（用户实测反馈）
-            m_caseManager->updateCalibrationBadge(
-                m_sessionMgr->currentVideoPath(), m_calibration.isEffective(),
-                ProjectIO::calibrationBadgeSummary(m_calibration));
-            m_chartPanel->setLabels(savedState.labels);
-            m_chartPanel->setChartGuideLinesData(savedState.chartGuideLines);
-
-            // Restore A/B region
-            if (savedState.abPointA >= 0) m_chartPanel->setPointA(savedState.abPointA);
-            if (savedState.abPointB >= 0) m_chartPanel->setPointB(savedState.abPointB);
-            if (savedState.abLoop) m_chartPanel->setABLoop(true);
-
-            if (!savedState.pinnedRect.isEmpty())
-                m_pinnedRect = savedState.pinnedRect;
-
-            m_snapshotFusion = savedState.snapshotFusion;
-            if (savedState.snapshotFusion.isValid() && !savedState.snapshotFusion.imageData.isNull()) {
-                m_snapshotOverlay->setSnapshot(savedState.snapshotFusion.imageData);
-                m_snapshotOverlay->setParameters(
-                    savedState.snapshotFusion.brightness,
-                    savedState.snapshotFusion.contrast,
-                    savedState.snapshotFusion.opacity);
-                m_editBtn->setEnabled(true);
-                m_placeBtn->setEnabled(true);
-            }
-
-            // 恢复播放画面调节（逐视频记忆：亮度/对比度/伽马/色阶/反色/旋转）
-            if (m_adjustPanel) {
-                m_adjustPanel->setValues(savedState.display,
-                                         savedState.displayRotation);
-                const QByteArray lut = savedState.display.buildLut();
-                m_videoWidget->setDisplayAdjust(savedState.display);
-                m_videoWidget->setDisplayRotation(savedState.displayRotation);
-                if (m_magnifier) {
-                    m_magnifier->setDisplayAdjust(savedState.display);
-                    m_magnifier->setDisplayRotation(savedState.displayRotation);
-                }
-                if (m_pinned) {
-                    m_pinned->setDisplayLut(lut);
-                    m_pinned->setDisplayRotation(savedState.displayRotation);
-                }
-            }
-
-            if (m_spectrogramEnhanced && savedState.snapshot.hasAudio())
-                m_spectrogramEnhanced->setSpectrogramData(savedState.snapshot.audioData());
-
-            m_playBtn->setEnabled(true);
-            m_pauseBtn->setEnabled(true);
-            m_stopBtn->setEnabled(true);
-            m_speedBtn->setEnabled(true);
-            m_analyzeBtn->setEnabled(true);
-            m_audioAnalysisBtn->setEnabled(true);
-            m_setTimeBtn->setEnabled(true);
-            m_captureBtn->setEnabled(true);
-            if (m_snapshotBtn)
-                m_snapshotBtn->setEnabled(true);
-            if (m_exportClipBtn)
-                m_exportClipBtn->setEnabled(true);
-
+            // v1.17.0 D2：恢复扇出抽为 applyRestoredState（逐字搬移，顺序冻结）
+            applyRestoredState(openPlan.memoryState);
+            enableVideoActions();
             // v1.7.1：案件树高亮正在播放的文件
             if (m_caseDock)
                 m_caseDock->setCurrentVideoPath(m_sessionMgr->currentVideoPath());
@@ -478,49 +537,10 @@ void MainWindow::openVideoFile(const QString &filePath)
         }
 
         // No saved state, clear data and check for .vla cache
-        m_roiModel->clearRegions();
-        m_roiModel->clearPolygons();
-        m_guideLineModel->clearLines();
-        m_timelineModel->clearData();
-        if (m_spectrogramEnhanced)
-            m_spectrogramEnhanced->clear();
+        // v1.17.0 D2：清空扇出抽为 resetForNewVideo（逐字搬移，顺序冻结）
+        resetForNewVideo();
+        enableVideoActions();
 
-        // Also reset chart-level state so labels/time axis/A-B/pinned/fusion
-        // from the previous video do not leak into this one.
-        m_chartPanel->setLabels({});
-        m_chartPanel->clearChartGuideLines();
-        m_calibration = TimeCalibration();
-        m_chartPanel->setCalibration(m_calibration);
-        m_chartPanel->clearAB();
-        m_pinnedRect = QRect();
-        m_snapshotFusion = SnapshotFusionData();
-        // 无状态视频：画面调节回默认（防跨视频泄漏）
-        if (m_adjustPanel) {
-            m_adjustPanel->setValues(DisplayAdjust(), 0);
-            m_videoWidget->setDisplayAdjust(DisplayAdjust());
-            m_videoWidget->setDisplayRotation(0);
-            if (m_magnifier)
-                m_magnifier->setDisplayAdjust(DisplayAdjust());
-            if (m_pinned)
-                m_pinned->setDisplayLut(QByteArray());
-        }
-        if (m_snapshotOverlay)
-            m_snapshotOverlay->clearSnapshot();
-        if (m_videoWidget)
-            m_videoWidget->clearSnapshot();
-
-        m_playBtn->setEnabled(true);
-        m_pauseBtn->setEnabled(true);
-        m_stopBtn->setEnabled(true);
-        m_speedBtn->setEnabled(true);
-        m_analyzeBtn->setEnabled(true);
-        m_audioAnalysisBtn->setEnabled(true);  // v0.3
-        m_setTimeBtn->setEnabled(true);
-        m_captureBtn->setEnabled(true);
-        if (m_snapshotBtn)
-            m_snapshotBtn->setEnabled(true);
-        if (m_exportClipBtn)
-            m_exportClipBtn->setEnabled(true);
 
         // Check for cached .vla file alongside the video（P-31 T2-A：路径/入案判定来自 planOpen）
         if (!openPlan.cacheVlaPath.isEmpty()) {

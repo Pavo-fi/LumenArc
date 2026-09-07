@@ -63,6 +63,9 @@ public:
     /// v1.17.0 P-77（R5）：当前视频路径公开只读入口（真身在 VideoSessionManager SSOT）
     QString currentVideoPath() const
     { return m_sessionMgr ? m_sessionMgr->currentVideoPath() : QString(); }
+    /// v1.17.0 D1：A/B 点只读入口（测试缝：切换/恢复链回归闸 testSwitchRestore 用）
+    qint64 abPointA() const;
+    qint64 abPointB() const;
 
     // v1.8.0 P1a：AnalysisPhase 硬编码两阶段枚举已删（PENDING P-32 勾销）——
     // 分析流程状态由 AnalysisTaskService 状态机持有（R7/R8），MainWindow 仅响应任务信号
@@ -225,6 +228,12 @@ protected:
     /// v1.17.0 P-78（Q5）：18 键快捷键路由（共享处理函数；
     /// eventFilter 本体只经 KeyGuardFilter 转发，不写大 switch）
     bool handleGlobalShortcut(QKeyEvent *e);
+    /// v1.17.0 D2：openVideoFile 恢复扇出（hasMemoryState 分支逐字抽取）
+    void applyRestoredState(const VideoState &st);
+    /// v1.17.0 D2：openVideoFile 无状态清空扇出（逐字抽取）
+    void resetForNewVideo();
+    /// v1.17.0 D2：两分支共用的播放/分析按钮启用块（消除重复）
+    void enableVideoActions();
 
     VideoWidget *m_videoWidget = nullptr;
     MagnifierWidget *m_magnifier = nullptr;
