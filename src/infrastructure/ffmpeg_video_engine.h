@@ -39,7 +39,11 @@ struct SwrContext;
 struct AVPacket;
 struct AVFrame;
 struct AVBufferRef;
-enum AVSampleFormat : int;   // v1.7.1：PCM 增益格式分支（完整定义在 libswresample）
+enum AVSampleFormat;   // v1.7.1：PCM 增益格式分支（完整定义在 libswresample/libavutil）。
+// 2026-09 修订：去掉固定底层类型 `: int`——Clang 严格执法：前向声明带固定类型后，
+// 后续真实定义（FFmpeg 的普通枚举）必须带同一类型，否则 "enumeration previously
+// declared with fixed underlying type"（macOS CI run 34129123727 实锤，engine_test
+// 先含本头再含 avformat.h）。普通前向声明在所有包含顺序/编译器下均合法。
 class QAudioSink;
 class QIODevice;
 
