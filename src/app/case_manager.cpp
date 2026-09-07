@@ -10,7 +10,12 @@
  */
 #include "case_manager.h"
 
-#include <windows.h>   // OpenProcess（锁残留检测，2026-08）
+#ifdef Q_OS_WIN
+#include <windows.h>   // OpenProcess（锁残留检测，2026-08；仅 Windows 可用）
+#else
+#include <cerrno>
+#include <csignal>     // kill(pid, 0)：POSIX 锁残留检测（macOS CI，2026-09）
+#endif
 
 #include <QCoreApplication>
 #include <QCryptographicHash>
@@ -265,12 +270,18 @@ bool CaseManager::isLockStale(const QString &lockPath)
     }
     if (pid <= 0)
         return true;
+#ifdef Q_OS_WIN
     HANDLE h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE,
                            DWORD(pid));
     if (!h)
         return true;   // 进程不存在或无权访问 → 残留
     CloseHandle(h);
     return false;
+#else
+    if (::kill(static_cast<pid_t>(pid), 0) == 0)
+        return false;  // 进程存在 → 非残留
+    return errno == ESRCH;   // 无权限（EPERM）说明进程仍在 → 非残留
+#endif
 }
 
 void CaseManager::removeLock()

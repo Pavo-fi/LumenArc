@@ -45,6 +45,7 @@ extern "C" {
 #include <libavutil/hwcontext.h>
 #include <libswscale/swscale.h>
 #include <libswresample/swresample.h>
+#include "infrastructure/ffmpeg_compat.h"   // AVSampleFormat（8.0 头改名兼容）
 }
 
 #ifdef Q_OS_WIN

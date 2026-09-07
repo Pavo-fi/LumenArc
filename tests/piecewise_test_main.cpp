@@ -27,11 +27,11 @@
 static int g_failures = 0;
 static int g_checks = 0;
 
-#define CHECK(cond) do { \
+#define CHECK(cond, msg) do { \
     ++g_checks; \
     if (!(cond)) { \
         ++g_failures; \
-        fprintf(stderr, "FAIL %s:%d %s\n", __FILE__, __LINE__, #cond); \
+        fprintf(stderr, "FAIL %s:%d %s\n", __FILE__, __LINE__, msg); \
     } \
 } while (0)
 
@@ -60,19 +60,19 @@ static void testEmptyAndSingle()
 {
     PiecewiseDetectReport rep;
     auto map = PiecewiseTimeMap::detect({}, 60000, &rep);
-    CHECK(!map.isValid());
-    CHECK(rep.segmentCount == 0);
+    CHECK(!map.isValid(), "!map.isValid()");
+    CHECK(rep.segmentCount == 0, "rep.segmentCount == 0");
 
     map = PiecewiseTimeMap::detect({pt(1000, 1784700002000LL)}, 60000, &rep);
-    CHECK(map.isValid());
-    CHECK(map.size() == 1);
-    CHECK(map.segments[0].rate == 1.0);
-    CHECK(map.segments[0].streamStartMs == 1000);
-    CHECK(!rep.speedVariant);
+    CHECK(map.isValid(), "map.isValid()");
+    CHECK(map.size() == 1, "map.size() == 1");
+    CHECK(map.segments[0].rate == 1.0, "map.segments[0].rate == 1.0");
+    CHECK(map.segments[0].streamStartMs == 1000, "map.segments[0].streamStartMs == 1000");
+    CHECK(!rep.speedVariant, "!rep.speedVariant");
 
     // 无效测点过滤
     map = PiecewiseTimeMap::detect({pt(-1, 0), pt(1000, 0)}, 60000, &rep);
-    CHECK(!map.isValid());
+    CHECK(!map.isValid(), "!map.isValid()");
 }
 
 static void testSingleSegmentNormal()
@@ -83,12 +83,12 @@ static void testSingleSegmentNormal()
     fillSegment(pts, base, 1.0, 0, 3600000, 60000);
     PiecewiseDetectReport rep;
     auto map = PiecewiseTimeMap::detect(pts, 3600000, &rep);
-    CHECK(map.isValid());
-    CHECK(map.size() == 1);
-    CHECK(std::fabs(map.segments[0].rate - 1.0) < 1e-9);
-    CHECK(!rep.speedVariant);
-    CHECK(rep.boundaryCount == 0);
-    CHECK(std::fabs(rep.totalWallSpanSec - 3600.0) < 1.0);
+    CHECK(map.isValid(), "map.isValid()");
+    CHECK(map.size() == 1, "map.size() == 1");
+    CHECK(std::fabs(map.segments[0].rate - 1.0) < 1e-9, "std::fabs(map.segments[0].rate - 1.0) < 1e-9");
+    CHECK(!rep.speedVariant, "!rep.speedVariant");
+    CHECK(rep.boundaryCount == 0, "rep.boundaryCount == 0");
+    CHECK(std::fabs(rep.totalWallSpanSec - 3600.0) < 1.0, "std::fabs(rep.totalWallSpanSec - 3600.0) < 1.0");
 }
 
 static void testOverallSpeedVariant()
@@ -99,10 +99,10 @@ static void testOverallSpeedVariant()
     fillSegment(pts, base, 2.0, 0, 1800000, 60000);   // 30min 流内 = 60min OSD
     PiecewiseDetectReport rep;
     auto map = PiecewiseTimeMap::detect(pts, 1800000, &rep);
-    CHECK(map.isValid());
-    CHECK(map.size() == 1);
-    CHECK(rep.speedVariant);
-    CHECK(std::fabs(rep.overallRate - 2.0) < 1e-6);
+    CHECK(map.isValid(), "map.isValid()");
+    CHECK(map.size() == 1, "map.size() == 1");
+    CHECK(rep.speedVariant, "rep.speedVariant");
+    CHECK(std::fabs(rep.overallRate - 2.0) < 1e-6, "std::fabs(rep.overallRate - 2.0) < 1e-6");
 }
 
 static void testThreeSegmentBoundaries()
@@ -128,18 +128,18 @@ static void testThreeSegmentBoundaries()
     }
     PiecewiseDetectReport rep;
     auto map = PiecewiseTimeMap::detect(pts, 3600000, &rep);
-    CHECK(map.isValid());
-    CHECK(rep.speedVariant);
-    CHECK(map.size() == 3);
+    CHECK(map.isValid(), "map.isValid()");
+    CHECK(rep.speedVariant, "rep.speedVariant");
+    CHECK(map.size() == 3, "map.size() == 3");
     if (map.size() == 3) {
-        CHECK(std::fabs(map.segments[0].rate - 1.0) < 1e-6);
-        CHECK(std::fabs(map.segments[1].rate - 2.0) < 1e-6);
-        CHECK(std::fabs(map.segments[2].rate - 1.0) < 1e-6);
+        CHECK(std::fabs(map.segments[0].rate - 1.0) < 1e-6, "std::fabs(map.segments[0].rate - 1.0) < 1e-6");
+        CHECK(std::fabs(map.segments[1].rate - 2.0) < 1e-6, "std::fabs(map.segments[1].rate - 2.0) < 1e-6");
+        CHECK(std::fabs(map.segments[2].rate - 1.0) < 1e-6, "std::fabs(map.segments[2].rate - 1.0) < 1e-6");
         // 边界位置误差 ≤ 2s（加密步长 1s 内）
-        CHECK(std::llabs(map.segments[1].streamStartMs - 1200000) <= 2000);
-        CHECK(std::llabs(map.segments[2].streamStartMs - 2400000) <= 2000);
+        CHECK(std::llabs(map.segments[1].streamStartMs - 1200000) <= 2000, "std::llabs(map.segments[1].streamStartMs - 1200000) <= 2000");
+        CHECK(std::llabs(map.segments[2].streamStartMs - 2400000) <= 2000, "std::llabs(map.segments[2].streamStartMs - 2400000) <= 2000");
     }
-    CHECK(rep.boundaryCount == 2);
+    CHECK(rep.boundaryCount == 2, "rep.boundaryCount == 2");
 }
 
 static void testNoiseNoFalseBoundary()
@@ -153,10 +153,10 @@ static void testNoiseNoFalseBoundary()
     }
     PiecewiseDetectReport rep;
     auto map = PiecewiseTimeMap::detect(pts, 3600000, &rep);
-    CHECK(map.isValid());
-    CHECK(map.size() == 1);
-    CHECK(!rep.speedVariant);
-    CHECK(std::fabs(map.segments[0].rate - 1.0) < 1e-3);
+    CHECK(map.isValid(), "map.isValid()");
+    CHECK(map.size() == 1, "map.size() == 1");
+    CHECK(!rep.speedVariant, "!rep.speedVariant");
+    CHECK(std::fabs(map.segments[0].rate - 1.0) < 1e-3, "std::fabs(map.segments[0].rate - 1.0) < 1e-3");
 }
 
 // v1.12.8（天河案 merged_concat 实测复现）：正常 rate=1 文件 + 月份位
@@ -226,15 +226,15 @@ static void testRoundTrip()
     fillSegment(pts, base, 1.0, 0, 1000000, 60000);
     fillSegment(pts, base + 1000000, 2.0, 1000000, 2000000, 60000);
     auto map = PiecewiseTimeMap::detect(pts, 2000000);
-    CHECK(map.isValid());
-    CHECK(map.size() == 2);
+    CHECK(map.isValid(), "map.isValid()");
+    CHECK(map.size() == 2, "map.size() == 2");
     for (qint64 s = 0; s <= 2000000; s += 37001) {
         const qint64 w = map.wallMsOf(s);
         const qint64 sBack = map.streamMsOf(w);
-        CHECK(std::llabs(sBack - s) <= 2000);   // 秒级量化内往返
+        CHECK(std::llabs(sBack - s) <= 2000, "std::llabs(sBack - s) <= 2000");   // 秒级量化内往返
     }
     // 末段反解（超出末段墙钟夹取）
-    CHECK(map.streamMsOf(base + 1000000 + 2 * 500000) == 1500000);
+    CHECK(map.streamMsOf(base + 1000000 + 2 * 500000) == 1500000, "map.streamMsOf(base + 1000000 + 2 * 500000) == 1500000");
 }
 
 static void testJsonRoundTrip()
@@ -246,12 +246,12 @@ static void testJsonRoundTrip()
     auto map = PiecewiseTimeMap::detect(pts, 2000000);
     const QJsonArray arr = map.toJson();
     auto map2 = PiecewiseTimeMap::fromJson(arr, 2000000);
-    CHECK(map2.size() == map.size());
+    CHECK(map2.size() == map.size(), "map2.size() == map.size()");
     if (map2.size() == map.size()) {
         for (int i = 0; i < map.size(); ++i) {
-            CHECK(map2.segments[i].streamStartMs == map.segments[i].streamStartMs);
-            CHECK(map2.segments[i].wallStartMs == map.segments[i].wallStartMs);
-            CHECK(std::fabs(map2.segments[i].rate - map.segments[i].rate) < 1e-9);
+            CHECK(map2.segments[i].streamStartMs == map.segments[i].streamStartMs, "map2.segments[i].streamStartMs == map.segments[i].streamStartMs");
+            CHECK(map2.segments[i].wallStartMs == map.segments[i].wallStartMs, "map2.segments[i].wallStartMs == map.segments[i].wallStartMs");
+            CHECK(std::fabs(map2.segments[i].rate - map.segments[i].rate) < 1e-9, "std::fabs(map2.segments[i].rate - map.segments[i].rate) < 1e-9");
         }
     }
 }
@@ -272,46 +272,46 @@ static void testGapSemantics()
 
     // segmentWallEndMs：段0=1000000+60000×1.0=1060000；段1=1780000；
     // 末段=1781000+60000×0.5=1811000
-    CHECK(pw.segmentWallEndMs(0) == 1060000);
-    CHECK(pw.segmentWallEndMs(1) == 1780000);
-    CHECK(pw.segmentWallEndMs(2) == 1811000);
+    CHECK(pw.segmentWallEndMs(0) == 1060000, "pw.segmentWallEndMs(0) == 1060000");
+    CHECK(pw.segmentWallEndMs(1) == 1780000, "pw.segmentWallEndMs(1) == 1780000");
+    CHECK(pw.segmentWallEndMs(2) == 1811000, "pw.segmentWallEndMs(2) == 1811000");
     pw.streamEndMs = 0;
-    CHECK(pw.segmentWallEndMs(2) == -1);   // 末段无右边界 → 无上界
+    CHECK(pw.segmentWallEndMs(2) == -1, "pw.segmentWallEndMs(2) == -1");   // 末段无右边界 → 无上界
     pw.streamEndMs = 180000;
 
     // gaps()：仅 段0→段1 一处（660s）；段1→段2 缝隙 1s 在容差内不报
     const auto gaps = pw.gaps();
-    CHECK(gaps.size() == 1);
+    CHECK(gaps.size() == 1, "gaps.size() == 1");
     if (!gaps.isEmpty()) {
-        CHECK(gaps[0].streamPosMs == 60000);
-        CHECK(gaps[0].wallFromMs == 1060000);
-        CHECK(gaps[0].wallToMs == 1720000);
-        CHECK(gaps[0].gapWallMs == 660000);
+        CHECK(gaps[0].streamPosMs == 60000, "gaps[0].streamPosMs == 60000");
+        CHECK(gaps[0].wallFromMs == 1060000, "gaps[0].wallFromMs == 1060000");
+        CHECK(gaps[0].wallToMs == 1720000, "gaps[0].wallToMs == 1720000");
+        CHECK(gaps[0].gapWallMs == 660000, "gaps[0].gapWallMs == 660000");
     }
-    CHECK(pw.gaps(700000).isEmpty());   // 容差大过缺口 → 不报
+    CHECK(pw.gaps(700000).isEmpty(), "pw.gaps(700000).isEmpty()");   // 容差大过缺口 → 不报
 
     // inGap：缺口内 true；段内/缺口边界容差带/首段前 false
-    CHECK(pw.inGap(1100000));
-    CHECK(!pw.inGap(1059000));
-    CHECK(!pw.inGap(1060000 + 1500));   // 容差带内（2s）不判缺口
-    CHECK(!pw.inGap(1720000));
-    CHECK(!pw.inGap(999999));
+    CHECK(pw.inGap(1100000), "pw.inGap(1100000)");
+    CHECK(!pw.inGap(1059000), "!pw.inGap(1059000)");
+    CHECK(!pw.inGap(1060000 + 1500), "!pw.inGap(1060000 + 1500)");   // 容差带内（2s）不判缺口
+    CHECK(!pw.inGap(1720000), "!pw.inGap(1720000)");
+    CHECK(!pw.inGap(999999), "!pw.inGap(999999)");
 
     // streamMsOf 缺口夹取：缺口内墙钟 → 缺口后段起点（跳过没录的）
-    CHECK(pw.streamMsOf(1100000) == 60000);
-    CHECK(pw.streamMsOf(1719999) == 60000);
+    CHECK(pw.streamMsOf(1100000) == 60000, "pw.streamMsOf(1100000) == 60000");
+    CHECK(pw.streamMsOf(1719999) == 60000, "pw.streamMsOf(1719999) == 60000");
     // 段内墙钟正常反解；段边界两侧连续
-    CHECK(pw.streamMsOf(1030000) == 30000);
-    CHECK(pw.streamMsOf(1720000) == 60000);   // 后段起点本身 → 后段
-    CHECK(pw.streamMsOf(1780000) == 120000);
+    CHECK(pw.streamMsOf(1030000) == 30000, "pw.streamMsOf(1030000) == 30000");
+    CHECK(pw.streamMsOf(1720000) == 60000, "pw.streamMsOf(1720000) == 60000");   // 后段起点本身 → 后段
+    CHECK(pw.streamMsOf(1780000) == 120000, "pw.streamMsOf(1780000) == 120000");
     // 首段前/末段后：边界外推语义不变
-    CHECK(pw.streamMsOf(990000) == -10000);
-    CHECK(pw.streamMsOf(1821000) == 120000 + qint64((1821000-1781000)/0.5));
+    CHECK(pw.streamMsOf(990000) == -10000, "pw.streamMsOf(990000) == -10000");
+    CHECK(pw.streamMsOf(1821000) == 120000 + qint64((1821000-1781000)/0.5), "pw.streamMsOf(1821000) == 120000 + qint64((1821000-1781000)/0.5)");
 
     // wallMsOf 不受缺口语义影响（单调跳变即真实）
-    CHECK(pw.wallMsOf(0) == 1000000);
-    CHECK(pw.wallMsOf(59999) < 1060000);
-    CHECK(pw.wallMsOf(60000) == 1720000);
+    CHECK(pw.wallMsOf(0) == 1000000, "pw.wallMsOf(0) == 1000000");
+    CHECK(pw.wallMsOf(59999) < 1060000, "pw.wallMsOf(59999) < 1060000");
+    CHECK(pw.wallMsOf(60000) == 1720000, "pw.wallMsOf(60000) == 1720000");
 }
 
 int main(int argc, char **argv)

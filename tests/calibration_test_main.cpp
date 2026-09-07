@@ -27,11 +27,11 @@
 static int g_failures = 0;
 static int g_checks = 0;
 
-#define CHECK(cond) do { \
+#define CHECK(cond, msg) do { \
     ++g_checks; \
     if (!(cond)) { \
         ++g_failures; \
-        fprintf(stderr, "FAIL %s:%d %s\n", __FILE__, __LINE__, #cond); \
+        fprintf(stderr, "FAIL %s:%d %s\n", __FILE__, __LINE__, msg); \
     } \
 } while (0)
 
@@ -50,33 +50,33 @@ static void testEmptyAndExcluded()
 {
     QVector<TimeCalibration::Sample> none;
     auto fr = TimeCalibration::fit(none);
-    CHECK(!fr.ok && fr.pointsUsed == 0);
+    CHECK(!fr.ok && fr.pointsUsed == 0, "!fr.ok && fr.pointsUsed == 0");
 
     // 全部排除 → 同样无效
     auto s1 = pt(0, kOff), s2 = pt(60000, kOff + 60000);
     s1.used = false; s2.used = false;
     fr = TimeCalibration::fit({s1, s2});
-    CHECK(!fr.ok && fr.pointsUsed == 0);
+    CHECK(!fr.ok && fr.pointsUsed == 0, "!fr.ok && fr.pointsUsed == 0");
 
     // 失败拟合不得改写现有校时值
     TimeCalibration c;
     c.offsetMs = 12345;
     c.applyFit(fr);
-    CHECK(c.offsetMs == 12345 && c.rate == 1.0 && !c.rateApplied);
+    CHECK(c.offsetMs == 12345 && c.rate == 1.0 && !c.rateApplied, "c.offsetMs == 12345 && c.rate == 1.0 && !c.rateApplied");
 }
 
 static void testSinglePoint()
 {
     auto fr = TimeCalibration::fit({pt(5000, kOff + 5000)});
-    CHECK(fr.ok && fr.pointsUsed == 1);
-    CHECK(fr.rate == 1.0 && !fr.rateSignificant);
-    CHECK(fr.offsetMs == kOff);
+    CHECK(fr.ok && fr.pointsUsed == 1, "fr.ok && fr.pointsUsed == 1");
+    CHECK(fr.rate == 1.0 && !fr.rateSignificant, "fr.rate == 1.0 && !fr.rateSignificant");
+    CHECK(fr.offsetMs == kOff, "fr.offsetMs == kOff");
 
     TimeCalibration c;
     c.applyFit(fr);
-    CHECK(!c.rateApplied);
-    CHECK(c.wallMsOf(5000) == kOff + 5000);
-    CHECK(c.wallMsOf(0) == kOff);
+    CHECK(!c.rateApplied, "!c.rateApplied");
+    CHECK(c.wallMsOf(5000) == kOff + 5000, "c.wallMsOf(5000) == kOff + 5000");
+    CHECK(c.wallMsOf(0) == kOff, "c.wallMsOf(0) == kOff");
 }
 
 static void testTwoPointsConservative()
@@ -87,10 +87,10 @@ static void testTwoPointsConservative()
     auto fr = TimeCalibration::fit({
         pt(0, kOff),
         pt(3600000, kOff + static_cast<qint64>(std::llround(rate * 3600000.0)))});
-    CHECK(fr.ok && fr.pointsUsed == 2);
-    CHECK(std::fabs(fr.rate - rate) < 1e-6);
-    CHECK(fr.sigmaRate > 0);
-    CHECK(!fr.rateSignificant);   // 两点无法区分漂移与 OCR 误差
+    CHECK(fr.ok && fr.pointsUsed == 2, "fr.ok && fr.pointsUsed == 2");
+    CHECK(std::fabs(fr.rate - rate) < 1e-6, "std::fabs(fr.rate - rate) < 1e-6");
+    CHECK(fr.sigmaRate > 0, "fr.sigmaRate > 0");
+    CHECK(!fr.rateSignificant, "!fr.rateSignificant");   // 两点无法区分漂移与 OCR 误差
 }
 
 static void testThreePointsDriftApplied()
@@ -102,22 +102,22 @@ static void testThreePointsDriftApplied()
         pt(0, kOff),
         pt(x1, kOff + static_cast<qint64>(std::llround(rate * x1))),
         pt(x2, kOff + static_cast<qint64>(std::llround(rate * x2)))});
-    CHECK(fr.ok && fr.pointsUsed == 3);
-    CHECK(std::fabs(fr.rate - rate) < 1e-6);
-    CHECK(fr.rateSignificant && fr.rateSane);
-    CHECK(fr.warning == TimeCalibration::FitWarning::None);
+    CHECK(fr.ok && fr.pointsUsed == 3, "fr.ok && fr.pointsUsed == 3");
+    CHECK(std::fabs(fr.rate - rate) < 1e-6, "std::fabs(fr.rate - rate) < 1e-6");
+    CHECK(fr.rateSignificant && fr.rateSane, "fr.rateSignificant && fr.rateSane");
+    CHECK(fr.warning == TimeCalibration::FitWarning::None, "fr.warning == TimeCalibration::FitWarning::None");
 
     TimeCalibration c;
     c.applyFit(fr);
-    CHECK(c.rateApplied);
-    CHECK(std::fabs(c.driftSecondsPerDay() - 34.56) < 0.5);
+    CHECK(c.rateApplied, "c.rateApplied");
+    CHECK(std::fabs(c.driftSecondsPerDay() - 34.56) < 0.5, "std::fabs(c.driftSecondsPerDay() - 34.56) < 0.5");
     // 各测点报时误差 ≤ 2ms
-    CHECK(std::fabs(c.wallMsOf(0) - kOff) <= 2);
-    CHECK(std::fabs(c.wallMsOf(x2) - (kOff + std::llround(rate * x2))) <= 2);
+    CHECK(std::fabs(c.wallMsOf(0) - kOff) <= 2, "std::fabs(c.wallMsOf(0) - kOff) <= 2");
+    CHECK(std::fabs(c.wallMsOf(x2) - (kOff + std::llround(rate * x2))) <= 2, "std::fabs(c.wallMsOf(x2) - (kOff + std::llround(rate * x2))) <= 2");
     // 修正前后对比：不修正时中段误差 ≈ 563ms 量级，修正后 ≤ 2ms
     const qint64 naive = kOff + x2;              // rate=1 的推算
     const qint64 truth = kOff + std::llround(rate * x2);
-    CHECK(truth - naive > 1000);                 // 漂移真实存在（>1s）
+    CHECK(truth - naive > 1000, "truth - naive > 1000");                 // 漂移真实存在（>1s）
 }
 
 static void testNoDriftNotSignificant()
@@ -125,9 +125,9 @@ static void testNoDriftNotSignificant()
     const qint64 x1 = 1410000, x2 = 2820000;
     auto fr = TimeCalibration::fit({
         pt(0, kOff), pt(x1, kOff + x1), pt(x2, kOff + x2)});
-    CHECK(fr.ok);
-    CHECK(fr.rate == 1.0);
-    CHECK(!fr.rateSignificant);
+    CHECK(fr.ok, "fr.ok");
+    CHECK(fr.rate == 1.0, "fr.rate == 1.0");
+    CHECK(!fr.rateSignificant, "!fr.rateSignificant");
 }
 
 static void testMinThresholdBoundary()
@@ -142,8 +142,8 @@ static void testMinThresholdBoundary()
         pt(0, kOff),
         pt(x1, kOff + static_cast<qint64>(std::llround(rLow * x1))),
         pt(x2, kOff + static_cast<qint64>(std::llround(rLow * x2)))});
-    CHECK(fr.ok && !fr.rateSignificant);
-    CHECK(std::fabs(fr.rate - rLow) < 1e-9);     // 拟合仍精确解出（供报告）
+    CHECK(fr.ok && !fr.rateSignificant, "fr.ok && !fr.rateSignificant");
+    CHECK(std::fabs(fr.rate - rLow) < 1e-9, "std::fabs(fr.rate - rLow) < 1e-9");     // 拟合仍精确解出（供报告）
 
     // 40 秒/天：超过 10 秒/天下限且 σ≈0 → 显著
     const double rHigh = 1.0 + 40.0 / 86400000.0;
@@ -151,7 +151,7 @@ static void testMinThresholdBoundary()
         pt(0, kOff),
         pt(x1, kOff + static_cast<qint64>(std::llround(rHigh * x1))),
         pt(x2, kOff + static_cast<qint64>(std::llround(rHigh * x2)))});
-    CHECK(fr.ok && fr.rateSignificant);
+    CHECK(fr.ok && fr.rateSignificant, "fr.ok && fr.rateSignificant");
 }
 
 static void testNoisyStrongDrift()
@@ -163,11 +163,11 @@ static void testNoisyStrongDrift()
         pt(0,  kOff + 200),
         pt(x1, kOff + static_cast<qint64>(std::llround(rate * x1)) - 150),
         pt(x2, kOff + static_cast<qint64>(std::llround(rate * x2)) + 100)});
-    CHECK(fr.ok);
-    CHECK(std::fabs(fr.rate - rate) < 1e-4);
-    CHECK(fr.rateSignificant);
-    CHECK(fr.sigmaRate > 0 && fr.sigmaOffsetMs > 0);
-    CHECK(fr.maxResidualMs <= 250);
+    CHECK(fr.ok, "fr.ok");
+    CHECK(std::fabs(fr.rate - rate) < 1e-4, "std::fabs(fr.rate - rate) < 1e-4");
+    CHECK(fr.rateSignificant, "fr.rateSignificant");
+    CHECK(fr.sigmaRate > 0 && fr.sigmaOffsetMs > 0, "fr.sigmaRate > 0 && fr.sigmaOffsetMs > 0");
+    CHECK(fr.maxResidualMs <= 250, "fr.maxResidualMs <= 250");
 }
 
 static void testOutlierExcludeRefit()
@@ -182,17 +182,17 @@ static void testOutlierExcludeRefit()
         pt(x3, kOff + static_cast<qint64>(std::llround(rate * x3)))};
 
     auto fr = TimeCalibration::fit(samples);
-    CHECK(fr.ok);
-    CHECK(fr.maxResidualMs > TimeCalibration::kOutlierResidualMs);
-    CHECK(fr.warning == TimeCalibration::FitWarning::OutlierSuspected);
+    CHECK(fr.ok, "fr.ok");
+    CHECK(fr.maxResidualMs > TimeCalibration::kOutlierResidualMs, "fr.maxResidualMs > TimeCalibration::kOutlierResidualMs");
+    CHECK(fr.warning == TimeCalibration::FitWarning::OutlierSuspected, "fr.warning == TimeCalibration::FitWarning::OutlierSuspected");
 
     // 剔除野点重拟合 → 恢复干净
     samples[2].used = false;
     fr = TimeCalibration::fit(samples);
-    CHECK(fr.ok && fr.pointsUsed == 3);
-    CHECK(fr.warning == TimeCalibration::FitWarning::None);
-    CHECK(std::fabs(fr.rate - rate) < 1e-6);
-    CHECK(fr.rateSignificant);
+    CHECK(fr.ok && fr.pointsUsed == 3, "fr.ok && fr.pointsUsed == 3");
+    CHECK(fr.warning == TimeCalibration::FitWarning::None, "fr.warning == TimeCalibration::FitWarning::None");
+    CHECK(std::fabs(fr.rate - rate) < 1e-6, "std::fabs(fr.rate - rate) < 1e-6");
+    CHECK(fr.rateSignificant, "fr.rateSignificant");
 }
 
 static void testInsaneRateRejected()
@@ -200,15 +200,15 @@ static void testInsaneRateRejected()
     // OCR 误读日期（wall 翻倍）→ 速率荒谬，拒绝应用但保留拟合值供诊断
     auto fr = TimeCalibration::fit({
         pt(0, kOff), pt(3600000, kOff + 2 * 3600000)});
-    CHECK(fr.ok && fr.rate == 2.0);
-    CHECK(!fr.rateSane);
-    CHECK(fr.warning == TimeCalibration::FitWarning::RateInsane);
+    CHECK(fr.ok && fr.rate == 2.0, "fr.ok && fr.rate == 2.0");
+    CHECK(!fr.rateSane, "!fr.rateSane");
+    CHECK(fr.warning == TimeCalibration::FitWarning::RateInsane, "fr.warning == TimeCalibration::FitWarning::RateInsane");
 
     TimeCalibration c;
     c.applyFit(fr);
-    CHECK(!c.rateApplied);              // 拒绝应用
-    CHECK(c.effectiveRate() == 1.0);    // 换算按 1.0
-    CHECK(c.rate == 2.0);               // 拟合值仍留档（报告/诊断）
+    CHECK(!c.rateApplied, "!c.rateApplied");              // 拒绝应用
+    CHECK(c.effectiveRate() == 1.0, "c.effectiveRate() == 1.0");    // 换算按 1.0
+    CHECK(c.rate == 2.0, "c.rate == 2.0");               // 拟合值仍留档（报告/诊断）
 }
 
 static void testExcludeDownToSingle()
@@ -218,16 +218,16 @@ static void testExcludeDownToSingle()
     auto s3 = pt(2820000, kOff + 2820000);
     s2.used = false; s3.used = false;
     auto fr = TimeCalibration::fit({s1, s2, s3});
-    CHECK(fr.ok && fr.pointsUsed == 1);
-    CHECK(fr.rate == 1.0 && fr.offsetMs == kOff);
+    CHECK(fr.ok && fr.pointsUsed == 1, "fr.ok && fr.pointsUsed == 1");
+    CHECK(fr.rate == 1.0 && fr.offsetMs == kOff, "fr.rate == 1.0 && fr.offsetMs == kOff");
 }
 
 static void testSameStreamPosition()
 {
     // 两个测点同一流内位置 → sxx=0 退化单点
     auto fr = TimeCalibration::fit({pt(5000, kOff + 5000), pt(5000, kOff + 5100)});
-    CHECK(fr.ok && fr.pointsUsed == 1);
-    CHECK(fr.rate == 1.0);
+    CHECK(fr.ok && fr.pointsUsed == 1, "fr.ok && fr.pointsUsed == 1");
+    CHECK(fr.rate == 1.0, "fr.rate == 1.0");
 }
 
 static void testRoundTrip()
@@ -239,21 +239,21 @@ static void testRoundTrip()
     c.rateApplied = true;
     const qint64 x = 2820000;
     const qint64 wall = c.wallMsOf(x);
-    CHECK(std::fabs(c.streamMsOf(wall) - x) <= 1);
+    CHECK(std::fabs(c.streamMsOf(wall) - x) <= 1, "std::fabs(c.streamMsOf(wall) - x) <= 1");
 
     // rateApplied=false → 双向都按 1.0（一致退化）
     c.rateApplied = false;
-    CHECK(c.wallMsOf(x) == kOff + x);
-    CHECK(c.streamMsOf(kOff + x) == x);
+    CHECK(c.wallMsOf(x) == kOff + x, "c.wallMsOf(x) == kOff + x");
+    CHECK(c.streamMsOf(kOff + x) == x, "c.streamMsOf(kOff + x) == x");
 }
 
 static void testLegacyMigration()
 {
     auto c = TimeCalibration::fromLegacyOffset(3600000);
-    CHECK(c.source == TimeCalibration::Source::Manual);
-    CHECK(!c.dateKnown);
-    CHECK(c.rate == 1.0 && !c.rateApplied);
-    CHECK(c.wallMsOf(5000) == 3605000);
+    CHECK(c.source == TimeCalibration::Source::Manual, "c.source == TimeCalibration::Source::Manual");
+    CHECK(!c.dateKnown, "!c.dateKnown");
+    CHECK(c.rate == 1.0 && !c.rateApplied, "c.rate == 1.0 && !c.rateApplied");
+    CHECK(c.wallMsOf(5000) == 3605000, "c.wallMsOf(5000) == 3605000");
 
     // 用户实测回归：time_offset=0 的旧数据 = 未校时，不产生空模型
     // （空模型会让案件徽标误亮 ⏰ 而图表毫无变化）
@@ -279,14 +279,14 @@ static void testTruthOffset()
     c.truthSet = true;
     c.truthCheckedAtMs = kOff + 86400000;
     // 监控时间不变
-    CHECK(c.wallMsOf(0) == kOff);
+    CHECK(c.wallMsOf(0) == kOff, "c.wallMsOf(0) == kOff");
     // 北京时间 = 监控 + 330s（全局应用）
-    CHECK(c.beijingMsOf(0) == kOff + 330000);
-    CHECK(c.beijingMsOf(2820000) == kOff + 2820000 + 330000);
+    CHECK(c.beijingMsOf(0) == kOff + 330000, "c.beijingMsOf(0) == kOff + 330000");
+    CHECK(c.beijingMsOf(2820000) == kOff + 2820000 + 330000, "c.beijingMsOf(2820000) == kOff + 2820000 + 330000");
     // 未校验时 truthOffsetMs=0 → 北京时间 == 监控时间（安全退化）
     TimeCalibration d;
     d.offsetMs = kOff;
-    CHECK(d.beijingMsOf(1000) == d.wallMsOf(1000));
+    CHECK(d.beijingMsOf(1000) == d.wallMsOf(1000), "d.beijingMsOf(1000) == d.wallMsOf(1000)");
 }
 
 static void testJsonRoundTrip()
@@ -311,19 +311,19 @@ static void testJsonRoundTrip()
     c.samples[1].used = false;
 
     const TimeCalibration r = TimeCalibration::fromJson(c.toJson());
-    CHECK(r.source == c.source);
-    CHECK(r.offsetMs == c.offsetMs);
-    CHECK(std::fabs(r.rate - c.rate) < 1e-15);
-    CHECK(r.rateApplied == c.rateApplied);
-    CHECK(r.dateKnown == c.dateKnown);
-    CHECK(r.truthSet && r.truthOffsetMs == 300000);
-    CHECK(r.truthNote == c.truthNote);
-    CHECK(r.samples.size() == 2);
-    CHECK(r.samples[0].rawText == c.samples[0].rawText);
-    CHECK(r.samples[0].frameImgPath == c.samples[0].frameImgPath);
-    CHECK(r.samples[1].used == false);
+    CHECK(r.source == c.source, "r.source == c.source");
+    CHECK(r.offsetMs == c.offsetMs, "r.offsetMs == c.offsetMs");
+    CHECK(std::fabs(r.rate - c.rate) < 1e-15, "std::fabs(r.rate - c.rate) < 1e-15");
+    CHECK(r.rateApplied == c.rateApplied, "r.rateApplied == c.rateApplied");
+    CHECK(r.dateKnown == c.dateKnown, "r.dateKnown == c.dateKnown");
+    CHECK(r.truthSet && r.truthOffsetMs == 300000, "r.truthSet && r.truthOffsetMs == 300000");
+    CHECK(r.truthNote == c.truthNote, "r.truthNote == c.truthNote");
+    CHECK(r.samples.size() == 2, "r.samples.size() == 2");
+    CHECK(r.samples[0].rawText == c.samples[0].rawText, "r.samples[0].rawText == c.samples[0].rawText");
+    CHECK(r.samples[0].frameImgPath == c.samples[0].frameImgPath, "r.samples[0].frameImgPath == c.samples[0].frameImgPath");
+    CHECK(r.samples[1].used == false, "r.samples[1].used == false");
     // 空对象 → None
-    CHECK(TimeCalibration::fromJson({}).source == TimeCalibration::Source::None);
+    CHECK(TimeCalibration::fromJson({}).source == TimeCalibration::Source::None, "TimeCalibration::fromJson({}).source == TimeCalibration::Source::None");
 }
 
 // ---------------------------------------------------------------------------
@@ -342,14 +342,14 @@ static void testTruthTimeParse()
     {
         const auto r = parseTruthTimeText(
             {QStringLiteral("2026年07月22日 星期三 12:25:47")}, day);
-        CHECK(r.ok && r.dateFromText && r.wallMs == expectMon);
-        CHECK(r.matchedText.contains(QStringLiteral("12:25:47")));
+        CHECK(r.ok && r.dateFromText && r.wallMs == expectMon, "r.ok && r.dateFromText && r.wallMs == expectMon");
+        CHECK(r.matchedText.contains(QStringLiteral("12:25:47")), "condition failed (L346)");
     }
     // ① 单行完整（横杠格式 + 毫秒小数）
     {
         const auto r = parseTruthTimeText(
             {QStringLiteral("2026-07-22 12:25:47.500")}, day);
-        CHECK(r.ok && r.wallMs == expectMon + 500);
+        CHECK(r.ok && r.wallMs == expectMon + 500, "r.ok && r.wallMs == expectMon + 500");
     }
     // ② 跨行组合（授时网页：不补零中文日期行 + 纯时间行；含噪声行）
     {
@@ -358,47 +358,47 @@ static void testTruthTimeParse()
              QStringLiteral("现在是2026年7月22日星期三，第30周"),
              QStringLiteral("12:39:41"),
              QStringLiteral("你的设备时间慢了750毫秒")}, day);
-        CHECK(r.ok && r.dateFromText && r.wallMs == expectBj);
-        CHECK(r.matchedText.contains(QStringLiteral("第30周")));
+        CHECK(r.ok && r.dateFromText && r.wallMs == expectBj, "r.ok && r.dateFromText && r.wallMs == expectBj");
+        CHECK(r.matchedText.contains(QStringLiteral("第30周")), "condition failed (L362)");
     }
     // ③ 纯时间 + 假定日期（框 1 同日）
     {
         const auto r = parseTruthTimeText({QStringLiteral("12:39:41")}, day);
-        CHECK(r.ok && !r.dateFromText && r.wallMs == expectBj);
+        CHECK(r.ok && !r.dateFromText && r.wallMs == expectBj, "r.ok && !r.dateFromText && r.wallMs == expectBj");
     }
     // ③ 无假定日期 → nomatch
     {
         const auto r = parseTruthTimeText({QStringLiteral("12:39:41")}, QDate());
-        CHECK(!r.ok && r.error == QStringLiteral("nomatch"));
+        CHECK(!r.ok && r.error == QStringLiteral("nomatch"), "condition failed (L372)");
     }
     // 拒识：仅时分（手机状态栏 12:39）→ noseconds
     {
         const auto r = parseTruthTimeText({QStringLiteral("12:39")}, day);
-        CHECK(!r.ok && r.error.startsWith(QStringLiteral("noseconds:")));
+        CHECK(!r.ok && r.error.startsWith(QStringLiteral("noseconds:")), "condition failed (L377)");
     }
     // 拒识：全角冒号归一化后命中（12：25：47）
     {
         const auto r = parseTruthTimeText(
             {QString::fromUtf8("2026年07月22日 12\uff1a25\uff1a47")}, day);
-        CHECK(r.ok && r.wallMs == expectMon);
+        CHECK(r.ok && r.wallMs == expectMon, "r.ok && r.wallMs == expectMon");
     }
     // 拒识：值域非法（25:99:99 之类误读）→ invalid
     {
         const auto r = parseTruthTimeText(
             {QStringLiteral("2026年07月22日 25:99:99")}, QDate());
-        CHECK(!r.ok && r.error.startsWith(QStringLiteral("invalid:")));
+        CHECK(!r.ok && r.error.startsWith(QStringLiteral("invalid:")), "condition failed (L389)");
     }
     // 拒识：毫无时间文本 → nomatch
     {
         const auto r = parseTruthTimeText(
             {QStringLiteral("标准北京时间"), QStringLiteral("本时间同步国家授时中心精确到毫秒")},
             day);
-        CHECK(!r.ok && r.error == QStringLiteral("nomatch"));
+        CHECK(!r.ok && r.error == QStringLiteral("nomatch"), "condition failed (L396)");
     }
     // 防碎片错配：112:39:41 不应在内层误命中 12:39:41
     {
         const auto r = parseTruthTimeText({QStringLiteral("112:39:41")}, day);
-        CHECK(!r.ok);
+        CHECK(!r.ok, "!r.ok");
     }
 }
 
@@ -419,13 +419,13 @@ static void testTruthArchiveRoundTrip()
     c.truthBeijingText = QStringLiteral("现在是2026年7月22日星期三，第30周 | 12:39:41");
 
     const TimeCalibration r = TimeCalibration::fromJson(c.toJson());
-    CHECK(r.truthSet && r.truthOffsetMs == -834000);
-    CHECK(r.truthSource == QStringLiteral("photo"));
-    CHECK(r.truthImagePath == c.truthImagePath);
-    CHECK(r.truthMonitorBox == QRect(100, 50, 800, 40));
-    CHECK(r.truthBeijingBox == QRect(1500, 900, 400, 120));
-    CHECK(r.truthMonitorText == c.truthMonitorText);
-    CHECK(r.truthBeijingText == c.truthBeijingText);
+    CHECK(r.truthSet && r.truthOffsetMs == -834000, "r.truthSet && r.truthOffsetMs == -834000");
+    CHECK(r.truthSource == QStringLiteral("photo"), "condition failed (L423)");
+    CHECK(r.truthImagePath == c.truthImagePath, "r.truthImagePath == c.truthImagePath");
+    CHECK(r.truthMonitorBox == QRect(100, 50, 800, 40), "r.truthMonitorBox == QRect(100, 50, 800, 40)");
+    CHECK(r.truthBeijingBox == QRect(1500, 900, 400, 120), "r.truthBeijingBox == QRect(1500, 900, 400, 120)");
+    CHECK(r.truthMonitorText == c.truthMonitorText, "r.truthMonitorText == c.truthMonitorText");
+    CHECK(r.truthBeijingText == c.truthBeijingText, "r.truthBeijingText == c.truthBeijingText");
 
     // 老文件（无新字段）→ 空值安全退化
     TimeCalibration legacy;
@@ -434,9 +434,9 @@ static void testTruthArchiveRoundTrip()
     legacy.truthSet = true;
     legacy.truthOffsetMs = 5000;
     const TimeCalibration lr = TimeCalibration::fromJson(legacy.toJson());
-    CHECK(lr.truthSource.isEmpty() && lr.truthImagePath.isEmpty());
-    CHECK(!lr.truthMonitorBox.isValid() && !lr.truthBeijingBox.isValid());
-    CHECK(lr.truthOffsetMs == 5000 && lr.truthSet);
+    CHECK(lr.truthSource.isEmpty() && lr.truthImagePath.isEmpty(), "lr.truthSource.isEmpty() && lr.truthImagePath.isEmpty()");
+    CHECK(!lr.truthMonitorBox.isValid() && !lr.truthBeijingBox.isValid(), "!lr.truthMonitorBox.isValid() && !lr.truthBeijingBox.isValid()");
+    CHECK(lr.truthOffsetMs == 5000 && lr.truthSet, "lr.truthOffsetMs == 5000 && lr.truthSet");
 }
 
 // ---------------------------------------------------------------------------

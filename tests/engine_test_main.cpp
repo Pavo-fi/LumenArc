@@ -28,6 +28,7 @@ extern "C" {
 extern "C" {
 #include <libswresample/swresample.h>
 }
+#include "infrastructure/ffmpeg_compat.h"   // AVSampleFormat（8.0 头改名兼容）
 #include <cstdio>
 #include <cmath>
 #include <numeric>
