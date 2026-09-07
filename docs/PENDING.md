@@ -53,6 +53,11 @@ P-20 2GB 尾帧 seek（已通过）· P-21 DVR 字体抽检（已通过）· P-2
 | P-39 | 转码 60min 超时/磁盘预估系数写死 → 参数面开放 | 随手 | ☐ |
 | P-40 | 时间戳归一化路径补集成测试（需重叠段素材） | 随手 | ☐ |
 | P-41 | 排序跨组移动 UI 暴露（applyGrouping） | 低优先 | ☐ |
+| P-76 | R3 残留：mainwindow.cpp:3043 `axisX()->min()/max()` 视口存/恢复（P-36 勾销后新增）→ ChartPanel 加 `xAxisRange() const` | 随 v1.17 阶段 B1 | ☐（方案已拍板，DEVELOPMENT_PLAN_V1.17_CN.md） |
+| P-77 | R5 残留：`m_currentVideoPath` 47 处 / `m_currentSpeed` 10 处无 SSOT → VideoSessionManager.currentVideoPath + PlaybackState（不变量：.vla 直载不覆写/videoRelocated 同步/列表清空清零） | 随 v1.17 阶段 B2 | ☐（方案已拍板） |
+| P-78 | Q5 违规：eventFilter :4180-4351 为 18 键键位路由本体（装在 6 处具体控件）→ KeyGuardFilter 守卫+转发，保留「全局键优先于聚焦控件」语义 | 随 v1.17 阶段 B3 | ☐（方案已拍板） |
+| P-79 | MainWindow 上帝单文件复胖（4770 行，v1.9 预警的 UI 壳复胖）→ 7 翻译单元拆分（单一类 API 零变化，public 区零 diff 门槛） | 随 v1.17 阶段 A | ☐（方案已拍板 2026-09-06） |
+| P-80 | onSnapshotQuick 纯渲染段 200 行不可单测 → SnapshotComposer 纯组件（输入集含 videoSize/OSD 文件名/预渲染 chartImg/specImg；前置：OverlayWidget 静态渲染函数迁非 Widgets）+ snapshot_test 像素断言 | 随 v1.17 阶段 C | ☐（方案已拍板） |
 
 ## 六、挂起优化/已知限制（低优先）
 
