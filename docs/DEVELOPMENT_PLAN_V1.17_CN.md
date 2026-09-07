@@ -127,7 +127,7 @@ CMake 显式源列表 :66-127 加 6 行）：
 
 - 版本 bump v1.17.0（CMake 单一真源）；用户无感知变更（手册不动）✅
 - HANDOVER/WORK_HISTORY/PENDING 勾销/DOCS_MAP（D1/D2/D6/D7）✅
-- RELEASE_CHECKLIST_V1.7 真机点检（行为冻结对照：开/切视频/校时/案件/多机/
+- RELEASE_CHECKLIST_V1.17_CN.md（docs/）真机点检（行为冻结对照：开/切视频/校时/案件/多机/
   快照/导出 各 1 条 + 聚焦控件按键 1 条）⏳ 留用户真机执行
 
 **总预估 9-12 天（2 周左右），与 v1.9 拆分周期一致。**

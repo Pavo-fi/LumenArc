@@ -118,7 +118,7 @@ MainWindow::MainWindow(QWidget *parent)
 
 
     loadLanguage();
-    setWindowTitle(lang("追光者 Lumen Arc v1.16.1", "Lumen Arc v1.16.1") + buildStamp());
+    setWindowTitle(lang(QStringLiteral("追光者 Lumen Arc v") + QString(APP_VERSION), QStringLiteral("Lumen Arc v") + QString(APP_VERSION)) + buildStamp());
     resize(1280, 720);
 
     m_roiModel = new RoiModel(this);   // 统一 ROI 模型（矩形+多边形，v1.5.0 Q-18）
@@ -1359,7 +1359,7 @@ void MainWindow::buildCaseUi(const QString &collapseBtnStyle)
     auto *casePhLay = new QVBoxLayout(casePhContent);
     casePhLay->setContentsMargins(2, 4, 2, 4);
     casePhLay->setSpacing(4);
-    auto *casePhExpandBtn = new QPushButton(QString::fromUtf8("â¶"),
+    auto *casePhExpandBtn = new QPushButton(QString::fromUtf8("\xe2\x96\xb6"),
                                             casePhContent);   // ▶
     casePhExpandBtn->setFixedSize(22, 22);
     casePhExpandBtn->setStyleSheet(collapseBtnStyle);

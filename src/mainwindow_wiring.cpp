@@ -614,7 +614,7 @@ void MainWindow::setupVideoListConnections()
                 }
 
                 setWindowTitle(windowTitleWithCase(
-                    lang("追光者 Lumen Arc v1.16.1", "Lumen Arc v1.16.1")));
+                    lang(QStringLiteral("追光者 Lumen Arc v") + QString(APP_VERSION), QStringLiteral("Lumen Arc v") + QString(APP_VERSION))));
                 updateTimeDisplay();
                 showOperationStatus(lang("已清空视频列表", "Video list cleared"));
             });

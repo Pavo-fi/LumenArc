@@ -26,23 +26,16 @@ public:
 
     void setHandler(Handler h) { m_handler = std::move(h); }
 
-    /// eventFilter 入口：KeyPress 交给处理器；true = 快捷键已消费
-    /// （阻断控件收键），false = 放行（继续走默认分发/上层 eventFilter）。
-    /// 注意：必须 override eventFilter 本体——本对象是直接挂在
-    /// installEventFilter 上的过滤器（MainWindow::eventFilter 不再被调用）。
+    /// eventFilter 入口（本对象直接挂在 installEventFilter 上）：
+    /// KeyPress 交给处理器；true = 快捷键已消费（阻断控件收键），
+    /// false = 放行（继续走默认分发）。
     bool eventFilter(QObject *watched, QEvent *event) override
     {
+        Q_UNUSED(watched)
         if (event->type() == QEvent::KeyPress && m_handler)
             if (m_handler(static_cast<QKeyEvent *>(event)))
                 return true;
         return false;
-    }
-
-    /// 显式转发入口（供 MainWindow::eventFilter 转发路径/单元测试用）
-    bool filterKeyPress(QObject *watched, QKeyEvent *e)
-    {
-        Q_UNUSED(watched)
-        return m_handler ? m_handler(e) : false;
     }
 
 private:

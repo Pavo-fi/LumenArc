@@ -146,7 +146,7 @@ void MainWindow::enterCaseMode()
     if (m_batchRelocateAction)
         m_batchRelocateAction->setEnabled(true);
     setWindowTitle(windowTitleWithCase(
-        lang("追光者 Lumen Arc v1.16.1", "Lumen Arc v1.16.1")));
+        lang(QStringLiteral("追光者 Lumen Arc v") + QString(APP_VERSION), QStringLiteral("Lumen Arc v") + QString(APP_VERSION))));
     showOperationStatus(lang("案件已打开：%1", "Case opened: %1")
                             .arg(m_caseManager->meta().caseNo));
     // 开案批量校时徽标校验（用户实测：旧 vla time_offset=0 误亮 ⏰ 且只在
@@ -197,7 +197,7 @@ void MainWindow::exitCaseMode()
         m_exportCaseAction->setEnabled(false);
     if (m_batchRelocateAction)
         m_batchRelocateAction->setEnabled(false);
-    setWindowTitle(lang("追光者 Lumen Arc v1.16.1", "Lumen Arc v1.16.1"));
+    setWindowTitle(lang(QStringLiteral("追光者 Lumen Arc v") + QString(APP_VERSION), QStringLiteral("Lumen Arc v") + QString(APP_VERSION)));
     showOperationStatus(lang("案件已关闭", "Case closed"));
 }
 
@@ -361,7 +361,7 @@ void MainWindow::onCaseProperties()
     // 名称可能已改：刷新标题/面板/状态栏
     if (m_caseManager->isOpen()) {
         setWindowTitle(windowTitleWithCase(
-            lang("追光者 Lumen Arc v1.16.1", "Lumen Arc v1.16.1")));
+            lang(QStringLiteral("追光者 Lumen Arc v") + QString(APP_VERSION), QStringLiteral("Lumen Arc v") + QString(APP_VERSION))));
         m_caseDock->refreshTree();
         m_caseStatusBtn->setText(
             QStringLiteral("📁 ") + m_caseManager->meta().caseNo);

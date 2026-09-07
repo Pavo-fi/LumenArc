@@ -40,7 +40,8 @@
 | docs/DEVELOPMENT_PLAN_V1.8_CN.md | v1.8 P1a/P1b 任务化+通道化施工方案（P-30，.vla v10 + Python 退役） | ✅ 已实施（2026-08-17 施工完成，待真机点检） |
 | docs/RELEASE_CHECKLIST_V1.8_CN.md | v1.8 手工点检 A-E | ⚠️ 待真机执行（离线项已自动验证） |
 | docs/DEVELOPMENT_PLAN_V1.9_CN.md | v1.9 P2 MainWindow 拆分施工方案（P-31，四组件 + R2/R3/R5 收口） | ✅ 已实施（2026-08-17 施工完成，待真机点检） |
-| docs/DEVELOPMENT_PLAN_V1.17_CN.md | v1.17.0 MainWindow 拆解施工方案（P-76~P-80：7 TU 拆分 + R3/R5/Q5 收口 + SnapshotComposer + restore 下沉） | 🔨 已拍板施工中（2026-09-06 用户拍板 Q1~Q7，每阶段完成后提交 git） |
+| docs/DEVELOPMENT_PLAN_V1.17_CN.md | v1.17.0 MainWindow 拆解施工方案（P-76~P-80：7 TU 拆分 + R3/R5/Q5 收口 + SnapshotComposer + restore 下沉） | ✅ 已实施（2026-09-07 四阶段完成 `e99c947`→`0e4e2e5`，待真机点检） |
+| docs/RELEASE_CHECKLIST_V1.17_CN.md | v1.17.0 手工点检（行为冻结 7 条 + 快捷键 9 键 + 顺带修复 2 项） | ⚠️ 待真机执行（离线项已自动验证） |
 | docs/RELEASE_CHECKLIST_V1.9_CN.md | v1.9 手工点检 A-F（行为冻结对照） | ⚠️ 待真机执行（离线项已自动验证） |
 | docs/PREPROCESSING_TECH_DESIGN_CN.md | 前处理技术设计 | ✅ 现行 |
 | docs/MULTICAM_PLAYBACK_TECH_DESIGN_CN.md | 多视频同步播放（多机时间线合并）技术方案（P-57） | ✅ v0.3 已拍板，**v1.10.0 已施工待真机**（2026-08-18） |

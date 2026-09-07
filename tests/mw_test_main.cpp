@@ -38,6 +38,7 @@
 #include <QCheckBox>
 #include <QPushButton>
 #include <QLabel>
+#include "videolistpanel.h"
 #include <QSplitter>
 #include <QProcess>
 #include <QEventLoop>
@@ -724,6 +725,32 @@ static void testSwitchRestore(QApplication &app)
     pump(app, 2000);
     CHECK(mw.abPointA() >= 0 && mw.abPointB() >= 0,
           "switch: A both points restored");
+
+    // ⑤ Space 端到端（Q5 第二键位回归；经操作状态栏 QLabel 观察）
+    auto opLabel = [&mw]() -> QString {
+        for (auto *l : mw.findChildren<QLabel *>())
+            if (l->text() == QString::fromUtf8("暂停") || l->text() == "Paused"
+                || l->text() == QString::fromUtf8("播放") || l->text() == "Playing")
+                return l->text();
+        return QString();
+    };
+    sendKey(Qt::Key_Space);   // 开 A 后引擎在播 → Space 应暂停
+    CHECK(opLabel() == QString::fromUtf8("暂停") || opLabel() == "Paused",
+          "Space pauses (operation label)");
+    sendKey(Qt::Key_Space);   // 再按 → 播放
+    CHECK(opLabel() == QString::fromUtf8("播放") || opLabel() == "Playing",
+          "Space plays again (operation label)");
+
+    // ⑥ 不变量③（R5）：视频列表清空 → 当前路径清零（回归闸）
+    CHECK(!mw.currentVideoPath().isEmpty(), "ssot③: path set before list clear");
+    if (auto *panel = mw.findChild<VideoListPanel *>()) {
+        panel->videoCountChanged(0);   // 测试通道：直调信号
+        pump(app, 500);
+        CHECK(mw.currentVideoPath().isEmpty(),
+              "ssot③: list clear resets current path");
+    } else {
+        CHECK(false, "ssot③: VideoListPanel not found");
+    }
 }
 
 // ---------------------------------------------------------------------------

@@ -9,7 +9,7 @@
   P-76~P-80 全勾销）
 - **构建**：`cmd //c "build_tmp\build_target.bat ALL"`；测试：`QT_QPA_PLATFORM=offscreen`
   + PATH 含 `C:\code\Qt\6.8.0\msvc2022_64\bin`（配置：`build_tmp\reconfigure.bat`）
-- **全回归基线**（19 套，v1.17.0 后）：mw 113 / ui_chain 103（2 已知遗留）/
+- **全回归基线**（19 套，v1.17.0 后）：mw 117 / ui_chain 103（2 已知遗留）/
   libav 26 / case 270 / case_e2e 51 / segment 120 / sync 195 / preprocess 268 /
   calibration 99 / piecewise 129 / report 52 / docx 23 / roi 23 / sidecar 34 /
   task 41 / v17 37 / snapshot 36（新增）/ vla PASS / denoise ALL PASS
@@ -76,7 +76,7 @@
   enableVideoActions（305 → ~150 行，行为冻结由 D1 闸验证）。
 - **回归基线**：19 套全绿（见表头）；版本 bump 1.17.0（CMake 单一真源）；
   PENDING P-76~P-80 勾销。
-- **留用户**：RELEASE_CHECKLIST_V1.7 真机点检（行为冻结对照：开/切视频、
+- **留用户**：RELEASE_CHECKLIST_V1.17_CN.md（docs/）真机点检（行为冻结对照：开/切视频、
   校时、案件、多机、快照、导出各 1 条 + 聚焦控件按键 1 条）。
 
 ## 90. P2.8 实测修订：聚光灯 50% 上限 / 条带全量化+语谱 / 打开输出文件夹

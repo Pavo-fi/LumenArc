@@ -224,9 +224,8 @@ protected:
     void keyReleaseEvent(QKeyEvent *event) override;
     void closeEvent(QCloseEvent *event) override;
     void resizeEvent(QResizeEvent *event) override;   // 打开面板居中（2026-08）
-    bool eventFilter(QObject *watched, QEvent *event) override;
     /// v1.17.0 P-78（Q5）：18 键快捷键路由（共享处理函数；
-    /// eventFilter 本体只经 KeyGuardFilter 转发，不写大 switch）
+    /// 由 KeyGuardFilter::eventFilter 转发调用，不写大 switch）
     bool handleGlobalShortcut(QKeyEvent *e);
     /// v1.17.0 D2：openVideoFile 恢复扇出（hasMemoryState 分支逐字抽取）
     void applyRestoredState(const VideoState &st);

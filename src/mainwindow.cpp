@@ -459,7 +459,7 @@ void MainWindow::openVideoFile(const QString &filePath)
 
         // Do NOT overwrite m_sessionMgr->currentVideoPath() with the .vla path: it is an
         // analysis file, not a playable video, and it keys VideoStateManager.
-        setWindowTitle(windowTitleWithCase("Lumen Arc v1.16.1 - [Loaded: " +
+        setWindowTitle(windowTitleWithCase(QStringLiteral("Lumen Arc v") + QString(APP_VERSION) + QStringLiteral(" - [Loaded: ") +
                            QFileInfo(filePath).fileName() + "]"));
         } else {
             QMessageBox::critical(this, lang("错误", "Error"),
@@ -689,7 +689,7 @@ void MainWindow::onLoadAnalysis()
                 m_guideLineModel->addLine(line);
 
             // Do NOT overwrite m_sessionMgr->currentVideoPath() with the .vla path (see openVideoFile).
-        setWindowTitle(windowTitleWithCase("Lumen Arc v1.16.1 - [Loaded: " +
+        setWindowTitle(windowTitleWithCase(QStringLiteral("Lumen Arc v") + QString(APP_VERSION) + QStringLiteral(" - [Loaded: ") +
                        QFileInfo(filePath).fileName() + "]"));
         QMessageBox::information(this, lang("已加载", "Loaded"),
             lang("分析结果加载成功。", "Analysis result loaded successfully."));
@@ -1521,21 +1521,6 @@ void MainWindow::restoreAnalysisState(const QVector<QRect> &regions,
              << "volume.size:" << loaded.audioData().volume.size();
     if (m_spectrogramEnhanced && loaded.hasAudio())
         m_spectrogramEnhanced->setSpectrogramData(loaded.audioData());
-}
-
-/**
- * @brief 全局事件过滤：所有快捷键全局生效，不受焦点区域影响
- */
-bool MainWindow::eventFilter(QObject *watched, QEvent *event)
-{
-    // v1.17.0 P-78（Q5 收口）：eventFilter 本体只做"放行/转发"——
-    // 18 键 switch 搬入 handleGlobalShortcut（KeyGuardFilter 仅守卫+转发）。
-    // 行为冻结：消费 = return true（原各 case 的 return true 路径）；
-    // 未消费 = 落回 QMainWindow::eventFilter（原 fall-through 路径）。
-    if (event->type() == QEvent::KeyPress && m_keyGuard)
-        if (m_keyGuard->filterKeyPress(watched, static_cast<QKeyEvent *>(event)))
-            return true;
-    return QMainWindow::eventFilter(watched, event);
 }
 
 bool MainWindow::handleGlobalShortcut(QKeyEvent *e)
