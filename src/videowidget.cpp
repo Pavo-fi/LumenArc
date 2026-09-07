@@ -11,6 +11,7 @@
 #include "videowidget.h"
 #include "frame_annotation.h"
 #include "displayadjust.h"
+#include "videoglwidget.h"   // P-29 Stage 1：GPU 纹理视频面
 #include "domain/roi_model.h"
 #include "domain/roi_model.h"
 #include "domain/guide_line_model.h"
@@ -27,6 +28,8 @@
 #include <QVBoxLayout>
 #include <QDebug>
 #include <QTransform>
+#include <QSettings>
+#include <QMessageBox>
 #include <climits>
 
 // =============================================================================
@@ -1377,6 +1380,12 @@ VideoWidget::VideoWidget(QWidget *parent)
             this, &VideoWidget::timestampRoiCancelled);
     connect(m_overlay, &OverlayWidget::timestampRoiReady,
             this, &VideoWidget::timestampRoiReady);
+
+    // P-29 Stage 1：GPU 显示模式（QSettings video/gpuDisplay，默认 auto）。
+    // GL 面惰性构造（首帧到达），此处不建——offscreen/CI 永不进 GL 分支。
+    QSettings s(QStringLiteral("LumenArc"), QStringLiteral("LumenArc"));
+    m_gpuDisplayMode = s.value(QStringLiteral("video/gpuDisplay"),
+                               QStringLiteral("auto")).toString();
 }
 
 VideoWidget::~VideoWidget() = default;
@@ -1441,6 +1450,7 @@ void VideoWidget::rebuildAdjustedFrame()
     if (m_displayRotation != 0)
         img = img.transformed(QTransform().rotate(m_displayRotation));
     m_frameImage = applyDisplayLut(img, m_displayLut);   // 空表 = 恒等浅拷贝
+    glPresentCurrent();   // 暂停态拖滑杆/切旋转也要同步 GL 面
     update();
     if (m_overlay)
         m_overlay->update();
@@ -1452,8 +1462,9 @@ void VideoWidget::onFrameReady(const QImage &image)
     if (m_displayLut.isEmpty() && m_displayRotation == 0) {
         // No deep copy: QImage is implicitly shared and m_frameImage is only read afterwards.
         m_frameImage = image;
+        glPresentCurrent();
     } else {
-        rebuildAdjustedFrame();
+        rebuildAdjustedFrame();   // 末尾已含 glPresentCurrent
     }
     if (m_engine)
         m_engine->ackFrame();   // 归还配额（引擎有界化丢帧）
@@ -1467,6 +1478,10 @@ void VideoWidget::clearFrame()
 {
     m_frameImage = QImage();
     m_rawFrameImage = QImage();
+    if (m_gl) {
+        m_gl->clearSurface();
+        m_gl->hide();   // 无帧时隐藏（空态/加载卡片仍由 raster 绘制）
+    }
     setLoading(false);   // 停旋转动画 + 清标志（清空列表后回到初始空状态）
     update();
     if (m_overlay)
@@ -1596,27 +1611,27 @@ void VideoWidget::paintEvent(QPaintEvent *event)
 
     if (!m_frameImage.isNull()) {
         QRect target = videoDisplayRect();
-        painter.drawImage(target, m_frameImage);
 
-        // Draw snapshot overlay if active
-        if (!m_snapshot.isNull()) {
-            // Rebuild cache if parameters changed（亮度/对比度/旋转档位均为缓存键；
-            // 存储为原视频系方位，绘制缓存随画面一起转——Q1 方案 A）
-            if (m_adjustedSnapshot.isNull() ||
-                m_cachedBrightness != m_snapshotBrightness ||
-                m_cachedContrast != m_snapshotContrast ||
-                m_cachedRotation != m_displayRotation) {
-                m_adjustedSnapshot = applyBrightnessContrast(m_snapshot, m_snapshotBrightness, m_snapshotContrast);
-                if (m_displayRotation != 0)
-                    m_adjustedSnapshot = m_adjustedSnapshot.transformed(
-                        QTransform().rotate(m_displayRotation));
-                m_cachedBrightness = m_snapshotBrightness;
-                m_cachedContrast = m_snapshotContrast;
-                m_cachedRotation = m_displayRotation;
+        if (glActive()) {
+            // P-29 Stage 1：视频帧 + 截图融合由 GL 面同层绘制（z 序保持：
+            // GL 面在 OverlayWidget 之下、VideoWidget 自绘之上）。
+            // 融合缓存重建逻辑与 CPU 路径共用 ensureAdjustedSnapshot。
+            if (m_snapshot.isNull()) {
+                m_gl->clearSnapshotOverlay();
+            } else if (ensureAdjustedSnapshot()) {
+                m_gl->presentSnapshotOverlay(
+                    m_adjustedSnapshot, 1.0 - m_snapshotOpacity / 100.0);
             }
-            painter.setOpacity(1.0 - m_snapshotOpacity / 100.0);
-            painter.drawImage(target, m_adjustedSnapshot);
-            painter.setOpacity(1.0);
+        } else {
+            painter.drawImage(target, m_frameImage);
+
+            // Draw snapshot overlay if active
+            if (!m_snapshot.isNull()) {
+                ensureAdjustedSnapshot();   // 缓存键变化时重建
+                painter.setOpacity(1.0 - m_snapshotOpacity / 100.0);
+                painter.drawImage(target, m_adjustedSnapshot);
+                painter.setOpacity(1.0);
+            }
         }
     } else if (m_frameImage.isNull()) {
         // 品牌空状态：logo 水印 + 引导语（加载大视频期间显示“导入中…”）
@@ -1696,4 +1711,90 @@ void VideoWidget::resizeEvent(QResizeEvent *event)
 {
     QWidget::resizeEvent(event);
     updateOverlayGeometry();
+    // P-29 Stage 1：GL 面无 layout manager，手动跟随 + 重发 letterbox 目标矩形
+    if (m_gl) {
+        m_gl->setGeometry(rect());
+        m_gl->setDisplayRect(videoDisplayRect());
+    }
+}
+
+// ---------------------------------------------------------------------------
+// P-29 v1.6.0 Stage 1：GPU 纹理显示（降级红线：失败即回退，永久可用）
+// ---------------------------------------------------------------------------
+
+void VideoWidget::setGpuDisplayMode(const QString &mode)
+{
+    const QString m = (mode == QLatin1String("on") || mode == QLatin1String("off"))
+        ? mode : QStringLiteral("auto");
+    if (m_gpuDisplayMode == m)
+        return;
+    m_gpuDisplayMode = m;
+    if (m == QLatin1String("off") && m_gl) {
+        m_gl->hide();   // 强制 CPU：下一帧起 paintEvent 走老路径
+    } else if (glActive() && !m_frameImage.isNull()) {
+        glPresentCurrent();   // 从 off 切回：立即恢复上屏
+    }
+}
+
+void VideoWidget::ensureGlSurface()
+{
+    if (m_gl || m_glFailed || m_gpuDisplayMode == QLatin1String("off"))
+        return;
+    m_gl = new GlVideoSurface(this);
+    connect(m_gl, &GlVideoSurface::glFailed, this, &VideoWidget::onGlFailed);
+    m_gl->setGeometry(rect());
+    m_gl->setDisplayRect(videoDisplayRect());
+    m_gl->lower();   // 压在 OverlayWidget 之下（构造时 overlay 已 raise）
+    m_gl->hide();    // 有帧才可见（首帧 presentFrame 后 show）
+}
+
+void VideoWidget::onGlFailed(const QString &reason)
+{
+    m_glFailed = true;   // 本进程不再尝试（Q3 auto 语义）
+    qWarning() << "[VideoWidget] GPU 显示不可用，永久回退 CPU 软件渲染：" << reason;
+    if (m_gl)
+        m_gl->hide();
+    if (m_gpuDisplayMode == QLatin1String("on"))
+        QMessageBox::warning(this,
+                             lang("GPU 显示不可用", "GPU Display Unavailable"),
+                             lang("已回退 CPU 软件渲染。", "Fell back to CPU software rendering. ")
+                                 + reason);
+}
+
+bool VideoWidget::glActive() const
+{
+    return m_gl && !m_glFailed && m_gl->glHealthy() && m_gl->isVisible();
+}
+
+void VideoWidget::glPresentCurrent()
+{
+    if (m_gpuDisplayMode == QLatin1String("off"))
+        return;
+    if (m_frameImage.isNull())
+        return;
+    ensureGlSurface();
+    if (!m_gl || m_glFailed)
+        return;
+    m_gl->presentFrame(m_frameImage);   // COW 浅拷贝（O(1)）
+    m_gl->show();                        // 首帧：触发 initializeGL（失败 → glFailed）
+}
+
+bool VideoWidget::ensureAdjustedSnapshot()
+{
+    // Rebuild cache if parameters changed（亮度/对比度/旋转档位均为缓存键；
+    // 存储为原视频系方位，绘制缓存随画面一起转——Q1 方案 A）
+    if (m_adjustedSnapshot.isNull() ||
+        m_cachedBrightness != m_snapshotBrightness ||
+        m_cachedContrast != m_snapshotContrast ||
+        m_cachedRotation != m_displayRotation) {
+        m_adjustedSnapshot = applyBrightnessContrast(m_snapshot, m_snapshotBrightness, m_snapshotContrast);
+        if (m_displayRotation != 0)
+            m_adjustedSnapshot = m_adjustedSnapshot.transformed(
+                QTransform().rotate(m_displayRotation));
+        m_cachedBrightness = m_snapshotBrightness;
+        m_cachedContrast = m_snapshotContrast;
+        m_cachedRotation = m_displayRotation;
+        return true;
+    }
+    return false;
 }

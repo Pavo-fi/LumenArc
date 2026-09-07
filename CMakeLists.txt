@@ -20,7 +20,7 @@ endif()
 
 # --- Qt6 ---
 set(CMAKE_PREFIX_PATH "${CMAKE_PREFIX_PATH};$ENV{QT6_DIR}")
-find_package(Qt6 REQUIRED COMPONENTS Widgets Charts Multimedia Concurrent Network Test)
+find_package(Qt6 REQUIRED COMPONENTS Widgets Charts Multimedia Concurrent Network Test OpenGL OpenGLWidgets)
 
 # --- FFmpeg (LGPL shared build: bin/ include/ lib/) ---
 set(FFMPEG_SDK_PATH "" CACHE PATH "Path to FFmpeg SDK root (contains include/ and lib/)")
@@ -72,6 +72,7 @@ set(SOURCES
     src/mainwindow_snapshot.cpp    # v1.17.0 P-79：证据快照
     src/mainwindow_export.cpp      # v1.17.0 P-79：导出三入口
     src/videowidget.cpp
+    src/videoglwidget.cpp        # P-29 v1.6.0 Stage 1：GPU 纹理视频面
     src/chartpanel.cpp
     src/magnifierwidget.cpp
     src/snapshotoverlay.cpp
@@ -767,6 +768,7 @@ add_executable(lumenarc_ui_chain_test
     src/timesettingsdialog.cpp
     src/calibphotodialog.cpp        # v1.12.5 校时图片框选（对话框依赖）
     src/videowidget.cpp
+    src/videoglwidget.cpp   # P-29 Stage 1：videowidget 依赖 GlVideoSurface
     src/frame_annotation.cpp   # v1.17.0 P-80 C0：ui_chain 像素场景直接调用其纯函数
     src/magnifierwidget.cpp
     src/displayadjust.cpp
@@ -792,6 +794,8 @@ target_link_libraries(lumenarc_ui_chain_test PRIVATE
     Qt6::Core
     Qt6::Gui
     Qt6::Widgets
+    Qt6::OpenGL
+    Qt6::OpenGLWidgets
     Qt6::Test       # QTest 鼠标事件注入
     Qt6::Concurrent   # timestamp_ocr_engine 后台解析（tool_paths）
     ${FFMPEG_LIBRARIES}
@@ -841,8 +845,9 @@ target_include_directories(${PROJECT_NAME} PRIVATE
 
 target_link_libraries(${PROJECT_NAME} PRIVATE
     Qt6::Widgets
-    Qt6::Charts
     Qt6::OpenGL
+    Qt6::OpenGLWidgets
+    Qt6::Charts
     Qt6::Multimedia
     Qt6::Network      # 账号系统 HTTPS（Schannel 系统 TLS）
     Qt6::Concurrent   # 分析结果解析 / .vla 保存后台线程（分析结束不再卡死 UI）

@@ -646,6 +646,70 @@ static bool runMagnifierIndicatorScenario()
     return g_failures == 0;
 }
 
+// P-29 v1.6.0 Stage 1：GL 不可用环境（offscreen = 天然失败注入）下
+// VideoWidget 全链不崩 + CPU 回退数据通道断言（方案 §6.3）
+static void runGpuFallbackScenario()
+{
+    QWidget host;
+    host.resize(640, 480);
+    VideoWidget *vw = new VideoWidget(&host);
+    vw->setGeometry(host.rect());
+    host.show();
+
+    CHECK(!vw->gpuDisplayActive(), "gl: inactive before first frame");
+
+    // 合成帧（320×240 RGB888 渐变）
+    QImage frame(320, 240, QImage::Format_RGB888);
+    for (int y = 0; y < frame.height(); ++y)
+        for (int x = 0; x < frame.width(); ++x)
+            frame.setPixel(x, y, qRgb(x % 256, y % 256, (x + y) % 256));
+    vw->onFrameReady(frame);
+    QCoreApplication::processEvents();   // 惰性 GL 构造 + 初始化(失败) + 回退
+
+    // offscreen 无 GL → 必须回退 CPU（glFailed 或 init 未执行，判定同为 false）
+    CHECK(!vw->gpuDisplayActive(), "gl: offscreen falls back to CPU");
+
+    // 数据通道零影响（证据链：所见即所得）
+    CHECK(!vw->currentFrame().isNull(), "gl: currentFrame intact");
+    CHECK(vw->currentFrame().pixel(160, 120) == frame.pixel(160, 120),
+          "gl: currentFrame pixel-identical to input");
+    CHECK(vw->rawFrame() == frame, "gl: rawFrame intact");
+
+    // 钉图通道
+    QImage pinned;
+    QObject::connect(vw, &VideoWidget::frameSnapshotReady,
+                     [&pinned](const QImage &img) { pinned = img; });
+    vw->grabFrameSnapshot();
+    CHECK(pinned == frame, "gl: pinned frame channel intact");
+
+    // 截图融合 + 清除（CPU 路径）
+    vw->setSnapshot(frame, 0, 0, 50);
+    QCoreApplication::processEvents();
+    vw->clearSnapshot();
+
+    // resize（GL 面几何同步路径）+ clearFrame
+    host.resize(800, 500);
+    vw->setGeometry(host.rect());
+    QCoreApplication::processEvents();
+    vw->clearFrame();
+    CHECK(vw->currentFrame().isNull(), "gl: clearFrame ok");
+
+    // 重开 + offscreen 强制 paint（CPU 回退态 drawImage 分支）
+    host.resize(640, 480);
+    vw->setGeometry(host.rect());
+    QCoreApplication::processEvents();
+    vw->onFrameReady(frame);
+    QCoreApplication::processEvents();
+
+    // 模式切换往返不崩
+    vw->setGpuDisplayMode(QStringLiteral("off"));
+    vw->setGpuDisplayMode(QStringLiteral("auto"));
+    vw->setGpuDisplayMode(QStringLiteral("off"));
+    QCoreApplication::processEvents();
+
+    delete vw;
+}
+
 int main(int argc, char **argv)
 {
     QApplication app(argc, argv);
@@ -726,6 +790,7 @@ int main(int argc, char **argv)
     runRotationScenario();   // 场景 0：显示旋转四角度双向映射（Q1 方案 A）
     runDisplayAdjustScenario();   // 场景 0b：画面调节 LUT + 放大镜生效验证
     runMagnifierIndicatorScenario();   // 场景 0c：§14 标识框/快照烧录/放大图
+    runGpuFallbackScenario();          // 场景 0d：P-29 GL 回退（offscreen 失败注入）
     runFlow(c, "onRunGo");       // 场景 1：GO 入口
     if (argc < 4)
         runFlow(c, "onRoiButton");   // 场景 2：框选按钮入口（合成片）

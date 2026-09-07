@@ -477,6 +477,36 @@ void MainWindow::createMenus()
             addAdapterAction(ad.name, ad.index, current);
     }
 
+    // P-29 v1.6.0 Stage 1：视频渲染（GPU 纹理缩放 / CPU 软件）
+    // auto=默认（GL 不可用永久回退 CPU）/ on=失败弹提示 / off=强制 CPU
+    QMenu *renderMenu = settingsMenu->addMenu(lang("视频渲染", "Video Rendering"));
+    QActionGroup *renderGroup = new QActionGroup(this);
+    auto addRenderAction = [this, renderMenu, renderGroup](const QString &title,
+                                                           const QString &key,
+                                                           const QString &current) {
+        QAction *a = renderMenu->addAction(title);
+        a->setCheckable(true);
+        renderGroup->addAction(a);
+        if (key == current)
+            a->setChecked(true);
+        connect(a, &QAction::triggered, this, [this, key]() {
+            QSettings s("LumenArc", "LumenArc");
+            s.setValue(QStringLiteral("video/gpuDisplay"), key);
+            m_videoWidget->setGpuDisplayMode(key);   // 即时生效（off→CPU；切回→下一帧恢复）
+        });
+    };
+    {
+        QSettings s("LumenArc", "LumenArc");
+        const QString current = s.value(QStringLiteral("video/gpuDisplay"),
+                                         QStringLiteral("auto")).toString();
+        addRenderAction(lang("自动（GPU 优先，失败回退 CPU）", "Auto (GPU, fallback to CPU)"),
+                        QStringLiteral("auto"), current);
+        addRenderAction(lang("强制 GPU（不可用弹提示）", "Force GPU (warn if unavailable)"),
+                        QStringLiteral("on"), current);
+        addRenderAction(lang("CPU 软件渲染", "CPU software rendering"),
+                        QStringLiteral("off"), current);
+    }
+
     // Help menu
     QMenu *helpMenu = menuBar()->addMenu(lang("帮助(&H)", "&Help"));
 
