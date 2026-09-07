@@ -34,7 +34,8 @@ jobs:
             -DFFMPEG_SDK_PATH="/opt/homebrew"
 
       - name: Build
-        run: cmake --build build --parallel
+        timeout-minutes: 180
+        run: cmake --build build --parallel --verbose
 
       - name: Bundle relocatable Python (python-build-standalone)
         run: |
