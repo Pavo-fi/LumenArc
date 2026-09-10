@@ -88,11 +88,67 @@ def frameworks_dir(app):
     return os.path.join(app, 'Contents', 'Frameworks')
 
 
+def _co_located(dep, macho, by_name):
+    """绝对依赖 → bundle 内同名文件（同目录 → .dylibs 子目录 → 全 bundle 唯一命中）。
+    by_name 为预建索引 {basename: [paths]}（避免每次回退都全树扫描）。"""
+    base = os.path.basename(dep)
+    d = os.path.dirname(macho)
+    for cand in (os.path.join(d, base), os.path.join(d, '.dylibs', base)):
+        if os.path.exists(cand):
+            return cand
+    hits = by_name.get(base, [])
+    return hits[0] if len(hits) == 1 else None
+
+
+def normalize_absolute_refs(app):
+    """把"绝对路径但文件就在 bundle 内"的 install name / 依赖改写为 @loader_path/…。
+
+    典型场景：opencv-python 官方 wheel 的 cv2/.dylibs/* 以构建机路径
+    /DLC/cv2/.dylibs/<name> 互相引用（该路径在用户机上不存在）。cmd_bundle 的
+    BAD_PREFIXES 不含 /DLC，故既不打包它、也不改写它，而 audit（"非 @ 前缀一律
+    拒绝"）会报错——两边口径出现缝隙。此处统一改为 @loader_path：与 wheel 自身
+    cv2.abi3.so → @loader_path/.dylibs/… 的引用方式一致，自洽且过严格门。
+    只改写"目标确实存在于 bundle 内"的引用，不改写系统库。
+    """
+    machos = all_machos(app)          # 只走一遍文件树，建 basename 索引
+    by_name = {}
+    for p in machos:
+        by_name.setdefault(os.path.basename(p), []).append(p)
+
+    count = 0
+    for m in machos:
+        mid, deps = otool_l(m)
+        # 自身 install name 是绝对路径（且就是本文件）→ 改为 @loader_path/<自身名>
+        if mid and not mid.startswith(OK_PREFIXES):
+            tgt = _co_located(mid, m, by_name)
+            if tgt is None or os.path.abspath(tgt) == os.path.abspath(m):
+                run_tool(['install_name_tool', '-id',
+                          f'@loader_path/{os.path.basename(m)}', m])
+                count += 1
+        for dep in deps:
+            if dep.startswith(OK_PREFIXES):
+                continue
+            tgt = _co_located(dep, m, by_name)
+            if tgt is None:
+                continue
+            rel = os.path.relpath(tgt, os.path.dirname(m)).replace(os.sep, '/')
+            run_tool(['install_name_tool', '-change', dep,
+                      f'@loader_path/{rel}', m])
+            count += 1
+    return count
+
+
 # ---------------------------------------------------------------- bundle ----
 def cmd_bundle(app):
     fw = frameworks_dir(app)
     os.makedirs(fw, exist_ok=True)
     bundled = {}  # 原绝对路径 -> @rpath 名
+
+    # 先归一 bundle 内自带的绝对引用（opencv wheel 的 /DLC/... 等），
+    # 否则它们既不会被拷进 Frameworks，又会被 audit 判为坏依赖
+    fixed = normalize_absolute_refs(app)
+    if fixed:
+        print(f'[bundle] normalized {fixed} co-located absolute reference(s)')
 
     # 迭代：新拷入的库可能又引入新的坏依赖，直到收敛
     round_no = 0
