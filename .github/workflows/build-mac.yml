@@ -34,10 +34,13 @@ jobs:
             -DFFMPEG_SDK_PATH="/opt/homebrew"
 
       - name: Build
-        # 2026-09-07：180→240——run 34129123727 实锤 180 分钟时构建到 91%（≈197-205min 完成），
-        # 180 上限会在完成前杀 Build（"The action 'Build' has timed out after 180 minutes"）
-        timeout-minutes: 240
-        run: cmake --build build --parallel --verbose
+        # 2026-09-08 根因修复：只编 app target。DMG 只用到 build/LumenArc.app，
+        # 原 `cmake --build build` 连带编 19 个测试可执行文件 → 3 核 runner 上约 4 小时，
+        # 导致 180/240 分钟上限反复超时（run 34129123727 91%@180min、run 34154142163
+        # 触 240min 上限被杀）。--target LumenArc 由 CMake 自动带上其依赖（资源/i18n/
+        # 生成头等）。上限 180 对单 target（预计 30-60min）余量充足。
+        timeout-minutes: 180
+        run: cmake --build build --target LumenArc --parallel --verbose
 
       - name: Bundle relocatable Python (python-build-standalone)
         run: |
@@ -45,9 +48,10 @@ jobs:
           curl -L -o python.tar.gz "https://github.com/astral-sh/python-build-standalone/releases/download/20260728/cpython-${PS_VER}-aarch64-apple-darwin-install_only.tar.gz"
           mkdir -p /tmp/pystand
           tar xzf python.tar.gz -C /tmp/pystand
-          cp -R /tmp/pystand/python "build/LumenArc.app/Contents/MacOS/python"
-          "build/LumenArc.app/Contents/MacOS/python/bin/python3" -m pip install --quiet --no-warn-script-location numpy opencv-python-headless rapidocr_onnxruntime
-          "build/LumenArc.app/Contents/MacOS/python/bin/python3" -c "import cv2, numpy; print('python bundle OK:', cv2.__version__, numpy.__version__)"
+          mkdir -p "build/LumenArc.app/Contents/Resources"
+          cp -R /tmp/pystand/python "build/LumenArc.app/Contents/Resources/python"
+          "build/LumenArc.app/Contents/Resources/python/bin/python3" -m pip install --quiet --no-warn-script-location numpy opencv-python-headless rapidocr_onnxruntime
+          "build/LumenArc.app/Contents/Resources/python/bin/python3" -c "import cv2, numpy; print('python bundle OK:', cv2.__version__, numpy.__version__)"
 
       - name: Bundle ffmpeg CLI
         run: |
