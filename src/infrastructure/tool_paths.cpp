@@ -30,9 +30,18 @@ QString ToolPaths::detectPythonPath()
 
 #ifdef Q_OS_MACOS
     // 0. Bundled Python (inside .app bundle)
-    QString bundledPy = appDir + "/python/bin/python3";
-    if (QFile::exists(bundledPy))
-        return bundledPy;
+    // python 树放 Contents/Resources（2026-09）：MacOS/ 是 codesign 的代码目录，
+    // 其中的非 Mach-O（pip console script、include/ 头文件目录）会被判为"未签名
+    // 嵌套代码"（code object is not signed at all / In subcomponent）→ 整包签名失败。
+    // 保留旧路径作兼容回退。
+    const QStringList pyCandidates = {
+        appDir + "/../Resources/python/bin/python3",
+        appDir + "/python/bin/python3",
+    };
+    for (const QString &cand : pyCandidates) {
+        if (QFile::exists(cand))
+            return QDir::cleanPath(cand);
+    }
 #endif
 
     // 1. Environment variable (cross-platform)

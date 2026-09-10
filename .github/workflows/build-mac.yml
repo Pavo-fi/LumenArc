@@ -48,9 +48,10 @@ jobs:
           curl -L -o python.tar.gz "https://github.com/astral-sh/python-build-standalone/releases/download/20260728/cpython-${PS_VER}-aarch64-apple-darwin-install_only.tar.gz"
           mkdir -p /tmp/pystand
           tar xzf python.tar.gz -C /tmp/pystand
-          cp -R /tmp/pystand/python "build/LumenArc.app/Contents/MacOS/python"
-          "build/LumenArc.app/Contents/MacOS/python/bin/python3" -m pip install --quiet --no-warn-script-location numpy opencv-python-headless rapidocr_onnxruntime
-          "build/LumenArc.app/Contents/MacOS/python/bin/python3" -c "import cv2, numpy; print('python bundle OK:', cv2.__version__, numpy.__version__)"
+          mkdir -p "build/LumenArc.app/Contents/Resources"
+          cp -R /tmp/pystand/python "build/LumenArc.app/Contents/Resources/python"
+          "build/LumenArc.app/Contents/Resources/python/bin/python3" -m pip install --quiet --no-warn-script-location numpy opencv-python-headless rapidocr_onnxruntime
+          "build/LumenArc.app/Contents/Resources/python/bin/python3" -c "import cv2, numpy; print('python bundle OK:', cv2.__version__, numpy.__version__)"
 
       - name: Bundle ffmpeg CLI
         run: |
