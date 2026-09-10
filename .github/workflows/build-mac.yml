@@ -6,6 +6,11 @@ on:
       - 'v*'
   workflow_dispatch:
 
+# 2026-09-10：挂 DMG 到 Release 需要写权限（run 34454627119 报 403
+# "Resource not accessible by integration"）
+permissions:
+  contents: write
+
 jobs:
   build-mac:
     runs-on: macos-14   # Apple Silicon (arm64)；Qt6 macOS 二进制为 universal
