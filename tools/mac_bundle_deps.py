@@ -100,6 +100,37 @@ def strip_bad_rpaths(app):
     return removed
 
 
+def strip_script_exec_bits(app):
+    """清除 bundle 内非 Mach-O 可执行文件的执行位。
+
+    pip 装的 console script（如 python/bin/onnxruntime_test、pip3）是**文本脚本**，
+    位于 bundle 的代码目录 Contents/MacOS/ 下；codesign 把它们当作未签名的嵌套代码
+    （"code object is not signed at all / In subcomponent: …onnxruntime_test"），
+    而脚本本身无法被 codesign 签名 → 整包签名失败（run 34446638667 实锤）。
+    这些脚本运行期用不到（App 只用 python3 -c / -m，见 tool_paths.cpp），去掉执行位
+    后成为普通资源文件，被密封进签名即可。Mach-O（含 python3 本体、ffmpeg）保留执行位。
+    """
+    app_abs = os.path.abspath(app)
+    stripped = 0
+    for root, _dirs, files in os.walk(app):
+        for name in files:
+            p = os.path.join(root, name)
+            if not os.path.isfile(p):
+                continue
+            tgt = os.path.realpath(p) if os.path.islink(p) else p
+            # 只处理 bundle 内、非 Mach-O 的文件（符号链接看真身）
+            if not os.path.abspath(tgt).startswith(app_abs) or is_macho(tgt):
+                continue
+            try:
+                mode = os.stat(tgt).st_mode
+            except OSError:
+                continue
+            if mode & 0o111:
+                os.chmod(tgt, mode & ~0o111)
+                stripped += 1
+    return stripped
+
+
 def frameworks_dir(app):
     return os.path.join(app, 'Contents', 'Frameworks')
 
@@ -168,6 +199,9 @@ def cmd_bundle(app):
     dropped = strip_bad_rpaths(app)
     if dropped:
         print(f'[bundle] stripped {dropped} build-machine rpath(s)')
+    scripts = strip_script_exec_bits(app)
+    if scripts:
+        print(f'[bundle] cleared exec bit on {scripts} non-Mach-O file(s) (codesign)')
 
     # 迭代：新拷入的库可能又引入新的坏依赖，直到收敛
     round_no = 0
@@ -249,7 +283,7 @@ def cmd_sign(app):
                            capture_output=True, text=True)
         if r.returncode != 0:
             print(f'[sign] WARN {os.path.relpath(m, app)}: {r.stderr.strip()}')
-    r = subprocess.run(['codesign', '--force', '--sign', '-', app],
+    r = subprocess.run(['codesign', '--force', '--deep', '--sign', '-', app],
                        capture_output=True, text=True)
     if r.returncode != 0:
         print(f'[sign] FAIL app: {r.stderr}')
