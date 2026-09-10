@@ -35,7 +35,7 @@ P-20 2GB 尾帧 seek（已通过）· P-21 DVR 字体抽检（已通过）· P-2
 | # | 版本 | 内容 | 前置 | 状态 |
 |---|---|---|---|---|
 | P-28 | v1.4.0 | 分析报告模块（DOCX：案件信息/时间基准/哈希清单/逐视频章节/签署盖章位）——**2026-08-23 拍板启动**：只出 DOCX（MD5+SHA256 双列/静态目录无页码/向导入口/章节一~七重排）；远期 HTML 渲染器接口预留。模板=用户《火灾视频分析报告模板.md》。批次①DOCX 地基已落（ZipStoreWriter 手写 store zip + DocxWriter 极简 OPC：标题/段落/表格/图片/分页，docx_test 23 断言） | 校时+案件 ✅ | 🔨 全部批次施工完 ✅ v1.14.0（批次①②③+曲线光栅嵌入+哈希进度条+P-74 点位图，docx23/report49/sitemap16 断言）；**待用户整体验收**（HANDOVER §74-§76） |
-| P-29 | v1.6.0 | GPU 显示管线 Stage 1（QOpenGLWidget 纹理缩放，消 uiDrops）；Stage 2 已砍 | 独立 | 🔨 Stage 1 T1~T3 完成（GlVideoSurface + VideoWidget 挂接 + offscreen 回退测试闸，reviewer 复审 APPROVE；安全点 safety/pre-gpu-pipeline-20260907）；待 T4 真机验收（RELEASE_CHECKLIST_V1.6_CN.md，uiDrops=0 硬指标）+ T5 文档 |
+| P-29 | v1.6.0 | GPU 显示管线 Stage 1（QOpenGLWidget 纹理缩放，消 uiDrops）；Stage 2 已砍 | 独立 | ✅ Stage 1 完成但**默认关闭**（2026-09-08 拍板：`video/gpuDisplay` 默认 off=CPU 软件渲染；GPU 保留为可选优化，设置菜单可切 自动/强制 GPU）。T1~T3：GlVideoSurface + VideoWidget 挂接 + offscreen 回退测试闸（reviewer 复审 APPROVE）；黑屏根因修复 773b410（VBO 先 bind 再 allocate + 首帧读回自检安全网，防"黑屏无告警"）+ 坏值归一 off（历史遗留 `false` 不再顶成启用；ui_chain +6 断言）。真机验收降为**可选评估**（走前先把模式切 GPU） |
 | P-30 | v1.8.0 | P1a/P1b 任务化+通道化（TaskRegistry / 通道字典 / **.vla v10**）+ Python 引擎退役 | v1.5 ✅ | ✅ 2026-08-17 已实施（任务化+通道化+v10+退役全落地，待真机点检 RELEASE_CHECKLIST_V1.8） |
 | P-31 | v1.9.0 | P2 MainWindow 拆分（AnalysisController/VideoSessionManager/ProjectIO/UiState；收口 R2/R3/R5） | 前序全部 | ✅ 2026-08-17 已实施（四组件落地+时长 SSOT+R3 收口；待真机点检 RELEASE_CHECKLIST_V1.9） |
 

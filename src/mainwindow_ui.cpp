@@ -478,7 +478,7 @@ void MainWindow::createMenus()
     }
 
     // P-29 v1.6.0 Stage 1：视频渲染（GPU 纹理缩放 / CPU 软件）
-    // auto=默认（GL 不可用永久回退 CPU）/ on=失败弹提示 / off=强制 CPU
+    // off=默认（CPU 软件渲染，2026-09-08 拍板降风险）/ auto=GPU 优先失败回退 / on=强制 GPU 失败弹提示
     QMenu *renderMenu = settingsMenu->addMenu(lang("视频渲染", "Video Rendering"));
     QActionGroup *renderGroup = new QActionGroup(this);
     auto addRenderAction = [this, renderMenu, renderGroup](const QString &title,
@@ -497,14 +497,18 @@ void MainWindow::createMenus()
     };
     {
         QSettings s("LumenArc", "LumenArc");
-        const QString current = s.value(QStringLiteral("video/gpuDisplay"),
-                                         QStringLiteral("auto")).toString();
+        // 同 VideoWidget 归一：只认 on/auto，其余一律 off——否则历史遗留值
+        // （如 "false"）会导致三项都不勾选，与实际生效模式不符
+        const QString raw = s.value(QStringLiteral("video/gpuDisplay"),
+                                     QStringLiteral("off")).toString().toLower();
+        const QString current = (raw == QLatin1String("on") || raw == QLatin1String("auto"))
+                ? raw : QStringLiteral("off");
+        addRenderAction(lang("CPU 软件渲染（默认）", "CPU software rendering (default)"),
+                        QStringLiteral("off"), current);
         addRenderAction(lang("自动（GPU 优先，失败回退 CPU）", "Auto (GPU, fallback to CPU)"),
                         QStringLiteral("auto"), current);
         addRenderAction(lang("强制 GPU（不可用弹提示）", "Force GPU (warn if unavailable)"),
                         QStringLiteral("on"), current);
-        addRenderAction(lang("CPU 软件渲染", "CPU software rendering"),
-                        QStringLiteral("off"), current);
     }
 
     // Help menu

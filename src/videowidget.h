@@ -316,7 +316,7 @@ private:
     GlVideoSurface *m_gl = nullptr;   ///< 惰性构造（首帧），非 GL 环境永不建
     bool m_glFailed = false;                ///< 本进程永久回退标志（Q3 auto 语义）
     QString m_glFailReason;                 ///< 降级原因（on 模式切换时表面化）
-    QString m_gpuDisplayMode = QStringLiteral("auto");
+    QString m_gpuDisplayMode = QStringLiteral("off");   // 2026-09-08：默认 CPU（GPU 管线为可选优化）
     void ensureGlSurface();                 ///< 首帧惰性构造（mode≠off 且未失败）
     void onGlFailed(const QString &reason); ///< 降级：隐藏 GL 面 + 日志（on 模式弹提示）
     bool glActive() const;                  ///< GL 面正在上屏的判定

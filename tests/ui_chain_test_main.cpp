@@ -654,6 +654,9 @@ static void runGpuFallbackScenario()
     host.resize(640, 480);
     VideoWidget *vw = new VideoWidget(&host);
     vw->setGeometry(host.rect());
+    // 2026-09-08：默认已改 off（CPU）。本场景验证的是"GPU 尝试 → 失败 → 回退"这条
+    // 路径，故显式置 auto（否则 ensureGlSurface 直接 early-return，本场景失效）
+    vw->setGpuDisplayMode(QStringLiteral("auto"));
     host.show();
 
     CHECK(!vw->gpuDisplayActive(), "gl: inactive before first frame");
@@ -715,6 +718,28 @@ static void runGpuFallbackScenario()
     vw->setGpuDisplayMode(QStringLiteral("auto"));
     vw->setGpuDisplayMode(QStringLiteral("off"));
     QCoreApplication::processEvents();
+
+    // 坏值归一：只认 on/auto，其余一律 off。含历史遗留布尔值字符串 "false"/"true"
+    // ——真实机器上 video/gpuDisplay=false 曾把 GPU 路径顶成启用（2026-09-08 改默认 CPU）
+    vw->setGpuDisplayMode(QStringLiteral("false"));
+    CHECK(vw->gpuDisplayMode() == QLatin1String("off"), "gl: junk 'false' normalizes to off");
+    vw->setGpuDisplayMode(QStringLiteral("true"));
+    CHECK(vw->gpuDisplayMode() == QLatin1String("off"), "gl: junk 'true' normalizes to off");
+    vw->setGpuDisplayMode(QStringLiteral("AUTO"));
+    CHECK(vw->gpuDisplayMode() == QLatin1String("off"), "gl: junk 'AUTO' normalizes to off (case)");
+
+    // 合法值直通（在无帧、未失败的干净实例上验证——避免 on 模式失败弹窗阻塞测试）
+    {
+        QWidget host2;
+        VideoWidget *vw2 = new VideoWidget(&host2);
+        vw2->setGpuDisplayMode(QStringLiteral("on"));
+        CHECK(vw2->gpuDisplayMode() == QLatin1String("on"), "gl: 'on' accepted");
+        vw2->setGpuDisplayMode(QStringLiteral("auto"));
+        CHECK(vw2->gpuDisplayMode() == QLatin1String("auto"), "gl: 'auto' accepted");
+        vw2->setGpuDisplayMode(QStringLiteral("off"));
+        CHECK(vw2->gpuDisplayMode() == QLatin1String("off"), "gl: 'off' accepted");
+        delete vw2;
+    }
 
     delete vw;
 }
