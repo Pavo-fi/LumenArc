@@ -351,7 +351,8 @@ bool FfmpegVideoEngine::reconfigSwrInput(const AVFrame *frame)
         swr_free(&m_swr);
     AVChannelLayout outLayout;
     av_channel_layout_default(&outLayout, m_outChannels);
-    if (swr_alloc_set_opts2(&m_swr, &outLayout, m_outSampleFmt, m_outSampleRate,
+    if (swr_alloc_set_opts2(&m_swr, &outLayout, static_cast<AVSampleFormat>(m_outSampleFmt),
+                            m_outSampleRate,
                             &frame->ch_layout,
                             static_cast<AVSampleFormat>(frame->format),
                             frame->sample_rate, 0, nullptr) < 0 || !m_swr) {

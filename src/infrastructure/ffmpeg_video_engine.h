@@ -39,11 +39,13 @@ struct SwrContext;
 struct AVPacket;
 struct AVFrame;
 struct AVBufferRef;
-enum AVSampleFormat;   // v1.7.1：PCM 增益格式分支（完整定义在 libswresample/libavutil）。
-// 2026-09 修订：去掉固定底层类型 `: int`——Clang 严格执法：前向声明带固定类型后，
-// 后续真实定义（FFmpeg 的普通枚举）必须带同一类型，否则 "enumeration previously
-// declared with fixed underlying type"（macOS CI run 34129123727 实锤，engine_test
-// 先含本头再含 avformat.h）。普通前向声明在所有包含顺序/编译器下均合法。
+// 注：AVSampleFormat 是 C 枚举，**不能**在本头前向声明：
+//  - `enum AVSampleFormat : int;` + FFmpeg 头的普通定义 → Clang 硬错
+//    "enumeration previously declared with fixed underlying type"
+//  - `enum AVSampleFormat;`（无底层类型）→ 非标准 C++，Clang/macOS 硬错
+//    "ISO C++ forbids forward references to 'enum' types"（MSVC/Windows Clang 宽松放过）
+// 因此本头不引 FFmpeg 头，改用 int 存枚举值（见 m_outSampleFmt），
+// 仅在 .cpp（含真实 FFmpeg 头）处 static_cast 使用。
 class QAudioSink;
 class QIODevice;
 
@@ -281,8 +283,9 @@ private:
     int m_outSampleRate = 0;
     int m_outChannels = 0;
     int m_outBytesPerSample = 2;    // sink 实际样本字节（Int16=2，Int64=8…）
-    // S16 = 1（FFmpeg AVSampleFormat 枚举值；头文件仅前置声明）
-    AVSampleFormat m_outSampleFmt = static_cast<AVSampleFormat>(1);
+    // S16 = 1（FFmpeg AVSampleFormat 枚举值）。不能用该枚举类型：C 枚举无法在本头
+    // 前向声明（见上方注释），所以用 int 存，.cpp 处 static_cast 还原
+    int m_outSampleFmt = 1;
     QAudioFormat m_sinkFmt;       // sink 实际格式（设备热切换重建用）
     QByteArray m_sinkDeviceId;    // sink 当前输出设备 id
     int m_devCheckCounter = 0;    // 周期性检查系统默认输出设备变化
