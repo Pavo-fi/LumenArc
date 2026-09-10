@@ -84,6 +84,22 @@ def is_ok(dep, app):
     return os.path.abspath(dep).startswith(os.path.abspath(app))
 
 
+def strip_bad_rpaths(app):
+    """删除指向构建机的 LC_RPATH（/opt/homebrew、/Users/… 、/DLC/… 等）。
+
+    这些是第三方 wheel（Pillow/opencv）的构建残留：用户机上不存在，留着会被
+    audit 判为坏 rpath；删掉不影响依赖解析——依赖已统一为 @loader_path/@rpath/
+    系统库三类。@ 前缀与 bundle 内绝对路径的 rpath 一律保留。
+    """
+    removed = 0
+    for m in all_machos(app):
+        for rp in otool_rpaths(m):
+            if is_bad(rp) or not is_ok(rp, app):
+                run_tool(['install_name_tool', '-delete_rpath', rp, m])
+                removed += 1
+    return removed
+
+
 def frameworks_dir(app):
     return os.path.join(app, 'Contents', 'Frameworks')
 
@@ -149,6 +165,9 @@ def cmd_bundle(app):
     fixed = normalize_absolute_refs(app)
     if fixed:
         print(f'[bundle] normalized {fixed} co-located absolute reference(s)')
+    dropped = strip_bad_rpaths(app)
+    if dropped:
+        print(f'[bundle] stripped {dropped} build-machine rpath(s)')
 
     # 迭代：新拷入的库可能又引入新的坏依赖，直到收敛
     round_no = 0
