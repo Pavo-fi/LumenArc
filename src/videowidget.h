@@ -22,7 +22,6 @@ class IVideoEngine;
 class RoiModel;
 class RoiModel;
 class GuideLineModel;
-class GlVideoSurface;   // P-29 Stage 1：GPU 纹理视频面
 struct DisplayAdjust;
 #include "domain/guide_line.h"
 
@@ -257,13 +256,6 @@ public:
     /// 未调节/未旋转的原始帧（放大镜首帧等需要【原视频系】像素的场景）
     const QImage& rawFrame() const { return m_rawFrameImage; }
 
-    /// P-29 v1.6.0 Stage 1：GPU 显示模式（QSettings video/gpuDisplay）：
-    /// auto（默认，GL 不可用永久回退 CPU）/ on（失败弹提示）/ off（强制 CPU）
-    void setGpuDisplayMode(const QString &mode);
-    QString gpuDisplayMode() const { return m_gpuDisplayMode; }
-    /// GL 面是否正在上屏（GL 初始化成功且可见）
-    bool gpuDisplayActive() const { return glActive(); }
-
 signals:
     void frameSnapshotReady(const QImage &image);
     void timestampRoiConfirmed(const QRectF &normalized);
@@ -303,19 +295,4 @@ private:
     int m_displayRotation = 0;   ///< 显示旋转档位（0/90/180/270 顺时针）
     int m_cachedRotation = -1;   ///< 截图叠加缓存的旋转档位（缓存键一部分）
     void rebuildAdjustedFrame(); ///< 按当前旋转+LUT 从原始帧重建 m_frameImage
-
-    // ------------------------------------------------------------------
-    // P-29 v1.6.0 Stage 1：GPU 纹理显示（GlVideoSurface 子控件）
-    // 只替换 paintEvent 的 drawImage 全帧 CPU 缩放；帧语义（旋转/LUT/
-    // 快照融合）全部继承既有 CPU 链。降级红线：glFailed → 永久回退 CPU。
-    // ------------------------------------------------------------------
-    GlVideoSurface *m_gl = nullptr;   ///< 惰性构造（首帧），非 GL 环境永不建
-    bool m_glFailed = false;                ///< 本进程永久回退标志（Q3 auto 语义）
-    QString m_gpuDisplayMode = QStringLiteral("auto");
-    void ensureGlSurface();                 ///< 首帧惰性构造（mode≠off 且未失败）
-    void onGlFailed(const QString &reason); ///< 降级：隐藏 GL 面 + 日志（on 模式弹提示）
-    bool glActive() const;                  ///< GL 面正在上屏的判定
-    void glPresentCurrent();                ///< 向 GL 面下发当前帧（COW，O(1)）
-    /// 截图融合缓存重建；返回本次是否重建（GL 分支据此决定是否重传纹理）
-    bool ensureAdjustedSnapshot();
 };
