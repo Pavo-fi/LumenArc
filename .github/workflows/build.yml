@@ -70,6 +70,10 @@ jobs:
         shell: bash
 
       - name: Build
+        # 全量编译作为发行前的“编译/链接漂移”闸门（app + 25 个测试目标，
+        # 4 核 runner 上约 25 分钟）：v1.18.0 正是靠全量编译拓到
+        # lumenarc_libav_test 的 LNK2019。加 timeout 防挂死。
+        timeout-minutes: 90
         run: cmake --build build --config Release
         shell: bash
 

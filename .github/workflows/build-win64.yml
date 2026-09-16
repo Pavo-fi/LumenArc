@@ -66,6 +66,11 @@ jobs:
         shell: bash
 
       - name: Build
+        # 全量编译（app + 25 个无头测试目标）是本工作流的价值所在：它充当
+        # “编译/链接漂移”闸门。v1.18.0 就是靠它拓到 lumenarc_libav_test 漏链
+        # 微变符号的 LNK2019（本地习惍只编 app target，永远拓不到）。
+        # 4 核 runner 上约 25 分钟，属预期；加 timeout 防挂死。
+        timeout-minutes: 90
         run: cmake --build build --config Release
         shell: bash
 

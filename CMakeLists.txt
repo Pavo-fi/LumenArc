@@ -61,6 +61,17 @@ message(STATUS "FFmpeg include: ${FFMPEG_INCLUDE_DIR}")
 message(STATUS "FFmpeg libraries: ${FFMPEG_LIBRARIES}")
 
 
+# --- 微变纯计算 / 基准提取源（app 与各无头测试目标共用）---
+# v1.18.0：这三个文件原先由各目标手抄，结果漂移 —— lumenarc_libav_test 漏抄导致
+# ALL 构建链接失败（microdiff::roiFrameStats / aggregateSeconds / detectOnset /
+# extractMicroDiffBaseline 无法解析）。该类缺陷在"只编 app target"的本地习惯下
+# 不暴露，只在 CI 编 ALL 目标时炸（run 35093597096 实锤）。统一走本变量。
+set(MICRODIFF_SOURCES
+    src/domain/microdiff_core.cpp
+    src/domain/microdiff_curve.cpp
+    src/infrastructure/microdiff_baseline.cpp
+)
+
 # --- Sources ---
 set(SOURCES
     src/main.cpp
@@ -87,8 +98,7 @@ set(SOURCES
     src/displayadjust.cpp
     src/microdiff.cpp              # 2026-09-10：微变显示末级（原彩+假彩色叠加）
     src/microdiffdialog.cpp        # 2026-09-10：微变面板（等级/基准段/显示模式）
-    src/domain/microdiff_core.cpp  # 2026-09-10：微变纯计算核心
-    src/domain/microdiff_curve.cpp # 2026-09-10：微变曲线纯计算（逐秒聚合/判定）
+    ${MICRODIFF_SOURCES}           # 微变纯计算核心/曲线/基准提取（统一定义，见文件上方）
     src/i18n.cpp
     src/aboutdialog.cpp
     src/videolistpanel.cpp
@@ -157,7 +167,6 @@ set(SOURCES
     src/infrastructure/tool_paths.cpp
     src/infrastructure/integrity_checker.cpp
     src/infrastructure/libav_analysis_engine.cpp
-    src/infrastructure/microdiff_baseline.cpp   # 2026-09-10：微变基准提取
     src/infrastructure/encoder_probe.cpp
     src/infrastructure/media_probe_engine.cpp
     src/infrastructure/timestamp_ocr_engine.cpp
@@ -281,9 +290,7 @@ add_executable(lumenarc_engine_test
     src/infrastructure/libav_analysis_engine.h
     src/infrastructure/microdiff_baseline.h
     src/infrastructure/libav_analysis_engine.cpp  # 2026-09-10：微变曲线无头验证驱动
-    src/infrastructure/microdiff_baseline.cpp     # 微变基准提取（独立解码）
-    src/domain/microdiff_core.cpp                 # 微变纯计算核心（基准中值/噪声标定）
-    src/domain/microdiff_curve.cpp                # 微变曲线纯计算（逐秒聚合/判定）
+    ${MICRODIFF_SOURCES}                          # 微变基准/核心/曲线（统一定义）
 )
 target_include_directories(lumenarc_engine_test PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src
@@ -500,6 +507,7 @@ add_executable(lumenarc_libav_test
     src/infrastructure/libav_analysis_engine.h
     src/infrastructure/ianalysis_engine.h
     src/domain/audio_denoise.cpp   # P-54：引擎依赖
+    ${MICRODIFF_SOURCES}           # v1.18.0 修复：引擎已引用微变符号，漏链即 LNK2019
 )
 target_include_directories(lumenarc_libav_test PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src
