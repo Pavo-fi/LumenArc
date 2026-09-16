@@ -168,6 +168,10 @@ private:
 public:
     /// 诊断/测试用：本次 seek 以来写入音频缓冲的字节数
     qint64 audioBytesWritten() const { return m_audioBytesWritten.load(); }
+    // 是否成功建立了可用的音频输出 sink（本机有无音频输出设备 / 设备是否接受）。
+    // v1.18.0：无头环境（CI runner / 无声卡服务器）下 ensureAudioOutput() 不建 sink，
+    // 此时 audioBytesWritten 恒为 0，不应用来断言音频链路健康。
+    bool audioSinkOk() const { return m_audioSinkOk.load(); }
     /// 诊断/测试用：音频主时钟（相对毫秒）
     qint64 audioClockMs() const;
     /// 诊断/测试用：是否存在可用音轨

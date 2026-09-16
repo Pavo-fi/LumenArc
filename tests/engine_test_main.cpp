@@ -19,6 +19,7 @@ extern "C" {
 #include <libavcodec/avcodec.h>
 }
 #include <QCoreApplication>
+#include <QMediaDevices>
 #include <QEventLoop>
 #include <QTimer>
 #include <QImage>
@@ -973,8 +974,16 @@ int main(int argc, char *argv[])
                seconds, audioBytes, engine.volume());
         if (!engine.hasAudio()) {
             printf("[ OK ] no audio stream (skipped)\n");
+        } else if (!engine.audioSinkOk()) {
+            // 未能建立可用的音频输出 sink —— 本机没有音频输出设备，或设备拒绝打开
+            // （典型：CI runner / 无头 VM / 无声卡服务器）。输出级根本没起来，
+            // audioBytesWritten 无意义 → 判 SKIP。
+            // 注意：sink 正常建立却 0 字节会落到下面分支按真缺陷判 FAIL，
+            // 因此这里不降低对真实引擎缺陷的严格度。
+            printf("[ OK ] no usable audio output sink (audio devices on host: %lld; assertion skipped)\n",
+                   static_cast<long long>(QMediaDevices::audioOutputs().size()));
         } else if (audioBytes <= 0) {
-            printf("[FAIL] no audio bytes decoded\n");
+            printf("[FAIL] audio sink active but no bytes written\n");
             failures++;
         } else {
             // 音量设置/读取断言
