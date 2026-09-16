@@ -1381,17 +1381,14 @@ VideoWidget::VideoWidget(QWidget *parent)
     connect(m_overlay, &OverlayWidget::timestampRoiReady,
             this, &VideoWidget::timestampRoiReady);
 
-    // P-29 Stage 1：GPU 显示模式（QSettings video/gpuDisplay，默认 off = CPU 软件渲染）。
-    // 2026-09-08 拍板：默认关闭（GPU 管线保留为可选优化，设置菜单可随时切 auto/on）。
+    // P-29 Stage 1：GPU 显示模式（QSettings video/gpuDisplay，默认 auto）。
     // GL 面首帧前不建；offscreen/CI 下无 3.3 core 上下文 → 初始化失败/未执行
     // → glActive() 恒 false → 渲染分支 100% 走 CPU（测试零 GL 依赖）。
     QSettings s(QStringLiteral("LumenArc"), QStringLiteral("LumenArc"));
     QString mode = s.value(QStringLiteral("video/gpuDisplay"),
-                           QStringLiteral("off")).toString().toLower();
-    // 归一：只认 on/auto；其余（含历史遗留布尔值 "false"/"true"、大小写/非法值）一律 off——
-    // 坏值经不落到"启用 GPU"这一侧（旧实现坏值→auto，曾把遗留 false 顶成 GPU 启用）
-    m_gpuDisplayMode = (mode == QLatin1String("on") || mode == QLatin1String("auto"))
-        ? mode : QStringLiteral("off");
+                           QStringLiteral("auto")).toString().toLower();
+    m_gpuDisplayMode = (mode == QLatin1String("on") || mode == QLatin1String("off"))
+        ? mode : QStringLiteral("auto");   // 坏值归一（大小写/非法值）
 }
 
 VideoWidget::~VideoWidget() = default;
@@ -1733,8 +1730,8 @@ void VideoWidget::resizeEvent(QResizeEvent *event)
 
 void VideoWidget::setGpuDisplayMode(const QString &mode)
 {
-    const QString m = (mode == QLatin1String("on") || mode == QLatin1String("auto"))
-        ? mode : QStringLiteral("off");   // 坏值→off（同构造期归一，坏值不落到启用侧）
+    const QString m = (mode == QLatin1String("on") || mode == QLatin1String("off"))
+        ? mode : QStringLiteral("auto");
     if (m_gpuDisplayMode == m)
         return;
     m_gpuDisplayMode = m;
