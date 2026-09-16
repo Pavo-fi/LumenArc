@@ -155,11 +155,7 @@ void GlVideoSurface::ensureQuad()
     m_vao->bind();
     m_vbo = new QOpenGLBuffer(QOpenGLBuffer::VertexBuffer);   // 非 QObject，析构显式删
     m_vbo->create();
-    // 红线：Qt 6.8 QOpenGLBuffer::allocate 要求先 bind（未 bind 时静默无效 → 0 字节 VBO
-    // → 0 顶点 → 黑屏；语谱图面板同款 create→bind→allocate 序列）
-    m_vbo->bind();
     m_vbo->allocate(kQuad, sizeof(kQuad));
-    m_vbo->release();
     const int stride = static_cast<int>(sizeof(QuadVertex));
     glEnableVertexAttribArray(0);
     glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, stride,
@@ -254,9 +250,6 @@ void GlVideoSurface::uploadFrame()
         if (!m_frameTex->create()) {
             delete m_frameTex;
             m_frameTex = nullptr;
-            // 纹理创建失败 → 持续黑屏且无告警 → 走降级红线（永久回退 CPU）
-            emit glFailed(QStringLiteral("frame texture create failed (auto CPU fallback)"));
-            m_glOk = false;
             return;
         }
         m_frameTexSize = QSize(w, h);
@@ -273,36 +266,6 @@ void GlVideoSurface::uploadFrame()
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
     m_frameTex->release();
     m_frameDirty = false;
-}
-
-bool GlVideoSurface::verifyFirstDraw(const QRect &displayRect, const QImage &frame)
-{
-    // 无有效帧（不应出现在可见态）：不拦截
-    if (frame.isNull() || frame.width() < 2 || frame.height() < 2)
-        return true;
-    const qreal dpr = devicePixelRatioF();
-    const int pxW = int(width() * dpr);
-    const int pxH = int(height() * dpr);
-    if (pxW < 2 || pxH < 2)
-        return true;
-    const QRgb want = frame.pixel(frame.width() / 2, frame.height() / 2);
-    // 显示矩形中心 → FBO 物理像素（GL y 从下往上）
-    const int x = qRound(displayRect.center().x() * dpr);
-    const int y = qRound((height() - displayRect.center().y()) * dpr);
-    if (x < 1 || x >= pxW - 1 || y < 1 || y >= pxH - 1)
-        return true;   // 边界外（letterbox 贴边情形）：不拦截
-    GLubyte px[3] = {0, 0, 0};
-    glReadPixels(x, y, 1, 1, GL_RGB, GL_UNSIGNED_BYTE, px);
-    const int dr = int(px[0]) - qRed(want);
-    const int dg = int(px[1]) - qGreen(want);
-    const int db = int(px[2]) - qBlue(want);
-    // 容差 16：双线性采样奇数尺寸帧中心可落在两 texel 间（邻域均值）
-    if (qAbs(dr) <= 16 && qAbs(dg) <= 16 && qAbs(db) <= 16)
-        return true;
-    qWarning() << "[GlVideoSurface] first-draw readback mismatch: got"
-               << int(px[0]) << int(px[1]) << int(px[2])
-               << "want" << qRed(want) << qGreen(want) << qBlue(want);
-    return false;
 }
 
 void GlVideoSurface::uploadSnapshot()
@@ -400,17 +363,4 @@ void GlVideoSurface::paintGL()
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, 0);
     glUseProgram(0);
-
-    // 首帧自检验收（安全网）：首次走完整绘制路径时读回显示矩形中心像素与帧中心比较。
-    // 只验 u_snapAlpha=0 的帧（快照贡献为零，输出即纯帧；旧 snap 纹理残留无影响）；
-    // 不匹配 → glFailed → 永久回退 CPU
-    if (!m_glVerified && m_snapOpacity <= 0.0f) {
-        if (verifyFirstDraw(r, m_pendingFrame)) {
-            m_glVerified = true;
-        } else {
-            emit glFailed(QStringLiteral("GL first-draw readback mismatch (auto CPU fallback)"));
-            m_glOk = false;
-            return;
-        }
-    }
 }

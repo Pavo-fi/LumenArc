@@ -71,9 +71,6 @@ private:
     void ensureQuad();             // 静态单位 quad VAO/VBO
     void uploadFrame();            // 惰性上传（尺寸不变 glTexSubImage2D 原地更新）
     void uploadSnapshot();
-    /// 首帧自检验收（安全网）：glReadPixels 回读显示矩形中心像素与帧中心比较，
-    /// 不匹配 → false（emit glFailed → 永久回退 CPU，防"黑屏无告警"失效模式）
-    bool verifyFirstDraw(const QRect &displayRect, const QImage &frame);
 
     QOpenGLShaderProgram *m_program = nullptr;
     QOpenGLVertexArrayObject *m_vao = nullptr;
@@ -91,5 +88,4 @@ private:
     qreal m_snapOpacity = 0.0;
     bool m_linear = true;
     bool m_glOk = false;
-    bool m_glVerified = false;     // 首帧读回自检通过（未过前每帧无叠加时重试）
 };
