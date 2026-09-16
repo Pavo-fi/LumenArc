@@ -738,9 +738,6 @@ static void testSwitchRestore(QApplication &app)
     sendKey(Qt::Key_Space);   // 开 A 后引擎在播 → Space 应暂停
     CHECK(opLabel() == QString::fromUtf8("暂停") || opLabel() == "Paused",
           "Space pauses (operation label)");
-    // 等引擎 worker 处理完暂停（pause() 为 postCommand 异步投递；
-    // 不等则第二次按键可能读到陈旧 state()==Playing 再次走 pause 分支）
-    pump(app, 300);
     sendKey(Qt::Key_Space);   // 再按 → 播放
     CHECK(opLabel() == QString::fromUtf8("播放") || opLabel() == "Playing",
           "Space plays again (operation label)");

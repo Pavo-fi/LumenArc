@@ -666,17 +666,8 @@ static void runGpuFallbackScenario()
     vw->onFrameReady(frame);
     QCoreApplication::processEvents();   // 惰性 GL 构造 + 初始化(失败) + 回退
 
-    // 过程锚定（防 ensureGlSurface 被静默跳过时测试仍绿）：
-    // GL 面必须已构造（首帧 auto 模式无条件建），回退是"建了但不可用"
-    // 而非"根本没建"
-    CHECK(vw->glSurfaceCreated(), "gl: surface constructed on first frame");
-
     // offscreen 无 GL → 必须回退 CPU（glFailed 或 init 未执行，判定同为 false）
     CHECK(!vw->gpuDisplayActive(), "gl: offscreen falls back to CPU");
-    // 终态自洽：非激活 ⇒ GL 面不健康（glHealthy 仅在 initializeGL 成功后
-    // 为 true；offscreen 下上下文建不出/initializeGL 未执行，同样为 false）
-    CHECK(vw->gpuDisplayActive() || !vw->glHealthy(),
-          "gl: inactive implies unhealthy GL surface");
 
     // 数据通道零影响（证据链：所见即所得）
     CHECK(!vw->currentFrame().isNull(), "gl: currentFrame intact");

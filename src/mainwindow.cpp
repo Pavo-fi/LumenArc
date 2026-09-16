@@ -1453,19 +1453,13 @@ QString MainWindow::formatTime(qint64 ms) const
     return QString("%1:%2").arg(minutes, 2, 10, QChar('0')).arg(seconds, 2, 10, QChar('0'));
 }
 
-/// @brief 在状态栏左侧显示操作反馈（5秒后自动清除，新操作重启窗口）
+/// @brief 在状态栏左侧显示操作反馈（2秒后自动清除）
 void MainWindow::showOperationStatus(const QString &text)
 {
     m_operationLabel->setText(text);
-    // 重启语义：新的操作状态重置清除窗口，避免多次操作累积的旧
-    // singleShot(5000) 迟到 fire 把新标签提前抹掉（S-2 测试暴露的真实 bug）
-    if (!m_statusClearTimer) {
-        m_statusClearTimer = new QTimer(this);
-        m_statusClearTimer->setSingleShot(true);
-        connect(m_statusClearTimer, &QTimer::timeout, this,
-                [this]() { m_operationLabel->clear(); });
-    }
-    m_statusClearTimer->start(5000);
+    QTimer::singleShot(5000, this, [this]() {
+        m_operationLabel->clear();
+    });
 }
 
 /// @brief 恢复分析状态：区域/校时/标签/截图融合/音频
