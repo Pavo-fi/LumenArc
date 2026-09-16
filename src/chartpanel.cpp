@@ -105,6 +105,12 @@ ChartPanel::ChartPanel(QWidget *parent)
         updateABMarkers();
     });
 
+    // 微变标记（阈值虚线/首帧竖线）随绘图区与 X 轴范围重定位（同 A/B 标记模式）
+    connect(m_chart, &QChart::plotAreaChanged, this, &ChartPanel::updateMdMarks);
+    connect(m_axisX, &QValueAxis::rangeChanged, this, [this](qreal, qreal) {
+        updateMdMarks();
+    });
+
     setChart(m_chart);
 
     // Legend click to toggle series visibility (connect after series are added in rebuildSeries)
@@ -282,6 +288,7 @@ ChartPanel::ChartPanel(QWidget *parent)
 ChartPanel::~ChartPanel()
 {
     clearChartGuideLines();
+    clearMdSeries();   // 微变系列/标记（无 parent，手动回收）
     delete m_labelTip;   // 独立顶层悬浮窗（无 parent），析构时回收
 
     for (auto *item : m_timeLabelItems) {
@@ -502,8 +509,8 @@ void ChartPanel::onDataReplaced()
              << "volume:" << snapshot.audioData().volume.size()
              << "spectrogram:" << snapshot.audioData().spectrogram.size()
              << "durationMs:" << m_durationMs;
-    // Need either timestamps (luminance) or audio data to proceed
-    if (snapshot.isEmpty() && !snapshot.hasAudio()) {
+    // Need either timestamps (luminance), audio, or microdiff data to proceed
+    if (snapshot.isEmpty() && !snapshot.hasAudio() && !snapshot.hasMicroDiff()) {
         // 2026-08 修复：切换视频后旧音量曲线残留 + X 轴换成新时长 →
         // 曲线“短一截”。空快照必须清掉音量曲线，而不是直接 return 残留
         if (m_volumeSeries) {
@@ -515,12 +522,12 @@ void ChartPanel::onDataReplaced()
         return;
     }
 
-    // If no luminance series exist, only continue when audio is present
+    // If no luminance series exist, only continue when audio or microdiff is present
     if (m_seriesList.isEmpty()) {
-        if (!snapshot.hasAudio())
+        if (!snapshot.hasAudio() && !snapshot.hasMicroDiff())
             return;
         // Create volume series lazily for audio-only display
-        if (!m_volumeSeries) {
+        if (snapshot.hasAudio() && !m_volumeSeries) {
             m_volumeSeries = new QLineSeries();
             m_volumeSeries->setName(lang("音量", "Volume"));
             // alpha=179 = 70% 不透明度（255×0.70，2026-08-18 用户拍板；原 180≈70.6%）
@@ -546,7 +553,9 @@ void ChartPanel::onDataReplaced()
 
     // Always rebuild when dataEntries exist to ensure series names/colors
     // match the latest data. The m_rebuilding flag prevents recursion.
-    if (!m_rebuilding && !snapshot.lumEntries().isEmpty()) {
+    // 微变通道同样需要触发重建（纯 microdiff 快照 lumEntries 为空，
+    // 不触发则 m_mdSeries 永不创建——地图陷阱 #2）。
+    if (!m_rebuilding && (!snapshot.lumEntries().isEmpty() || snapshot.hasMicroDiff())) {
         rebuildSeries();
         // 不 return：rebuildSeries 重建的空音量曲线需要继续填充，
         // 否则有亮度数据的视频切换后音量曲线为空（2026-08 修复）
@@ -563,6 +572,8 @@ void ChartPanel::onDataReplaced()
         // 不计入音频全长会把音量曲线截断在残留时长处（“短一截”）。
         if (snapshot.hasAudio())
             dataMax = qMax(dataMax, qreal(snapshot.audioData().durationMs()));
+        if (snapshot.hasMicroDiff() && !snapshot.microdiffChannelPtr()->mdTs.isEmpty())
+            dataMax = qMax(dataMax, qreal(snapshot.microdiffChannelPtr()->mdTs.last()));
         qreal xMax = qMax(qreal(m_durationMs), dataMax);
         if (xMax < 1000) xMax = 1000;
         m_axisX->setRange(0, xMax);
@@ -573,6 +584,11 @@ void ChartPanel::onDataReplaced()
         // Audio-only: set X-axis from audio duration
         qint64 audioDur = snapshot.audioData().durationMs();
         m_axisX->setRange(0, qMax(audioDur, qint64(1000)));
+    } else if (snapshot.hasMicroDiff()) {
+        // Micro-diff only（无亮度/音频、未设时长，如离屏测试）：按 mdTs 全长铺轴
+        const ChannelData *md = snapshot.microdiffChannelPtr();
+        if (!md->mdTs.isEmpty())
+            m_axisX->setRange(0, qMax(qreal(md->mdTs.last()), 1000.0));
     }
 
     // Use direct synchronous update for series data.
@@ -604,6 +620,29 @@ void ChartPanel::onDataReplaced()
             }
             series->replace(pts);
         }
+    }
+
+    // 微变通道独立填点（X=mdTs 流内 ms，Y=mdRows 行值；m_mdSeries[i] 与
+    // mdRows[i] 行序对应）。逐秒 1 点、全长 ~1800 点 < 5000，无需抽稀，
+    // 直接 replace（pointsForViewport 只认亮度行，不能复用）。
+    if (snapshot.hasMicroDiff()) {
+        const ChannelData *md = snapshot.microdiffChannelPtr();
+        for (int i = 0; i < m_mdSeries.size(); ++i) {
+            if (i >= md->mdRows.size() || md->mdTs.isEmpty()) {
+                m_mdSeries[i]->clear();
+                continue;
+            }
+            const QVector<qreal> &row = md->mdRows[i];
+            const int n = qMin(md->mdTs.size(), row.size());
+            QVector<QPointF> pts;
+            pts.reserve(n);
+            for (int k = 0; k < n; ++k)
+                pts.append(QPointF(qreal(md->mdTs[k]), row[k]));
+            m_mdSeries[i]->replace(pts);
+        }
+    } else if (!m_mdSeries.isEmpty()) {
+        // 本次快照无微变通道（如重跑了亮度）：rebuild 已清过，此处兑底
+        clearMdSeries();
     }
 
     // v0.3: Update volume series
@@ -639,6 +678,7 @@ void ChartPanel::onDataReplaced()
     }
 
     updateYAxisRange();
+    updateMdMarks();   // 阈值虚线位置依赖 Y 轴范围，需在 auto-range 之后
     updateTimeLabels();
     updateTimeLabelPositions();
     updateLabelItems();
@@ -647,6 +687,7 @@ void ChartPanel::onDataReplaced()
 
 void ChartPanel::onDataCleared()
 {
+    clearMdSeries();   // 微变系列/标记随数据清空
     for (auto *series : m_seriesList) {
         series->clear();
     }
@@ -671,7 +712,7 @@ void ChartPanel::onDataCleared()
 
 void ChartPanel::updateYAxisRange()
 {
-    if (!m_yAxisAutoRange || m_seriesList.isEmpty())
+    if (!m_yAxisAutoRange || (m_seriesList.isEmpty() && m_mdSeries.isEmpty()))
         return;
 
     // Find data min/max across all visible series points in current X viewport
@@ -679,14 +720,16 @@ void ChartPanel::updateYAxisRange()
     qreal yMax = 0.0;
     bool hasData = false;
 
-    for (const auto *series : m_seriesList) {
-        const auto points = series->pointsVector();
-        for (const auto &pt : points) {
-            qreal y = pt.y();
-            if (!qIsNaN(y) && !qIsInf(y)) {
-                if (y < yMin) yMin = y;
-                if (y > yMax) yMax = y;
-                hasData = true;
+    for (const QVector<QLineSeries *> list : {m_seriesList, m_mdSeries}) {
+        for (const auto *series : list) {
+            const auto points = series->pointsVector();
+            for (const auto &pt : points) {
+                qreal y = pt.y();
+                if (!qIsNaN(y) && !qIsInf(y)) {
+                    if (y < yMin) yMin = y;
+                    if (y > yMax) yMax = y;
+                    hasData = true;
+                }
             }
         }
     }
@@ -978,6 +1021,89 @@ void ChartPanel::rebuildSeries()
         m_seriesList.append(series);
     }
 
+    // 微变通道系列（2026-09-10）：每 ROI 2 条——blkMax 粗线 / medD 细线（同色
+    // 降 alpha），颜色与该 ROI 亮度线一致；独立于 m_seriesList（亮度填点
+    // 循环按 lumEntries 索引，误入会被错填——地图陷阱 #3）。
+    clearMdSeries();
+    if (const ChannelData *md = snap.microdiffChannelPtr()) {
+        const int groupCount = qMin(md->mdRows.size() / 2, md->mdEntries.size() / 2);
+        for (int g = 0; g < groupCount; ++g) {
+            const DataEntry &e = md->mdEntries[2 * g];
+            QColor color(0x8C, 0x92, 0xA0);   // 兑底中性灰（ROI 已删除等异常）
+            int labelNum = 0;
+            bool found = false;
+            if (e.type == DataEntry::Rect && m_regionModel) {
+                for (int i = 0; i < m_regionModel->regionCount(); ++i)
+                    if (m_regionModel->roiIdAt(i) == e.roiId) {
+                        color = RoiModel::regionColor(i);
+                        labelNum = i + 1;
+                        found = true;
+                        break;
+                    }
+            } else if (e.type == DataEntry::Polygon && m_polygonModel) {
+                for (int i = 0; i < m_polygonModel->polygonCount(); ++i)
+                    if (m_polygonModel->polygonRoiIdAt(i) == e.roiId) {
+                        color = RoiModel::polygonColor(i);
+                        labelNum = i + 1;
+                        found = true;
+                        break;
+                    }
+            }
+            const QString base = found
+                ? (e.type == DataEntry::Rect
+                       ? QString(lang("区域 %1", "Region %1")).arg(labelNum)
+                       : QString(lang("多边形 %1", "Polygon %1")).arg(labelNum))
+                : QString(lang("区域", "Region"));
+            for (int k = 0; k < 2; ++k) {
+                const bool isBlkMax = (k == 0);
+                auto *series = new QLineSeries();
+                series->setName(QString("%1 %2").arg(base).arg(
+                    isBlkMax ? QStringLiteral("blkMax") : QStringLiteral("medD")));
+                QColor c = color;
+                if (!isBlkMax)
+                    c.setAlpha(110);   // medD 细线降不透明度区分
+                QPen pen(c);
+                pen.setWidth(isBlkMax ? 2 : 1);
+                series->setPen(pen);
+                m_chart->addSeries(series);
+                series->attachAxis(m_axisX);
+                series->attachAxis(m_axisY);
+                m_mdSeries.append(series);
+            }
+            // 阈值虚线（mu+3σ，每 ROI 一条）
+            if (g < md->mdThreshold.size()) {
+                MdMark mk;
+                mk.kind = MdMark::Threshold;
+                mk.color = color;
+                mk.value = qreal(md->mdThreshold[g]);
+                mk.line = new QGraphicsLineItem(m_chart);
+                mk.line->setPen(QPen(color, 1, Qt::DashLine));
+                mk.line->setZValue(LABEL_Z_VALUE - 4);
+                mk.label = new QGraphicsSimpleTextItem(m_chart);
+                mk.label->setFont(fontSans(8));
+                mk.label->setBrush(QBrush(color));
+                mk.label->setZValue(LABEL_Z_VALUE - 3);
+                m_mdMarks.append(mk);
+            }
+            // 首帧微变标记：竖线 + 文本标签（仅已检出的 ROI）
+            if (g < md->mdOnsets.size() && md->mdOnsets[g].tsMs >= 0) {
+                MdMark mk;
+                mk.kind = MdMark::Onset;
+                mk.color = Qt::red;
+                mk.value = qreal(md->mdOnsets[g].tsMs);
+                mk.line = new QGraphicsLineItem(m_chart);
+                mk.line->setPen(QPen(Qt::red, 1, Qt::DashLine));
+                mk.line->setZValue(LABEL_Z_VALUE - 3);
+                mk.label = new QGraphicsSimpleTextItem(m_chart);
+                mk.label->setFont(fontSans(8));
+                mk.label->setBrush(QBrush(Qt::red));
+                mk.label->setZValue(LABEL_Z_VALUE - 2);
+                m_mdMarks.append(mk);
+            }
+        }
+        updateMdMarks();
+    }
+
     // v0.3: Create volume series
     m_volumeSeries = new QLineSeries();
     m_volumeSeries->setName(lang("音量", "Volume"));
@@ -1024,11 +1150,82 @@ void ChartPanel::rebuildSeries()
 
     if (m_timelineModel) {
         auto snap = m_timelineModel->snapshot();
-        if (!snap.isEmpty() || snap.hasAudio())
+        if (!snap.isEmpty() || snap.hasAudio() || snap.hasMicroDiff())
             onDataReplaced();
     }
 
     m_rebuilding = false;
+}
+
+/// 微变通道：删除全部微变系列与标记项（rebuild 前/清数据/析构用）
+void ChartPanel::clearMdSeries()
+{
+    for (const MdMark &mk : qAsConst(m_mdMarks)) {
+        if (mk.line) {
+            if (mk.line->scene())
+                mk.line->scene()->removeItem(mk.line);
+            delete mk.line;
+        }
+        if (mk.label) {
+            if (mk.label->scene())
+                mk.label->scene()->removeItem(mk.label);
+            delete mk.label;
+        }
+    }
+    m_mdMarks.clear();
+    for (auto *series : qAsConst(m_mdSeries)) {
+        series->detachAxis(m_axisX);
+        series->detachAxis(m_axisY);
+        m_chart->removeSeries(series);
+        delete series;
+    }
+    m_mdSeries.clear();
+}
+
+/// 微变标记重定位：阈值虚线（横向全宽，Y 随轴范围）+ 首帧微变竖线（X 随缩放/平移）
+void ChartPanel::updateMdMarks()
+{
+    if (m_mdMarks.isEmpty() || !m_chart)
+        return;
+    const QRectF pa = m_chart->plotArea();
+    if (pa.width() < 10 || pa.height() < 10)
+        return;
+    const bool hasY = m_axisY && m_axisY->max() > m_axisY->min();
+    for (auto &mk : m_mdMarks) {
+        if (mk.kind == MdMark::Threshold) {
+            if (!hasY) {
+                mk.line->setVisible(false);
+                mk.label->setVisible(false);
+                continue;
+            }
+            const qreal yMin = m_axisY->min();
+            const qreal yMax = m_axisY->max();
+            const qreal norm = (mk.value - yMin) / (yMax - yMin);
+            if (norm < 0.0 || norm > 1.0) {
+                // 阈值超出当前 Y 范围：隐藏（数据全低于阈值时常见）
+                mk.line->setVisible(false);
+                mk.label->setVisible(false);
+                continue;
+            }
+            const qreal y = pa.bottom() - norm * pa.height();
+            mk.line->setLine(pa.left(), y, pa.right(), y);
+            mk.label->setText(QStringLiteral("μ+3σ=") + QString::number(mk.value, 'f', 1));
+            mk.label->setPos(pa.right() - mk.label->boundingRect().width() - 3,
+                             qMax(pa.top(), y - mk.label->boundingRect().height() - 2));
+            mk.line->setVisible(true);
+            mk.label->setVisible(true);
+        } else {   // Onset
+            const qreal x = mapTimeToX(static_cast<qint64>(mk.value));
+            mk.line->setLine(x, pa.top(), x, pa.bottom());
+            mk.label->setText(
+                QString(lang("首微变 %1", "First micro-change %1"))
+                    .arg(formatDisplayTime(displayMsOf(static_cast<qint64>(mk.value)))));
+            mk.label->setPos(qMin(x + 3, pa.right() - mk.label->boundingRect().width()),
+                             pa.top() + 2);
+            mk.line->setVisible(true);
+            mk.label->setVisible(true);
+        }
+    }
 }
 
 /// @brief 计算时间步长：目标6-8个标签可见
@@ -1654,7 +1851,7 @@ void ChartPanel::showLabelTipNow()
 /// 音量曲线有数据时 +1）。标签文字自动隐藏判定用：≥2 时只显示标记点
 int ChartPanel::visibleSeriesCount() const
 {
-    int n = m_seriesList.size();
+    int n = m_seriesList.size() + m_mdSeries.size();
     if (m_volumeSeries && m_volumeSeries->count() > 0)
         ++n;
     return n;

@@ -27,8 +27,8 @@
 #include <QRect>
 #include <QPolygon>
 #include "domain/analysis_snapshot.h"
+#include "infrastructure/ianalysis_engine.h"   // MicroDiffCurveParams（微变任务参数）
 
-class IAnalysisEngine;
 class TimelineModel;
 
 class AnalysisTaskService : public QObject
@@ -61,7 +61,8 @@ public slots:
                const QVector<QRect> &regions,
                const QVector<QPolygon> &polygons,
                const QVector<int> &rectRoiIds,
-               const QVector<int> &polygonRoiIds);
+               const QVector<int> &polygonRoiIds,
+               const IAnalysisEngine::MicroDiffCurveParams &mdParams = {});
 
     /// 取消当前任务：转发引擎 cancelAnalysis；此后迟到的引擎信号被忽略
     void cancel();

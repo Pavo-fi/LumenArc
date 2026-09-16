@@ -856,6 +856,40 @@ static void testFilesNeedingTranscode()
     need = filesNeedingTranscode(same);
     CHECK(need.isEmpty(), "need.isEmpty()");
 
+    // ---- 2026-09-11 现场反馈（潮州饶平 .dav）：----
+    // 大华私有容器 .dav 编码 h264/分辨率一致/关键帧合格，旧逻辑判成
+    // “已合格 MP4”直接返回源文件 → 用户拿到 .dav 根本打不开。
+    {
+        QVector<ProbeResult> dav{
+            makeProbe(QStringLiteral("a.dav"), 60000),
+            makeProbe(QStringLiteral("b.dav"), 60000),
+        };
+        for (auto &p : dav)
+            p.container = QStringLiteral("dhav");
+        need = filesNeedingTranscode(dav);
+        CHECK(need.size() == 2, "private dvr container (dhav) -> transcode all");
+
+        // 时间戳未归一（绝对墙钟，DVR 固件写入）→ 也必须转码
+        QVector<ProbeResult> ps{
+            makeProbe(QStringLiteral("a.ps"), 60000),
+            makeProbe(QStringLiteral("b.ps"), 60000),
+        };
+        for (auto &p : ps) {
+            p.container = QStringLiteral("mpeg");        // 容器名本身不触发
+            p.absStartEpochMs = 1789084798000LL;          // 但绝对墙钟基触发
+        }
+        need = filesNeedingTranscode(ps);
+        CHECK(need.size() == 2, "unnormalized absolute timestamp base -> transcode all");
+
+        // 普通 MP4（无绝对墙钟基）仍不转码——不能把优化一刀切掉
+        QVector<ProbeResult> plain{
+            makeProbe(QStringLiteral("a.mp4"), 60000),
+            makeProbe(QStringLiteral("b.mp4"), 60000),
+        };
+        need = filesNeedingTranscode(plain);
+        CHECK(need.isEmpty(), "plain mp4 still no transcode");
+    }
+
     // 空输入 → 空
     CHECK(filesNeedingTranscode({}).isEmpty(), "filesNeedingTranscode({}).isEmpty()");
 }

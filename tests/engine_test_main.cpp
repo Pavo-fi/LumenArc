@@ -6,10 +6,14 @@
  *   lumenarc_engine_test seek-matrix <video> [toleranceMs]
  *   lumenarc_engine_test random-seek <video> <count>
  *   lumenarc_engine_test play <video> <seconds>
+ *   lumenarc_engine_test microdiff-curve <video> <x,y,w,h> <baseStartMs> <baseDurMs>
  *
  * 退出码 0 = 全部断言通过；1 = 有失败。
  */
 #include "infrastructure/ffmpeg_video_engine.h"
+#include "infrastructure/ianalysis_engine.h"   // microdiff-curve：基类信号（AUTOMOC 需直接包含）
+#include "infrastructure/libav_analysis_engine.h"   // microdiff-curve：微变曲线引擎路径
+#include "domain/microdiff_curve.h"                  // microdiff-curve：纯函数自检
 extern "C" {
 #include <libavformat/avformat.h>
 #include <libavcodec/avcodec.h>
@@ -25,6 +29,7 @@ extern "C" {
 #include <QAudioFormat>
 #include <QFile>
 #include <QDir>
+#include <QFileInfo>
 extern "C" {
 #include <libswresample/swresample.h>
 }
@@ -32,6 +37,8 @@ extern "C" {
 #include <cstdio>
 #include <cmath>
 #include <numeric>
+#include <vector>
+#include <cstdint>
 #ifdef Q_OS_WIN
 #include <windows.h>
 #include <psapi.h>
@@ -146,12 +153,255 @@ static bool muxGapToneMkv(const QString &path)
     return true;
 }
 
+// ============================================================================
+// microdiff-curve：微变变化率曲线无头验证（2026-09-10）
+//   用法: microdiff-curve <video> <x,y,w,h> <baseStartMs> <baseDurMs>
+//         microdiff-curve --pure-only        （仅跑纯函数自检，不解码）
+// Part 1：纯函数自检（常量 ROI 统计 / 逐秒聚合 / 阶跃 onset 检出）
+// Part 2：真实素材两遍引擎路径（Pass A 基准 + Pass B 全片扫描 + 判定），
+//         打印 mu/sigma/阈值/onset 与 onset 邻域 blkMax 供人工对拍标定值
+// ============================================================================
+static int runMicroDiffCurveTest(const QStringList &args)
+{
+    int failures = 0;
+    const QString video = args[2];
+    const bool pureOnly = (video == QLatin1String("--pure-only"));
+
+    // ---- Part 1：纯函数自检 ----
+    {
+        // roiFrameStats：16×16 常量 D=5 → medD/blkMax/signedD 均 5
+        std::vector<int16_t> d(16 * 16, 5);
+        const microdiff::FrameStats fs = microdiff::roiFrameStats(d.data(), 16, 16);
+        if (std::fabs(fs.medD - 5.0) > 1e-9 || std::fabs(fs.blkMax - 5.0) > 1e-9
+            || std::fabs(fs.signedD - 5.0) > 1e-9) {
+            printf("[FAIL] roiFrameStats constant: medD=%.3f blkMax=%.3f signedD=%.3f\n",
+                   fs.medD, fs.blkMax, fs.signedD);
+            failures++;
+        } else {
+            printf("[ OK ] roiFrameStats constant D=5 (16x16, 2x2 blocks)\n");
+        }
+
+        // roiFrameStats：真实尺寸非整除回归（227×209 → 8×8 分块，末列 3 px /
+        // 末行 1 px 落在第 nx/ny 块，历史 bug：x/bw 越界写堆导致引擎首帧崩溃）
+        {
+            const int rw = 227, rh = 209;
+            std::vector<int16_t> dr(static_cast<size_t>(rw) * rh, 5);
+            const microdiff::FrameStats fr = microdiff::roiFrameStats(dr.data(), rw, rh);
+            if (std::fabs(fr.medD - 5.0) > 1e-9 || std::fabs(fr.blkMax - 5.0) > 1e-9
+                || std::fabs(fr.signedD - 5.0) > 1e-9) {
+                printf("[FAIL] roiFrameStats 227x209: medD=%.3f blkMax=%.3f signedD=%.3f\n",
+                       fr.medD, fr.blkMax, fr.signedD);
+                failures++;
+            } else {
+                printf("[ OK ] roiFrameStats 227x209 non-divisible (8x8 blocks, clamped)\n");
+            }
+        }
+
+        // aggregateSeconds：4 帧 ts 0/500/1000/1500 → 2 秒（均值正确）
+        QVector<microdiff::FrameStats> fr;
+        QVector<qint64> fts;
+        for (int i = 0; i < 4; ++i) {
+            microdiff::FrameStats f;
+            f.medD = i + 1;
+            f.blkMax = (i + 1) * 2.0;
+            f.signedD = -i;
+            fr.append(f);
+            fts.append(i * 500);
+        }
+        const QVector<microdiff::SecondRow> rowsA = microdiff::aggregateSeconds(fr, fts);
+        bool aggOk = rowsA.size() == 2;
+        if (aggOk) {
+            aggOk = rowsA[0].tsMs == 0 && std::fabs(rowsA[0].medD - 1.5) < 1e-9
+                && std::fabs(rowsA[0].blkMax - 3.0) < 1e-9
+                && std::fabs(rowsA[0].signedD - (-0.5)) < 1e-9;
+            aggOk = aggOk && rowsA[1].tsMs == 1000 && std::fabs(rowsA[1].medD - 3.5) < 1e-9
+                && std::fabs(rowsA[1].blkMax - 7.0) < 1e-9;
+        }
+        if (!aggOk) {
+            printf("[FAIL] aggregateSeconds: rows=%d\n", rowsA.size());
+            failures++;
+        } else {
+            printf("[ OK ] aggregateSeconds 4 frames -> 2 seconds\n");
+        }
+
+        // detectOnset：干净段 70~250s 全 8.0，260s 起阶跃到 30.0（signedD 转负）
+        QVector<microdiff::SecondRow> rows;
+        for (int t = 0; t <= 400; ++t) {
+            microdiff::SecondRow r;
+            r.tsMs = t * 1000;
+            r.blkMax = (t < 260) ? 8.0 : 30.0;
+            r.medD = 3.0;
+            r.signedD = (t < 260) ? 5.0 : -1.0;
+            rows.append(r);
+        }
+        const microdiff::OnsetOutcome oc = microdiff::detectOnset(rows, 42, 70000, 180000);
+        if (!oc.baselineOk || oc.baselineSamples != 180
+            || std::fabs(oc.mu - 8.0) > 1e-9 || std::fabs(oc.sigma) > 1e-9
+            || oc.onset.tsMs != 260000 || oc.onset.direction != -1
+            || oc.onset.roiId != 42) {
+            printf("[FAIL] detectOnset step: ok=%d n=%d mu=%.3f sig=%.3f thr=%.3f "
+                   "ts=%lld dir=%d roi=%d\n",
+                   (int)oc.baselineOk, oc.baselineSamples, oc.mu, oc.sigma,
+                   oc.threshold, (long long)oc.onset.tsMs, oc.onset.direction,
+                   oc.onset.roiId);
+            failures++;
+        } else {
+            printf("[ OK ] detectOnset step at 260s (mu=8 sigma=0 dir=smoke roi=42)\n");
+        }
+
+        // 常量无阶跃 → 不检出；过短基准段 → baselineOk=false
+        QVector<microdiff::SecondRow> flat;
+        for (int t = 0; t <= 400; ++t) {
+            microdiff::SecondRow r;
+            r.tsMs = t * 1000;
+            r.blkMax = 8.0;
+            r.medD = 3.0;
+            r.signedD = 5.0;
+            flat.append(r);
+        }
+        const microdiff::OnsetOutcome oc2 = microdiff::detectOnset(flat, 1, 70000, 180000);
+        const microdiff::OnsetOutcome oc3 = microdiff::detectOnset(rows, 2, 0, 4000);
+        if (!oc2.baselineOk || oc2.onset.tsMs != -1) {
+            printf("[FAIL] detectOnset flat: ok=%d ts=%lld\n",
+                   (int)oc2.baselineOk, (long long)oc2.onset.tsMs);
+            failures++;
+        }
+        if (oc3.baselineOk) {
+            printf("[FAIL] detectOnset short baseline should be rejected (n=%d)\n",
+                   oc3.baselineSamples);
+            failures++;
+        }
+        if (oc2.baselineOk && oc2.onset.tsMs == -1 && !oc3.baselineOk)
+            printf("[ OK ] detectOnset flat=no-onset / short-baseline=reject\n");
+
+        // 基准段之前的阶跃不得报为首帧微变（参照系语义）：
+        // 90–200s 有伪变化（基准段之前），900s 起才是真变化（基准段之后）
+        {
+            QVector<microdiff::SecondRow> pre;
+            for (int t = 0; t <= 1200; ++t) {
+                microdiff::SecondRow r;
+                r.tsMs = t * 1000;
+                r.blkMax = 8.0;
+                r.medD = 3.0;
+                r.signedD = 5.0;
+                if (t >= 100 && t < 200) r.blkMax = 60.0;   // 伪变化（基准段之前）
+                if (t >= 900) r.blkMax = 60.0;              // 真变化（基准段之后）
+                pre.append(r);
+            }
+            const microdiff::OnsetOutcome ocPre = microdiff::detectOnset(pre, 3, 700000, 180000);
+            if (!ocPre.baselineOk || ocPre.onset.tsMs != 900000) {
+                printf("[FAIL] detectOnset pre-baseline step: ok=%d ts=%lld (expect 900000)\n",
+                       (int)ocPre.baselineOk, (long long)ocPre.onset.tsMs);
+                failures++;
+            } else {
+                printf("[ OK ] detectOnset ignores pre-baseline step (onset=900000)\n");
+            }
+        }
+    }
+
+    // ---- Part 2：真实素材（两遍引擎路径）----
+    if (pureOnly) {
+        printf("[SKIP] engine path (pure-only mode)\n");
+        printf(failures == 0 ? "[RESULT] PASS\n" : "[RESULT] FAIL (%d)\n", failures);
+        return failures == 0 ? 0 : 1;
+    }
+    if (args.size() < 6) {
+        printf("[FAIL] usage: microdiff-curve <video> <x,y,w,h> <baseStartMs> <baseDurMs>\n");
+        return 1;
+    }
+    const QStringList roiParts = args[3].split(',');
+    if (roiParts.size() != 4) {
+        printf("[FAIL] roi must be x,y,w,h\n");
+        return 1;
+    }
+    const QRect roi(roiParts[0].toInt(), roiParts[1].toInt(),
+                    roiParts[2].toInt(), roiParts[3].toInt());
+    const qint64 baseStartMs = args[4].toLongLong();
+    const qint64 baseDurMs = args[5].toLongLong();
+    if (!QFileInfo::exists(video)) {
+        printf("[FAIL] video not found: %s\n", qPrintable(video));
+        return 1;
+    }
+
+    LibavAnalysisEngine engine;
+    QEventLoop loop;
+    AnalysisSnapshot result;
+    QString errMsg;
+    int lastPct = -100;
+    QObject::connect(&engine, &IAnalysisEngine::analysisFinished, &loop,
+                     [&](const AnalysisSnapshot &s) { result = s; loop.quit(); });
+    QObject::connect(&engine, &IAnalysisEngine::analysisFailed, &loop,
+                     [&](const QString &e) { errMsg = e; loop.quit(); });
+    QObject::connect(&engine, &IAnalysisEngine::progressUpdated,
+                     [&](int, int, qreal pct) {
+                         const int p = static_cast<int>(pct);
+                         if (p - lastPct >= 5) {
+                             lastPct = p;
+                             printf("[progress] %.0f%%\n", pct);
+                             fflush(stdout);
+                         }
+                     });
+    QTimer guardTimer;   // 45min 兕底：防引擎卡死时无限等待
+    guardTimer.setSingleShot(true);
+    QObject::connect(&guardTimer, &QTimer::timeout, &loop, [&loop] { loop.quit(); });
+    guardTimer.start(45 * 60 * 1000);
+    engine.startMicroDiffAnalysis(video, {roi}, {0}, {baseStartMs, baseDurMs});
+    loop.exec();
+
+    if (!errMsg.isEmpty()) {
+        printf("[FAIL] engine: %s\n", qPrintable(errMsg));
+        failures++;
+    } else if (!result.hasMicroDiff()) {
+        printf("[FAIL] snapshot has no microdiff channel\n");
+        failures++;
+    } else {
+        const ChannelData *md = result.microdiffChannelPtr();
+        if (md->mdTs.isEmpty() || md->mdRows.size() != 2 || md->mdOnsets.size() != 1) {
+            printf("[FAIL] channel shape: ts=%d rows=%d onsets=%d\n",
+                   md->mdTs.size(), md->mdRows.size(), md->mdOnsets.size());
+            failures++;
+        } else {
+            const MicroDiffOnset &on = md->mdOnsets[0];
+            const QVector<qreal> &blk = md->mdRows[0];
+            const QVector<qreal> &med = md->mdRows[1];
+            printf("[info] seconds=%d  mu=%.3f sigma=%.3f threshold=%.3f\n",
+                   md->mdTs.size(), md->mdStatMu[0], md->mdStatSigma[0],
+                   md->mdThreshold[0]);
+            printf("[info] onset: tsMs=%lld direction=%d\n",
+                   (long long)on.tsMs, on.direction);
+            // onset 邻域 ±10 秒 blkMax 采样（人工对拍：应见 8.x → 30+ 跳变）
+            if (on.tsMs >= 0) {
+                const int i0 = md->mdTs.indexOf(on.tsMs);
+                if (i0 >= 0) {
+                    for (int i = qMax(0, i0 - 10); i <= qMin(blk.size() - 1, i0 + 10); ++i)
+                        printf("[onset%+3ds] %lldms blkMax=%6.2f medD=%5.2f\n",
+                               i - i0, (long long)md->mdTs[i], blk[i], med[i]);
+                }
+            }
+            // 形态断言：时间轴升序、两行等长、onset 行内存在
+            bool shapeOk = true;
+            for (int i = 1; i < md->mdTs.size(); ++i)
+                if (md->mdTs[i] <= md->mdTs[i - 1]) { shapeOk = false; break; }
+            if (blk.size() != md->mdTs.size() || med.size() != md->mdTs.size())
+                shapeOk = false;
+            if (!shapeOk) {
+                printf("[FAIL] channel shape: ts not ascending or row length mismatch\n");
+                failures++;
+            }
+        }
+    }
+
+    printf(failures == 0 ? "[RESULT] PASS\n" : "[RESULT] FAIL (%d)\n", failures);
+    return failures == 0 ? 0 : 1;
+}
+
 int main(int argc, char *argv[])
 {
     QCoreApplication app(argc, argv);
     QStringList args = app.arguments();
     if (args.size() < 3) {
-        fprintf(stderr, "usage: %s <seek-matrix|random-seek|play> <video> [arg]\n",
+        fprintf(stderr,
+                "usage: %s <seek-matrix|random-seek|play|microdiff-curve> <video> [args]\n",
                 qPrintable(args[0]));
         return 1;
     }
@@ -284,6 +534,10 @@ int main(int argc, char *argv[])
         printf(failures == 0 ? "[RESULT] PASS\n" : "[RESULT] FAIL (%d)\n", failures);
         return failures == 0 ? 0 : 1;
     }
+
+    // 微变变化率曲线（两遍引擎路径，早退：不走播放引擎）
+    if (scenario == QStringLiteral("microdiff-curve"))
+        return runMicroDiffCurveTest(args);
 
     FfmpegVideoEngine engine;
     if (args.contains(QStringLiteral("--sw")))

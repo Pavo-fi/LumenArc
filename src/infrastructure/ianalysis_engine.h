@@ -75,6 +75,28 @@ public:
     /// 在 startAudioAnalysis 之前调用生效；默认实现空操作。
     virtual void setAudioDenoiseStrength(double strength);
 
+    /// @brief 微变变化率曲线参数（流内时间，ms）
+    struct MicroDiffCurveParams
+    {
+        qint64 baseStartMs = 0;   ///< 用户标记的干净基准段起点
+        qint64 baseDurMs = 0;     ///< 干净基准段时长
+    };
+
+    /**
+     * @brief 开始微变变化率曲线分析（2026-09-10）。
+     *
+     * 两遍：Pass A 从干净基准段提取基准（复用微变显示同一提取器），
+     * Pass B 全片扫描逐帧 ROI 微差统计 → 逐秒 blkMax/medD + 首帧微变判定。
+     * 结果经既有 analysisFinished 回传（snapshot 仅含 microdiff 通道，
+     * 任务服务按通道合并，亮度/音频通道保留）。
+     * 默认实现：不支持（analysisFailed），与 startAudioAnalysis 一致。
+     * 仅支持矩形 ROI（regions + rectRoiIds 平行）；多边形 ROI 不参与。
+     */
+    virtual void startMicroDiffAnalysis(const QString &videoPath,
+                                        const QVector<QRect> &regions,
+                                        const QVector<int> &rectRoiIds,
+                                        const MicroDiffCurveParams &params);
+
 signals:
     void progressUpdated(int analyzed, int total, qreal percent);
     void analysisFinished(const AnalysisSnapshot &result);
@@ -100,4 +122,12 @@ inline void IAnalysisEngine::startAudioAnalysis(const QString &)
 
 inline void IAnalysisEngine::setAudioDenoiseStrength(double)
 {
+}
+
+inline void IAnalysisEngine::startMicroDiffAnalysis(const QString &,
+                                                     const QVector<QRect> &,
+                                                     const QVector<int> &,
+                                                     const MicroDiffCurveParams &)
+{
+    emit analysisFailed(QObject::tr("当前分析引擎不支持微变变化率曲线分析"));
 }

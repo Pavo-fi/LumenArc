@@ -749,7 +749,8 @@ void PreprocessingCoordinator::startProcessing(const ProcessingOptions &opts)
         const bool needTx = filesNeedingTranscode({m_probes.value(f)})
                                 .contains(f);
         if (!needTx) {
-            log(QStringLiteral("[%1] 单文件已是合格 MP4（H.264 且关键帧 ≤2.5s），无需处理")
+            // 走到这里 = 探测通过且容器/时间戳/编码均合格（MP4 家族、时间戳已归一）
+            log(QStringLiteral("[%1] 单文件已是合格 MP4（编码/关键帧/容器/时间戳均合规），无需处理")
                     .arg(tsLog()));
             m_report.outputPath = f;
             m_report.evidenceDir.clear();   // 未执行任何处理：不留临时证据目录

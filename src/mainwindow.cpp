@@ -72,6 +72,11 @@
 #include <QFileDialog>
 #include <QMessageBox>
 #include <QApplication>
+#include <QCoreApplication>
+#include <cstring>
+#include "microdiffdialog.h"
+#include "infrastructure/microdiff_baseline.h"
+#include "domain/roi_model.h"
 #include <QSystemTrayIcon>
 #include <QStyle>
 #include <QDebug>
@@ -154,8 +159,8 @@ void MainWindow::openVideosInteractive(bool admitToCase)
     QStringList filePaths = QFileDialog::getOpenFileNames(this,
         lang("打开视频", "Open Video Files"),
         QString(),
-        lang("视频文件 (*.mp4 *.avi *.mkv *.mov *.wmv *.flv *.webm);;所有文件 (*)",
-             "Video Files (*.mp4 *.avi *.mkv *.mov *.wmv *.flv *.webm);;All Files (*)"));
+        lang("视频文件 (*.mp4 *.avi *.mkv *.mov *.wmv *.flv *.webm *.ps *.dav *.ts *.mpg *.m2ts);;所有文件 (*)",
+             "Video Files (*.mp4 *.avi *.mkv *.mov *.wmv *.flv *.webm *.ps *.dav *.ts *.mpg *.m2ts);;All Files (*)"));
 
     if (filePaths.isEmpty())
         return;
@@ -426,6 +431,7 @@ void MainWindow::enableVideoActions()
     m_speedBtn->setEnabled(true);
     m_analyzeBtn->setEnabled(true);
     m_audioAnalysisBtn->setEnabled(true);
+    m_microDiffBtn->setEnabled(true);
     m_setTimeBtn->setEnabled(true);
     m_captureBtn->setEnabled(true);
     if (m_snapshotBtn)
@@ -493,6 +499,16 @@ void MainWindow::openVideoFile(const QString &filePath)
     }
 
     removeMagnifier();
+    // 审查 F-1：换视频必须清微变基准与时域环——否则打开同分辨率的另一个视频时旧基准仍生效，
+    // 整屏假阳性（取证场景下是错误的分析输出）。
+    if (m_videoWidget)
+        m_videoWidget->clearMicroDiffBaseline();
+    // 曲线触发状态同步复位（旧视频的基准段对新视频无意义）
+    m_microDiffBaselineReady = false;
+    m_microDiffBaseStartSec = 0.0;
+    m_microDiffBaseDurSec = 0.0;
+    if (m_microDiffDialog)
+        m_microDiffDialog->setBaselineReady(false);
     m_sessionMgr->setCurrentVideoPath(filePath);
     m_uiState->beginVideo(trustedDurationFor(filePath));   // 等待 durationChanged 校准
     // 案件现场跟踪（v1.3.0 M2：开案恢复 lastVideoId 的数据源）
@@ -800,6 +816,7 @@ void MainWindow::onSetStartTime()
         m_calibration, sidecarWarning, m_calibrationService, this);
     dlg->setAttribute(Qt::WA_DeleteOnClose);
     m_calibrationDialog = dlg;
+    dlg->setPlayhead(curPos);   // v1.18.2：初始播放位置（未开始播放也能取点）
     // 恢复已保存的时间戳区域（同一摄像头自动复用）
     const QRectF savedRoi = m_projectIo->savedTimestampRoi(m_sessionMgr->currentVideoPath());
     if (savedRoi.isValid())
@@ -1098,6 +1115,211 @@ void MainWindow::onAudioAnalysis()
                          {}, {}, {}, {});
 }
 
+// ======================== 微变分析（2026-09-10） ========================
+// 对标火调行业"微变分析"（火察同类原理）：基准中值 → 偏差 → 时域一致性 →
+// 多尺度低通 → 假彩色叠加。两个用户输入：① 微变区域（复用 ROI 绘制）
+// ② 干净基准时段（面板填起点/时长后点"采集基准"）。
+
+QRect MainWindow::resolveMicroDiffRoi(bool *hasRoi) const
+{
+    if (hasRoi)
+        *hasRoi = false;
+    if (!m_roiModel)
+        return QRect();
+    const QVector<QRect> rects = m_roiModel->regions();
+    if (rects.isEmpty())
+        return QRect();
+    QRect uni = rects.first();
+    for (const QRect &r : rects)
+        uni = uni.united(r);
+    if (hasRoi)
+        *hasRoi = true;
+    return uni;
+}
+
+void MainWindow::pushMicroDiffToWidget()
+{
+    if (!m_microDiffDialog || !m_videoWidget)
+        return;
+    MicroDiffParams p = m_microDiffDialog->params();
+    bool hasRoi = false;
+    p.roi = resolveMicroDiffRoi(&hasRoi);
+    if (!hasRoi)
+        p.fullFrame = true;      // 未绘制 ROI：自动回退全画面，不阻断使用
+    p.noiseFloor = m_videoWidget->microDiffNoiseFloor();
+    m_videoWidget->setMicroDiffParams(p);
+    m_microDiffDialog->setRoiSummary(m_roiModel ? m_roiModel->regionCount() : 0,
+                                     m_roiModel ? m_roiModel->polygonCount() : 0);
+}
+
+void MainWindow::applyMicroDiffParams()
+{
+    pushMicroDiffToWidget();
+}
+
+void MainWindow::onMicroDiff()
+{
+    if (m_sessionMgr->currentVideoPath().isEmpty()) {
+        QMessageBox::information(this, lang("微变分析", "Micro-change analysis"),
+                                 lang("请先打开一个视频文件。",
+                                      "Please open a video file first."));
+        return;
+    }
+    if (!m_microDiffDialog) {
+        m_microDiffDialog = new MicroDiffDialog(this);
+        connect(m_microDiffDialog, &MicroDiffDialog::paramsChanged, this,
+                &MainWindow::applyMicroDiffParams);
+        connect(m_microDiffDialog, &MicroDiffDialog::baselineRequested, this,
+                &MainWindow::onMicroDiffBaselineRequest);
+        connect(m_microDiffDialog, &MicroDiffDialog::cancelRequested, this,
+                [this] { m_microDiffCancel.store(true); });
+        connect(m_microDiffDialog, &MicroDiffDialog::curveRequested, this,
+                &MainWindow::onMicroDiffCurve);
+        // ROI 改动即时生效（边画边看）。审查 P2-8：不能加 isVisible 守卫——
+        // 面板关着但微变已启用时改 ROI，处理区会停留在旧值。
+        if (m_roiModel) {
+            connect(m_roiModel, &RoiModel::regionsChanged, this, [this] {
+                if (m_microDiffDialog && m_videoWidget
+                    && !m_videoWidget->microDiffParams().isIdentity())
+                    pushMicroDiffToWidget();
+            });
+        }
+    }
+    // 每次打开都按当前位置预置基准段（默认：当前播放点往前 3 分钟处取 2 分钟）
+    m_microDiffDialog->setDefaultSegment(
+        m_videoEngine ? m_videoEngine->duration() / 1000.0 : 0.0,
+        m_videoEngine ? m_videoEngine->position() / 1000.0 : 0.0);
+    m_microDiffDialog->setBaselineReady(m_microDiffBaselineReady);
+    pushMicroDiffToWidget();
+    m_microDiffDialog->show();
+    m_microDiffDialog->raise();
+    m_microDiffDialog->activateWindow();
+}
+
+void MainWindow::onMicroDiffBaselineRequest(double startSec, double durationSec)
+{
+    if (!m_microDiffDialog || !m_videoWidget)
+        return;
+    const QString path = m_sessionMgr->currentVideoPath();
+    if (path.isEmpty()) {
+        m_microDiffDialog->setStatus(lang("请先打开一个视频文件。",
+                                          "Please open a video file first."));
+        return;
+    }
+
+    m_microDiffCancel.store(false);
+    m_microDiffDialog->setBusy(true);
+    m_microDiffDialog->setProgress(0);
+    m_microDiffDialog->setStatus(lang("正在解码基准段并计算逐像素中值…",
+                                      "Decoding baseline segment…"));
+    QApplication::setOverrideCursor(Qt::WaitCursor);
+
+    const MicroDiffParams cur = m_microDiffDialog->params();
+    // R13：本操作同步执行（典型 120 秒基准段约 16 秒），带进度条与取消
+    const MicroDiffBaseline bl = extractMicroDiffBaseline(
+        path, startSec, durationSec, 24, cur.temporalFrames, cur.sigma,
+        [this](int pct, const QString &stage) -> bool {
+            if (m_microDiffDialog) {
+                m_microDiffDialog->setProgress(pct);
+                m_microDiffDialog->setStatus(stage);
+            }
+            QCoreApplication::processEvents();   // 让取消按钮可点
+            return !m_microDiffCancel.load();
+        },
+        &m_microDiffCancel);
+
+    QApplication::restoreOverrideCursor();
+    m_microDiffDialog->setBusy(false);
+
+    // 审查 F-3：提取是同步长操作（典型 16 秒），期间用户可切视频/清空列表。
+    // 不校验就把旧视频的基准塞回当前 widget，会在新视频上整屏假阳性。
+    if (m_sessionMgr->currentVideoPath() != path) {
+        m_microDiffDialog->setStatus(lang("视频已切换，本次基准作废",
+                                          "Video changed; baseline discarded"));
+        return;
+    }
+
+    if (!bl.ok()) {
+        m_microDiffBaselineReady = false;
+        m_microDiffDialog->setBaselineReady(false);
+        m_microDiffDialog->setStatus(lang("采集失败：%1", "Baseline failed: %1")
+                                         .arg(bl.error));
+        return;
+    }
+
+    QImage gray(bl.width, bl.height, QImage::Format_Grayscale8);
+    if (gray.isNull()) {
+        m_microDiffDialog->setStatus(lang("基准图像分配失败（尺寸过大）",
+                                          "Failed to allocate baseline image"));
+        return;
+    }
+    for (int y = 0; y < bl.height; ++y)
+        std::memcpy(gray.scanLine(y),
+                    bl.gray.data() + static_cast<size_t>(y) * bl.width,
+                    static_cast<size_t>(bl.width));
+
+    if (!m_videoWidget->setMicroDiffBaseline(gray, bl.noiseFloor)) {
+        m_microDiffDialog->setStatus(
+            lang("基准尺寸与当前视频不匹配（%1×%2），请确认基准段属于本视频",
+                 "Baseline size mismatch (%1×%2)")
+                .arg(bl.width).arg(bl.height));
+        return;
+    }
+
+    m_microDiffDialog->setStatus(
+        lang("基准已就绪：%1 帧，噪声基底 %2 级，%3×%4。启用后即可看微变效果；曲线按钮已解锁。",
+             "Baseline ready: %1 frames, noise floor %2, %3×%4. Curve button unlocked.")
+            .arg(bl.framesUsed)
+            .arg(bl.noiseFloor, 0, 'f', 1)
+            .arg(bl.width)
+            .arg(bl.height));
+    // 曲线触发所需的基准信息（流内秒；与面板 spinbox 同语义）
+    m_microDiffBaselineReady = true;
+    m_microDiffBaseStartSec = startSec;
+    m_microDiffBaseDurSec = durationSec;
+    m_microDiffDialog->setBaselineReady(true);
+    pushMicroDiffToWidget();   // 让面板上的启用/等级立即生效
+}
+
+/// @brief 计算变化率曲线（全片逐秒 blkMax/medD + 首帧微变判定）。
+/// 与微变叠加显示共用同一基准段；曲线由引擎独立解码计算，不依赖显示链。
+void MainWindow::onMicroDiffCurve()
+{
+    if (m_sessionMgr->currentVideoPath().isEmpty()) {
+        if (m_microDiffDialog)
+            m_microDiffDialog->setStatus(lang("请先打开一个视频文件。",
+                                              "Please open a video file first."));
+        return;
+    }
+    if (!m_microDiffBaselineReady) {
+        if (m_microDiffDialog)
+            m_microDiffDialog->setStatus(lang("请先采集基准段（曲线需要干净段做参照）。",
+                                              "Collect the baseline segment first."));
+        return;
+    }
+    if (!m_roiModel || (m_roiModel->regionCount() == 0 && m_roiModel->polygonCount() == 0)) {
+        if (m_microDiffDialog)
+            m_microDiffDialog->setStatus(lang("请先在视频上绘制至少一个 ROI 区域。",
+                                              "Please draw at least one ROI first."));
+        return;
+    }
+
+    QVector<QRect> regions = m_roiModel->regions();
+    QVector<QPolygon> polygons = m_roiModel->polygons();
+    QVector<int> rectRoiIds, polygonRoiIds;
+    for (int i = 0; i < m_roiModel->regionCount(); ++i)
+        rectRoiIds.append(m_roiModel->roiIdAt(i));
+    for (int i = 0; i < m_roiModel->polygonCount(); ++i)
+        polygonRoiIds.append(m_roiModel->polygonRoiIdAt(i));
+
+    IAnalysisEngine::MicroDiffCurveParams md;
+    md.baseStartMs = static_cast<qint64>(m_microDiffBaseStartSec * 1000.0);
+    md.baseDurMs = static_cast<qint64>(m_microDiffBaseDurSec * 1000.0);
+    m_taskService->start(AnalysisChannels::microdiff(), m_sessionMgr->currentVideoPath(),
+                         regions, polygons, rectRoiIds, polygonRoiIds, md);
+}
+
+
 
 void MainWindow::onTaskStarted(const QString &taskId)
 {
@@ -1108,6 +1330,11 @@ void MainWindow::onTaskStarted(const QString &taskId)
         m_audioAnalysisBtn->setEnabled(false);
         m_audioAnalysisBtn->setText(lang("分析中...", "Analyzing..."));
         m_statusLabel->setText(lang("正在分析音频...", "Analyzing audio..."));
+    } else if (taskId == AnalysisChannels::microdiff()) {
+        // 微变曲线：不占用亮度/音频按钮文案（不进入下面的亮度分支）
+        m_analyzeBtn->setEnabled(false);
+        m_statusLabel->setText(lang("正在计算变化率曲线（约 3~4 分钟）...",
+                                    "Computing rate-of-change curve (~3-4 min)..."));
     } else {
         m_analyzeBtn->setEnabled(false);
         m_analyzeBtn->setText(lang("亮度分析中...", "Analyzing luminance..."));
@@ -1378,6 +1605,11 @@ void MainWindow::onPositionChanged(qint64 timeMs)
         m_spectrogramEnhanced->setCursorTime(timeMs);
     }
 
+    // v1.18.2：校时窗开着时把播放位置推给它——第 1 步「手动录入」的两点取样
+    // 靠它知道“取当前”到底取的是哪个位置（对话框本身不跟踪播放头）
+    if (m_calibrationDialog)
+        m_calibrationDialog->setPlayhead(timeMs);
+
     // A/B region loop playback
     if (m_chartPanel->isABRegionSet() && m_videoEngine->state() == PlaybackState::Playing) {
         qint64 bPoint = m_chartPanel->abPointB();
@@ -1411,6 +1643,10 @@ void MainWindow::onSeekFromChart(qint64 timeMs)
     } else {
         // 点击/标签跳转：一次性 seek
         m_videoEngine->setScrubMode(false);
+        // 审查 F-2：seek 跳变后必须重置时域环，否则落点后前 N 帧（默认 11）混入跳变前
+        // 画面 → 出现整片假"变化云"（拖一下时间轴必撞）。
+        if (m_videoWidget)
+            m_videoWidget->resetMicroDiffTemporal();
         m_pendingSeekMs = timeMs;
         if (!m_seekThrottleTimer) {
             m_seekThrottleTimer = new QTimer(this);
@@ -1553,6 +1789,8 @@ bool MainWindow::handleGlobalShortcut(QKeyEvent *e)
         float f = m_videoEngine->fps();
         qint64 frameStep = static_cast<qint64>(1000.0f / f);
         if (frameStep < 1) frameStep = 33;
+        if (m_videoWidget)
+            m_videoWidget->resetMicroDiffTemporal();   // 审查 F-2：跳变后重置时域环
         m_videoEngine->seek(m_videoEngine->position() - frameStep);
         showOperationStatus(lang("帧 -1", "Frame -1"));
         return true;
@@ -1561,6 +1799,8 @@ bool MainWindow::handleGlobalShortcut(QKeyEvent *e)
         float f = m_videoEngine->fps();
         qint64 frameStep = static_cast<qint64>(1000.0f / f);
         if (frameStep < 1) frameStep = 33;
+        if (m_videoWidget)
+            m_videoWidget->resetMicroDiffTemporal();   // 审查 F-2：跳变后重置时域环
         m_videoEngine->seek(m_videoEngine->position() + frameStep);
         showOperationStatus(lang("帧 +1", "Frame +1"));
         return true;

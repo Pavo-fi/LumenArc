@@ -10,6 +10,7 @@
  */
 #include "concat_precheck.h"
 
+#include <QDateTime>
 #include <QSet>
 
 namespace {
@@ -24,6 +25,21 @@ const QSet<QString> kMp4AudioWhitelist = {
     QStringLiteral("aac"), QStringLiteral("mp3"), QStringLiteral("ac3"),
     QStringLiteral("eac3"), QStringLiteral("opus"), QStringLiteral("flac"),
 };
+
+/// 私有/录像机容器：即使编解码全在白名单，也不能直接 -c copy 进 MP4。
+/// 大华 DHAV（.dav / .ps）为 Annex-B H.264 + 绝对墙钟时间戳 + 无容器时长，
+/// 直拷依赖 -fflags +genpts 打补丁（实测产生 Non-monotonic DTS 警告与
+/// 接缝空隙），产出无法保证在通用播放器正常播放/seek。
+bool isPrivateDvrContainer(const QString &container)
+{
+    return container == QLatin1String("dhav");
+}
+
+/// 时间戳基是否已归一：绝对墙钟基（DVR 固件写入）→ 必须转码重新打时间戳
+bool hasUnnormalizedTimeBase(const ProbeResult &p)
+{
+    return p.absStartEpochMs > 0;
+}
 
 void add(PrecheckResult &res, const QString &name, PrecheckLevel level,
          const QString &detail)
@@ -118,6 +134,31 @@ PrecheckResult concatPrecheck(const QVector<ProbeResult> &g)
         }
     }
 
+    // 私有录像机容器（大华 DHAV：.dav/.ps）→ BLOCK 路由转码。
+    // 编码/分辨率可能全一致，但容器私有 + 时间戳未归一，直拷进 MP4 不可靠。
+    for (const auto &p : g) {
+        if (isPrivateDvrContainer(p.container)) {
+            add(res, QStringLiteral("containerCompat"), PrecheckLevel::Block,
+                QStringLiteral("%1: 容器 %2 为私有录像机格式（非 MP4 家族），路由转码")
+                    .arg(p.filePath, p.container));
+            break;
+        }
+    }
+
+    // 时间戳基未归一（绝对墙钟，DVR 固件写入）→ BLOCK 路由转码。
+    // 现场反馈（2026-09-11 潮州饶平 .dav）：只看编码/关键帧会把这类文件判成
+    // “已合格 MP4”直接返回源文件，用户拿到 .dav 根本打不开。
+    for (const auto &p : g) {
+        if (hasUnnormalizedTimeBase(p)) {
+            add(res, QStringLiteral("timestampBase"), PrecheckLevel::Block,
+                QStringLiteral("%1: 起始时间为绝对墙钟（%2），时间戳未归一，路由转码")
+                    .arg(p.filePath,
+                         QDateTime::fromMSecsSinceEpoch(p.absStartEpochMs)
+                             .toString(QStringLiteral("yyyy-MM-dd HH:mm:ss"))));
+            break;
+        }
+    }
+
     // --- WARN 级 ---
     if (DIVERGENT(profile) || DIVERGENT(level))
         add(res, QStringLiteral("profileLevel"), PrecheckLevel::Warn,
@@ -186,7 +227,10 @@ QStringList filesNeedingTranscode(const QVector<ProbeResult> &g)
             || !kMp4VideoWhitelist.contains(p.videoCodec)
             || (p.audioStreams > 0
                 && !kMp4AudioWhitelist.contains(p.audioCodec))
-            || p.keyframeSparse;         // MP4 关键帧 >2.5s：拖拽不流畅 → 转码重排
+            || p.keyframeSparse         // MP4 关键帧 >2.5s：拖拽不流畅 → 转码重排
+            // 容器/时间戳层（2026-09-11 补）：编码与关键帧全合格不代表能直拷
+            || isPrivateDvrContainer(p.container)   // 私有录像机容器（dhav 等）
+            || hasUnnormalizedTimeBase(p);          // 绝对墙钟时间戳未归一
         if (!selfNeed && i > 0 && p.videoCodec != g[0].videoCodec)
             selfNeed = true;             // 编码与基准不一致 → 转码追平
         if (selfNeed || paramDivergent || fpsBlock)

@@ -1318,7 +1318,11 @@ QString SegmentExportEngine::buildAudioFilterChainV2(
             segLabels << segOut;
         }
     }
-    parts << QStringLiteral("%1concat=n=%2:v=0:a=1[aout]")
+    // apad：音频快于画面耗尽时补静音，避免 -shortest 把画面一并截断。
+    // 实测（2026-09-11 潮州饶平案）：源音频轨短于视频（前处理产物音频比视频短 83s），
+    // 段区间末尾超出音频末尾 → 音频图提前结束 → -shortest 把整段切掉 22%
+    // （图谱条游标只走到 78%）。画面帧数才是主，音频不够就补静音。
+    parts << QStringLiteral("%1concat=n=%2:v=0:a=1,apad[aout]")
                  .arg(segLabels.join(QString()), QString::number(segs.size()));
     return parts.join(QStringLiteral(";"));
 }

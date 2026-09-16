@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(LumenArc VERSION 1.17.0 LANGUAGES CXX)
+project(LumenArc VERSION 1.18.0 LANGUAGES CXX)
 add_compile_definitions(APP_VERSION="${PROJECT_VERSION}")
 
 set(CMAKE_CXX_STANDARD 17)
@@ -85,6 +85,10 @@ set(SOURCES
     src/accountdialog.cpp
     src/fullscreenvideowindow.cpp
     src/displayadjust.cpp
+    src/microdiff.cpp              # 2026-09-10：微变显示末级（原彩+假彩色叠加）
+    src/microdiffdialog.cpp        # 2026-09-10：微变面板（等级/基准段/显示模式）
+    src/domain/microdiff_core.cpp  # 2026-09-10：微变纯计算核心
+    src/domain/microdiff_curve.cpp # 2026-09-10：微变曲线纯计算（逐秒聚合/判定）
     src/i18n.cpp
     src/aboutdialog.cpp
     src/videolistpanel.cpp
@@ -153,6 +157,7 @@ set(SOURCES
     src/infrastructure/tool_paths.cpp
     src/infrastructure/integrity_checker.cpp
     src/infrastructure/libav_analysis_engine.cpp
+    src/infrastructure/microdiff_baseline.cpp   # 2026-09-10：微变基准提取
     src/infrastructure/encoder_probe.cpp
     src/infrastructure/media_probe_engine.cpp
     src/infrastructure/timestamp_ocr_engine.cpp
@@ -162,6 +167,12 @@ set(SOURCES
     src/infrastructure/compose_render.cpp          # 合成导出 P2：ROI/曲线滚动条烧录
     src/segmentexportdialog.cpp
     src/composeworkbench.cpp
+    # --- 监控直播（2026-09-11）：录像机 RTSP 接入 + 辅助线/截图叠加 + 无损录制 ---
+    src/domain/live/live_source.cpp
+    src/infrastructure/live/live_stream_engine.cpp
+    src/infrastructure/live/live_recorder.cpp
+    src/livemonitorwindow.cpp
+    src/mainwindow_live.cpp          # v1.17.0 P-79 风格：主窗口仅保留入口接线
     src/resources.qrc
 )
 
@@ -188,6 +199,10 @@ set(HEADERS
     src/pinnedwidget.h
     src/fullscreenvideowindow.h
     src/displayadjust.h
+    src/microdiff.h
+    src/microdiffdialog.h
+    src/domain/microdiff_core.h
+    src/domain/microdiff_curve.h
     src/i18n.h
     src/aboutdialog.h
     src/videolistpanel.h
@@ -229,6 +244,7 @@ set(HEADERS
     src/infrastructure/ianalysis_engine.h
     src/infrastructure/ffmpeg_video_engine.h
     src/infrastructure/tool_paths.h
+    src/infrastructure/microdiff_baseline.h
     src/infrastructure/libav_analysis_engine.h
     src/infrastructure/encoder_probe.h
     src/infrastructure/media_probe_engine.h
@@ -245,15 +261,29 @@ set(HEADERS
     src/accountdialog.h
     src/segmentexportdialog.h
     src/composeworkbench.h
+    src/domain/live/live_source.h
+    src/infrastructure/live/live_stream_engine.h
+    src/infrastructure/live/live_recorder.h
+    src/livemonitorwindow.h
 )
 
 # --- Headless engine test harness ---
 add_executable(lumenarc_engine_test
     tests/engine_test_main.cpp
-    src/infrastructure/ivideo_engine.h
+    src/domain/audio_denoise.cpp   # P-54b：引擎依赖（播放降噪 DSP）
+    src/domain/audio_denoise.h
+    src/domain/microdiff_core.h
+    src/domain/microdiff_curve.h
     src/infrastructure/ffmpeg_video_engine.h
     src/infrastructure/ffmpeg_video_engine.cpp
-    src/domain/audio_denoise.cpp   # P-54b：引擎依赖（播放降噪 DSP）
+    src/infrastructure/ivideo_engine.h
+    src/infrastructure/ianalysis_engine.h      # 微变曲线：基类信号 moc（测试直连信号需要）
+    src/infrastructure/libav_analysis_engine.h
+    src/infrastructure/microdiff_baseline.h
+    src/infrastructure/libav_analysis_engine.cpp  # 2026-09-10：微变曲线无头验证驱动
+    src/infrastructure/microdiff_baseline.cpp     # 微变基准提取（独立解码）
+    src/domain/microdiff_core.cpp                 # 微变纯计算核心（基准中值/噪声标定）
+    src/domain/microdiff_curve.cpp                # 微变曲线纯计算（逐秒聚合/判定）
 )
 target_include_directories(lumenarc_engine_test PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src
@@ -310,6 +340,18 @@ target_include_directories(lumenarc_piecewise_test PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src
 )
 target_link_libraries(lumenarc_piecewise_test PRIVATE
+    Qt6::Core
+)
+
+# --- 监控直播源地址组装纯逻辑单测（2026-09-11）---
+add_executable(lumenarc_live_source_test
+    tests/live_source_test_main.cpp
+    src/domain/live/live_source.cpp
+)
+target_include_directories(lumenarc_live_source_test PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+)
+target_link_libraries(lumenarc_live_source_test PRIVATE
     Qt6::Core
 )
 
@@ -770,6 +812,8 @@ add_executable(lumenarc_ui_chain_test
     src/frame_annotation.cpp   # v1.17.0 P-80 C0：ui_chain 像素场景直接调用其纯函数
     src/magnifierwidget.cpp
     src/displayadjust.cpp
+    src/microdiff.cpp              # 2026-09-10：videowidget 依赖微变显示末级
+    src/domain/microdiff_core.cpp
     src/app/calibration_service.cpp
     src/infrastructure/ivideo_engine.h
     src/infrastructure/ianalysis_engine.h

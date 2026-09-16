@@ -237,6 +237,9 @@ void MainWindow::createMenus()
     // P-57 U-1：独立模式 2 路对比播放（无案件也可用，双临时进槽位）
     fileMenu->addAction(lang("多机对比播放（2 路）(&M)...", "&Multi-cam Compare Playback (2 lanes)..."),
                         this, &MainWindow::onMultiCamStandalone);
+    // 监控直播（2026-09-11）：录像机 RTSP 接入 + 辅助线/截图叠加 + 无损录制
+    fileMenu->addAction(lang("接入监控直播(&L)...", "Live &Monitor (RTSP)..."),
+                        this, &MainWindow::onOpenLiveMonitor);
 
     // v1.3.0 M2：案件菜单（新建/打开/最近/起始页/属性/根目录设置 +
     // 关闭案件 Ctrl+W = 模式出口二）
@@ -732,6 +735,16 @@ void MainWindow::createToolBar()
     m_audioAnalysisBtn->setStyleSheet(audioBtnStyle);
     m_audioAnalysisBtn->setEnabled(false);
 
+    // 微变分析（2026-09-10）：显示链彩色增强，非模态面板
+    m_microDiffBtn = new QPushButton(lang("微变分析", "Micro-change"), this);
+    m_microDiffBtn->setToolTip(lang("微变分析：把肉眼不可见的早期烟气/辉光变成彩色云团"
+                                    "（需先圈定 ROI 并采集“起火前干净段”作为基准）",
+                                    "Micro-change analysis: reveal invisible early smoke as a "
+                                    "colour cloud (draw an ROI and collect a clean baseline first)"));
+    m_microDiffBtn->setFixedHeight(32);
+    m_microDiffBtn->setStyleSheet(audioBtnStyle);
+    m_microDiffBtn->setEnabled(false);
+
     m_setTimeBtn = new QPushButton(lang("校时…", "Calibrate…"), this);
     m_setTimeBtn->setToolTip(lang("视频校时：自动识别/手动/北京时间校验",
                                   "Time calibration: auto OCR / manual / Beijing-time check"));
@@ -860,6 +873,7 @@ void MainWindow::createToolBar()
     toolBar->addSeparator();
     toolBar->addWidget(m_analyzeBtn);
     toolBar->addWidget(m_audioAnalysisBtn);  // v0.3: Audio analysis
+    toolBar->addWidget(m_microDiffBtn);      // 2026-09-10: 微变分析
     toolBar->addWidget(m_setTimeBtn);
     toolBar->addSeparator();
     toolBar->addWidget(modeSegment);

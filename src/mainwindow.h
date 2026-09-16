@@ -11,6 +11,7 @@
 #pragma once
 
 #include <QMainWindow>
+#include <atomic>
 #include "domain/speed_plan.h"
 #include "infrastructure/segment_export_engine.h"   // 合成导出工作台信号携带 Params
 #include <QPointer>
@@ -43,6 +44,8 @@ class CaseOpenPanel;
 class RoiModel;
 class GuideLineModel;
 class QPushButton;
+class MicroDiffDialog;
+class LiveMonitorWindow;
 class QLabel;
 class QSplitter;
 class QDockWidget;
@@ -88,6 +91,14 @@ private slots:
     void onAnalyze();
     /// @brief 启动音频分析流程（独立于亮度分析）
     void onAudioAnalysis();
+    /// @brief 微变分析面板（2026-09-10）：非模态浮窗，可边播边调等级
+    void onMicroDiff();
+    /// @brief 面板参数变化 → 解析当前 ROI 并下发到 VideoWidget
+    void applyMicroDiffParams();
+    /// @brief 采集基准段（同步长操作，带进度与取消；R13）
+    void onMicroDiffBaselineRequest(double startSec, double durationSec);
+    /// @brief 计算变化率曲线（全片逐秒微变统计 + 首帧微变判定，走分析任务服务）
+    void onMicroDiffCurve();
     /// P-54b：把播放降噪开关（QSettings）+ 当前降噪滑杆强度下发到
     /// 主引擎与多机窗（开着的）
     void applyPlaybackDenoiseSetting();
@@ -195,6 +206,8 @@ private:
     /// @brief 多机时间线对齐只读视图（v1.3.0 M3 任务14）
     void onMultiCamView();
     void onMultiCamStandalone();   ///< 文件菜单：独立 2 路对比播放（P-57 U-1）
+    /// @brief 监控直播窗口（录像机网络流接入 + 辅助线/截图叠加 + 无损录制）
+    void onOpenLiveMonitor();
     /// @brief 用 Python 分析引擎的真实帧数/FPS 计算可信时长
     qint64 trustedDurationFor(const QString &path) const;
     void createMagnifier();
@@ -272,6 +285,7 @@ protected:
     QAction *m_batchRelocateAction = nullptr; ///< 菜单「批量重新定位」(M3)
     QAction *m_multiCamAction = nullptr;      ///< 菜单「多机同步播放」(M3/P-57)
     QPointer<MultiCamPlaybackWindow> m_multiCamWin;  ///< 非模态多机播放窗口（P-57）
+    QPointer<LiveMonitorWindow> m_liveMonitorWin;    ///< 非模态监控直播窗口（RTSP 接入）
     TimeCalibration m_calibration;   // 当前视频校时 SSOT（.vla v8 持久化）
     QPointer<TimeSettingsDialog> m_calibrationDialog;  // 非模态校时窗口（v1.2.1）
     QPointer<TimeSettingsDialog> m_roiDialog;          // 框选中的校时窗口
@@ -298,6 +312,19 @@ protected:
     QPushButton *m_pauseBtn = nullptr;
     QPushButton *m_stopBtn = nullptr;
     QPushButton *m_analyzeBtn = nullptr;
+    // 微变分析（2026-09-10）
+    QPushButton *m_microDiffBtn = nullptr;
+    MicroDiffDialog *m_microDiffDialog = nullptr;
+    std::atomic<bool> m_microDiffCancel{false};
+    /// 曲线触发用：基准段已采集成功 + 其流内时间（秒）
+    bool m_microDiffBaselineReady = false;
+    double m_microDiffBaseStartSec = 0.0;
+    double m_microDiffBaseDurSec = 0.0;
+
+    /// @brief 由 RoiModel 解析微变处理区（矩形 ROI 的并集外框；无则回退全画面）
+    QRect resolveMicroDiffRoi(bool *hasRoi) const;
+    /// @brief 把参数（含 ROI）下发 VideoWidget，并刷新面板的区域摘要
+    void pushMicroDiffToWidget();
     QPushButton *m_audioAnalysisBtn = nullptr;  // v0.3: 音频分析按钮
     QPushButton *m_setTimeBtn = nullptr;
     QPushButton *m_captureBtn = nullptr;

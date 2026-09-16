@@ -28,6 +28,7 @@
 #include <QCheckBox>
 #include <QDialogButtonBox>
 #include <QFrame>
+#include <QToolButton>
 #include <QDateTime>
 #include <QFileInfo>
 #include <QFileDialog>
@@ -101,7 +102,8 @@ void TimeSettingsDialog::buildUi()
 
     m_workingSummary = new QLabel(this);
     m_workingSummary->setWordWrap(true);
-    m_workingSummary->setStyleSheet(QStringLiteral("color:#8a8;font-weight:bold;"));
+    m_workingSummary->setStyleSheet(QStringLiteral("color:%1;font-weight:bold;")
+                                        .arg(Theme::Success));
     lay->addWidget(m_workingSummary);
 
     if (!m_sidecarWarning.isEmpty()) {
@@ -135,8 +137,140 @@ void TimeSettingsDialog::buildUi()
     goRow->addWidget(m_cancelBtn, 1);
     goRow->addWidget(m_roiBtn, 1);
     gg->addLayout(goRow);
+
+    // ---- 第 1 步的手动出路（v1.18.3 简化版）----
+    // 背景：自动 OCR 对某些 OSD 版式天然无效（如“今日水印相机”：时分 19:32 +
+    // 灰框秒 37，中间无冒号，而解析器要求 H:M:S）。
+    // 用户反馈：“输入后没有确认结果的方法 / 页面字太多太复杂”，故：
+    //   默认 = 一条（填画面时间 + 采用，位置自动取当前播放头，零前置操作），
+    //   应用后就地给出确认；两点（修正时钟快慢）收进可展开高级区，默认折叠。
+    auto *manualBox = new QFrame(this);
+    // 用主题令牌（勿硬编码浅色：本程序为深色主题，浅底会变成一块白砖）
+    manualBox->setStyleSheet(QStringLiteral(
+        "QFrame { background:%1; border:1px solid %2; border-radius:6px; }"
+        "QLabel { border:none; background:transparent; }")
+        .arg(Theme::BgCard, Theme::Border));
+    auto *mb = new QVBoxLayout(manualBox);
+    mb->setContentsMargins(10, 8, 10, 8);
+    mb->setSpacing(6);
+
+    // 默认路径：单点。位置自动取当前播放头——不需要任何“先取位置”的前置动作
+    m_manualSimpleBox = new QWidget(manualBox);
+    m_manualSimpleBox->setObjectName(QStringLiteral("manualSimpleBox"));
+    auto *msRow = new QHBoxLayout(m_manualSimpleBox);
+    msRow->setContentsMargins(0, 0, 0, 0);
+    msRow->setSpacing(6);
+    msRow->addWidget(new QLabel(lang("画面时间读不出？填画面上的时间：",
+                                     "OCR failed? Type the on-screen time:"),
+                                m_manualSimpleBox));
+    m_manualSimpleEdit = new QDateTimeEdit(QDateTime::currentDateTime(),
+                                           m_manualSimpleBox);
+    m_manualSimpleEdit->setObjectName(QStringLiteral("manualSimpleEdit"));
+    m_manualSimpleEdit->setDisplayFormat(QStringLiteral("yyyy-MM-dd HH:mm:ss"));
+    m_manualSimpleEdit->setCalendarPopup(true);
+    m_manualSimpleEdit->setToolTip(lang(
+        "照拄画面上此刻显示的完整日期时间（对应当前播放位置）",
+        "Type the full date/time shown on screen at the current playhead"));
+    msRow->addWidget(m_manualSimpleEdit, 2);
+    auto *adoptBtn = new QPushButton(lang("采用", "Apply"), m_manualSimpleBox);
+    adoptBtn->setObjectName(QStringLiteral("adoptManualBaseBtn"));
+    msRow->addWidget(adoptBtn);
+    mb->addWidget(m_manualSimpleBox);
+    connect(adoptBtn, &QPushButton::clicked,
+            this, &TimeSettingsDialog::onAdoptManualBase);
+
+    // 高级路径：两点（默认折叠，需修正“时钟快慢”时才展开）
+    m_manualAdvBtn = new QToolButton(manualBox);
+    m_manualAdvBtn->setObjectName(QStringLiteral("manualAdvBtn"));
+    m_manualAdvBtn->setCheckable(true);
+    m_manualAdvBtn->setAutoRaise(true);
+    m_manualAdvBtn->setToolButtonStyle(Qt::ToolButtonTextOnly);
+    m_manualAdvBtn->setText(lang("▸ 需要修正时钟快慢？（两点，需 ≥10 分钟录像）",
+                                 "▸ Correct clock drift? (two points, >=10 min)"));
+    m_manualAdvBtn->setToolTip(lang(
+        "两点分处录像首尾：既能定基准，又能算出画面时钟每天快/慢多少。\n"
+        "注意：OSD 只有秒级精度，跨度不足 10 分钟时算不出可信的漂移。",
+        "One point near each end: sets the base and measures drift.\n"
+        "Note: with 1s OSD resolution, spans under ~10 min cannot resolve drift."));
+    mb->addWidget(m_manualAdvBtn);
+
+    m_manualAdvBox = new QWidget(manualBox);
+    m_manualAdvBox->setObjectName(QStringLiteral("manualAdvBox"));
+    auto *mab = new QVBoxLayout(m_manualAdvBox);
+    mab->setContentsMargins(0, 0, 0, 0);
+    mab->setSpacing(4);
+
+    const auto mkAdvRow = [&](const QString &label, const QString &posObj,
+                              const QString &editObj, const QString &takeObj,
+                              QLabel *&posOut, QDateTimeEdit *&editOut,
+                              QPushButton *&takeOut) {
+        auto *row = new QHBoxLayout();
+        row->addWidget(new QLabel(label, m_manualAdvBox));
+        posOut = new QLabel(QStringLiteral("—"), m_manualAdvBox);
+        posOut->setObjectName(posObj);
+        posOut->setMinimumWidth(80);
+        posOut->setStyleSheet(QStringLiteral("color:%1;").arg(Theme::TextSecond));
+        row->addWidget(posOut);
+        editOut = new QDateTimeEdit(QDateTime::currentDateTime(), m_manualAdvBox);
+        editOut->setObjectName(editObj);
+        editOut->setDisplayFormat(QStringLiteral("yyyy-MM-dd HH:mm:ss"));
+        editOut->setCalendarPopup(true);
+        row->addWidget(editOut, 2);
+        takeOut = new QPushButton(lang("取当前", "Grab"), m_manualAdvBox);
+        takeOut->setObjectName(takeObj);
+        row->addWidget(takeOut);
+        mab->addLayout(row);
+    };
+    QPushButton *p1TakeBtn = nullptr;
+    QPushButton *p2TakeBtn = nullptr;
+    mkAdvRow(lang("点1", "Pt1"), QStringLiteral("manualP1Pos"),
+             QStringLiteral("manualP1Edit"), QStringLiteral("manualP1TakeBtn"),
+             m_manualP1Pos, m_manualP1Edit, p1TakeBtn);
+    mkAdvRow(lang("点2", "Pt2"), QStringLiteral("manualP2Pos"),
+             QStringLiteral("manualP2Edit"), QStringLiteral("manualP2TakeBtn"),
+             m_manualP2Pos, m_manualP2Edit, p2TakeBtn);
+    auto *advFoot = new QHBoxLayout();
+    advFoot->addStretch(1);
+    auto *adoptTwoBtn = new QPushButton(lang("采用两点", "Apply two points"),
+                                       m_manualAdvBox);
+    adoptTwoBtn->setObjectName(QStringLiteral("adoptManualTwoPointBtn"));
+    advFoot->addWidget(adoptTwoBtn);
+    mab->addLayout(advFoot);
+    m_manualAdvBox->hide();
+    mb->addWidget(m_manualAdvBox);
+
+    connect(p1TakeBtn, &QPushButton::clicked,
+            this, &TimeSettingsDialog::onTakeManualP1);
+    connect(p2TakeBtn, &QPushButton::clicked,
+            this, &TimeSettingsDialog::onTakeManualP2);
+    connect(adoptTwoBtn, &QPushButton::clicked,
+            this, &TimeSettingsDialog::onAdoptManualTwoPoint);
+    connect(m_manualAdvBtn, &QToolButton::toggled, this, [this](bool on) {
+        m_manualAdvBox->setVisible(on);
+        m_manualSimpleBox->setVisible(!on);
+        m_manualAdvBtn->setText(on
+            ? lang("▾ 修正时钟快慢（两点）", "▾ Correct clock drift (two points)")
+            : lang("▸ 需要修正时钟快慢？（两点，需 ≥10 分钟录像）",
+                   "▸ Correct clock drift? (two points, >=10 min)"));
+    });
+
+    // 位置提示 + 应用后的确认（用户反馈：输入后没有确认结果的方法）
+    m_manualLivePos = new QLabel(lang("位置取当前播放头：00:00:00",
+                                      "Uses playhead: 00:00:00"), manualBox);
+    m_manualLivePos->setObjectName(QStringLiteral("manualLivePos"));
+    m_manualLivePos->setStyleSheet(QStringLiteral("color:%1;").arg(Theme::TextSecond));
+    mb->addWidget(m_manualLivePos);
+
+    m_manualResultLabel = new QLabel(manualBox);
+    m_manualResultLabel->setObjectName(QStringLiteral("manualResultLabel"));
+    m_manualResultLabel->setWordWrap(true);
+    m_manualResultLabel->setStyleSheet(QStringLiteral("color:%1;").arg(Theme::Success));
+    m_manualResultLabel->hide();
+    mb->addWidget(m_manualResultLabel);
+
+    gg->addWidget(manualBox);
     m_progressLabel = new QLabel(this);
-    m_progressLabel->setStyleSheet(QStringLiteral("color:#666;"));
+    m_progressLabel->setStyleSheet(QStringLiteral("color:%1;").arg(Theme::TextSecond));
     gg->addWidget(m_progressLabel);
     // 结果（GO 完成后出现）
     m_resultLabel = new QLabel(lang(
@@ -193,15 +327,13 @@ void TimeSettingsDialog::buildUi()
                                         "Step 2 · Align to real time (optional)"), this);
     auto *gt = new QVBoxLayout(grpTruth);
     auto *truthExplain = new QLabel(lang(
-        "监控主机时钟可能偏快/偏慢（如从未对时）。第 1 步解决「视频进度 ↔ 画面时间」，\n"
-        "这一步解决「画面时间 ↔ 真实北京时间」。推荐拍照校时：对屏幕拍照时把手机\n"
-        "标准时间同框拍入，框选两处时间自动识别计算偏差（图片随案件存档）；也可手动输入。",
-        "The on-screen clock may be fast/slow (e.g. recorder never synced). Step 1 maps "
-        "playback↔on-screen time; this step maps on-screen↔real Beijing time. "
-        "Recommended: photograph the screen together with a phone showing standard "
-        "time, box both clocks for OCR (photo archived with the case); or enter manually."), this);
+        "第 1 步对的是「视频进度 ↔ 画面时间」，这一步对「画面时间 ↔ 真实北京时间」\n"
+        "（如录像机从未对时）。推荐拍照校时：屏幕与手机标准时间同框拍入，框选两处自动算偏差。",
+        "Step 1 maps playback↔on-screen time; this step maps on-screen↔real time "
+        "(e.g. the recorder was never synced). Recommended: photograph the screen "
+        "together with a standard clock and box both."), this);
     truthExplain->setWordWrap(true);
-    truthExplain->setStyleSheet(QStringLiteral("color:#666;"));
+    truthExplain->setStyleSheet(QStringLiteral("color:%1;").arg(Theme::TextSecond));
     gt->addWidget(truthExplain);
 
     // 方式一：校时图片框选 OCR（v1.12.7 用户反馈：按钮不够显眼 →
@@ -213,10 +345,11 @@ void TimeSettingsDialog::buildUi()
     m_truthPhotoBtn->setMinimumHeight(40);
     m_truthPhotoBtn->setStyleSheet(QStringLiteral(
         "QPushButton { font-size:14px; font-weight:bold; "
-        "background:%1; color:#1a1a1a; border-radius:6px; padding:0 14px; }"
+        "background:%1; color:%3; border-radius:6px; padding:0 14px; }"
         "QPushButton:hover { background:%2; }"
-        "QPushButton:disabled { background:#555; color:#999; }")
-        .arg(Theme::Accent).arg(Theme::AccentHover));
+        "QPushButton:disabled { background:%4; color:%5; }")
+        .arg(Theme::Accent, Theme::AccentHover, Theme::AccentOnDark,
+             Theme::BgPressed, Theme::TextMuted));
     m_truthPhotoBtn->setEnabled(m_service != nullptr);
     if (!m_service)
         m_truthPhotoBtn->setToolTip(lang("OCR 引擎不可用", "OCR engine unavailable"));
@@ -319,12 +452,10 @@ void TimeSettingsDialog::buildUi()
 
     // ---- 底部 ----
     auto *hint = new QLabel(lang(
-        "提示：识别/重建在后台进行，可最小化窗口继续其他操作；"
-        "关闭窗口不取消任务，重新打开可查看进度与结果。",
-        "Tip: tasks run in background; minimize to keep working. "
-        "Closing keeps the task running; reopen to see progress/result."), this);
+        "识别在后台进行，可最小化窗口继续操作。",
+        "Recognition runs in background; you can minimize and keep working."), this);
     hint->setWordWrap(true);
-    hint->setStyleSheet(QStringLiteral("color:#888;"));
+    hint->setStyleSheet(QStringLiteral("color:%1;").arg(Theme::TextSecond));
     lay->addWidget(hint);
     auto *bbox = new QDialogButtonBox(QDialogButtonBox::Close, this);
     connect(bbox, &QDialogButtonBox::rejected, this, &QDialog::reject);
@@ -346,9 +477,11 @@ void TimeSettingsDialog::buildUi()
 QWidget *TimeSettingsDialog::buildUsageBanner()
 {
     auto *banner = new QFrame(this);
+    // 主题令牌（原为硬编码浅色，与深色主题不一致——用户反馈：面板颜色不一致）
     banner->setStyleSheet(QStringLiteral(
-        "QFrame { background:#f4f7fb; border:1px solid #c8d4e4; border-radius:8px; }"
-        "QLabel { border:none; background:transparent; }"));
+        "QFrame { background:%1; border:1px solid %2; border-radius:8px; }"
+        "QLabel { border:none; background:transparent; }")
+        .arg(Theme::BgCard, Theme::Border));
     auto *lay = new QVBoxLayout(banner);
     lay->setContentsMargins(12, 8, 12, 8);
     lay->setSpacing(4);
@@ -356,25 +489,14 @@ QWidget *TimeSettingsDialog::buildUsageBanner()
     title->setStyleSheet(QStringLiteral("font-weight:bold;"));
     lay->addWidget(title);
     auto *desc = new QLabel(
-        lang("点下方 GO → 自动识别画面时间 → 自动应用\n"
-             "│\n"
-             "│ GO 会自动判断：\n"
-             "│ - 正常录像 → 自动三点识别（画面时间基准 + 时钟快慢）\n"
-             "│ - 抽帧/变速文件 → 自动重建（按画面时间恢复整片映射，需数分钟）\n"
-             "│ - 完成后自动应用，图表时间轴立即变为画面时间\n"
-             "│\n"
-             "│ 画面时间与真实时间对不上（如监控钟慢）？用第 2 步对真实时间。",
-             "Click GO below → auto-read on-screen time → auto-applied\n"
-             "│\n"
-             "│ GO decides automatically:\n"
-             "│ - normal recording → 3-point OCR (time base + clock drift)\n"
-             "│ - variable-rate / sampled file → reconstruction from frames (minutes)\n"
-             "│ - applied automatically; chart axis becomes on-screen time\n"
-             "│\n"
-             "│ On-screen time differs from real time? Use Step 2."),
+        lang("点 GO 自动识别画面时间并应用；识别不出就用下面的手动录入。\n"
+             "画面时间与真实时间有整体偏差时，用第 2 步对真实时间。",
+             "Press GO to auto-read and apply the on-screen time; if it fails, "
+             "use manual entry below.\n"
+             "Use Step 2 if the on-screen clock differs from real time."),
         banner);
     desc->setWordWrap(true);
-    desc->setStyleSheet(QStringLiteral("color:#555;"));
+    desc->setStyleSheet(QStringLiteral("color:%1;").arg(Theme::TextSecond));
     lay->addWidget(desc);
     return banner;
 }
@@ -435,6 +557,8 @@ void TimeSettingsDialog::refreshWorkingSummary()
         // 方式二手输默认取当前画面时间（可编辑；取后用户自行微调）
         if (!m_monitorEdit->hasFocus())
             m_monitorEdit->setDateTime(QDateTime::fromMSecsSinceEpoch(curWall));
+        // v1.18.2：手动取样位置由用户点「取当前」显式记录，
+        // 不随播放头漂移（输入框保持用户填的画面时间）
     } else {
         m_monitorTimeLabel->setText(lang("（需先完成自动校时）",
                                          "(run auto calibrate first)"));
@@ -801,12 +925,21 @@ void TimeSettingsDialog::onServiceFailed(const QString &videoPath,
             "未能识别画面中的时间（%1）。\n"
             "可能原因：\n"
             "· 画面中没有时间显示，或时间不含日期（需 年月日 时分秒）\n"
+            "· 时间格式为「时分 + 独立秒框」之类非标准写法（如水印相机）\n"
             "· 时间字体/位置特殊\n"
             "· 框选区域与时间戳位置不匹配（可重新框选）\n"
-            "若画面本身无 OSD 时间，可用第 2 步「手动输入两个时间」直接对真实时间。",
+            "→ 不用卡在这里：用上方「画面时间读不出？手动录入」照拄画面时间\n"
+            "   建立基准，第 2 步即可继续。\n"
+            "   （单点只能定基准；如需修正“时钟快慢”仍建议修好框选后重跑 GO）",
             "Could not read on-screen time (%1).\n"
-            "Possible: no timestamp, date-less format (needs yyyy-mm-dd hh:mm:ss), "
-            "or unusual font. Try Step 3 → manual / force reconstruction.")
+            "Possible causes:\n"
+            "- no timestamp on screen, or no date (needs yyyy-mm-dd hh:mm:ss)\n"
+            "- non-standard layout, e.g. hh:mm plus a separate seconds chip\n"
+            "- unusual font/position\n"
+            "- boxed area does not match the timestamp (re-select it)\n"
+            "-> Do not get stuck: use \"Enter on-screen time\" above to set the base\n"
+            "   manually, then continue with step 2.\n"
+            "   (A single point fixes the offset only; GO is still needed for drift.)")
                 .arg(error));
         emit goTaskFinished(lang("校时失败", "Calibration failed"),
                             lang("%1：%2", "%1: %2")
@@ -938,6 +1071,166 @@ void TimeSettingsDialog::setGoBusy(bool busy, const QString &stageText)
             : lang("🔍 自动校时", "🔍 Auto calibrate"));
     }
     m_progressLabel->setText(busy ? stageText : QString());
+}
+
+// ---------------------------------------------------------------------------
+// 第 1 步的手动出路（v1.18.1 单点 / v1.18.2 两点）：OSD 无法 OCR 时的唯一入口
+// 语义：记录「某播放位置上，画面显示的日期时间」。
+//   仅点1 → 固定偏移（rate=1，等同 v1.18.1 行为）
+//   点1+点2 → 复用 TimeCalibration::fit 做最小二乘，同时得偏移与速率
+// （复用 domain 拟合而不自写数学：显著性/合理上限/标准误全走既有规则，R9）
+// ---------------------------------------------------------------------------
+namespace {
+/// 手动取样点（rawText 留痕，便于在细节表里看出是人填的而非 OCR）
+TimeCalibration::Sample makeManualSample(qint64 streamMs, qint64 wallMs)
+{
+    TimeCalibration::Sample s;
+    s.streamMs = streamMs;
+    s.wallMs = wallMs;
+    s.rawText = QStringLiteral("手动录入");
+    s.conf = 1.0;
+    s.used = true;
+    return s;
+}
+} // namespace
+
+void TimeSettingsDialog::setPlayhead(qint64 ms)
+{
+    m_playheadMs = qMax<qint64>(0, ms);
+    if (m_manualLivePos)
+        m_manualLivePos->setText(lang("位置取当前播放头：%1", "Uses playhead: %1")
+                                     .arg(fmtStreamMs(m_playheadMs)));
+}
+
+void TimeSettingsDialog::onTakeManualP1()
+{
+    m_manualP1PosMs = m_playheadMs;
+    if (m_manualP1Pos)
+        m_manualP1Pos->setText(fmtStreamMs(m_manualP1PosMs));
+}
+
+void TimeSettingsDialog::onTakeManualP2()
+{
+    m_manualP2PosMs = m_playheadMs;
+    if (m_manualP2Pos)
+        m_manualP2Pos->setText(fmtStreamMs(m_manualP2PosMs));
+}
+
+bool TimeSettingsDialog::applyManualSamples(
+    const QVector<TimeCalibration::Sample> &samples, bool twoPoint)
+{
+    const TimeCalibration::FitResult fr = TimeCalibration::fit(samples);
+    if (!fr.ok) {
+        QMessageBox::warning(this, lang("无法应用", "Cannot apply"),
+            lang("取样点无效，无法建立基准。", "Invalid samples."));
+        return false;
+    }
+    if (fr.warning == TimeCalibration::FitWarning::RateInsane) {
+        // |rate-1| 超合理上限（≈1%）几乎必为时间拄错：拒绝而非静默采纳
+        // （静默采纳会把一个错别字变成整个时间轴的系统性偏差）
+        QMessageBox::warning(this, lang("数值不合理", "Implausible"),
+            lang("推算出的时钟快慢超出合理范围（每天 %1 秒），疑似时间拄错。\n"
+                 "请核对两点的画面时间后重试。",
+                 "Implied drift %1 s/day is out of range; check both times.")
+                .arg(fr.driftSecondsPerDay(), 0, 'f', 1));
+        return false;
+    }
+
+    TimeCalibration c = m_working;
+    c.source = TimeCalibration::Source::Manual;
+    c.dateKnown = true;
+    c.samples = samples;
+    c.conf = 1.0;
+    // 手动取样替代 OCR/重建结论：清掉它们遗留的变速态，避免与本次拟合矛盾
+    c.piecewise = PiecewiseTimeMap();
+    c.piecewiseApplied = false;
+    c.speedVariant = false;
+    c.boundaryCount = 0;
+    c.applyFit(fr);   // offsetMs/rate/sigmaRate；rateApplied 走既有显著性规则
+
+    applyWorking(c);
+    m_goStage = GoStage::Done;
+    setGoBusy(false, QString());
+    m_detailsBtn->setEnabled(false);
+    m_useBtn->setEnabled(false);
+
+    // 就地确认（用户反馈：输入后没有确认结果的方法）——把“哪个位置↔哪个时间”
+    // 这对关键映射显式回读出来，用户一眼可核
+    QString msg = lang("✓ 已应用：位置 %1 的画面时间 = %2",
+                       "✓ Applied: on-screen time at %1 = %2")
+                      .arg(fmtStreamMs(samples.first().streamMs),
+                           fmtWall(samples.first().wallMs));
+    if (twoPoint) {
+        msg += lang("\n　 位置 %1 的画面时间 = %2",
+                    "\n   on-screen time at %1 = %2")
+                   .arg(fmtStreamMs(samples.last().streamMs),
+                        fmtWall(samples.last().wallMs));
+        if (c.rateApplied)
+            msg += lang("\n　 已修正时钟快慢：每天 %1 秒",
+                        "\n   drift corrected: %1 s/day")
+                       .arg(fr.driftSecondsPerDay(), 0, 'f', 1);
+        else
+            msg += lang("\n　 跨度内时钟快慢不显著（每天 %1 秒），仅对基准",
+                        "\n   drift not significant (%1 s/day); offset only")
+                       .arg(fr.driftSecondsPerDay(), 0, 'f', 1);
+    } else {
+        msg += lang("\n　 仅对基准；如需修正时钟快慢，展开下方两点模式",
+                    "\n   offset only; expand two-point mode for drift");
+    }
+    msg += lang("\n　 第 2 步「对真实时间」已解锁。",
+                "\n   Step 2 (align to real time) is now unlocked.");
+    if (m_manualResultLabel) {
+        m_manualResultLabel->setText(msg);
+        m_manualResultLabel->show();
+    }
+    m_resultLabel->setText(lang("已按手动录入建立画面时间基准（见上方确认）。",
+                                "On-screen time base set from manual input "
+                                "(see confirmation above)."));
+    return true;
+}
+
+void TimeSettingsDialog::onAdoptManualBase()
+{
+    // 默认路径：位置 = 当前播放头。不要求任何“先取位置”的前置动作
+    // （v1.18.2 曾要求先点「取当前」，用户实测因此以为功能坏了）
+    if (!m_manualSimpleEdit)
+        return;
+    const qint64 wall = m_manualSimpleEdit->dateTime().toMSecsSinceEpoch();
+    QVector<TimeCalibration::Sample> samples;
+    samples.append(makeManualSample(m_playheadMs, wall));
+    applyManualSamples(samples, /*twoPoint=*/false);
+}
+
+void TimeSettingsDialog::onAdoptManualTwoPoint()
+{
+    if (!m_manualP1Edit || !m_manualP2Edit)
+        return;
+    if (m_manualP1PosMs < 0 || m_manualP2PosMs < 0) {
+        QMessageBox::warning(this, lang("无法应用", "Cannot apply"),
+            lang("两点模式需先各自点「取当前」记录位置：\n"
+                 "① 把播放头停到点1 能看清画面时间的位置 → 点1 行「取当前」；\n"
+                 "② 再停到点2 → 点2 行「取当前」。",
+                 "Two-point mode needs each row's Grab first."));
+        return;
+    }
+    if (m_manualP2PosMs <= m_manualP1PosMs) {
+        QMessageBox::warning(this, lang("无法应用", "Cannot apply"),
+            lang("点2 的播放位置必须晚于点1。",
+                 "Point 2 must be later than point 1."));
+        return;
+    }
+    const qint64 w1 = m_manualP1Edit->dateTime().toMSecsSinceEpoch();
+    const qint64 w2 = m_manualP2Edit->dateTime().toMSecsSinceEpoch();
+    if (w2 == w1) {
+        QMessageBox::warning(this, lang("无法应用", "Cannot apply"),
+            lang("两点的画面时间完全相同，无法推算时钟快慢。",
+                 "Both points show the same on-screen time."));
+        return;
+    }
+    QVector<TimeCalibration::Sample> samples;
+    samples.append(makeManualSample(m_manualP1PosMs, w1));
+    samples.append(makeManualSample(m_manualP2PosMs, w2));
+    applyManualSamples(samples, /*twoPoint=*/true);
 }
 
 // ---------------------------------------------------------------------------

@@ -22,6 +22,7 @@
 #pragma once
 
 #include "ianalysis_engine.h"
+#include "domain/microdiff_curve.h"   // microdiff::FrameStats（微变 Pass B 输出）
 #include <QVector>
 #include <QRect>
 #include <QPolygon>
@@ -52,6 +53,11 @@ public:
     void startAudioAnalysis(const QString &videoPath);
     /// P-54：音频降噪强度（谱门控 α；0=关）。线程安全，worker 启动时读取。
     void setAudioDenoiseStrength(double strength) override;
+    /// 微变变化率曲线分析（2026-09-10）：两遍（干净基准段 + 全片扫描），
+    /// 仅矩形 ROI（regions 与 rectRoiIds 平行）；结果经 analysisFinished 回传
+    void startMicroDiffAnalysis(const QString &videoPath, const QVector<QRect> &regions,
+                                 const QVector<int> &rectRoiIds,
+                                 const MicroDiffCurveParams &params) override;
     void cancelAnalysis() override;
     bool isRunning() const override;
 
@@ -79,6 +85,8 @@ signals:
     void beginAnalysis();
     /// 内部：请求工作线程启动音频分析（startAudioAnalysis 时发射）
     void beginAudio();
+    /// 内部：请求工作线程启动微变变化率曲线分析（startMicroDiffAnalysis 时发射）
+    void beginMicroDiff();
 
 private:
     struct RoiSpec {
@@ -92,6 +100,7 @@ private:
     // ---- 分析任务（工作线程执行） ----
     void runLuminanceTask();
     void runAudioTask();
+    void runMicroDiffTask();   // 微变：Pass A 基准 + Pass B 全片扫描 + 判定
 
     // ---- libav 封装 ----
     bool openVideo(const QString &path, AVFormatContext **fmt,
@@ -105,6 +114,14 @@ private:
     bool analyzeLuminanceOne(const QString &path, const QVector<RoiSpec> &rois,
                              qint64 totalFramesEst,
                              QVector<qint64> *outTs, QVector<QVector<qreal>> *outLums);
+
+    /// 微变 Pass B：全片解码，逐帧 ROI 微差统计（尺寸与基准一致的帧才计入）。
+    /// baseline/baseW/baseH 为 Pass A 产出（原始分辨率）；ROI 坐标同基准坐标系。
+    bool analyzeMicroDiffScan(const QString &path, const QVector<QRect> &rects,
+                              const std::vector<uint8_t> &baseline, int baseW, int baseH,
+                              qint64 totalFramesEst,
+                              QVector<QVector<microdiff::FrameStats>> *outPerRoi,
+                              QVector<qint64> *outFrameTs);
 
     /// 单视频音频分析：PCM(24000 mono) → RMS + STFT（对齐 analyze_video.py 语义）。
     /// 成功返回 true 且 out 已填。
@@ -122,6 +139,11 @@ private:
     QString m_videoPath;
     QStringList m_extraVideos;
     QVector<RoiSpec> m_rois;
+
+    // 微变任务参数（startMicroDiffAnalysis 时填好，worker 读取）
+    QVector<QRect> m_mdRegions;          // 与 m_mdRoiIds 平行
+    QVector<int> m_mdRoiIds;
+    MicroDiffCurveParams m_mdParams;
 
     // v1.7.1：videoTiming 缓存（切换视频路径上多次调用，大文件每次
     // open+find_stream_info 是秒级开销——用户实测切换卡顿）
