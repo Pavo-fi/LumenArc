@@ -5,6 +5,22 @@ on:
     branches: [master]
   workflow_dispatch:
 
+# ─────────────────────────────────────────────────────────────────────────────
+# v1.18.0 CI 修复说明（本工作流自 2026-07-20 起 156 连败的根因）
+#
+# CMakeLists.txt 第 39-53 行在 **configure 期** 即硬校验 FFmpeg SDK
+# （third_party/ffmpeg/include/libavformat/avformat.h + lib/*.lib，缺失即
+# FATAL_ERROR 退出）。而旧版本工作流把 "Download FFmpeg SDK" 放在
+# "Configure CMake" **之后** → configure 必然失败。
+# 实锤：run 34459819377 等全部卡在 "CMake Error at CMakeLists.txt:52"。
+# 现将其前置到 Configure CMake 之前。
+#
+# 打包一并改为走 tools/pack_release.py：带红线排除 + REQUIRED 必含清单
+# 双重校验（源目录查一遍、zip 内再查一遍），取代原先的 Compress-Archive
+# 裸打包——后者不校验清单、且只拷了 ffmpeg.exe 漏了 ffprobe.exe，
+# 正是 v1.16.0/v1.16.1 "probe_timestamps.py 误删" 事故的来源。
+# ─────────────────────────────────────────────────────────────────────────────
+
 jobs:
   build-windows:
     runs-on: windows-2022
@@ -21,6 +37,29 @@ jobs:
           arch: 'win64_msvc2022_64'
           modules: 'qtcharts qtmultimedia'
 
+      - name: Set up Python (for tools/pack_release.py)
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      # ★★ 必须在 Configure CMake 之前 ★★
+      - name: Download FFmpeg SDK (LGPL shared)
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $url = "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-lgpl-shared.zip"
+          Invoke-WebRequest -Uri $url -OutFile "ffmpeg-sdk.zip"
+          Expand-Archive -Path "ffmpeg-sdk.zip" -DestinationPath "ffmpeg-sdk-temp" -Force
+          $inner = Get-ChildItem "ffmpeg-sdk-temp" -Directory | Select-Object -First 1
+          New-Item -ItemType Directory -Path "third_party" -Force | Out-Null
+          Move-Item $inner.FullName "third_party\ffmpeg" -Force
+          Remove-Item "ffmpeg-sdk.zip", "ffmpeg-sdk-temp" -Recurse -Force
+          # 显式校验：缺失会让 CMake configure 直接失败，早点给出可读错误
+          if (-not (Test-Path "third_party\ffmpeg\include\libavformat\avformat.h")) {
+            Write-Error "FFmpeg SDK 头文件缺失：third_party\ffmpeg\include\libavformat\avformat.h"
+            exit 1
+          }
+          Write-Host "FFmpeg SDK ready: third_party\ffmpeg"
+        shell: pwsh
 
       - name: Configure CMake
         run: cmake -B build -S . -G "Visual Studio 17 2022" -A x64 -DCMAKE_BUILD_TYPE=Release
@@ -30,31 +69,24 @@ jobs:
         run: cmake --build build --config Release
         shell: bash
 
-      - name: Download FFmpeg SDK (LGPL shared)
+      - name: Download ffmpeg CLI (GPL — ffmpeg.exe + ffprobe.exe)
         run: |
-          $url = "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-lgpl-shared.zip"
-          Invoke-WebRequest -Uri $url -OutFile "ffmpeg-sdk.zip"
-          Expand-Archive -Path "ffmpeg-sdk.zip" -DestinationPath "ffmpeg-sdk-temp" -Force
-          $inner = Get-ChildItem "ffmpeg-sdk-temp" -Directory | Select-Object -First 1
-          New-Item -ItemType Directory -Path "third_party" -Force | Out-Null
-          Move-Item $inner.FullName "third_party\ffmpeg" -Force
-          Remove-Item "ffmpeg-sdk.zip", "ffmpeg-sdk-temp" -Recurse -Force
-        shell: pwsh
-
-      - name: Download ffmpeg
-        run: |
+          $ErrorActionPreference = 'Stop'
           $ffmpegUrl = "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip"
           Write-Host "Downloading ffmpeg..."
           Invoke-WebRequest -Uri $ffmpegUrl -OutFile "ffmpeg.zip"
           Expand-Archive -Path "ffmpeg.zip" -DestinationPath "ffmpeg_temp" -Force
           New-Item -ItemType Directory -Path "build\Release\ffmpeg" -Force | Out-Null
-          $ffmpegExe = Get-ChildItem -Path "ffmpeg_temp" -Recurse -Filter "ffmpeg.exe" | Select-Object -First 1
-          if ($ffmpegExe) {
-            Copy-Item -Path $ffmpegExe.FullName -Destination "build\Release\ffmpeg\ffmpeg.exe" -Force
-            Write-Host "ffmpeg copied to build\Release\ffmpeg\ffmpeg.exe"
-          } else {
-            Write-Error "ffmpeg.exe not found in downloaded archive"
-            exit 1
+          # ffprobe.exe 是 pack_release.py 的必含项（probe_timestamps.py 用它取时长），
+          # 旧版只拷 ffmpeg.exe → REQUIRED 校验会失败
+          foreach ($tool in @("ffmpeg.exe", "ffprobe.exe")) {
+            $found = Get-ChildItem -Path "ffmpeg_temp" -Recurse -Filter $tool | Select-Object -First 1
+            if (-not $found) {
+              Write-Error "$tool not found in downloaded archive"
+              exit 1
+            }
+            Copy-Item -Path $found.FullName -Destination "build\Release\ffmpeg\$tool" -Force
+            Write-Host "$tool -> build\Release\ffmpeg\$tool"
           }
           Remove-Item -Path "ffmpeg.zip" -Force
           Remove-Item -Path "ffmpeg_temp" -Recurse -Force
@@ -62,11 +94,12 @@ jobs:
 
       - name: Bundle Python 3.12 embeddable
         run: |
+          $ErrorActionPreference = 'Stop'
           $pyVer = "3.12.8"
           $pyUrl = "https://www.python.org/ftp/python/$pyVer/python-$pyVer-embed-amd64.zip"
           Write-Host "Downloading Python $pyVer embeddable..."
           Invoke-WebRequest -Uri $pyUrl -OutFile "python-embed.zip"
-          Expand-Archive -Path "python-embed.zip" -DestinationPath "build\Release\python"
+          Expand-Archive -Path "python-embed.zip" -DestinationPath "build\Release\python" -Force
           Remove-Item "python-embed.zip"
 
           # Enable site packages in ._pth file
@@ -91,9 +124,20 @@ jobs:
           Write-Host "Python bundled successfully"
         shell: pwsh
 
-      - name: Verify Python works
+      - name: Verify bundled Python works
         run: |
           & "build\Release\python\python.exe" -c "import cv2; import numpy; print(f'OK: cv2={cv2.__version__}, numpy={numpy.__version__}')"
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+        shell: pwsh
+
+      - name: Stage remaining release inputs
+        run: |
+          $ErrorActionPreference = 'Stop'
+          # vc_redist.x64.exe 是 24MB 二进制、未入 git → 从微软官方拉取。
+          # pack_release.py 的 REQUIRED 清单强校验它，缺失即打包失败。
+          Invoke-WebRequest -Uri "https://aka.ms/vs/17/release/vc_redist.x64.exe" -OutFile "build\Release\vc_redist.x64.exe"
+          Copy-Item "setup_python_deps.bat" "build\Release\" -Force
+          Write-Host "Stage done: vc_redist.x64.exe + setup_python_deps.bat"
         shell: pwsh
 
       - name: Run engine self-tests
@@ -110,22 +154,22 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit 1 }
         shell: pwsh
 
-      - name: Create portable package
+      - name: Pack release (tools/pack_release.py — 红线排除 + REQUIRED 双重校验)
         run: |
-          # Copy extra files
-          Copy-Item "setup_python_deps.bat" "build\Release\" -ErrorAction SilentlyContinue
-          Copy-Item "lightchaser.jpg" "build\Release\" -ErrorAction SilentlyContinue
-          Copy-Item "追光者 Lumen Arc v0.5 Beta — 操作手册.pdf" "build\Release\" -ErrorAction SilentlyContinue
-
-          # Create zip
-          Compress-Archive -Path "build\Release\*" -DestinationPath "LumenArc-win64.zip"
-
-          $size = (Get-Item "LumenArc-win64.zip").Length / 1MB
-          Write-Host "Package size: $([math]::Round($size, 1)) MB"
-        shell: pwsh
+          # 版本号从 CMakeLists.txt 提取（不用 grep -oP：Git Bash 的 -P 受 locale 限制会失败）
+          VER=$(sed -n 's/^project(LumenArc VERSION \([0-9][0-9.]*\).*/\1/p' CMakeLists.txt | head -1)
+          if [ -z "$VER" ]; then echo "::error::无法从 CMakeLists.txt 解析版本号"; exit 1; fi
+          echo "Detected version from CMakeLists.txt: $VER"
+          python tools/pack_release.py "$VER"
+        shell: bash
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: LumenArc-win64
-          path: LumenArc-win64.zip
+          path: build_tmp/dist/LumenArc-v*-win64.zip
+          if-no-files-found: error
+
+# 注：本工作流只管 master 推入时的构建/打包/产物留档（触发条件不含 tag）。
+# 发行附件的挂载由 .github/workflows/build.yml（tag 触发）负责，二者不重叠、
+# 不会争抢同一个 Release 资产。改动打包逻辑时两个文件都要同步改。

@@ -8,6 +8,7 @@ probe_timestamps.py 误删事故（v1.16.0/v1.16.1 初包自动校时失效）�
 """
 import fnmatch
 import os
+import re
 import sys
 import zipfile
 
@@ -27,10 +28,42 @@ EXCLUDE_GLOB = ["lumenarc_*", "*.log", "*.rlog",
                 "maglayout_shot*.png",         # 放大镜布局截图（开发杂项）
                 "analyze_video.py"]            # 退役 Python 引擎遗物（代码仅注释引用）
 
+# ---- FFmpeg 陈旧运行库剔除（v1.18.0）----
+# 根因：FFmpeg SDK 换过大版本（7.x → 8.x：avcodec-61→-63、avutil-59→-61、
+# swresample-5→-7、swscale-8→-10），旧 DLL 一直留在 build/Release 里，而打包是
+# 整目录扫描 → 旧版 DLL 随包发行（约 17MB 冗余，且存在被误加载的隐患）。
+# 现改为按 third_party/ffmpeg/bin 的实况自动剔除：只保留当前 SDK 真正提供的
+# 那一套，将来 SDK 再升级也无需修改本文件。
+FFMPEG_BIN = os.path.join(ROOT, "third_party", "ffmpeg", "bin")
+FFMPEG_DLL_RE = re.compile(r"^(?:av|sw)[a-z0-9_]*-?\d*\.dll$", re.IGNORECASE)
+
+
+def current_ffmpeg_dlls():
+    """当前 SDK 提供的顶层 FFmpeg DLL 名（小写）；SDK 目录缺失时返回 None＝不剔除。"""
+    if not os.path.isdir(FFMPEG_BIN):
+        return None
+    return {n.lower() for n in os.listdir(FFMPEG_BIN) if n.lower().endswith(".dll")}
+
+
+def is_stale_ffmpeg_dll(rel, current):
+    """顶层目录下、看着像 FFmpeg DLL、但不在当前 SDK 名单里 → 陈旧残留。"""
+    if current is None:
+        return False
+    if os.path.dirname(rel):          # 只看顶层（随包 DLL 一律平铺在根目录）
+        return False
+    name = os.path.basename(rel).lower()
+    return bool(FFMPEG_DLL_RE.match(name)) and name not in current
+
 # ---- 必含清单（运行时硬依赖；缺任何一个 → 打包失败）----
 REQUIRED = [
     "LumenArc.exe",
     "vc_redist.x64.exe",                       # Win10 运行库（常见问题首行）
+    "setup_python_deps.bat",                  # 随包一键装 Python 依赖（旧系统备用路径）
+    # VC++ 运行库：干净 Windows 启动硬依赖。由 CMake 从 portable/sysdlls 拷入
+    # （见 CMakeLists.txt 的 SYSDLLS 块）。此前守卫条件误依赖 dxgi.dll 而静默失效，
+    # 导致 v1.16.0/v1.16.1/v1.17.0 包在未装运行库的机器上双击即报缺 DLL。
+    # 此处列为必含项，令同类回归在打包阶段就报错，而不是等用户报障。
+    "msvcp140.dll", "vcruntime140.dll", "vcruntime140_1.dll",
     "probe_timestamps.py",                     # 自动校时 OCR 运行时脚本！
     "python/python.exe",                       # 随包 Python（OCR 依赖）
     "ffmpeg/ffmpeg.exe", "ffmpeg/ffprobe.exe",
@@ -70,6 +103,8 @@ def main():
 
     n_files = 0
     total = 0
+    stale_skipped = []
+    current_ffmpeg = current_ffmpeg_dlls()
     with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED, allowZip64=True) as zf:
         for dirpath, dirnames, filenames in os.walk(SRC):
             dirnames[:] = [d for d in dirnames
@@ -78,6 +113,9 @@ def main():
                 full = os.path.join(dirpath, fn)
                 rel = os.path.relpath(full, SRC)
                 if excluded(rel, False):
+                    continue
+                if is_stale_ffmpeg_dll(rel, current_ffmpeg):
+                    stale_skipped.append(rel)
                     continue
                 arc = os.path.join("LumenArc", rel)
                 zf.write(full, arc)
@@ -99,6 +137,11 @@ def main():
     print(f"OK: {out}")
     print(f"  {n_files} files, src {total // 1048576}MB -> zip {size_mb}MB")
     print(f"  required manifest: {len(REQUIRED)}/{len(REQUIRED)} present")
+    if stale_skipped:
+        stale_mb = sum(os.path.getsize(os.path.join(SRC, r)) for r in stale_skipped) // 1048576
+        print(f"  stale FFmpeg DLLs excluded: {len(stale_skipped)} ({stale_mb}MB)")
+        for r in sorted(stale_skipped):
+            print(f"    - {r}")
 
 
 if __name__ == "__main__":

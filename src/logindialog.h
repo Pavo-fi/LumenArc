@@ -47,6 +47,7 @@ private:
     QLineEdit* m_invName = nullptr;
     QLineEdit* m_invOrg = nullptr;
     QPushButton* m_invBtn = nullptr;
+    QPushButton* m_quitBtn = nullptr;   // v1.18.0：busy 期间禁用（防在途请求回调悬空）
 
     QLabel* m_status = nullptr;
     QTimer* m_countdown = nullptr;

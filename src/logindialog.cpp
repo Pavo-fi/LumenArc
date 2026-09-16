@@ -9,6 +9,7 @@
 #include <QJsonObject>
 #include <QLabel>
 #include <QLineEdit>
+#include <QPointer>
 #include <QPushButton>
 #include <QRegularExpressionValidator>
 #include <QTabWidget>
@@ -135,9 +136,11 @@ LoginDialog::LoginDialog(QWidget* parent) : QDialog(parent) {
     m_status->setStyleSheet(QStringLiteral("color:#c0392b;"));
     root->addWidget(m_status);
 
-    auto* quitBtn = new QPushButton(QStringLiteral("退出程序"), this);
-    root->addWidget(quitBtn, 0, Qt::AlignRight);
-    connect(quitBtn, &QPushButton::clicked, this, &QDialog::reject);
+    // v1.18.0：改为成员并在 busy 期间禁用 —— 请求在途时若直接退出，main() 返回 0
+    // 触发静态析构，QNAM 中止挂起请求会回调到已销毁的对话框（0xC0000005）。
+    m_quitBtn = new QPushButton(QStringLiteral("退出程序"), this);
+    root->addWidget(m_quitBtn, 0, Qt::AlignRight);
+    connect(m_quitBtn, &QPushButton::clicked, this, &QDialog::reject);
 
     connect(m_sendBtn, &QPushButton::clicked, this, &LoginDialog::onSendCode);
     connect(m_loginBtn, &QPushButton::clicked, this, &LoginDialog::onSmsLogin);
@@ -174,6 +177,7 @@ void LoginDialog::setBusy(bool busy, const QString& hint) {
     m_loginBtn->setEnabled(!busy);
     m_registerBtn->setEnabled(!busy);
     m_invBtn->setEnabled(!busy);
+    if (m_quitBtn) m_quitBtn->setEnabled(!busy);
     if (busy) {
         m_status->setStyleSheet(QStringLiteral("color:#666;"));
         m_status->setText(hint.isEmpty() ? QStringLiteral("处理中…") : hint);
@@ -206,7 +210,12 @@ void LoginDialog::onSendCode() {
         return;
     }
     setBusy(true, QStringLiteral("正在发送验证码…"));
-    CloudAccount::instance().sendSmsCode(phone, [this](const CloudAccount::Result& r) {
+    // v1.18.0 P1 修复：请求挂在静态 CloudAccount::m_nam 上，而本对话框是栈对象，
+    // 可能先被销毁（Esc / 关闭）。原 [this] 捕获在回调触发时即悬空 → 0xC0000005。
+    // QPointer 守卫：对话框已销毁则直接放弃本次回调。
+    QPointer<LoginDialog> self(this);
+    CloudAccount::instance().sendSmsCode(phone, [this, self](const CloudAccount::Result& r) {
+        if (!self) return;
         setBusy(false);
         if (!r.ok) {
             fail(r.error, r.message);
@@ -227,7 +236,10 @@ void LoginDialog::onSmsLogin() {
     if (code.length() < 4) { fail(QStringLiteral("bad_code"), QStringLiteral("请输入短信验证码")); return; }
 
     setBusy(true, QStringLiteral("正在验证短信…"));
-    CloudAccount::instance().signInWithSms(phone, code, [=](const CloudAccount::Result& r) {
+    // v1.18.0 P1 修复：见 onSendCode —— QPointer 守卫对话框生命周期
+    QPointer<LoginDialog> self(this);
+    CloudAccount::instance().signInWithSms(phone, code, [this, self, phone](const CloudAccount::Result& r) {
+        if (!self) return;
         if (!r.ok && r.error == QLatin1String("need_signup")) {
             // 第二层：新用户补全姓名/单位
             setBusy(false);
@@ -257,7 +269,10 @@ void LoginDialog::onCompleteRegistration() {
         return;
     }
     setBusy(true, QStringLiteral("正在注册…"));
-    CloudAccount::instance().signUpAndRegister(name, org, [=](const CloudAccount::Result& r) {
+    // v1.18.0 P1 修复：见 onSendCode —— QPointer 守卫对话框生命周期
+    QPointer<LoginDialog> self(this);
+    CloudAccount::instance().signUpAndRegister(name, org, [this, self, name, org](const CloudAccount::Result& r) {
+        if (!self) return;
         if (!r.ok) {
             fail(r.error, r.message);
             return;
@@ -282,7 +297,10 @@ void LoginDialog::onInviteActivate() {
         return;
     }
     setBusy(true, QStringLiteral("正在激活…"));
-    CloudAccount::instance().activateInvite(code, name, org, [=](const CloudAccount::Result& r) {
+    // v1.18.0 P1 修复：见 onSendCode —— QPointer 守卫对话框生命周期
+    QPointer<LoginDialog> self(this);
+    CloudAccount::instance().activateInvite(code, name, org, [this, self, code, name, org](const CloudAccount::Result& r) {
+        if (!self) return;
         if (!r.ok) {
             fail(r.error, r.message);
             return;
