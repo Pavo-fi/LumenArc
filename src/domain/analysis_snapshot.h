@@ -35,6 +35,8 @@ namespace AnalysisChannels {
 inline QString luminance() { return QStringLiteral("luminance"); }
 /// 音频通道（AudioData 自含时间轴，B3）
 inline QString audio() { return QStringLiteral("audio"); }
+/// 微变通道（变化率曲线 + 首帧微变判定，2026-09-10）
+inline QString microdiff() { return QStringLiteral("microdiff"); }
 } // namespace AnalysisChannels
 
 /// 图表辅助线的可序列化数据（UI 层的 ChartGuideLine 含图形项指针，不入状态）
@@ -170,17 +172,35 @@ struct DataEntry {
 };
 
 /**
+ * @brief 单 ROI 的首帧微变判定（微变通道，2026-09-10）。
+ *
+ * 判据 = 干净段 blkMax 均值 + 3σ 阈值；onset = 曲线上首次 > 阈值且
+ * 连续 ≥3 秒保持的秒。单位 = 灰度级（未加显示增益）。
+ */
+struct MicroDiffOnset
+{
+    int roiId = -1;
+    qint64 tsMs = -1;      ///< 首帧微变时刻（流内 ms）；-1 = 未检出
+    double mu = 0;         ///< 干净段 blkMax 均值
+    double sigma = 0;      ///< 干净段 blkMax 标准差
+    double threshold = 0;  ///< mu + 3*sigma
+    int direction = 0;     ///< -1 烟挡光 / +1 火光增亮 / 0 未定（该秒 signedD 符号）
+};
+
+/**
  * @brief 单个分析通道的数据载荷（v1.8.0 P1b 通道化，PENDING P-33）。
  *
  * kind=Luminance：lumRows 与 dataEntries 一一对应，行内点与共享时间轴
  * snapshot.timestamps 对齐（语义与旧版 values/dataEntries 成员完全一致）。
  * kind=Audio：AudioData 自含时间轴（B3，语义不变）。
+ * kind=MicroDiff：mdTs 自含逐秒时间轴，mdRows 每 ROI 2 行 [blkMax, medD]，
+ * mdOnsets 为每 ROI 首帧微变判定（2026-09-10）。
  * kind=Opaque：本版不认识的通道（由更新版本 .vla 写入）——原始块原样
  * 保全，回写时原样带回（拍板 Q2：取证“数据不丢”优先于 F4 的忽略）。
  */
 struct ChannelData
 {
-    enum class Kind { Luminance, Audio, Opaque };
+    enum class Kind { Luminance, Audio, MicroDiff, Opaque };
     Kind kind = Kind::Opaque;
 
     // ---- kind == Luminance ----
@@ -189,6 +209,19 @@ struct ChannelData
 
     // ---- kind == Audio ----
     AudioData audio;
+
+    // ---- kind == MicroDiff（变化率曲线，2026-09-10）----
+    QVector<qint64> mdTs;              ///< 逐秒时间轴（流内 ms，升序；各 ROI 共用）
+    QVector<QVector<qreal>> mdRows;    ///< 每 ROI 2 行拍平 [blkMax, medD]；与 mdEntries 平行
+    QVector<DataEntry> mdEntries;      ///< 与 mdRows 平行；同一 roiId 两条（先 blkMax 后 medD）
+    QVector<MicroDiffOnset> mdOnsets;  ///< 每 ROI 首帧微变判定（ROI 顺序）
+    QVector<double> mdStatMu;          ///< 每 ROI：干净段 blkMax 均值
+    QVector<double> mdStatSigma;      ///< 每 ROI：干净段 blkMax 标准差
+    QVector<double> mdThreshold;      ///< 每 ROI：mu + 3*sigma
+    double mdBaseStartMs = 0;         ///< 干净基准段起点（流内 ms，用户标记）
+    double mdBaseDurMs = 0;           ///< 干净基准段时长（ms）
+    int mdTemporalFrames = 0;         ///< provenance；曲线恒 0（不做时域平滑，与标定一致）
+    double mdSigma = 0;               ///< provenance；曲线恒 0（不做空间低通，与标定一致）
 
     // ---- kind == Opaque（未知通道 passthrough）----
     QByteArray opaqueTag;       ///< 原始块标签（4 ASCII，如 "CH01"）
@@ -245,6 +278,28 @@ struct AnalysisSnapshot
     }
     void removeAudioChannel() { channels.remove(AnalysisChannels::audio()); }
 
+    /// 整体替换微变通道（kind 与字段成对写入，2026-09-10）
+    void setMicroDiff(QVector<qint64> ts, QVector<QVector<qreal>> rows,
+                      QVector<DataEntry> entries, QVector<MicroDiffOnset> onsets,
+                      QVector<double> muVec, QVector<double> sigmaVec,
+                      QVector<double> thresholdVec, double baseStartMs,
+                      double baseDurMs)
+    {
+        ChannelData ch;
+        ch.kind = ChannelData::Kind::MicroDiff;
+        ch.mdTs = std::move(ts);
+        ch.mdRows = std::move(rows);
+        ch.mdEntries = std::move(entries);
+        ch.mdOnsets = std::move(onsets);
+        ch.mdStatMu = std::move(muVec);
+        ch.mdStatSigma = std::move(sigmaVec);
+        ch.mdThreshold = std::move(thresholdVec);
+        ch.mdBaseStartMs = baseStartMs;
+        ch.mdBaseDurMs = baseDurMs;
+        channels.insert(AnalysisChannels::microdiff(), std::move(ch));
+    }
+    void removeMicroDiffChannel() { channels.remove(AnalysisChannels::microdiff()); }
+
     // ---- 读取 API（永久）----
     bool hasLuminance() const { return !lumRows().isEmpty(); }
     const QVector<QVector<qreal>> &lumRows() const
@@ -268,6 +323,13 @@ struct AnalysisSnapshot
 
     bool isEmpty() const { return timestamps.isEmpty(); }   ///< 亮度侧空（音频自含，同旧版语义）
     bool hasAudio() const { return !audioData().isEmpty(); }
+    /// 微变通道整体（无则 nullptr；逐字段访问 md* 成员）
+    const ChannelData *microdiffChannelPtr() const
+    {
+        const auto it = channels.constFind(AnalysisChannels::microdiff());
+        return it == channels.constEnd() ? nullptr : &it.value();
+    }
+    bool hasMicroDiff() const { return microdiffChannelPtr() != nullptr; }
     int pointCount() const { return timestamps.size(); }
     int regionCount() const { return lumRows().size(); }
 

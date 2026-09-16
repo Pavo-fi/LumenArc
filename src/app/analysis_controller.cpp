@@ -45,5 +45,18 @@ AnalysisController::AnalysisController(RoiModel *roiModel, TimelineModel *timeli
     aud.producedChannels = {AnalysisChannels::audio()};
     reg.registerTask(aud);
 
+    AnalysisTaskDesc md;
+    md.taskId = AnalysisChannels::microdiff();
+    md.displayNameZh = QStringLiteral("微变变化率曲线");
+    md.displayNameEn = QStringLiteral("Micro-change");
+    md.preconditionError = [roiModel]() -> QString {
+        if (!roiModel || (roiModel->regionCount() == 0 && roiModel->polygonCount() == 0))
+            return lang("请先在视频上绘制至少一个 ROI 区域。",
+                        "Please draw at least one ROI on the video.");
+        return QString();
+    };
+    md.producedChannels = {AnalysisChannels::microdiff()};
+    reg.registerTask(md);
+
     m_service = new AnalysisTaskService(m_engine, timeline, this);
 }

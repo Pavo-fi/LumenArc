@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(LumenArc VERSION 1.17.0 LANGUAGES CXX)
+project(LumenArc VERSION 1.18.0 LANGUAGES CXX)
 add_compile_definitions(APP_VERSION="${PROJECT_VERSION}")
 
 set(CMAKE_CXX_STANDARD 17)
@@ -61,6 +61,17 @@ message(STATUS "FFmpeg include: ${FFMPEG_INCLUDE_DIR}")
 message(STATUS "FFmpeg libraries: ${FFMPEG_LIBRARIES}")
 
 
+# --- 微变纯计算 / 基准提取源（app 与各无头测试目标共用）---
+# v1.18.0：这三个文件原先由各目标手抄，结果漂移 —— lumenarc_libav_test 漏抄导致
+# ALL 构建链接失败（microdiff::roiFrameStats / aggregateSeconds / detectOnset /
+# extractMicroDiffBaseline 无法解析）。该类缺陷在"只编 app target"的本地习惯下
+# 不暴露，只在 CI 编 ALL 目标时炸（run 35093597096 实锤）。统一走本变量。
+set(MICRODIFF_SOURCES
+    src/domain/microdiff_core.cpp
+    src/domain/microdiff_curve.cpp
+    src/infrastructure/microdiff_baseline.cpp
+)
+
 # --- Sources ---
 set(SOURCES
     src/main.cpp
@@ -85,6 +96,9 @@ set(SOURCES
     src/accountdialog.cpp
     src/fullscreenvideowindow.cpp
     src/displayadjust.cpp
+    src/microdiff.cpp              # 2026-09-10：微变显示末级（原彩+假彩色叠加）
+    src/microdiffdialog.cpp        # 2026-09-10：微变面板（等级/基准段/显示模式）
+    ${MICRODIFF_SOURCES}           # 微变纯计算核心/曲线/基准提取（统一定义，见文件上方）
     src/i18n.cpp
     src/aboutdialog.cpp
     src/videolistpanel.cpp
@@ -162,6 +176,12 @@ set(SOURCES
     src/infrastructure/compose_render.cpp          # 合成导出 P2：ROI/曲线滚动条烧录
     src/segmentexportdialog.cpp
     src/composeworkbench.cpp
+    # --- 监控直播（2026-09-11）：录像机 RTSP 接入 + 辅助线/截图叠加 + 无损录制 ---
+    src/domain/live/live_source.cpp
+    src/infrastructure/live/live_stream_engine.cpp
+    src/infrastructure/live/live_recorder.cpp
+    src/livemonitorwindow.cpp
+    src/mainwindow_live.cpp          # v1.17.0 P-79 风格：主窗口仅保留入口接线
     src/resources.qrc
 )
 
@@ -188,6 +208,10 @@ set(HEADERS
     src/pinnedwidget.h
     src/fullscreenvideowindow.h
     src/displayadjust.h
+    src/microdiff.h
+    src/microdiffdialog.h
+    src/domain/microdiff_core.h
+    src/domain/microdiff_curve.h
     src/i18n.h
     src/aboutdialog.h
     src/videolistpanel.h
@@ -229,6 +253,7 @@ set(HEADERS
     src/infrastructure/ianalysis_engine.h
     src/infrastructure/ffmpeg_video_engine.h
     src/infrastructure/tool_paths.h
+    src/infrastructure/microdiff_baseline.h
     src/infrastructure/libav_analysis_engine.h
     src/infrastructure/encoder_probe.h
     src/infrastructure/media_probe_engine.h
@@ -245,15 +270,27 @@ set(HEADERS
     src/accountdialog.h
     src/segmentexportdialog.h
     src/composeworkbench.h
+    src/domain/live/live_source.h
+    src/infrastructure/live/live_stream_engine.h
+    src/infrastructure/live/live_recorder.h
+    src/livemonitorwindow.h
 )
 
 # --- Headless engine test harness ---
 add_executable(lumenarc_engine_test
     tests/engine_test_main.cpp
-    src/infrastructure/ivideo_engine.h
+    src/domain/audio_denoise.cpp   # P-54b：引擎依赖（播放降噪 DSP）
+    src/domain/audio_denoise.h
+    src/domain/microdiff_core.h
+    src/domain/microdiff_curve.h
     src/infrastructure/ffmpeg_video_engine.h
     src/infrastructure/ffmpeg_video_engine.cpp
-    src/domain/audio_denoise.cpp   # P-54b：引擎依赖（播放降噪 DSP）
+    src/infrastructure/ivideo_engine.h
+    src/infrastructure/ianalysis_engine.h      # 微变曲线：基类信号 moc（测试直连信号需要）
+    src/infrastructure/libav_analysis_engine.h
+    src/infrastructure/microdiff_baseline.h
+    src/infrastructure/libav_analysis_engine.cpp  # 2026-09-10：微变曲线无头验证驱动
+    ${MICRODIFF_SOURCES}                          # 微变基准/核心/曲线（统一定义）
 )
 target_include_directories(lumenarc_engine_test PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src
@@ -310,6 +347,18 @@ target_include_directories(lumenarc_piecewise_test PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src
 )
 target_link_libraries(lumenarc_piecewise_test PRIVATE
+    Qt6::Core
+)
+
+# --- 监控直播源地址组装纯逻辑单测（2026-09-11）---
+add_executable(lumenarc_live_source_test
+    tests/live_source_test_main.cpp
+    src/domain/live/live_source.cpp
+)
+target_include_directories(lumenarc_live_source_test PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+)
+target_link_libraries(lumenarc_live_source_test PRIVATE
     Qt6::Core
 )
 
@@ -458,6 +507,7 @@ add_executable(lumenarc_libav_test
     src/infrastructure/libav_analysis_engine.h
     src/infrastructure/ianalysis_engine.h
     src/domain/audio_denoise.cpp   # P-54：引擎依赖
+    ${MICRODIFF_SOURCES}           # v1.18.0 修复：引擎已引用微变符号，漏链即 LNK2019
 )
 target_include_directories(lumenarc_libav_test PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src
@@ -770,6 +820,8 @@ add_executable(lumenarc_ui_chain_test
     src/frame_annotation.cpp   # v1.17.0 P-80 C0：ui_chain 像素场景直接调用其纯函数
     src/magnifierwidget.cpp
     src/displayadjust.cpp
+    src/microdiff.cpp              # 2026-09-10：videowidget 依赖微变显示末级
+    src/domain/microdiff_core.cpp
     src/app/calibration_service.cpp
     src/infrastructure/ivideo_engine.h
     src/infrastructure/ianalysis_engine.h
@@ -894,6 +946,16 @@ if(WIN32)
         COMMENT "Copying probe_timestamps.py..."
     )
 
+    # Copy Python deps one-click installer (老系统的备用路径；pack_release.py 必含项)
+    if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/setup_python_deps.bat")
+        add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${CMAKE_CURRENT_SOURCE_DIR}/setup_python_deps.bat"
+                "$<TARGET_FILE_DIR:${PROJECT_NAME}>"
+            COMMENT "Copying setup_python_deps.bat..."
+        )
+    endif()
+
     # Copy user manual PDF (mac: 与可执行文件同目录，供 帮助→使用手册 打开)
     # v1.16.0：文件名去版本号（手册随包永远最新）；由 MANUAL.md 经 Qt markdown 导出
     if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/追光者 Lumen Arc — 操作手册.pdf")
@@ -917,15 +979,34 @@ if(WIN32)
     endif()
 
     # Copy system runtime DLLs for compatibility with stripped Windows systems
+    #
+    # v1.18.0 修复（开箱即用红线）：原守卫为
+    #   if(EXISTS ".../vcruntime140_1.dll" AND EXISTS ".../dxgi.dll")
+    # 但 dxgi.dll 在 1130f0b（"accumulated cleanup - drop VLC engine"）被删除，
+    # 守卫自此恒为假 —— POST_BUILD 拷贝静默失效，msvcp140/vcruntime140 等
+    # VC++ 运行库从未进入 build/Release，导致 v1.16.0/v1.16.1/v1.17.0 包
+    # 在未装 VC++ 运行库的干净 Windows 上双击即报 "VCRUNTIME140.dll 缺失"。
+    # 现改为只依赖关键运行库，并在 glob 为空 / 关键文件缺失时**显式报错**，
+    # 避免同类问题再次静默发生。
     set(SYSDLLS_SRC "${CMAKE_CURRENT_SOURCE_DIR}/portable/sysdlls")
-    if(EXISTS "${SYSDLLS_SRC}/vcruntime140_1.dll" AND EXISTS "${SYSDLLS_SRC}/dxgi.dll")
+    if(EXISTS "${SYSDLLS_SRC}/vcruntime140_1.dll" AND EXISTS "${SYSDLLS_SRC}/msvcp140.dll")
         file(GLOB SYSDLLS "${SYSDLLS_SRC}/*.dll")
+        list(LENGTH SYSDLLS _sysdlls_n)
+        if(_sysdlls_n EQUAL 0)
+            message(FATAL_ERROR
+                "portable/sysdlls 存在但未匹配到任何 DLL —— 系统运行库将缺失，"
+                "干净 Windows 无法启动。请检查该目录是否被误清空。")
+        endif()
         add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
             COMMAND ${CMAKE_COMMAND} -E copy_if_different
                 ${SYSDLLS}
                 "$<TARGET_FILE_DIR:${PROJECT_NAME}>"
-            COMMENT "Copying system runtime DLLs for compatibility..."
+            COMMENT "Copying ${_sysdlls_n} system runtime DLLs for compatibility..."
         )
+    else()
+        message(WARNING
+            "portable/sysdlls 缺少 msvcp140.dll / vcruntime140_1.dll —— "
+            "产物将不含 VC++ 运行库，干净 Windows 需先安装随包 vc_redist.x64.exe。")
     endif()
 
     # Copy app icon
@@ -946,15 +1027,9 @@ if(WIN32)
         )
     endif()
 
-    # Copy user manual PDF
-    if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/追光者 Lumen Arc v1.0 — 操作手册.pdf")
-        add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
-            COMMAND ${CMAKE_COMMAND} -E copy_if_different
-                "${CMAKE_CURRENT_SOURCE_DIR}/追光者 Lumen Arc v1.0 — 操作手册.pdf"
-                "$<TARGET_FILE_DIR:${PROJECT_NAME}>"
-            COMMENT "Copying user manual PDF..."
-        )
-    endif()
+    # v1.18.0：此处原为 "…v1.0 — 操作手册.pdf" 的重复拷贝分支，文件早已不存在，
+    # 属历史遗留死代码，已整块删除（手册由上方按当前文件名统一拷贝）。
+    # CI 也曾用 "…v0.5 Beta…" 旧名找文件，导致包里缺手册——已同步修正。
 endif()
 
 # --- macOS deployment ---

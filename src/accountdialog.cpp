@@ -9,6 +9,7 @@
 #include <QLabel>
 #include <QLineEdit>
 #include <QMessageBox>
+#include <QPointer>
 #include <QPushButton>
 #include <QTimer>
 #include <QVBoxLayout>
@@ -131,7 +132,12 @@ void AccountDialog::fail(const QString& machineCode, const QString& serverMsg) {
 void AccountDialog::onSendCode() {
     const QString phone = m_uid.mid(4);  // 去 "+86 "
     setBusy(true, QStringLiteral("正在发送验证码…"));
-    CloudAccount::instance().sendSmsCode(phone, [this](const CloudAccount::Result& r) {
+    // v1.18.0 P1 修复：请求挂在静态 CloudAccount::m_nam 上，而本对话框是栈对象
+    // （mainwindow_ui.cpp: dlg.exec()），可能在请求在途时被关闭 —— 原 [this]
+    // 捕获回调触发时即悬空 → 0xC0000005。QPointer 守卫对话框生命周期。
+    QPointer<AccountDialog> self(this);
+    CloudAccount::instance().sendSmsCode(phone, [this, self](const CloudAccount::Result& r) {
+        if (!self) return;
         setBusy(false);
         if (!r.ok) {
             fail(r.error, r.message);
@@ -154,7 +160,10 @@ void AccountDialog::onSubmitProfile() {
 
     const QString phone = m_uid.mid(4);
     setBusy(true, QStringLiteral("正在验证身份…"));
-    CloudAccount::instance().reauthPhone(phone, code, [=](const CloudAccount::Result& r) {
+    // v1.18.0 P1 修复：见 onSendCode —— QPointer 守卫对话框生命周期（含内层回调）
+    QPointer<AccountDialog> self(this);
+    CloudAccount::instance().reauthPhone(phone, code, [this, self, phone, code, name, org](const CloudAccount::Result& r) {
+        if (!self) return;
         if (!r.ok) {
             fail(r.error, r.message);
             return;
@@ -163,7 +172,8 @@ void AccountDialog::onSubmitProfile() {
         const Credential cred = CredentialStore::load();
         setBusy(true, QStringLiteral("正在提交修改…"));
         CloudAccount::instance().updateProfile(cred.token, accessToken, name, org,
-                                               [=](const CloudAccount::Result& r2) {
+                                               [this, self, name, org](const CloudAccount::Result& r2) {
+            if (!self) return;
             if (!r2.ok) {
                 fail(r2.error, r2.message);
                 return;

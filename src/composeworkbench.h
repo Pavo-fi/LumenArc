@@ -82,6 +82,7 @@ private slots:
     void onModeChanged();
     void onBrowseOutput();
     void onStartExport();
+    void onProgramPlay();                      ///< ▶ 播放合成结果 / ⏹ 停止合成预览
 
 private:
     void rebuildMaterials();
@@ -102,6 +103,10 @@ private:
     void syncTimeline();
     void updateSuggestedPath();
     SegmentExportEngine::Params buildParams(QString *err);
+    // ---- 合成结果预览（节目模式，2026-09-11）：按片段时间线顺序连续播放 ----
+    void startProgramPreview(int fromSeg = 0);
+    void stopProgramPreview(const QString &why = QString());
+    void advanceProgram(int segIdx);   ///< 播第 segIdx 段（跳宫格段；播完自动接下一段）
 
     CaseManager *m_cm = nullptr;
     QString m_currentVideo;
@@ -128,6 +133,10 @@ private:
     qint64 m_markIn = -1, m_markOut = -1;
     int m_playSegIdx = -1;            // 预览位置所在片段块（播放头联动/切割/标注共用）
 
+    // ---- 合成结果预览（节目模式）：m_programIdx=-1 表示不在节目模式 ----
+    bool m_programPlay = false;
+    int m_programIdx = -1;
+
     // ---- 标注轨（P2.7）----
     class AnnoPickOverlay;
     AnnoPickOverlay *m_pickOverlay = nullptr;
@@ -142,6 +151,8 @@ private:
     QLabel *m_timeLabel = nullptr;
     QLabel *m_markLabel = nullptr;
     QPushButton *m_playBtn = nullptr;
+    QPushButton *m_programBtn = nullptr;   // ▶ 播放合成结果（按时间线顺序连播）
+    QLabel *m_programLabel = nullptr;      // 合成预览进度（第 n/N 段）
     QPushButton *m_inBtn = nullptr;
     QPushButton *m_outBtn = nullptr;
     QPushButton *m_recordBtn = nullptr;   // ⏺/⏹ 录音笔式截取主钮

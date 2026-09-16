@@ -165,6 +165,10 @@ protected:
 
 private:
     void rebuildSeries();
+    /// 微变通道：按当前轴范围/绘图区重定位阈值虚线与首帧微变标记
+    void updateMdMarks();
+    /// 微变通道：删除 m_mdSeries/m_mdMarks 全部项（rebuild/清数据用）
+    void clearMdSeries();
     void updateCursorPosition();
     void updateTimeLabels();
     void updateTimeLabelPositions();
@@ -222,6 +226,21 @@ private:
     qint64 m_durationMs = 0;
     TimeCalibration m_calibration;      // 校时模型（渲染派生值，SSOT 在 VideoState）
     bool m_spanCrossDay = false;        // 当前可视范围跨天（updateTimeLabels 刷新）
+
+    // 微变通道（2026-09-10）：每 ROI 2 条独立系列（blkMax 粗线 / medD 细线），
+    // 与 mdRows 行序一一对应。独立于 m_seriesList——亮度填点循环按
+    // m_seriesMapping/lumEntries 索引，误入会被错填。
+    QVector<QLineSeries *> m_mdSeries;
+    /// 微变标记项：阈值虚线（每 ROI）+ 首帧微变竖线/文本（每检出）
+    struct MdMark {
+        enum Kind { Threshold, Onset };
+        Kind kind;
+        QColor color;
+        qreal value;   // Threshold=Y 值；Onset=X 时间（流内 ms）
+        QGraphicsLineItem *line = nullptr;
+        QGraphicsSimpleTextItem *label = nullptr;
+    };
+    QVector<MdMark> m_mdMarks;
 
     QVector<QLineSeries *> m_seriesList;
     QLineSeries *m_volumeSeries = nullptr;       // v0.3: Volume line

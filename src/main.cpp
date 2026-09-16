@@ -14,6 +14,7 @@
 #include <QJsonObject>
 #include <QSplashScreen>
 #include <QMessageBox>
+#include <QPointer>
 #include <QTimer>
 #include <QIcon>
 #include <QDir>
@@ -212,7 +213,13 @@ int main(int argc, char *argv[])
     {
         const Credential cred = CredentialStore::load();
         if (cred.valid()) {
-            CloudAccount::instance().heartbeat(cred.token, [&window](const CloudAccount::Result &r) {
+            // v1.18.0 修复：原为 [&window] 引用捕获。心跳是异步的，若回调在 window
+            // 析构（应用退出）之后才投递，解引用即 UAF（0xC0000005）。
+            // 改用 QPointer 守卫：窗体已销毁则放弃本次回调。
+            QPointer<MainWindow> windowGuard(&window);
+            CloudAccount::instance().heartbeat(cred.token, [windowGuard](const CloudAccount::Result &r) {
+                if (!windowGuard) return;
+                MainWindow *w = windowGuard.data();
                 const qint64 nowMs = QDateTime::currentMSecsSinceEpoch();
                 if (r.ok) {
                     CredentialStore::touchOk(nowMs);
@@ -240,13 +247,13 @@ int main(int argc, char *argv[])
                     }
                 } else if (r.error == QLatin1String("invalid_or_expired_token")
                            || r.error == QLatin1String("user_disabled")) {
-                    QMessageBox::warning(&window, QStringLiteral("登录状态失效"),
+                    QMessageBox::warning(w, QStringLiteral("登录状态失效"),
                         r.error == QLatin1String("user_disabled")
                             ? QStringLiteral("该账号已停用，请重新登录或联系提供方。")
                             : QStringLiteral("登录已过期（30 天未在线验证或 token 到期），请重新登录。"));
-                    LoginDialog dlg(&window);
+                    LoginDialog dlg(w);
                     if (dlg.exec() != QDialog::Accepted) {
-                        QTimer::singleShot(0, &window, &QWidget::close);
+                        QTimer::singleShot(0, w, &QWidget::close);
                     }
                 }
             });

@@ -167,7 +167,7 @@ static bool vlaKnownDataTag(const QByteArray &tag)
 {
     return tag == QByteArray("META", 4) || tag == QByteArray("TMS ", 4)
         || tag == QByteArray("LUM ", 4) || tag == QByteArray("VOL ", 4)
-        || tag == QByteArray("SPEC", 4);
+        || tag == QByteArray("SPEC", 4) || tag == QByteArray("MDCF", 4);
 }
 
 static QByteArray vlaPackChunk(const char *tag4, const QByteArray &payload)
@@ -452,6 +452,11 @@ bool TimelineModel::saveToFile(const QString &filePath,
                     cObj["spec_frames"] = audioOut.spectrogram[0].size();
                 }
                 break;
+            case ChannelData::Kind::MicroDiff:
+                cObj["kind"] = "microdiff";
+                cObj["roi_count"] = static_cast<double>(ch.mdRows.size() / 2);
+                cObj["second_count"] = static_cast<double>(ch.mdTs.size());
+                break;
             case ChannelData::Kind::Opaque:
                 cObj["kind"] = "opaque";
                 cObj["chunk"] = QString::fromLatin1(ch.opaqueTag);
@@ -490,6 +495,45 @@ bool TimelineModel::saveToFile(const QString &filePath,
                 ds << float(v);
     }
     chunks.append({"LUM ", lum});
+
+    // MDCF：微变变化率曲线（v10 通道；逐秒 float32 序列 + 每 ROI 判据）
+    //   布局（自描述头，与读端严格对称）：
+    //     quint32 roiCount | quint64 secondCount | qint64 baseStartMs | qint64 baseDurMs
+    //     secondCount × qint64  mdTs
+    //     每 ROI：qint32 roiId | secondCount×float32 blkMax | secondCount×float32 medD
+    //             | double mu | double sigma | double threshold
+    //             | qint64 onsetTsMs | qint32 onsetDirection
+    //   provenance（temporalFrames/spatialSigma）不入盘：本版恒为 0，无读者。
+    if (const ChannelData *md = m_snapshot.microdiffChannelPtr()) {
+        QByteArray mdcf;
+        {
+            QDataStream ds(&mdcf, QIODevice::WriteOnly);
+            const int roiCount = md->mdRows.size() / 2;
+            const int n = md->mdTs.size();
+            ds << quint32(roiCount) << quint64(n)
+               << qint64(md->mdBaseStartMs) << qint64(md->mdBaseDurMs);
+            for (qint64 t : md->mdTs)
+                ds << t;
+            for (int g = 0; g < roiCount; ++g) {
+                const int ei = 2 * g;   // 每 ROI 两条同 roiId
+                ds << qint32(ei < md->mdEntries.size() ? md->mdEntries[ei].roiId : -1);
+                ds.setFloatingPointPrecision(QDataStream::SinglePrecision);
+                for (int k = 0; k < 2; ++k) {
+                    const QVector<qreal> &row = md->mdRows[2 * g + k];
+                    for (int i = 0; i < n; ++i)
+                        ds << float(i < row.size() ? row[i] : 0.0);
+                }
+                ds.setFloatingPointPrecision(QDataStream::DoublePrecision);
+                ds << double(g < md->mdStatMu.size() ? md->mdStatMu[g] : 0.0)
+                   << double(g < md->mdStatSigma.size() ? md->mdStatSigma[g] : 0.0)
+                   << double(g < md->mdThreshold.size() ? md->mdThreshold[g] : 0.0);
+                const bool hasOn = (g < md->mdOnsets.size());
+                ds << qint64(hasOn ? md->mdOnsets[g].tsMs : -1)
+                   << qint32(hasOn ? md->mdOnsets[g].direction : 0);
+            }
+        }
+        chunks.append({"MDCF", mdcf});
+    }
 
     // VOL：音量（float32）
     if (!audioOut.volume.isEmpty()) {
@@ -591,6 +635,15 @@ bool TimelineModel::loadFromFile(const QString &filePath,
     QVector<qint64> timestamps;
     QVector<QVector<qreal>> values;
     AudioData audioData;
+    // MDCF（微变变化率曲线，v10 通道）：块存在时解析，装配段统一写入快照
+    bool hasMd = false;
+    QVector<qint64> mdTs;
+    QVector<QVector<qreal>> mdRows;
+    QVector<DataEntry> mdEntries;
+    QVector<MicroDiffOnset> mdOnsets;
+    QVector<double> mdMu, mdSigma, mdThreshold;
+    qint64 mdBaseStartMs = 0;
+    qint64 mdBaseDurMs = 0;
     bool isVla2 = false;
     QVector<Vla2RawChunk> rawChunks;   // opaque 未知通道字节保全（拍板 Q2）
     QMap<QByteArray, QByteArray> chunks;
@@ -642,6 +695,63 @@ bool TimelineModel::loadFromFile(const QString &filePath,
                     row.append(f);
                 }
                 values.append(std::move(row));
+            }
+        }
+        // MDCF：微变变化率曲线（v10 通道；与写端严格对称，超限即拒）
+        if (chunks.contains("MDCF")) {
+            QDataStream ds(chunks.value("MDCF"));
+            quint32 roiCount = 0;
+            quint64 secondCount = 0;
+            ds >> roiCount >> secondCount >> mdBaseStartMs >> mdBaseDurMs;
+            if (roiCount > 1024 || secondCount > 1000000)
+                return false;
+            mdTs.reserve(int(secondCount));
+            for (quint64 i = 0; i < secondCount; ++i) {
+                qint64 t = 0;
+                ds >> t;
+                mdTs.append(t);
+            }
+            mdRows.reserve(int(roiCount) * 2);
+            mdOnsets.reserve(int(roiCount));
+            mdMu.reserve(int(roiCount));
+            mdSigma.reserve(int(roiCount));
+            mdThreshold.reserve(int(roiCount));
+            for (quint32 g = 0; g < roiCount; ++g) {
+                qint32 roiId = -1;
+                ds >> roiId;
+                ds.setFloatingPointPrecision(QDataStream::SinglePrecision);
+                for (int k = 0; k < 2; ++k) {
+                    QVector<qreal> row;
+                    row.reserve(int(secondCount));
+                    for (quint64 i = 0; i < secondCount; ++i) {
+                        float f = 0;
+                        ds >> f;
+                        row.append(f);
+                    }
+                    mdRows.append(std::move(row));
+                    DataEntry de;
+                    de.type = DataEntry::Rect;
+                    de.roiId = roiId;
+                    mdEntries.append(de);
+                }
+                ds.setFloatingPointPrecision(QDataStream::DoublePrecision);
+                double mu = 0, sg = 0, th = 0;
+                ds >> mu >> sg >> th;
+                mdMu.append(mu);
+                mdSigma.append(sg);
+                mdThreshold.append(th);
+                qint64 onTs = -1;
+                qint32 onDir = 0;
+                ds >> onTs >> onDir;
+                MicroDiffOnset on;
+                on.roiId = roiId;
+                on.tsMs = onTs;
+                on.direction = onDir;
+                on.mu = mu;
+                on.sigma = sg;
+                on.threshold = th;
+                mdOnsets.append(on);
+                hasMd = true;
             }
         }
         // VOL：音量（float32）
@@ -959,6 +1069,11 @@ bool TimelineModel::loadFromFile(const QString &filePath,
                             std::move(dataEntries));
     if (!audioData.isEmpty())
         loaded.setAudio(std::move(audioData));
+    if (hasMd)
+        loaded.setMicroDiff(std::move(mdTs), std::move(mdRows), std::move(mdEntries),
+                            std::move(mdOnsets), std::move(mdMu), std::move(mdSigma),
+                            std::move(mdThreshold), double(mdBaseStartMs),
+                            double(mdBaseDurMs));
 
     // ---- v10 opaque 未知通道保全（拍板 Q2）：
     //      ① META channels 里声明的 opaque 通道 → 按 chunk 标签取原始块；

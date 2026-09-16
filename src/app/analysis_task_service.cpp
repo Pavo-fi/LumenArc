@@ -48,7 +48,8 @@ bool AnalysisTaskService::start(const QString &taskId, const QString &videoPath,
                                 const QVector<QRect> &regions,
                                 const QVector<QPolygon> &polygons,
                                 const QVector<int> &rectRoiIds,
-                                const QVector<int> &polygonRoiIds)
+                                const QVector<int> &polygonRoiIds,
+                                const IAnalysisEngine::MicroDiffCurveParams &mdParams)
 {
     // 前置校验链（顺序与旧版 onAnalyze/onAudioAnalysis 一致，行为冻结）
     if (videoPath.isEmpty()) {
@@ -84,6 +85,9 @@ bool AnalysisTaskService::start(const QString &taskId, const QString &videoPath,
         m_engine->startAnalysis(videoPath, regions, polygons, {}, rectRoiIds, polygonRoiIds);
     } else if (taskId == AnalysisChannels::audio()) {
         m_engine->startAudioAnalysis(videoPath);
+    } else if (taskId == AnalysisChannels::microdiff()) {
+        // 微变变化率曲线：仅矩形 ROI；干净基准段参数由 UI（阶段 2）传入
+        m_engine->startMicroDiffAnalysis(videoPath, regions, rectRoiIds, mdParams);
     } else {
         // 已注册但本版未接线引擎的任务（未来扩展点）：明确报错，不静默（C2）
         finishRun();
@@ -118,6 +122,9 @@ void AnalysisTaskService::onEngineProgress(int analyzed, int total, qreal percen
     if (m_activeTask == AnalysisChannels::luminance()) {
         detail = QString(lang("分析中 %1%（%2 个采样点）", "Analyzing %1% (%2 samples)"))
                      .arg(pct, 0, 'f', 1).arg(analyzed);
+    } else if (m_activeTask == AnalysisChannels::microdiff()) {
+        detail = QString(lang("微变分析中 %1%（%2 帧）", "Micro-change %1% (%2 frames)"))
+                     .arg(pct, 0, 'f', 1).arg(analyzed);
     } else {
         detail = QString(lang("音频分析阶段 %1/%2（%3%）", "Audio phase %1/%2 (%3%)"))
                      .arg(analyzed).arg(total).arg(pct, 0, 'f', 1);
@@ -141,6 +148,12 @@ void AnalysisTaskService::onEngineFinished(const AnalysisSnapshot &snapshot)
         if (snapshot.hasLuminance())   // 引擎同时带回了亮度（理论上不发生，防御）
             merged.setLuminance(snapshot.timestamps, snapshot.lumRows(), snapshot.lumEntries());
         merged.setAudio(snapshot.audioData());
+    } else if (m_activeTask == AnalysisChannels::microdiff()) {
+        // 微变通道整体覆盖；亮度/音频通道保持既有（按通道覆盖语义）
+        if (const ChannelData *md = snapshot.microdiffChannelPtr())
+            merged.setMicroDiff(md->mdTs, md->mdRows, md->mdEntries, md->mdOnsets,
+                                 md->mdStatMu, md->mdStatSigma, md->mdThreshold,
+                                 md->mdBaseStartMs, md->mdBaseDurMs);
     }
     m_model->setSnapshot(merged);
 

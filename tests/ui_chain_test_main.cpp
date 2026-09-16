@@ -10,6 +10,7 @@
 #include <QtTest/QtTest>
 #include <QCryptographicHash>
 #include <QDateTimeEdit>
+#include <QToolButton>
 #include <QComboBox>
 #include <QSpinBox>
 #include <QLabel>
@@ -844,6 +845,180 @@ int main(int argc, char **argv)
         CHECK(appliedCount == 2 && applied.truthOffsetMs == -60000
               && applied.truthNote.contains(QStringLiteral("人工修正")),
               "photo-truth: hand-edited note appended");
+    }
+
+    // ---- v1.18.1~1.18.3 回归锁：未校时时必须能「手动录入画面时间」建立基准。
+    // 缺陷背景（2026-09-13 用户实测，三轮）：
+    //  ① 第 1 步只有 GO 自动 OCR 一个入口，第 2 步手动又被 isValid()/dateKnown
+    //     门控——OSD 无法 OCR 的视频（如水印相机：时分 19:32 + 灰框秒 37，中间
+    //     无冒号，解析器需 H:M:S）形成死锁：自动必失败 → 手动进不去 → 无路可走。
+    //  ② v1.18.2 要求先点「取当前」记录位置，用户不知道，以为功能坏了。
+    //  ③ 采用后没有任何确认，用户不知道到底生效没有。
+    // 本用例锁住简化后的行为：位置自动取当前播放头（零前置）+ 就地回读确认。
+    {
+        TimeCalibration none;   // 未校时（Source::None）
+        CHECK(!none.isValid(), "manual-base: baseline is uncalibrated");
+
+        TimeSettingsDialog dlg(QStringLiteral("dummy.mp4"), 0, 60000, none,
+                               QString(), &service, nullptr);
+        auto *simpleEdit = dlg.findChild<QDateTimeEdit*>(
+            QStringLiteral("manualSimpleEdit"));
+        auto *adoptBaseBtn = dlg.findChild<QPushButton*>(
+            QStringLiteral("adoptManualBaseBtn"));
+        auto *livePos = dlg.findChild<QLabel*>(QStringLiteral("manualLivePos"));
+        auto *resultLbl = dlg.findChild<QLabel*>(
+            QStringLiteral("manualResultLabel"));
+        auto *advBtn = dlg.findChild<QToolButton*>(QStringLiteral("manualAdvBtn"));
+        CHECK(simpleEdit && adoptBaseBtn && livePos && resultLbl && advBtn,
+              "manual-base: step-1 simple UI present");
+
+        if (simpleEdit && adoptBaseBtn && livePos && resultLbl && advBtn) {
+            TimeCalibration applied;
+            int appliedCount = 0;
+            QObject::connect(&dlg, &TimeSettingsDialog::calibrationApplied,
+                             [&](const TimeCalibration &cc) {
+                                 applied = cc;
+                                 ++appliedCount;
+                             });
+            CHECK(resultLbl->isHidden(),
+                  "manual-base: confirmation hidden before apply");
+
+            // 播放头 37s（主窗口推送），画面显示 19:32:37。
+            // 关键：不需要任何“先取位置”的前置动作。
+            dlg.setPlayhead(37000);
+            CHECK(livePos->text().contains(QStringLiteral("00:00:37")),
+                  "manual-base: playhead pushed from main window");
+            const qint64 w1 = QDateTime(QDate(2026, 9, 12), QTime(19, 32, 37),
+                                       Qt::LocalTime).toMSecsSinceEpoch();
+            simpleEdit->setDateTime(QDateTime::fromMSecsSinceEpoch(w1));
+            adoptBaseBtn->click();
+
+            CHECK(appliedCount == 1,
+                  "manual-base: applied in ONE step (no Grab prerequisite)");
+            CHECK(applied.source == TimeCalibration::Source::Manual
+                  && applied.dateKnown && applied.isValid(),
+                  "manual-base: source=Manual + dateKnown");
+            CHECK(applied.offsetMs == w1 - 37000,
+                  "manual-base: offset anchored at playhead");
+            CHECK(applied.wallMsOf(37000) == w1,
+                  "manual-base: round-trip at playhead");
+            CHECK(!applied.rateApplied && applied.rate == 1.0,
+                  "manual-base: single point -> offset only");
+            CHECK(applied.samples.size() == 1, "manual-base: 1 sample recorded");
+            CHECK(dlg.calibration().isValid(),
+                  "manual-base: dialog registers calibrated state");
+
+            // 确认（用户反馈③）：就地回读“位置 ↔ 时间”，不依赖用户去别处找状态
+            CHECK(!resultLbl->isHidden(), "manual-base: confirmation shown");
+            CHECK(resultLbl->text().contains(QStringLiteral("00:00:37"))
+                  && resultLbl->text().contains(QStringLiteral("19:32:37")),
+                  "manual-base: confirmation reads back position and time");
+            CHECK(resultLbl->text().contains(QStringLiteral("已应用")),
+                  "manual-base: confirmation wording");
+
+            // 第 2 步随之解锁：手动对北京时间不再被门控
+            auto *monEdit = dlg.findChild<QDateTimeEdit*>(
+                QStringLiteral("truthMonitorEdit"));
+            auto *bjEdit = dlg.findChild<QDateTimeEdit*>(
+                QStringLiteral("truthBeijingEdit"));
+            auto *adoptTruthBtn = dlg.findChild<QPushButton*>(
+                QStringLiteral("adoptTruthBtn"));
+            CHECK(monEdit && bjEdit && adoptTruthBtn,
+                  "manual-base: step-2 widgets present");
+            if (monEdit && bjEdit && adoptTruthBtn) {
+                monEdit->setDateTime(QDateTime::fromMSecsSinceEpoch(w1));
+                bjEdit->setDateTime(QDateTime::fromMSecsSinceEpoch(w1 + 834000));
+                adoptTruthBtn->click();
+                CHECK(appliedCount == 2 && applied.truthSet
+                      && applied.truthOffsetMs == 834000,
+                      "manual-base: step-2 manual truth usable after manual base");
+            }
+        }
+    }
+
+    // ---- v1.18.2/1.18.3：两点模式（高级区）的能力边界 ----
+    // fit() 对 n=2 用单点假设误差±1s，所以 σ_rate = 2/跨度(秒)、3σ = 6/跨度(秒)，
+    // 必须 dev > 3σ 且 dev ≤ 1%（合理上限）才会 rateApplied。推得：
+    //   跨度 < 600s → 3σ > 1%，任何漂移都不可能被采用（要么不显著要么不合理）
+    //   要检出 40 秒/天 的漂移 → 两点跨度需 > 3.6 小时
+    {
+        // (1) 短片（468s 跨度，+1s）：漂移不显著 → 只对基准，锚在点1
+        TimeSettingsDialog dlgS(QStringLiteral("dummy.mp4"), 0, 524000,
+                                TimeCalibration(), QString(), &service, nullptr);
+        auto *sAdv = dlgS.findChild<QToolButton*>(QStringLiteral("manualAdvBtn"));
+        auto *sSimple = dlgS.findChild<QWidget*>(QStringLiteral("manualSimpleBox"));
+        auto *sAdvBox = dlgS.findChild<QWidget*>(QStringLiteral("manualAdvBox"));
+        auto *s1 = dlgS.findChild<QDateTimeEdit*>(QStringLiteral("manualP1Edit"));
+        auto *s2 = dlgS.findChild<QDateTimeEdit*>(QStringLiteral("manualP2Edit"));
+        auto *st1 = dlgS.findChild<QPushButton*>(QStringLiteral("manualP1TakeBtn"));
+        auto *st2 = dlgS.findChild<QPushButton*>(QStringLiteral("manualP2TakeBtn"));
+        auto *sOk = dlgS.findChild<QPushButton*>(
+            QStringLiteral("adoptManualTwoPointBtn"));
+        CHECK(sAdv && sSimple && sAdvBox && s1 && s2 && st1 && st2 && sOk,
+              "manual-2pt: advanced widgets present");
+        if (sAdv && s1 && s2 && st1 && st2 && sOk) {
+            // 高级区默认折叠（简化诉求：默认只有一条）
+            CHECK(sAdvBox->isHidden(), "manual-2pt: advanced rows hidden by default");
+            sAdv->setChecked(true);
+            CHECK(!sAdvBox->isHidden(), "manual-2pt: advanced rows shown on expand");
+            CHECK(sSimple->isHidden(),
+                  "manual-2pt: simple row hidden while advanced open");
+
+            TimeCalibration appliedS;
+            int cntS = 0;
+            QObject::connect(&dlgS, &TimeSettingsDialog::calibrationApplied,
+                             [&](const TimeCalibration &cc) { appliedS = cc; ++cntS; });
+            const qint64 base = QDateTime(QDate(2026, 9, 12), QTime(19, 31, 29),
+                                          Qt::LocalTime).toMSecsSinceEpoch();
+            dlgS.setPlayhead(0);
+            s1->setDateTime(QDateTime::fromMSecsSinceEpoch(base));
+            st1->click();
+            dlgS.setPlayhead(468000);
+            s2->setDateTime(QDateTime::fromMSecsSinceEpoch(base + 469000));
+            st2->click();
+            sOk->click();
+            CHECK(cntS == 1 && appliedS.samples.size() == 2,
+                  "manual-2pt: short span accepted as two samples");
+            CHECK(!appliedS.rateApplied,
+                  "manual-2pt: <600s span cannot apply drift (by design)");
+            CHECK(appliedS.offsetMs == base,
+                  "manual-2pt: short span anchors at pt1");
+            CHECK(appliedS.wallMsOf(0) == base,
+                  "manual-2pt: short span mapping exact at pt1");
+        }
+
+        // (2) 长片（4h 跨度，墙钟 +14.4s = 86.4 秒/天）：漂移显著 → 修正生效
+        TimeSettingsDialog dlgL(QStringLiteral("dummy.mp4"), 0, 14400000,
+                                TimeCalibration(), QString(), &service, nullptr);
+        auto *l1 = dlgL.findChild<QDateTimeEdit*>(QStringLiteral("manualP1Edit"));
+        auto *l2 = dlgL.findChild<QDateTimeEdit*>(QStringLiteral("manualP2Edit"));
+        auto *lt1 = dlgL.findChild<QPushButton*>(QStringLiteral("manualP1TakeBtn"));
+        auto *lt2 = dlgL.findChild<QPushButton*>(QStringLiteral("manualP2TakeBtn"));
+        auto *lOk = dlgL.findChild<QPushButton*>(
+            QStringLiteral("adoptManualTwoPointBtn"));
+        if (l1 && l2 && lt1 && lt2 && lOk) {
+            TimeCalibration appliedL;
+            int cntL = 0;
+            QObject::connect(&dlgL, &TimeSettingsDialog::calibrationApplied,
+                             [&](const TimeCalibration &cc) { appliedL = cc; ++cntL; });
+            const qint64 baseL = QDateTime(QDate(2026, 9, 12), QTime(8, 0, 0),
+                                           Qt::LocalTime).toMSecsSinceEpoch();
+            dlgL.setPlayhead(0);
+            l1->setDateTime(QDateTime::fromMSecsSinceEpoch(baseL));
+            lt1->click();
+            dlgL.setPlayhead(14400000);
+            l2->setDateTime(QDateTime::fromMSecsSinceEpoch(baseL + 14414400));
+            lt2->click();
+            lOk->click();
+            CHECK(cntL == 1, "manual-2pt: long span applied");
+            CHECK(appliedL.rateApplied, "manual-2pt: >600s span applies drift");
+            CHECK(qAbs(appliedL.rate - 1.001) < 1e-9,
+                  "manual-2pt: fitted rate = 1.001");
+            CHECK(qAbs(appliedL.driftSecondsPerDay() - 86.4) < 0.05,
+                  "manual-2pt: drift = 86.4 s/day");
+            CHECK(appliedL.wallMsOf(14400000) == baseL + 14414400,
+                  "manual-2pt: long span mapping exact at pt2");
+        }
     }
 
     fprintf(stderr, "ui_chain_v3: %d checks, %d failures\n", g_checks, g_failures);

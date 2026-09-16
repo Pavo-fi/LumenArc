@@ -38,6 +38,7 @@
 #include <QPainter>
 #include <QProgressBar>
 #include <QPushButton>
+#include <QTimer>
 #include <QRadioButton>
 #include <QRegularExpression>
 #include <QSettings>
@@ -498,6 +499,24 @@ ComposeWorkbenchWindow::ComposeWorkbenchWindow(CaseManager *cm,
     transport->addWidget(m_timeLabel);
     center->addLayout(transport);
 
+    // 合成结果预览条：把下方片段时间线按顺序连播（自动跳入点/接下一段/按段倍速）
+    // 此前只能预览源素材，“剪出来的成品到底连不连贯”无处可验。
+    auto *progPrevRow = new QHBoxLayout();
+    m_programBtn = new QPushButton(QStringLiteral("▶ 播放合成结果"), this);
+    m_programBtn->setFixedWidth(140);
+    m_programBtn->setEnabled(false);
+    m_programBtn->setFocusPolicy(Qt::NoFocus);
+    m_programBtn->setToolTip(QStringLiteral(
+        "按下方片段时间线的顺序连续播放：自动跳到每段入点、按段倍速、一段放完自动接下一段，"
+        "用来检查剪出来的成品连不连贯。从当前选中的块开始播（未选=从第一段）。宫格段暂不参与。"));
+    m_programLabel = new QLabel(this);
+    m_programLabel->setStyleSheet(QStringLiteral("color:#d4a017;"));
+    progPrevRow->addWidget(m_programBtn);
+    progPrevRow->addWidget(m_programLabel, 1);
+    center->addLayout(progPrevRow);
+    connect(m_programBtn, &QPushButton::clicked, this,
+            &ComposeWorkbenchWindow::onProgramPlay);
+
     // 截取条：红点一键记录（像录音笔，主操作）+ I/O 精确打点（剪映/PR 同款键位）
     auto *cutRow = new QHBoxLayout();
     m_recordBtn = new QPushButton(QStringLiteral("⏺ 从这里开始（I）"), this);
@@ -694,7 +713,27 @@ ComposeWorkbenchWindow::ComposeWorkbenchWindow(CaseManager *cm,
     connect(m_timeline, &ComposeTimelineWidget::removeRequested, this,
             &ComposeWorkbenchWindow::onBlockRemove);
     connect(m_timeline, &ComposeTimelineWidget::selectionChanged, this,
-            [this](int) { updateGuide(); });
+            [this](int idx) {
+                updateGuide();
+                // 点选片段块 → 预览直接跳到该段入点（已切出的段落可立即回看）
+                if (m_running || idx < 0 || idx >= m_segs.size() || m_segs[idx].isLanes())
+                    return;
+                stopProgramPreview();
+                const auto &sg = m_segs[idx];
+                const QString eff = effectivePath(sg.sourcePath);
+                if (eff != m_singlePreviewPath || !m_singleEngine)
+                    loadSinglePreview(eff, segDisplayName(sg));
+                if (m_singleEngine) {
+                    m_singleEngine->seek(sg.inMs);
+                    if (m_slider)
+                        m_slider->setValue(int(sg.inMs));
+                    m_status->setStyleSheet(QStringLiteral("color:#8a8a8a;"));
+                    m_status->setText(QStringLiteral("已跳到第 %1 段：%2（%3 → %4）")
+                                          .arg(idx + 1)
+                                          .arg(segDisplayName(sg))
+                                          .arg(formatMs(sg.inMs), formatMs(sg.outMs)));
+                }
+            });
     connect(m_timeline, &ComposeTimelineWidget::rateRequested, this,
             &ComposeWorkbenchWindow::onBlockRate);
     connect(m_timeline, &ComposeTimelineWidget::annoRemoveRequested, this,
@@ -978,6 +1017,20 @@ void ComposeWorkbenchWindow::loadSinglePreview(const QString &path,
                 if (!m_multiActive && !m_sliderScrubbing && m_slider->isEnabled())
                     m_slider->setValue(int(ms));
                 updateTransport();
+                // 合成预览：本段放完 → 暂停并（下一轮事件循环）接下一段。
+                // 用 singleShot 避免在本信号处理中重建引擎；先把 m_programIdx 置 -1 去重，
+                // 否则 positionChanged 在 25~60Hz 下会把同一次越界重复排队。
+                if (m_programPlay && m_programIdx >= 0 && m_programIdx < m_segs.size()
+                    && ms >= m_segs[m_programIdx].outMs) {
+                    const int next = m_programIdx + 1;
+                    m_programIdx = -1;
+                    if (m_singleEngine)
+                        m_singleEngine->pause();
+                    QTimer::singleShot(0, this, [this, next] {
+                        if (m_programPlay)
+                            advanceProgram(next);
+                    });
+                }
             });
     connect(m_singleEngine, &IVideoEngine::stateChanged, this,
             [this](PlaybackState st) {
@@ -1144,8 +1197,9 @@ void ComposeWorkbenchWindow::updateTransport() {
     m_timeline->setPlaySeg(playIdx);
     m_playSegIdx = playIdx;
     // 切割钮：预览位置严格落在某段内部（两端留 200ms）才可用
+    // （合成预览播放中禁用：下标属于节目模式，此时改段会错位）
     bool canSplit = false;
-    if (playIdx >= 0 && !m_running) {
+    if (playIdx >= 0 && !m_running && !m_programPlay) {
         const auto &sg = m_segs[playIdx];
         const qint64 pos = previewPosMs();
         canSplit = (pos - sg.inMs > 200) && (sg.outMs - pos > 200);
@@ -1155,7 +1209,8 @@ void ComposeWorkbenchWindow::updateTransport() {
     // 标注钮：预览位置落在单视频段内（v1 宫格段不支持标注）
     const bool canAnno = canSplit || (playIdx >= 0 && !m_running
                                       && !m_segs[playIdx].isLanes());
-    const bool annoSingle = playIdx >= 0 && !m_running && !m_segs[playIdx].isLanes();
+    const bool annoSingle = playIdx >= 0 && !m_running && !m_programPlay
+                            && !m_segs[playIdx].isLanes();
     if (m_annoSpotBtn) {
         m_annoSpotBtn->setEnabled(annoSingle);
         m_annoArrowBtn->setEnabled(annoSingle);
@@ -1293,6 +1348,7 @@ void ComposeWorkbenchWindow::onPlayPause() {
 }
 
 void ComposeWorkbenchWindow::onSliderPressed() {
+    stopProgramPreview();   // 手动拖时间轴 = 接管，退出合成预览
     m_sliderScrubbing = true;
     if (m_multiActive && m_svc)
         m_svc->beginScrub();
@@ -1318,6 +1374,7 @@ void ComposeWorkbenchWindow::onSliderReleased() {
 }
 
 void ComposeWorkbenchWindow::onMarkIn() {
+    stopProgramPreview();   // 打点=在源素材上作业，退出合成预览
     m_markIn = previewPosMs();
     if (m_markOut >= 0 && m_markOut <= m_markIn)
         m_markOut = -1;
@@ -1384,7 +1441,106 @@ void ComposeWorkbenchWindow::syncTimeline() {
     m_evidenceRadio->setEnabled(!hasLanes && !m_running);
     if (hasLanes && m_evidenceRadio->isChecked())
         m_demoRadio->setChecked(true);
+    if (m_programBtn)
+        m_programBtn->setEnabled(!m_segs.isEmpty() && !m_running);
     updateSuggestedPath();
+}
+
+// ---------------------------------------------------------------------------
+// 合成结果预览（节目模式，2026-09-11）
+//   背景：预览区原本只能播源素材——剪出片段后无法验证“成品连不连贯”。
+//   这里按 m_segs 顺序连播：自动切源/跳入点/按段倍速，一段完自动接下一段。
+//   v1 仅单视频段（宫格段需多机位同步服务，跳过并提示）。
+// ---------------------------------------------------------------------------
+
+/// @brief ▶ 播放合成结果 / ⏹ 停止（按钮槽）
+void ComposeWorkbenchWindow::onProgramPlay() {
+    if (m_programPlay) {
+        stopProgramPreview(QStringLiteral("已停止合成预览"));
+        return;
+    }
+    if (m_segs.isEmpty()) {
+        m_status->setStyleSheet(QStringLiteral("color:#c0392b;"));
+        m_status->setText(QStringLiteral(
+            "下方片段清单还是空的——先按 I/O 打点再「设为终点并加入」，剪出至少一段"));
+        return;
+    }
+    if (m_multiActive) {
+        m_status->setStyleSheet(QStringLiteral("color:#c0392b;"));
+        m_status->setText(QStringLiteral("宫格预览模式下不支持合成预览，先在左侧选单路素材"));
+        return;
+    }
+    int from = m_timeline ? m_timeline->selected() : -1;
+    if (from < 0 || from >= m_segs.size())
+        from = 0;   // 未选中 → 从第一段开始
+    startProgramPreview(from);
+}
+
+void ComposeWorkbenchWindow::startProgramPreview(int fromSeg) {
+    m_programPlay = true;
+    m_programIdx = -1;
+    if (m_programBtn)
+        m_programBtn->setText(QStringLiteral("⏹ 停止合成预览"));
+    advanceProgram(fromSeg);
+}
+
+/// @brief 播放第 segIdx 段（宫格段跳过；播完由 positionChanged 接下一段）
+void ComposeWorkbenchWindow::advanceProgram(int segIdx) {
+    if (!m_programPlay)
+        return;
+    if (segIdx >= m_segs.size()) {
+        stopProgramPreview(QStringLiteral("合成预览结束：共 %1 段已按时间线顺序播完")
+                               .arg(m_segs.size()));
+        return;
+    }
+    const auto &sg = m_segs[segIdx];
+    if (sg.isLanes()) {
+        m_status->setStyleSheet(QStringLiteral("color:#d4a017;"));
+        m_status->setText(
+            QStringLiteral("第 %1 段是宫格段，合成预览暂不支持，已跳过").arg(segIdx + 1));
+        advanceProgram(segIdx + 1);
+        return;
+    }
+    const QString eff = effectivePath(sg.sourcePath);
+    if (eff != m_singlePreviewPath || !m_singleEngine)
+        loadSinglePreview(eff, segDisplayName(sg));   // 切源：内部重建引擎并重连信号
+    if (!m_singleEngine)
+        return;   // 加载失败：loadSinglePreview 已写状态栏
+    m_programIdx = segIdx;
+    m_singleEngine->setRate(float(sg.rate > 0.0 ? sg.rate : 1.0));
+    m_singleEngine->seek(sg.inMs);
+    if (m_slider)
+        m_slider->setValue(int(sg.inMs));
+    m_singleEngine->play();
+    if (m_programLabel)
+        m_programLabel->setText(QStringLiteral("合成预览：第 %1/%2 段 · %3")
+                                    .arg(segIdx + 1)
+                                    .arg(m_segs.size())
+                                    .arg(segDisplayName(sg)));
+    m_status->setStyleSheet(QStringLiteral("color:#8a8a8a;"));
+    m_status->setText(QStringLiteral("正在播放合成结果（第 %1/%2 段）")
+                          .arg(segIdx + 1)
+                          .arg(m_segs.size()));
+}
+
+void ComposeWorkbenchWindow::stopProgramPreview(const QString &why) {
+    if (!m_programPlay && m_programIdx < 0)
+        return;   // 本就不在节目模式：不动状态栏（各手动操作都会调它）
+    const bool wasPlaying = m_programPlay;
+    m_programPlay = false;
+    m_programIdx = -1;
+    if (m_singleEngine) {
+        m_singleEngine->pause();
+        m_singleEngine->setRate(1.0f);   // 段倍速不残留到手动预览
+    }
+    if (m_programBtn)
+        m_programBtn->setText(QStringLiteral("▶ 播放合成结果"));
+    if (m_programLabel)
+        m_programLabel->setText(QString());
+    if (wasPlaying && !why.isEmpty()) {
+        m_status->setStyleSheet(QStringLiteral("color:#8a8a8a;"));
+        m_status->setText(why);
+    }
 }
 
 int ComposeWorkbenchWindow::segIndexAtPreviewPos() const {
@@ -1395,6 +1551,7 @@ void ComposeWorkbenchWindow::onSplitBlock() {
     const int idx = segIndexAtPreviewPos();
     if (idx < 0 || idx >= m_segs.size())
         return;
+    stopProgramPreview();
     const qint64 cut = previewPosMs();
     auto &sg = m_segs[idx];
     if (cut - sg.inMs <= 200 || sg.outMs - cut <= 200) {
@@ -1538,12 +1695,14 @@ void ComposeWorkbenchWindow::onAnnoToolCaption() {
 void ComposeWorkbenchWindow::onBlockMove(int from, int to) {
     if (from < 0 || from >= m_segs.size() || to < 0 || to >= m_segs.size())
         return;
+    stopProgramPreview();   // 段序变了，进行中的合成预览下标已失效
     m_segs.move(from, to);
     syncTimeline();
 }
 
 void ComposeWorkbenchWindow::onBlockRemove(int idx) {
     if (idx >= 0 && idx < m_segs.size()) {
+        stopProgramPreview();   // 删段后下标会移，进行中的预览必须先停
         m_segs.removeAt(idx);
         syncTimeline();
     }

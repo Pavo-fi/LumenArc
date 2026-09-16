@@ -17,6 +17,7 @@
 #include <QVector>
 #include <QPointer>
 #include <QImage>
+#include "microdiff.h"
 
 class IVideoEngine;
 class RoiModel;
@@ -256,6 +257,32 @@ public:
     /// 未调节/未旋转的原始帧（放大镜首帧等需要【原视频系】像素的场景）
     const QImage& rawFrame() const { return m_rawFrameImage; }
 
+    /// 微变分析显示环节（2026-09-10）。实际变换顺序：
+    ///   原始帧 → 【微变假彩色叠加】 → 旋转 → 调节 LUT → m_frameImage
+    /// （微变在旋转前：ROI/基准均定义在原视频坐标系，先叠加后旋转不下错位）
+    /// 计算只用亮度，显示保留原彩画面（alpha=0 处完全保留）。
+    /// 仅影响显示与截图快照；分析/ROI/导出证据走原始帧（取证红线）。
+    /// @param p 参数；p.enabled=false 时零开销直通
+    void setMicroDiffParams(const MicroDiffParams &p);
+    /// @brief 下发灰度基准（采集基准动作产出）
+    /// @return 尺寸不合法时 false
+    bool setMicroDiffBaseline(const QImage &gray, double noiseFloor);
+    void clearMicroDiffBaseline();
+    /// @brief seek/跳转后清空时域环缓冲（避免跨段平均产生假变化）
+    void resetMicroDiffTemporal();
+    bool microDiffHasBaseline() const { return m_microDiffState.hasBaseline(); }
+    /// @brief 时域窗内已有帧数（< temporalFrames 说明还在预热）
+    int microDiffWarmupFrames() const { return m_microDiffState.framesInWindow(); }
+    /// @brief 当前噪声基底（基准采集时自动标定）
+    double microDiffNoiseFloor() const { return m_microDiffState.noiseFloor(); }
+    /// @brief 当前帧算好的微变数据（纯数据；供放大镜/钉图/全屏共享重渲染）
+    /// @note 指针生命周期到下一帧到达为止；renderMicroDiff 不推进时域环缓冲
+    const MicroDiffFrame &microDiffFrame() const { return m_microDiffFrame; }
+    /// @brief 把当前帧的微变叠加应用到给定原彩帧（纯渲染，不推进时域环缓冲）。
+    /// 放大镜/钉图/副屏全屏用同一份 MicroDiffFrame 各自重渲染 → "微变局部放大"。
+    QImage applyMicroDiffTo(const QImage &raw) const;
+    const MicroDiffParams& microDiffParams() const { return m_microDiffParams; }
+
 signals:
     void frameSnapshotReady(const QImage &image);
     void timestampRoiConfirmed(const QRectF &normalized);
@@ -294,5 +321,10 @@ private:
     QImage m_rawFrameImage;      ///< 未调节的原始帧（调节参数变化时重建显示帧）
     int m_displayRotation = 0;   ///< 显示旋转档位（0/90/180/270 顺时针）
     int m_cachedRotation = -1;   ///< 截图叠加缓存的旋转档位（缓存键一部分）
-    void rebuildAdjustedFrame(); ///< 按当前旋转+LUT 从原始帧重建 m_frameImage
+    void rebuildAdjustedFrame(); ///< 按当前旋转+LUT+微变 从原始帧重建 m_frameImage
+
+    // 微变分析（显示链末级）
+    MicroDiffParams m_microDiffParams;
+    MicroDiffDisplayState m_microDiffState;
+    MicroDiffFrame m_microDiffFrame;   ///< 当前帧计算结果（每帧只算一次）
 };

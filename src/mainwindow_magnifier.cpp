@@ -241,7 +241,7 @@ void MainWindow::createMagnifier()
     // 注意必须给【原始帧】：放大镜内部按原视频系坐标裁剪（旋转由 ContentWidget
     // 在显示前应用）；currentFrame() 是已旋转+LUT 的显示帧，裁剪几何会错。
     if (!m_videoWidget->rawFrame().isNull()) {
-        m_magnifier->onFrameReady(m_videoWidget->rawFrame());
+        m_magnifier->onFrameReady(m_videoWidget->applyMicroDiffTo(m_videoWidget->rawFrame()));
     }
 }
 

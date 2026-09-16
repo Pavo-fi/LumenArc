@@ -11,6 +11,8 @@
  */
 #include "libav_analysis_engine.h"
 #include "domain/audio_denoise.h"   // P-54 谱门控降噪
+#include "domain/microdiff_curve.h"   // 微变：逐帧统计 / 逐秒聚合 / 判定
+#include "infrastructure/microdiff_baseline.h"   // 微变 Pass A 基准提取（独立解码）
 
 extern "C" {
 #include <libavformat/avformat.h>
@@ -42,6 +44,7 @@ public:
 public slots:
     void runLuminance() { m_engine->runLuminanceTask(); }
     void runAudio() { m_engine->runAudioTask(); }
+    void runMicroDiff() { m_engine->runMicroDiffTask(); }
 
 private:
     LibavAnalysisEngine *m_engine = nullptr;
@@ -134,6 +137,8 @@ LibavAnalysisEngine::LibavAnalysisEngine(QObject *parent)
             m_worker, &Worker::runLuminance);
     connect(this, &LibavAnalysisEngine::beginAudio,
             m_worker, &Worker::runAudio);
+    connect(this, &LibavAnalysisEngine::beginMicroDiff,
+            m_worker, &Worker::runMicroDiff);
     thread->start();
 }
 
@@ -195,6 +200,22 @@ void LibavAnalysisEngine::startAudioAnalysis(const QString &videoPath)
 void LibavAnalysisEngine::setAudioDenoiseStrength(double strength)
 {
     m_audioDenoiseStrength.store(qBound(0.0, strength, 10.0));
+}
+
+void LibavAnalysisEngine::startMicroDiffAnalysis(const QString &videoPath,
+                                                  const QVector<QRect> &regions,
+                                                  const QVector<int> &rectRoiIds,
+                                                  const MicroDiffCurveParams &params)
+{
+    if (m_running.load())
+        return;
+    m_videoPath = videoPath;
+    m_mdRegions = regions;
+    m_mdRoiIds = rectRoiIds;
+    m_mdParams = params;
+    m_cancel = false;
+    m_running = true;
+    emit beginMicroDiff();
 }
 
 void LibavAnalysisEngine::cancelAnalysis()
@@ -301,14 +322,36 @@ bool LibavAnalysisEngine::openVideo(const QString &path, AVFormatContext **fmtOu
 {
     AVFormatContext *fmt = nullptr;
     const QByteArray pathUtf8 = path.toUtf8();
-    if (avformat_open_input(&fmt, pathUtf8.constData(), nullptr, nullptr) < 0)
+    auto tryOpen = [&](int analyzeUs) -> bool {
+        if (avformat_open_input(&fmt, pathUtf8.constData(), nullptr, nullptr) < 0)
+            return false;
+        // v1.7.1：限制流信息分析时长（默认对长文件可读数 MB 耗时秒级；
+        // 500ms 已足够拿到码率/时长/帧率元数据——用户实测切换卡顿优化）
+        fmt->max_analyze_duration = analyzeUs;
+        if (avformat_find_stream_info(fmt, nullptr) < 0) {
+            avformat_close_input(&fmt);
+            fmt = nullptr;
+            return false;
+        }
+        return true;
+    };
+    if (!tryOpen(AV_TIME_BASE / 2))
         return false;
-    // v1.7.1：限制流信息分析时长（默认对长文件可读数 MB 耗时秒级；
-    // 500ms 已足够拿到码率/时长/帧率元数据——用户实测切换卡顿优化）
-    fmt->max_analyze_duration = AV_TIME_BASE / 2;
-    if (avformat_find_stream_info(fmt, nullptr) < 0) {
-        avformat_close_input(&fmt);
-        return false;
+    // v1.18.0：像素格式未确定（拼接/低码率源 500ms 探不到，ffmpeg 提示
+    // "unspecified pixel format"）时用 5s 重新探测——此时解码器会吐出
+    // fmt=NONE 帧导致整条分析链失效。快文件不受影响（500ms 已出结果）。
+    {
+        int v = -1;
+        for (unsigned i = 0; i < fmt->nb_streams; ++i)
+            if (fmt->streams[i]->codecpar->codec_type == AVMEDIA_TYPE_VIDEO) { v = static_cast<int>(i); break; }
+        if (v >= 0 && fmt->streams[v]->codecpar->format == AV_PIX_FMT_NONE) {
+            fprintf(stderr, "[trace] openVideo: pix fmt NONE after fast probe, re-probing 5s\n");
+            fflush(stderr);
+            avformat_close_input(&fmt);
+            fmt = nullptr;
+            if (!tryOpen(AV_TIME_BASE * 5))
+                return false;
+        }
     }
 
     int vstream = -1;
@@ -322,6 +365,9 @@ bool LibavAnalysisEngine::openVideo(const QString &path, AVFormatContext **fmtOu
         avformat_close_input(&fmt);
         return false;
     }
+    fprintf(stderr, "[trace] openVideo: final pix fmt=%d\n",
+            (int)fmt->streams[vstream]->codecpar->format);
+    fflush(stderr);
 
     const AVCodec *codec = avcodec_find_decoder(
         fmt->streams[vstream]->codecpar->codec_id);
@@ -672,6 +718,280 @@ void LibavAnalysisEngine::runLuminanceTask()
         if (row.size() > tsN)
             row.resize(tsN);
     snap.setLuminance(std::move(mergedTs), std::move(mergedLums), std::move(entries));
+    emit analysisFinished(snap);
+}
+
+// ============================================================================
+// 微变变化率曲线（2026-09-10）：Pass A 基准 + Pass B 全片扫描 + 判定
+// ============================================================================
+bool LibavAnalysisEngine::analyzeMicroDiffScan(const QString &path,
+                                                 const QVector<QRect> &rects,
+                                                 const std::vector<uint8_t> &baseline,
+                                                 int baseW, int baseH,
+                                                 qint64 totalFramesEst,
+                                                 QVector<QVector<microdiff::FrameStats>> *outPerRoi,
+                                                 QVector<qint64> *outFrameTs)
+{
+    AVFormatContext *fmt = nullptr;
+    AVCodecContext *dec = nullptr;
+    int vstream = -1;
+    if (!openVideo(path, &fmt, &dec, &vstream))
+        return false;
+
+    const AVStream *st = fmt->streams[vstream];
+    const double tb = (st->time_base.den > 0) ? av_q2d(st->time_base) : 0.001;
+
+    // 与亮度分析同一模式：首帧后惰性建 sws 表（P-55）；拼接源分辨率切换时重建
+    SwsContext *sws = nullptr;
+    AVFrame *gray = av_frame_alloc();
+    if (!gray) {
+        closeVideo(fmt, dec);
+        return false;
+    }
+    int curW = 0, curH = 0, curFmt = AV_PIX_FMT_NONE;
+    auto prepareForFrame = [&](int fw, int fh, int ffmt) -> bool {
+        if (fw <= 0 || fh <= 0 || ffmt == AV_PIX_FMT_NONE)
+            return false;
+        SwsContext *ctx = sws_getContext(fw, fh, static_cast<AVPixelFormat>(ffmt),
+                                         fw, fh, AV_PIX_FMT_GRAY8,
+                                         SWS_BILINEAR, nullptr, nullptr, nullptr);
+        if (!ctx)
+            return false;
+        sws_freeContext(sws);
+        sws = ctx;
+        av_frame_unref(gray);
+        gray->format = AV_PIX_FMT_GRAY8;
+        gray->width = fw;
+        gray->height = fh;
+        if (av_frame_get_buffer(gray, 32) < 0) {
+            sws_freeContext(sws);
+            sws = nullptr;
+            return false;
+        }
+        curW = fw;
+        curH = fh;
+        curFmt = ffmt;
+        return true;
+    };
+
+    // 每 ROI 一块 D 缓冲（逐帧复用，免分配）
+    std::vector<std::vector<int16_t>> dBufs(rects.size());
+
+    AVFrame *frame = av_frame_alloc();
+    int64_t startPts = AV_NOPTS_VALUE;
+    qint64 frameCount = 0;
+
+    outPerRoi->clear();
+    outPerRoi->resize(rects.size());
+    outFrameTs->clear();
+
+    while (!m_cancel.load() && readNextVideoFrame(fmt, dec, vstream, frame)) {
+        const int64_t pts = (frame->pts != AV_NOPTS_VALUE)
+            ? frame->pts : frame->best_effort_timestamp;
+        if (startPts == AV_NOPTS_VALUE && pts != AV_NOPTS_VALUE)
+            startPts = pts;
+        double tsMs = 0.0;
+        if (pts != AV_NOPTS_VALUE)
+            tsMs = (pts - startPts) * tb * 1000.0;
+        else
+            tsMs = ++frameCount / 30.0 * 1000.0;   // PTS 全缺兕底（罕见，同亮度分析）
+
+        if (frame->width != curW || frame->height != curH
+            || frame->format != curFmt) {
+            fprintf(stderr, "[trace] md size/fmt change at frame %lld: %dx%d fmt=%d\n",
+                    (long long)frameCount, frame->width, frame->height, frame->format);
+            fflush(stderr);
+            if (!prepareForFrame(frame->width, frame->height, frame->format)) {
+                av_frame_unref(frame);
+                break;
+            }
+        }
+        sws_scale(sws, frame->data, frame->linesize, 0, curH,
+                  gray->data, gray->linesize);
+        const uint8_t *g = gray->data[0];
+        const int gls = gray->linesize[0];
+
+        // 尺寸与基准一致的帧才可比（拼接源分辨率切换帧跳过，时间轴自然留缺）
+        if (curW == baseW && curH == baseH) {
+            for (int k = 0; k < rects.size(); ++k) {
+                const QRect &r = rects[k];
+                std::vector<int16_t> &db = dBufs[k];
+                db.resize(static_cast<size_t>(r.width()) * r.height());
+                int p = 0;
+                for (int y = r.top(); y <= r.bottom(); ++y) {
+                    const uint8_t *grow = g + static_cast<size_t>(y) * gls;
+                    const uint8_t *brow = baseline.data() + static_cast<size_t>(y) * baseW;
+                    for (int x = r.left(); x <= r.right(); ++x)
+                        db[p++] = static_cast<int16_t>(static_cast<int>(grow[x]) - static_cast<int>(brow[x]));
+                }
+                (*outPerRoi)[k].push_back(
+                    microdiff::roiFrameStats(db.data(), r.width(), r.height()));
+            }
+            outFrameTs->append(static_cast<qint64>(std::lround(tsMs)));
+        }
+
+        if ((++frameCount & 0x3F) == 0 && totalFramesEst > 0) {
+            // Pass B 占总进度 10%~100%（Pass A 基准提取占 0%~10%）
+            const qreal pct = 100.0 * frameCount / static_cast<double>(totalFramesEst);
+            emit progressUpdated(static_cast<int>(frameCount),
+                                 static_cast<int>(totalFramesEst), 10.0 + 0.9 * pct);
+        }
+        if (frameCount % 500 == 0) {
+            fprintf(stderr, "[trace] md frame %lld tsMs=%.0f\n", (long long)frameCount, tsMs);
+            fflush(stderr);
+        }
+        av_frame_unref(frame);
+    }
+
+    av_frame_free(&frame);
+    av_frame_free(&gray);
+    sws_freeContext(sws);
+    closeVideo(fmt, dec);
+
+    return !outFrameTs->isEmpty();
+}
+
+void LibavAnalysisEngine::runMicroDiffTask()
+{
+    const QString path = m_videoPath;
+    const qint64 baseStartMs = m_mdParams.baseStartMs;
+    const qint64 baseDurMs = m_mdParams.baseDurMs;
+
+    // 参数先行校验（快速失败，不浪费解码）
+    if (m_mdRegions.isEmpty()) {
+        m_running = false;
+        emit analysisFailed(tr("微变分析需要至少一个矩形 ROI"));
+        return;
+    }
+    if (baseStartMs < 0 || baseDurMs <= 0) {
+        m_running = false;
+        emit analysisFailed(tr("请先标记干净基准段（起点与时长）"));
+        return;
+    }
+
+    // ---- Pass A：干净基准段 → 逐像素时间中值（与微变显示同一提取器）----
+    MicroDiffBaseline base;
+    {
+        std::atomic<bool> *cancel = &m_cancel;
+        base = extractMicroDiffBaseline(
+            path, baseStartMs / 1000.0, baseDurMs / 1000.0,
+            /*maxSamples=*/24, /*temporalFrames=*/11, /*sigma=*/5.0,
+            [this](int percent, const QString &) -> bool {
+                if (m_cancel.load())
+                    return false;
+                // Pass A 占总进度 0%~10%
+                emit progressUpdated(0, 1, 0.1 * percent);
+                return true;
+            },
+            cancel);
+    }
+    if (m_cancel.load()) {
+        m_running = false;
+        emit analysisFailed(tr("分析已取消"));
+        return;
+    }
+    if (!base.ok()) {
+        m_running = false;
+        emit analysisFailed(tr("微变基准提取失败：%1").arg(base.error));
+        return;
+    }
+
+    // ---- ROI 对基准帧钳制（ROI 坐标 = 原视频坐标系）----
+    QVector<QRect> rects;
+    for (const QRect &r : m_mdRegions) {
+        const QRect rc = r.intersected(QRect(0, 0, base.width, base.height));
+        if (rc.isEmpty()) {
+            m_running = false;
+            emit analysisFailed(tr("微变 ROI 超出视频画面"));
+            return;
+        }
+        rects.append(rc);
+    }
+
+    // ---- 总帧数预探测（进度用，同亮度分析）----
+    qint64 totalEst = 0;
+    {
+        const VideoTiming vt = videoTiming(path);
+        totalEst = (vt.durationMs > 0 && vt.fps > 0)
+            ? static_cast<qint64>(vt.durationMs / 1000.0 * vt.fps) : 0;
+    }
+    fprintf(stderr, "[trace] totalEst=%lld\n", (long long)totalEst); fflush(stderr);
+
+    // ---- Pass B：全片扫描（进度 10%~100%）----
+    fprintf(stderr, "[trace] pass B start\n"); fflush(stderr);
+    QVector<QVector<microdiff::FrameStats>> perRoi;
+    QVector<qint64> frameTs;
+    if (!analyzeMicroDiffScan(path, rects, base.gray, base.width, base.height,
+                               totalEst, &perRoi, &frameTs)) {
+        fprintf(stderr, "[trace] scan failed\n"); fflush(stderr);
+        m_running = false;
+        emit analysisFailed(tr("微变分析失败：无法解码视频"));
+        return;
+    }
+    fprintf(stderr, "[trace] scan done frames=%lld\n", (long long)frameTs.size()); fflush(stderr);
+
+    // ---- 逐秒聚合 + 首帧微变判定（纯 domain 计算）----
+    QVector<qint64> mdTs;
+    QVector<QVector<qreal>> mdRows;
+    QVector<DataEntry> mdEntries;
+    QVector<MicroDiffOnset> onsets;
+    QVector<double> muVec, sigVec, thrVec;
+    QString failMsg;
+
+    for (int k = 0; k < rects.size() && failMsg.isEmpty(); ++k) {
+        const QVector<microdiff::SecondRow> rows =
+            microdiff::aggregateSeconds(perRoi[k], frameTs);
+        if (rows.isEmpty()) {
+            failMsg = tr("微变 ROI %1 无有效帧（该区域处于分辨率切换段？）").arg(k + 1);
+            break;
+        }
+        if (mdTs.isEmpty()) {
+            mdTs.reserve(rows.size());
+            for (const microdiff::SecondRow &r : rows)
+                mdTs.append(r.tsMs);
+        }
+        const microdiff::OnsetOutcome oc =
+            microdiff::detectOnset(rows, (k < m_mdRoiIds.size()) ? m_mdRoiIds[k] : -1,
+                                    baseStartMs, baseDurMs);
+        if (!oc.baselineOk) {
+            failMsg = tr("基准段有效帧不足（仅 %1 个逐秒样本，至少需 5 个）；请加长基准段或换一段")
+                          .arg(oc.baselineSamples);
+            break;
+        }
+        QVector<qreal> blkRow, medRow;
+        blkRow.reserve(rows.size());
+        medRow.reserve(rows.size());
+        for (const microdiff::SecondRow &r : rows) {
+            blkRow.append(static_cast<qreal>(r.blkMax));
+            medRow.append(static_cast<qreal>(r.medD));
+        }
+        mdRows.append(std::move(blkRow));
+        mdRows.append(std::move(medRow));
+        DataEntry e;
+        e.type = DataEntry::Rect;
+        e.roiId = oc.onset.roiId;
+        mdEntries.append(e);
+        mdEntries.append(e);
+        onsets.append(oc.onset);
+        muVec.append(oc.mu);
+        sigVec.append(oc.sigma);
+        thrVec.append(oc.threshold);
+    }
+
+    m_running = false;
+    if (!failMsg.isEmpty()) {
+        emit analysisFailed(failMsg);
+        return;
+    }
+    if (mdTs.isEmpty()) {
+        emit analysisFailed(tr("微变分析失败：无有效帧"));
+        return;
+    }
+
+    AnalysisSnapshot snap;
+    snap.setMicroDiff(std::move(mdTs), std::move(mdRows), std::move(mdEntries),
+                      std::move(onsets), std::move(muVec), std::move(sigVec),
+                      std::move(thrVec), double(baseStartMs), double(baseDurMs));
     emit analysisFinished(snap);
 }
 

@@ -1436,8 +1436,12 @@ void VideoWidget::rebuildAdjustedFrame()
 {
     if (m_rawFrameImage.isNull())
         return;
-    // 显示链：原始帧 → 旋转 → LUT（Q1 拍板方案 A 规定的变换顺序）
+    // 显示链：原始帧 → 微变叠加 → 旋转 → LUT
+    // 微变放在旋转【之前】：ROI 与基准都定义在【原视频坐标系】，先叠加后旋转
+    // 才能保证旋转时 ROI 不错位；LUT 放在最后（亮度/对比度属于显示调节）。
     QImage img = m_rawFrameImage;
+    if (m_microDiffFrame.valid && !m_microDiffParams.isIdentity())
+        img = renderMicroDiff(img, m_microDiffFrame, m_microDiffParams);
     if (m_displayRotation != 0)
         img = img.transformed(QTransform().rotate(m_displayRotation));
     m_frameImage = applyDisplayLut(img, m_displayLut);   // 空表 = 恒等浅拷贝
@@ -1446,10 +1450,65 @@ void VideoWidget::rebuildAdjustedFrame()
         m_overlay->update();
 }
 
+void VideoWidget::setMicroDiffParams(const MicroDiffParams &p)
+{
+    // 几何类参数（处理范围/ROI/σ/时域窗）变化 → 缓存作废，交回下一帧重算；
+    // 仅显示类参数（等级/强度/模式/噪声基底/开关）变化 → 直接用缓存重渲染。
+    const bool geoChanged = (p.fullFrame != m_microDiffParams.fullFrame)
+                            || (p.roi != m_microDiffParams.roi)
+                            || (p.sigma != m_microDiffParams.sigma)
+                            || (p.temporalFrames != m_microDiffParams.temporalFrames);
+    m_microDiffParams = p;
+    if (geoChanged)
+        m_microDiffFrame.clear();
+    rebuildAdjustedFrame();   // 纯渲染，可反复调用（不推进时域环缓冲）
+}
+
+bool VideoWidget::setMicroDiffBaseline(const QImage &gray, double noiseFloor)
+{
+    // 尺寸契约（审查 P2-5）：基准尺寸必须与当前视频帧一致，否则整条管线静默失效。
+    // 这里显式返回 false，让调用方能弹出"基准尺寸与当前视频不匹配"的可诊断提示。
+    if (!gray.isNull() && !m_rawFrameImage.isNull()
+        && gray.size() != m_rawFrameImage.size())
+        return false;
+    const bool ok = m_microDiffState.setBaselineGray(gray, noiseFloor);
+    m_microDiffFrame.clear();
+    rebuildAdjustedFrame();
+    return ok;
+}
+
+void VideoWidget::clearMicroDiffBaseline()
+{
+    m_microDiffState.clearBaseline();
+    m_microDiffFrame.clear();
+    rebuildAdjustedFrame();
+}
+
+void VideoWidget::resetMicroDiffTemporal()
+{
+    m_microDiffState.resetTemporal();
+    m_microDiffFrame.clear();
+}
+
+QImage VideoWidget::applyMicroDiffTo(const QImage &raw) const
+{
+    // 纯渲染：不推进时域环缓冲，可安全地在同一帧上被多个显示面调用
+    if (raw.isNull() || !m_microDiffFrame.valid || m_microDiffParams.isIdentity())
+        return raw;
+    if (raw.size() != m_microDiffState.baselineSize())
+        return raw;
+    return renderMicroDiff(raw, m_microDiffFrame, m_microDiffParams);
+}
+
 void VideoWidget::onFrameReady(const QImage &image)
 {
     m_rawFrameImage = image;    // COW 浅拷贝；引擎发出后不再改
-    if (m_displayLut.isEmpty() && m_displayRotation == 0) {
+    // 微变：时域环缓冲【每帧只在这里推进一次】（重绘/改滑杆都不推进）
+    if (!m_microDiffParams.isIdentity() && m_microDiffState.hasBaseline())
+        m_microDiffFrame = computeMicroDiff(m_microDiffState, m_microDiffParams, image);
+    else
+        m_microDiffFrame.clear();
+    if (m_displayLut.isEmpty() && m_displayRotation == 0 && !m_microDiffFrame.valid) {
         // No deep copy: QImage is implicitly shared and m_frameImage is only read afterwards.
         m_frameImage = image;
     } else {
@@ -1563,6 +1622,13 @@ QRect VideoWidget::videoDisplayRect() const
         int x = (widgetSize.width() - w) / 2;
         targetRect = QRect(x, 0, w, h);
     }
+    // 并排对比模式：renderMicroDiff 输出的是 2w×h 画布（左原图 / 右微变），
+    // 但 ROI/时间戳框/辅助线都定义在【原视频 w×h 坐标系】。若按 2w 算显示矩形，
+    // overlay 双向映射会把原坐标铺满整张画布→框位置错位、更严重的是此模式下
+    // 新画的 ROI 会以错误 x 存入 RoiModel（取证数据错误）。
+    // 因此该模式下只取左半（= 原图）作为视频显示区。
+    if (m_microDiffParams.enabled && m_microDiffParams.mode == MicroDiffMode::SideBySide)
+        targetRect.setWidth(targetRect.width() / 2);
     return targetRect;
 }
 

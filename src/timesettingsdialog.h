@@ -30,6 +30,7 @@ class QLineEdit;
 class QCheckBox;
 class QComboBox;
 class QSpinBox;
+class QToolButton;
 class QWidget;
 
 /// GO 一键校时状态机
@@ -92,6 +93,15 @@ private slots:
     void onToggleDetails();
     void onTruthInputChanged();
     void onAdoptTruth();
+    /// v1.18.1：第 1 步的手动出路——OSD 无法 OCR 时照拄画面时间建立基准。
+    /// v1.18.2：两点制——只取点1 = 仅对基准；点1+点2 = 同时拟合偏移与速率。
+    void onAdoptManualBase();      ///< 单点：画面时间 + 当前播放头
+    void onAdoptManualTwoPoint();  ///< 高级：点1/点2 显式取样
+    void onTakeManualP1();
+    void onTakeManualP2();
+    /// 两条手动路径共用：拟合 → 清理 → 应用 → 就地确认（R9：一处实现）
+    bool applyManualSamples(const QVector<TimeCalibration::Sample> &samples,
+                            bool twoPoint);
     void onClearTruth();
     /// v1.12.5 北京时间对时（拍板：校时图片框选 OCR / 手动两时间 / 直输偏移）
     void onTruthPhotoPick();          // 选图 → 框选对话框 → 引擎识别
@@ -105,6 +115,9 @@ private slots:
 public slots:
     /// 主窗口框选完成回调：rect 归一化 0~1（无效 = 用户跳过）
     void setTimestampRoi(const QRectF &rect);
+    /// v1.18.2：主窗口推送当前播放位置。本窗口不跟踪播放头，
+    /// 手动两点取样靠它知道“取当前”到底取的是哪个位置。
+    void setPlayhead(qint64 ms);
     /// 框选就绪（拖拽松开/叠加层确认）：恢复窗口并给出「确认并开始校时」；
     /// rect 无效 = 用户跳过框选 → GO 流程直接自动扫描开始
     void stageTimestampRoi(const QRectF &rect);
@@ -155,6 +168,20 @@ private:
     QLabel *m_fitWarningLabel = nullptr;
     QPushButton *m_useBtn = nullptr;        // 结果区「使用此结果」
     QCheckBox *m_noDriftCheck = nullptr;
+    // v1.18.1/1.18.2/1.18.3 第 1 步手动录入（默认单点，两点折叠）
+    QWidget *m_manualSimpleBox = nullptr;   ///< 默认：单点（位置 = 当前播放头）
+    QWidget *m_manualAdvBox = nullptr;      ///< 高级：两点（显式取样）
+    QToolButton *m_manualAdvBtn = nullptr;  ///< 展开/收起高级区
+    QDateTimeEdit *m_manualSimpleEdit = nullptr; ///< 默认路径：单点时间输入
+    QDateTimeEdit *m_manualP1Edit = nullptr;      ///< 高级路径：点1 时间
+    QDateTimeEdit *m_manualP2Edit = nullptr;      ///< 高级路径：点2 时间
+    QLabel *m_manualP1Pos = nullptr;      ///< 点1 已记录的流内位置（未取=—）
+    QLabel *m_manualP2Pos = nullptr;      ///< 点2 已记录的流内位置（未取=—）
+    QLabel *m_manualLivePos = nullptr;    ///< 当前播放位置（主窗口推送）
+    QLabel *m_manualResultLabel = nullptr;///< 应用后的确认（用户反馈：无确认）
+    qint64 m_manualP1PosMs = -1;          ///< -1 = 未取点
+    qint64 m_manualP2PosMs = -1;
+    qint64 m_playheadMs = 0;              ///< 主窗口最新播放位置
     QLabel *m_monitorTimeLabel = nullptr;
     QDateTimeEdit *m_beijingEdit = nullptr;
     QDateTimeEdit *m_monitorEdit = nullptr;   // v1.12.5 手输：监控主机时间

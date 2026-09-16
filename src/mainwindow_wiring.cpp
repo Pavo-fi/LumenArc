@@ -24,6 +24,7 @@
 #include "app/case_manager.h"
 #include "app/case_open_panel.h"
 #include "app/analysis_task_service.h"
+#include "microdiffdialog.h"   // 清基准时同步面板按钮态（曲线按钮可用性）
 #include "app/analysis_controller.h"
 #include "app/uistate.h"
 #include "app/project_io.h"
@@ -133,6 +134,7 @@ void MainWindow::setupTransportConnections()
     connect(m_speedBtn, &QPushButton::clicked, this, &MainWindow::cycleSpeed);
     connect(m_analyzeBtn, &QPushButton::clicked, this, &MainWindow::onAnalyze);
     connect(m_audioAnalysisBtn, &QPushButton::clicked, this, &MainWindow::onAudioAnalysis);
+    connect(m_microDiffBtn, &QPushButton::clicked, this, &MainWindow::onMicroDiff);
     connect(m_setTimeBtn, &QPushButton::clicked, this, &MainWindow::onSetStartTime);
 
     connect(m_videoEngine, &IVideoEngine::positionChanged,
@@ -146,6 +148,9 @@ void MainWindow::setupTransportConnections()
     connect(m_chartPanel, &ChartPanel::scrubEnded, this, [this]() {
         m_videoEngine->setScrubMode(false);
         qint64 pos = m_chartPanel->cursorTime();
+        // 审查 F-2：seek 落点后重置微变时域环（防跨跳变平均出假变化云）
+        if (m_videoWidget)
+            m_videoWidget->resetMicroDiffTemporal();
         m_videoEngine->seek(pos);
     });
 
@@ -155,6 +160,8 @@ void MainWindow::setupTransportConnections()
     // 语谱拖拽松手：退出 scrub 模式 + 最终精确 seek（光标在拖拽中已两面板同步）
     connect(m_spectrogramEnhanced, &SpectrogramPanelEnhanced::scrubEnded, this, [this]() {
         m_videoEngine->setScrubMode(false);
+        if (m_videoWidget)
+            m_videoWidget->resetMicroDiffTemporal();   // 审查 F-2
         m_videoEngine->seek(m_chartPanel->cursorTime());
     });
 }
@@ -255,13 +262,19 @@ void MainWindow::setupMagnifierConnections()
     m_videoListPanel->listWidget()->installEventFilter(m_keyGuard);  // 视频列表快捷键
 
     // Forward video frames to magnifier and pinned
+    // 审查 F-5：这里必须转发【已叠加微变】的原彩帧（而非引擎原始帧），否则
+    // 放大镜/钉图/副屏全屏看不到微变彩色——即"微变局部放大"失效。
+    // VideoWidget 已在 setVideoEngine 时先接到 frameReady（连接顺序在前），
+    // 因此此处取到的 m_microDiffFrame 与本帧同步；applyMicroDiffTo 是纯渲染，
+    // 不推进时域环缓冲，可被多个显示面共享。
     connect(m_videoEngine, &IVideoEngine::frameReady,
             this, [this](const QImage &img) {
+                const QImage md = m_videoWidget ? m_videoWidget->applyMicroDiffTo(img) : img;
                 if (m_magnifier)
-                    m_magnifier->onFrameReady(img);
-                updatePinnedImage(img);
+                    m_magnifier->onFrameReady(md);
+                updatePinnedImage(md);
                 if (m_fsWindow)
-                    m_fsWindow->setFrame(img);   // 副屏全屏：同源帧（隐式共享）
+                    m_fsWindow->setFrame(md);   // 副屏全屏：同源帧（隐式共享）
             });
 
     // Pinned timestamp
@@ -597,6 +610,15 @@ void MainWindow::setupVideoListConnections()
                 m_speedBtn->setEnabled(false);
                 m_analyzeBtn->setEnabled(false);
                 m_audioAnalysisBtn->setEnabled(false);
+                m_microDiffBtn->setEnabled(false);
+                // 审查 F-1：清空列表同时清微变基准，防下一个视频与旧基准求差
+                if (m_videoWidget)
+                    m_videoWidget->clearMicroDiffBaseline();
+                m_microDiffBaselineReady = false;
+                m_microDiffBaseStartSec = 0.0;
+                m_microDiffBaseDurSec = 0.0;
+                if (m_microDiffDialog)
+                    m_microDiffDialog->setBaselineReady(false);
                 m_setTimeBtn->setEnabled(false);
                 m_captureBtn->setEnabled(false);
                 if (m_snapshotBtn)

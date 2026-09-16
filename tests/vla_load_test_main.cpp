@@ -542,6 +542,173 @@ static int testV10CalibrationOnly()
 }
 
 
+/// v10 微变变化率曲线通道（MDCF）往返：曲线行/ROI 身份/判据/首帧微变/基准来源全量还原
+static int testV10MicroDiffRoundTrip()
+{
+    const int before = g_v10Failures;
+    QDir tmp(QDir::tempPath() + QStringLiteral("/lumenarc_vla_mdcf"));
+    tmp.removeRecursively();
+    QDir().mkpath(tmp.path());
+    const QString path = tmp.path() + QStringLiteral("/mdcf_rt.vla");
+    QFile::remove(path);
+
+    // 造数据：亮度打底 + 微变曲线通道（每 ROI 2 行 + 判据 + 首帧微变）
+    TimelineModel m;
+    m.setData({0, 1000, 2000}, {{1, 2, 3}}, {{DataEntry::Rect, 7}}, AudioData());
+
+    const int nSec = 5;
+    QVector<qint64> ts;
+    for (int i = 0; i < nSec; ++i)
+        ts.append(936000 + i * 1000);
+    QVector<QVector<qreal>> rows;
+    rows.append({8.0, 9.0, 11.85, 15.42, 31.12});   // blkMax
+    rows.append({4.0, 4.0, 4.35, 5.0, 6.0});        // medD
+    QVector<DataEntry> ents = {{DataEntry::Rect, 7}, {DataEntry::Rect, 7}};
+    MicroDiffOnset on;
+    on.roiId = 7;
+    on.tsMs = 938000;
+    on.mu = 8.316;
+    on.sigma = 1.096;
+    on.threshold = 11.605;
+    on.direction = 1;
+    const QVector<MicroDiffOnset> onsets = {on};
+
+    AnalysisSnapshot withMd = m.snapshot();
+    withMd.setMicroDiff(ts, rows, ents, onsets, {8.316}, {1.096}, {11.605},
+                        700000.0, 180000.0);
+    m.setSnapshot(withMd);
+
+    TimeCalibration cal;
+    V10CHECK(m.saveToFile(path, {QRect(1, 1, 10, 10)}, cal, QRect(), {}, QRect(),
+                          SnapshotFusionData(), {}, {}, {7}, {}),
+             "mdcf: saveToFile ok");
+
+    // 文件层面：MDCF 块存在 + META 声明 kind=microdiff + version 仍为 10
+    QVector<V10Chunk> chunks;
+    V10CHECK(v10Parse(v10ReadAll(path), &chunks), "mdcf: file parses");
+    bool sawChunk = false;
+    const V10Chunk *metaChunk = nullptr;
+    for (const auto &c : chunks) {
+        if (c.tag == QByteArray("MDCF", 4)) sawChunk = true;
+        if (c.tag == QByteArray("META", 4)) metaChunk = &c;
+    }
+    V10CHECK(sawChunk, "mdcf: MDCF chunk written");
+    V10CHECK(metaChunk, "mdcf: META chunk present");
+    if (metaChunk) {
+        const QJsonObject meta = QJsonDocument::fromJson(v10ChunkPayload(*metaChunk)).object();
+        V10CHECK(meta["version"].toInt() == 10, "mdcf: version stays 10");
+        bool sawMd = false;
+        for (const auto &cv : meta["channels"].toArray())
+            if (cv.toObject()["kind"].toString() == QLatin1String("microdiff"))
+                sawMd = true;
+        V10CHECK(sawMd, "mdcf: channels list declares microdiff");
+    }
+
+    // 重载往返
+    TimelineModel m2;
+    QVector<QRect> regions; QVector<QPolygon> polys; QVector<GuideLine> gl;
+    QVector<int> rIds, pIds; TimeCalibration cal2; QRect mag, pin;
+    QVector<ChartLabel> labels; SnapshotFusionData fusion;
+    V10CHECK(m2.loadFromFile(path, &regions, &cal2, &mag, &labels, &pin, &fusion,
+                             &polys, &gl, &rIds, &pIds), "mdcf: reload ok");
+    const AnalysisSnapshot s2 = m2.snapshot();
+    V10CHECK(s2.hasMicroDiff(), "mdcf: channel present after reload");
+    V10CHECK(s2.lumRows().size() == 1, "mdcf: luminance channel kept alongside");
+    if (const ChannelData *md = s2.microdiffChannelPtr()) {
+        V10CHECK(md->mdTs.size() == nSec && md->mdTs[0] == 936000, "mdcf: mdTs roundtrip");
+        V10CHECK(md->mdRows.size() == 2, "mdcf: 2 rows per ROI");
+        V10CHECK(md->mdRows.size() == 2 && qAbs(md->mdRows[0][4] - 31.12) < 1e-3,
+                 "mdcf: blkMax row roundtrip (float32)");
+        V10CHECK(md->mdRows.size() == 2 && qAbs(md->mdRows[1][2] - 4.35) < 1e-3,
+                 "mdcf: medD row roundtrip");
+        V10CHECK(md->mdEntries.size() == 2 && md->mdEntries[0].roiId == 7
+                 && md->mdEntries[1].roiId == 7, "mdcf: roiId roundtrip");
+        V10CHECK(md->mdOnsets.size() == 1 && md->mdOnsets[0].tsMs == 938000
+                 && md->mdOnsets[0].direction == 1 && md->mdOnsets[0].roiId == 7,
+                 "mdcf: onset roundtrip");
+        V10CHECK(md->mdStatMu.size() == 1 && qAbs(md->mdStatMu[0] - 8.316) < 1e-6
+                 && qAbs(md->mdThreshold[0] - 11.605) < 1e-6,
+                 "mdcf: stats roundtrip (double precision)");
+        V10CHECK(qAbs(md->mdBaseStartMs - 700000.0) < 1e-6
+                 && qAbs(md->mdBaseDurMs - 180000.0) < 1e-6,
+                 "mdcf: baseline provenance roundtrip");
+    }
+
+    fprintf(stderr, "[v10] microdiff MDCF roundtrip: %d checks, %d failures\n",
+            g_v10Checks, g_v10Failures - before);
+    return g_v10Failures - before;
+}
+
+/// 微变通道图表渲染（无头）：**纯 microdiff 快照**（无亮度/无音频）也必须出曲线
+/// ——接线地图警告的三处早退陷阱（isEmpty 早退 / seriesList 空门 / 重建门）
+/// 正是这条路径；微变系列与亮度系列必须互不干扰
+static int testMicroDiffChartRender()
+{
+    int failures = 0;
+    RoiModel rm;
+    rm.addRegion(QRect(961, 54, 227, 209));
+    RoiModel pm;
+    TimelineModel tm;
+    ChartPanel chart;
+    chart.setRegionModel(&rm);
+    chart.setPolygonModel(&pm);
+    chart.setTimelineModel(&tm);
+    chart.setDuration(1800000);
+    chart.resize(1200, 400);
+
+    const int roiId = rm.roiIdAt(0);
+    AnalysisSnapshot snap;   // 故意只放 microdiff 通道（最苛刻路径）
+    QVector<qint64> ts;
+    for (int i = 0; i < 5; ++i)
+        ts.append(936000 + i * 1000);
+    QVector<QVector<qreal>> rows;
+    rows.append({8.0, 9.0, 11.85, 15.42, 31.12});   // blkMax（过阈 11.605）
+    rows.append({4.0, 4.0, 4.35, 5.0, 6.0});        // medD
+    QVector<DataEntry> ents = {{DataEntry::Rect, roiId}, {DataEntry::Rect, roiId}};
+    MicroDiffOnset on;
+    on.roiId = roiId;
+    on.tsMs = 938000;
+    on.mu = 8.316;
+    on.sigma = 1.096;
+    on.threshold = 11.605;
+    on.direction = 1;
+    snap.setMicroDiff(ts, rows, ents, {on}, {8.316}, {1.096}, {11.605},
+                      700000.0, 180000.0);
+    tm.setSnapshot(snap);
+    // 重建是 QTimer::singleShot(0) 延迟的（同 testFile）
+    QCoreApplication::processEvents();
+    QCoreApplication::processEvents();
+
+    int mdSeries = 0, mdPoints = 0;
+    for (auto *s : chart.chart()->series()) {
+        auto *ls = qobject_cast<QLineSeries *>(s);
+        if (!ls)
+            continue;
+        const QString n = ls->name();
+        if (n.contains(QStringLiteral("blkMax")) || n.contains(QStringLiteral("medD"))) {
+            ++mdSeries;
+            mdPoints = qMax(mdPoints, int(ls->count()));
+        }
+    }
+    if (mdSeries != 2) {
+        fprintf(stderr, "FAIL: microdiff chart series=%d (expect 2: blkMax+medD)\n", mdSeries);
+        ++failures;
+    }
+    if (mdPoints != 5) {
+        fprintf(stderr, "FAIL: microdiff chart points=%d (expect 5)\n", mdPoints);
+        ++failures;
+    }
+    // 渲染不得崩（阈值虚线与首帧微变标记都在图元层）
+    const QImage img = chart.renderToImage(QSize(1200, 400));
+    if (img.isNull()) {
+        fprintf(stderr, "FAIL: microdiff chart renderToImage null\n");
+        ++failures;
+    }
+    fprintf(stderr, "[chart-md] series=%d points=%d render=%dx%d => %s\n",
+            mdSeries, mdPoints, img.width(), img.height(), failures == 0 ? "PASS" : "FAIL");
+    return failures;
+}
+
 int main(int argc, char **argv)
 {
     QApplication app(argc, argv);
@@ -575,7 +742,8 @@ int main(int argc, char **argv)
     v10Fail += testV10RoundTripAndChain();
     v10Fail += testV10UnknownChannelPassthrough();
     v10Fail += testV10CalibrationOnly();
-
+    v10Fail += testV10MicroDiffRoundTrip();
+    v10Fail += testMicroDiffChartRender();
     RoiModel rm;
     RoiModel pm;
     TimelineModel tm;
