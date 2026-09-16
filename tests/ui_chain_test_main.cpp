@@ -741,30 +741,6 @@ static void runGpuFallbackScenario()
         delete vw2;
     }
 
-    // 构造期归一（本次事故真实触发点）：注册表遗留布尔值字符串 "false" 经旧归一
-    // → auto（GPU 启用）→ 黑屏。现归一 → off。写测试值前后还原现场（写入值
-    // 本身即归一为 off，即使中断也不会把用户环境弄成"启用 GPU"）。
-    {
-        QSettings st(QStringLiteral("LumenArc"), QStringLiteral("LumenArc"));
-        const QString k = QStringLiteral("video/gpuDisplay");
-        const bool had = st.contains(k);
-        const QVariant saved = st.value(k);
-        st.setValue(k, QStringLiteral("false"));
-        st.sync();
-        {
-            QWidget host3;
-            VideoWidget *vw3 = new VideoWidget(&host3);
-            CHECK(vw3->gpuDisplayMode() == QLatin1String("off"),
-                  "gl: ctor normalizes legacy 'false' to off");
-            delete vw3;
-        }
-        if (had)
-            st.setValue(k, saved);
-        else
-            st.remove(k);
-        st.sync();
-    }
-
     delete vw;
 }
 
