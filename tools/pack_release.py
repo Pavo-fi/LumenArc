@@ -22,6 +22,15 @@ import sys
 import tempfile
 import zipfile
 
+# Windows / CI 控制台不一定是 UTF-8（实测 GitHub runner 上是 cp1252）：
+# 直接 print 中文会 UnicodeEncodeError 把脚本打挂（fetch_ffmpeg_cli.py 已在 CI
+# 上因此失败过一次）。统一把 stdout/stderr 重配为 UTF-8 + replace，一劳永逸。
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SRC = os.path.join(ROOT, "build", "Release")
 OUT_DIR = os.path.join(ROOT, "build_tmp", "dist")

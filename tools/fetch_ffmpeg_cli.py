@@ -32,6 +32,15 @@ import tempfile
 import urllib.request
 import zipfile
 
+# Windows / CI 控制台不一定是 UTF-8（实测 GitHub runner 上是 cp1252）：直接 print
+# 中文会 UnicodeEncodeError 把脚本打挂 —— 本脚本就因此在 CI 上失败过一次
+# （下载/安装/自检都成功，死在最后那句中文提示）。重配为 UTF-8 + replace。
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DEFAULT_DEST = os.path.join(ROOT, "build", "Release", "ffmpeg")
 
