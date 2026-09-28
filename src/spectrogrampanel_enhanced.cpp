@@ -11,6 +11,7 @@
 #include "spectrogrampanel_enhanced.h"
 #include "domain/tick_utils.h"
 #include "i18n.h"
+#include "theme.h"
 
 #include <QPainter>
 #include <QResizeEvent>
@@ -300,7 +301,8 @@ void SpectrogramPanelEnhanced::paintGL()
         qreal xRatio = (m_cursorTimeMs - m_viewXMin) / (m_viewXMax - m_viewXMin);
         if (xRatio >= 0.0 && xRatio <= 1.0) {
             int x = m_leftMargin + static_cast<int>(xRatio * heatW);
-            QPen cursorPen(QColor(0xFF, 0x98, 0x1C), 2, Qt::DashLine);
+            // 规范§8：播放光标 = Accent 1px 实线
+            QPen cursorPen(QColor(Theme::Accent), 1);
             painter.setPen(cursorPen);
             painter.drawLine(x, yTop, x, yBot);
         }
@@ -472,12 +474,14 @@ QImage SpectrogramPanelEnhanced::renderHeatmapImage(const QSize &targetSize)
     {
         QPainter p(&img);
         p.setRenderHint(QPainter::Antialiasing);
-        const QColor labelColor(0xFF, 0x98, 0x1C);          // 与屏上 drawAxes 同色
-        const QColor tickColor(0xFF, 0x98, 0x1C, 180);
+        // 规范§8：轴/刻度文字 TextMuted
+        const QColor labelColor(Theme::TextTk::Muted);          // 与屏上 drawAxes 同色
+        QColor tickColor(Theme::TextTk::Muted);
+        tickColor.setAlpha(180);
         const int fs = qBound(10, W / 180, 16);
         p.setFont(QFont(QStringLiteral("Consolas"), fs, QFont::Bold));
         // 单位提示（左上）
-        p.setPen(QColor(0x9A, 0xA0, 0xAB));
+        p.setPen(QColor(Theme::TextTk::Muted)); // 规范§8：轴单位提示 TextMuted
         p.drawText(QRect(4, 2, axisW - 6, fs + 6),
                    Qt::AlignLeft | Qt::AlignTop, QStringLiteral("Hz"));
         const auto ticks = freqAxisTicks(m_freqScale, y0, y1, nyquist, H, 30);
@@ -496,7 +500,8 @@ QImage SpectrogramPanelEnhanced::renderHeatmapImage(const QSize &targetSize)
         if (m_cursorTimeMs >= 0 && x1 > x0) {
             const qreal ratio = (m_cursorTimeMs - x0) / (x1 - x0);
             if (ratio >= 0.0 && ratio <= 1.0) {
-                p.setPen(QPen(QColor(0xFF, 0x98, 0x1C), 2, Qt::DashLine));
+                // 规范§8：播放光标 = Accent 1px 实线
+                p.setPen(QPen(QColor(Theme::Accent), 1));
                 const int cx = axisW + int(ratio * (heatW - 1));
                 p.drawLine(cx, 0, cx, H - 1);
             }
@@ -557,8 +562,10 @@ void SpectrogramPanelEnhanced::drawAxes(QPainter &painter)
     if (heatW <= 0 || heatH <= 0)
         return;
 
-    QColor labelColor(0xFF, 0x98, 0x1C);
-    QColor tickColor(0xFF, 0x98, 0x1C, 180);
+    // 规范§8：轴/刻度文字 TextMuted
+    QColor labelColor(Theme::TextTk::Muted);
+    QColor tickColor(Theme::TextTk::Muted);
+    tickColor.setAlpha(180);
     QFont font("Consolas", 9, QFont::Bold);
     painter.setFont(font);
 
@@ -613,7 +620,7 @@ void SpectrogramPanelEnhanced::drawAxes(QPainter &painter)
 
 void SpectrogramPanelEnhanced::drawError(QPainter &painter, const QString &msg)
 {
-    painter.setPen(QColor(255, 100, 100));
+    painter.setPen(QColor(Theme::Status::Error)); // 规范§8：错误文字用状态 token
     painter.setFont(QFont("Consolas", 10));
     painter.drawText(rect(), Qt::AlignCenter, msg);
 }

@@ -899,6 +899,38 @@ void MainWindow::onSetStartTime()
     dlg->activateWindow();
 }
 
+// P-98（2026-09-28 实测教训）：秒级精细对齐是 **2~4 分钟的长任务**。用户在它跑完前
+// 关掉校时窗口（或切走视频）时，结果原本随对话框销毁而丢弃 —— 实测现场：tick_map
+// 已算好（2800 锚点）但 .vla 仍是旧的单直线结果，用户看到「时快时慢」。
+// 这里在**没有该对话框**时把结果直接落库（与对话框在时的 calibrationApplied 同效）。
+void MainWindow::wireTickAlignPersistence()
+{
+    if (!m_calibrationService)
+        return;
+    connect(m_calibrationService, &CalibrationService::tickAlignReady, this,
+            [this](const QString &path, const TimeCalibration &cal) {
+                if (m_calibrationDialog != nullptr)
+                    return;              // 对话框在 → 由它应用（既有路径）
+                const QString cur = m_sessionMgr->currentVideoPath();
+                if (cur.isEmpty()
+                    || QString::compare(QDir::cleanPath(path),
+                                        QDir::cleanPath(cur),
+                                        Qt::CaseInsensitive) != 0)
+                    return;              // 已切走别的视频：不越权写别人的校时
+                m_calibration = cal;
+                m_chartPanel->setCalibration(m_calibration);
+                showOperationStatus(lang(
+                    "秒级精细对齐已完成并落库（%1 个秒级锚点；校时窗口已关闭，"
+                    "结果直接写入 .vla）",
+                    "Second-level alignment finished and saved (%1 ticks; the "
+                    "calibration window was closed, result written to .vla)")
+                        .arg(cal.tickAnchors.size()));
+                saveCurrentVlaAsync();
+                if (m_caseDock)
+                    m_caseDock->refreshTree();
+            });
+}
+
 void MainWindow::dragEnterEvent(QDragEnterEvent *event)
 {
     if (event->mimeData()->hasUrls()) {

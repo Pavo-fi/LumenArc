@@ -27,6 +27,11 @@
 #include <QLabel>
 #include <QLineEdit>
 #include <QMenu>
+#include <QDrag>          // P2.13：宫格窗位拖拽换位
+#include <QMimeData>
+#include <QApplication>
+#include <QDragMoveEvent>
+#include <QDropEvent>
 #include <QDesktopServices>
 #include <QMouseEvent>
 #include <QUrl>
@@ -252,9 +257,9 @@ protected:
                 const QRect chip(cx, 3, cw, 16);
                 QString icon;
                 switch (an.type) {
-                case SegmentExportEngine::Params::ComposeAnno::Spotlight: icon = QStringLiteral("🎯"); break;
+                case SegmentExportEngine::Params::ComposeAnno::Spotlight: icon = QStringLiteral("◉"); break; // 规范§6 文本符号
                 case SegmentExportEngine::Params::ComposeAnno::Arrow:     icon = QStringLiteral("↗"); break;
-                default:                                                  icon = QStringLiteral("💬"); break;
+                default:                                                  icon = QStringLiteral("✎"); break; // 规范§6 文本符号
                 }
                 p.setPen(Qt::NoPen);
                 p.setBrush(QColor::fromRgb(an.colorRgb).darker(150));
@@ -428,8 +433,8 @@ ComposeWorkbenchWindow::ComposeWorkbenchWindow(CaseManager *cm,
     // ---- 顶部：四步引导条（当前步高亮/完成变绿）+ 一句白话动态提示 ----
     auto *guideBar = new QFrame(this);
     guideBar->setObjectName(QStringLiteral("wbGuideBar"));
-    guideBar->setStyleSheet(QStringLiteral(
-        "QFrame#wbGuideBar{background:#23272e;border:1px solid #3a3f47;border-radius:6px;}"));
+    guideBar->setStyleSheet(
+        "QFrame#wbGuideBar{background:" + Theme::Surface::Overlay + ";border:1px solid " + Theme::BorderTk::Default + ";border-radius:6px;}");
     auto *gh = new QHBoxLayout(guideBar);
     gh->setContentsMargins(10, 6, 10, 6);
     const QStringList stepTexts = {
@@ -440,13 +445,13 @@ ComposeWorkbenchWindow::ComposeWorkbenchWindow(CaseManager *cm,
         gh->addWidget(m_stepLabels[i]);
         if (i < 3) {
             auto *arrow = new QLabel(QStringLiteral("→"), guideBar);
-            arrow->setStyleSheet(QStringLiteral("color:#555;"));
+            arrow->setStyleSheet(QStringLiteral("color:") + Theme::TextTk::Muted + ";"); // 规范§1.3 令牌
             gh->addWidget(arrow);
         }
     }
     gh->addSpacing(20);
     m_guideHint = new QLabel(guideBar);
-    m_guideHint->setStyleSheet(QStringLiteral("color:#d4a017;"));
+    m_guideHint->setStyleSheet(QStringLiteral("color:%1;").arg(Theme::AccentTk::Text));
     gh->addWidget(m_guideHint, 1);
     root->addWidget(guideBar);
 
@@ -461,7 +466,7 @@ ComposeWorkbenchWindow::ComposeWorkbenchWindow(CaseManager *cm,
     m_matTree->setMaximumWidth(300);
     matLay->addWidget(m_matTree);
     auto *matHint = new QLabel(QStringLiteral("单视频：点选即预览\n勾 2~4 个机位 = 同屏"), matBox);
-    matHint->setStyleSheet(QStringLiteral("color:#888;"));
+    matHint->setStyleSheet(QStringLiteral("color:%1;").arg(Theme::TextTk::Second));
     matLay->addWidget(matHint);
     mid->addWidget(matBox);
 
@@ -486,7 +491,8 @@ ComposeWorkbenchWindow::ComposeWorkbenchWindow(CaseManager *cm,
 
     // 走带条（键位对齐剪映/PR：空格=播放暂停，←/→=逐帧，Shift+←/→=±1秒，J/L=±5秒）
     auto *transport = new QHBoxLayout();
-    m_playBtn = new QPushButton(QStringLiteral("▶ 播放（空格）"), this);
+    m_playBtn = new QPushButton(QStringLiteral("▶ 播放"), this);  // 规范§10：按钮禁括号教学
+    m_playBtn->setToolTip(QStringLiteral("播放 / 暂停 (Space)"));
     m_playBtn->setFixedWidth(116);
     m_playBtn->setEnabled(false);
     m_playBtn->setFocusPolicy(Qt::NoFocus);
@@ -510,7 +516,7 @@ ComposeWorkbenchWindow::ComposeWorkbenchWindow(CaseManager *cm,
         "按下方片段时间线的顺序连续播放：自动跳到每段入点、按段倍速、一段放完自动接下一段，"
         "用来检查剪出来的成品连不连贯。从当前选中的块开始播（未选=从第一段）。宫格段暂不参与。"));
     m_programLabel = new QLabel(this);
-    m_programLabel->setStyleSheet(QStringLiteral("color:#d4a017;"));
+    m_programLabel->setStyleSheet(QStringLiteral("color:%1;").arg(Theme::AccentTk::Text));
     progPrevRow->addWidget(m_programBtn);
     progPrevRow->addWidget(m_programLabel, 1);
     center->addLayout(progPrevRow);
@@ -524,9 +530,11 @@ ComposeWorkbenchWindow::ComposeWorkbenchWindow(CaseManager *cm,
     m_recordBtn->setEnabled(false);
     m_recordBtn->setMinimumHeight(34);
     m_recordBtn->setFocusPolicy(Qt::NoFocus);
-    m_recordBtn->setStyleSheet(QStringLiteral(
-        "QPushButton{background:#8c2f2f;color:#fff;font-weight:bold;border-radius:5px;padding:0 14px;}"
-        "QPushButton:disabled{background:#4a3a3a;color:#998;}"));
+    // 规范§7.1：记录钮=Secondary 金描边（本窗主按钮是「开始导出」，红色实心违反语义色纪律）
+    m_recordBtn->setStyleSheet(
+        "QPushButton{background:transparent;color:" + Theme::AccentTk::Text + ";border:1px solid " + Theme::AccentTk::Outline + ";font-weight:bold;border-radius:5px;padding:0 14px;}"
+        "QPushButton:hover{background:" + Theme::withAlpha(Theme::AccentTk::Solid, 10) + ";}"
+        "QPushButton:disabled{background:transparent;color:" + Theme::TextTk::Muted + ";border-color:" + Theme::BorderTk::Default + ";}");
     m_recordBtn->setToolTip(QStringLiteral(
         "用法像录音笔：到关键画面按一下（或按 I 键）开始记录；继续播放/拖动到结束画面，再按一下（或按 O 键）→ 这段自动进下方清单"));
     m_inBtn = new QPushButton(QStringLiteral("设为起点（I）"), this);
@@ -538,7 +546,7 @@ ComposeWorkbenchWindow::ComposeWorkbenchWindow(CaseManager *cm,
     m_inBtn->setToolTip(QStringLiteral("快捷键 I——与剪映/PR 的入点一致"));
     m_outBtn->setToolTip(QStringLiteral("快捷键 O——设终点并立即把这段加入下方清单"));
     m_markLabel = new QLabel(QString(), this);
-    m_markLabel->setStyleSheet(QStringLiteral("color:#d4a017;"));
+    m_markLabel->setStyleSheet(QStringLiteral("color:%1;").arg(Theme::AccentTk::Text));
     cutRow->addWidget(m_recordBtn);
     cutRow->addSpacing(12);
     cutRow->addWidget(m_inBtn);
@@ -554,16 +562,16 @@ ComposeWorkbenchWindow::ComposeWorkbenchWindow(CaseManager *cm,
     cutRow->addStretch(1);
     auto *keysHint = new QLabel(
         QStringLiteral("←/→ 逐帧 · Shift+←/→ ±1秒 · J/L ±5秒"), this);
-    keysHint->setStyleSheet(QStringLiteral("color:#777;"));
+    keysHint->setStyleSheet(QStringLiteral("color:%1;").arg(Theme::TextTk::Second));
     cutRow->addWidget(keysHint);
     center->addLayout(cutRow);
 
     // 标注条（P2.7 标注轨：挂到预览位置所在的单视频片段块上）
     auto *annoRow = new QHBoxLayout();
     auto *annoCap = new QLabel(QStringLiteral("标注："), this);
-    annoCap->setStyleSheet(QStringLiteral("color:#999;"));
+    annoCap->setStyleSheet(QStringLiteral("color:%1;").arg(Theme::TextTk::Second));
     annoRow->addWidget(annoCap);
-    m_annoSpotBtn = new QPushButton(QStringLiteral("🎯 聚光灯"), this);
+    m_annoSpotBtn = new QPushButton(QStringLiteral("聚光灯"), this);  // 规范§6 去 emoji
     m_annoSpotBtn->setToolTip(QStringLiteral(
         "在画面上拖框 → 该区域提亮、其余变暗，并平滑放大至满屏（突出重点区域）"));
     m_annoArrowBtn = new QPushButton(QStringLiteral("↗ 箭头"), this);
@@ -577,7 +585,7 @@ ComposeWorkbenchWindow::ComposeWorkbenchWindow(CaseManager *cm,
     }
     auto *annoHint = new QLabel(
         QStringLiteral("标注挂在「预览位置所在」的片段块上；时间线块上方出小标，右键可删"), this);
-    annoHint->setStyleSheet(QStringLiteral("color:#777;"));
+    annoHint->setStyleSheet(QStringLiteral("color:%1;").arg(Theme::TextTk::Second));
     annoRow->addWidget(annoHint);
     annoRow->addStretch(1);
     center->addLayout(annoRow);
@@ -585,7 +593,7 @@ ComposeWorkbenchWindow::ComposeWorkbenchWindow(CaseManager *cm,
     // 片段块时间线
     auto *tlCap = new QLabel(
         QStringLiteral("片段清单（拖动排序 · 双击微调 · Delete 删除选中）"), this);
-    tlCap->setStyleSheet(QStringLiteral("color:#999;"));
+    tlCap->setStyleSheet(QStringLiteral("color:%1;").arg(Theme::TextTk::Second));
     center->addWidget(tlCap);
     m_timeline = new ComposeTimelineWidget(this);
     m_timeline->setObjectName(QStringLiteral("wbTimeline"));
@@ -656,21 +664,24 @@ ComposeWorkbenchWindow::ComposeWorkbenchWindow(CaseManager *cm,
     m_progress->setRange(0, 100);
     progRow->addWidget(m_progress, 1);
     m_etaLabel = new QLabel(QString(), outBox);
-    m_etaLabel->setStyleSheet(QStringLiteral("color:#999;"));
+    m_etaLabel->setStyleSheet(QStringLiteral("color:%1;").arg(Theme::TextTk::Second));
     m_etaLabel->setMinimumWidth(190);
     progRow->addWidget(m_etaLabel);
     m_startBtn = new QPushButton(QStringLiteral("开始导出（Ctrl+E）"), outBox);
     m_startBtn->setObjectName(QStringLiteral("wbStartBtn"));
     m_startBtn->setMinimumHeight(34);
-    m_startBtn->setStyleSheet(QStringLiteral(
-        "QPushButton{background:#2f5d8c;color:#fff;font-weight:bold;border-radius:5px;padding:0 18px;}"
-        "QPushButton:disabled{background:#3a4048;color:#889;}"));
+    // 规范§7.1：开始导出=本窗 Primary 实心金
+    m_startBtn->setStyleSheet(
+        "QPushButton{background:" + Theme::AccentTk::Solid + ";color:" + Theme::AccentTk::OnSolid + ";font-weight:bold;border-radius:5px;padding:0 18px;}"
+        "QPushButton:hover{background:" + Theme::AccentTk::Hover + ";}"
+        "QPushButton:pressed{background:" + Theme::AccentTk::Pressed + ";}"
+        "QPushButton:disabled{background:" + Theme::Interactive::Pressed + ";color:" + Theme::TextTk::Muted + ";}");
     m_cancelBtn = new QPushButton(QStringLiteral("取消导出"), outBox);
     m_cancelBtn->setEnabled(false);
     m_cancelBtn->setFocusPolicy(Qt::NoFocus);
     m_closeBtn = new QPushButton(QStringLiteral("关 闭"), outBox);
     m_closeBtn->setFocusPolicy(Qt::NoFocus);
-    m_openOutBtn = new QPushButton(QStringLiteral("📂 打开输出文件夹"), outBox);
+    m_openOutBtn = new QPushButton(QStringLiteral("打开输出文件夹"), outBox); // 规范§6 去 emoji（本模块裸中文，不走 lang）
     m_openOutBtn->setFocusPolicy(Qt::NoFocus);
     m_openOutBtn->setVisible(false);
     progRow->addWidget(m_openOutBtn);
@@ -685,6 +696,13 @@ ComposeWorkbenchWindow::ComposeWorkbenchWindow(CaseManager *cm,
     root->addWidget(outBox);
 
     // ---- 信号 ----
+    // 案件内重定位：素材树/时间线/预览路径跟随新位置（不跟随 → 导出拿着
+    // 过期路径去找不存在的文件；真机 2026-09-24 案例就是这么卡的）
+    if (m_cm)
+        connect(m_cm, &CaseManager::videoRelocated, this,
+                [this](const QString &, const QString &oldPath, const QString &newPath) {
+                    followRelocatedPath(oldPath, newPath);
+                });
     connect(m_matTree, &QTreeWidget::itemClicked, this,
             [this](QTreeWidgetItem *, int) { onMaterialChanged(); });
     connect(m_matTree, &QTreeWidget::itemChanged, this,
@@ -727,7 +745,7 @@ ComposeWorkbenchWindow::ComposeWorkbenchWindow(CaseManager *cm,
                     m_singleEngine->seek(sg.inMs);
                     if (m_slider)
                         m_slider->setValue(int(sg.inMs));
-                    m_status->setStyleSheet(QStringLiteral("color:#8a8a8a;"));
+                    m_status->setStyleSheet(QStringLiteral("color:%1;").arg(Theme::TextTk::Second));
                     m_status->setText(QStringLiteral("已跳到第 %1 段：%2（%3 → %4）")
                                           .arg(idx + 1)
                                           .arg(segDisplayName(sg))
@@ -799,6 +817,35 @@ ComposeWorkbenchWindow::ComposeWorkbenchWindow(CaseManager *cm,
 
 ComposeWorkbenchWindow::~ComposeWorkbenchWindow() {
     stopPreviews();
+}
+
+void ComposeWorkbenchWindow::followRelocatedPath(const QString &oldPath,
+                                                 const QString &newPath)
+{
+    if (oldPath.isEmpty() || newPath.isEmpty() || oldPath == newPath)
+        return;
+    // 1) 已排入时间线的段（单视频段 + 多通道宫格段逐路）
+    for (auto &sg : m_segs) {
+        if (sg.isLanes()) {
+            for (auto &l : sg.lanes)
+                if (l.path == oldPath)
+                    l.path = newPath;
+        } else if (sg.sourcePath == oldPath) {
+            sg.sourcePath = newPath;
+        }
+    }
+    // 2) 素材树（含勾选入列用的 lane 快照）
+    for (auto &it : m_inv) {
+        if (it.path == oldPath)
+            it.path = newPath;
+        if (it.lane.path == oldPath)
+            it.lane.path = newPath;
+    }
+    // 3) 预览（旧路径已失效；不强制重载，用户再点素材即可）
+    if (m_singlePreviewPath == oldPath)
+        m_singlePreviewPath = newPath;
+    syncTimeline();
+    updateGuide();
 }
 
 // ---------------------------------------------------------------------------
@@ -982,6 +1029,154 @@ void ComposeWorkbenchWindow::onMaterialChanged() {
 // ---------------------------------------------------------------------------
 // 预览加载
 // ---------------------------------------------------------------------------
+// P2.13（2026-09-28 用户拍板）：宫格窗位自由安排——预览拖拽/右键换位，
+// 映射同时写回宫格段（导出侧 ComposeSeg::laneCell），保证「预览即所得」。
+void ComposeWorkbenchWindow::relayoutMultiGrid()
+{
+    if (!m_multiGrid)
+        return;
+    // 全部摘下再按映射放回（cols 口径与导出/旧版一致：≤2 路单行，其余 2 列）
+    for (auto *t : m_multiTiles)
+        m_multiGrid->removeWidget(t);
+    const int n = m_multiTiles.size();
+    const int cols = (n <= 2) ? qMax(1, n) : 2;
+    for (int i = 0; i < n; ++i) {
+        int c = (i < m_laneCell.size()) ? m_laneCell.at(i) : i;
+        if (c < 0 || c >= n)
+            c = i;
+        m_multiGrid->addWidget(m_multiTiles.at(i), c / cols, c % cols);
+    }
+}
+
+void ComposeWorkbenchWindow::swapLaneCells(int src, int dst)
+{
+    const int n = m_multiTiles.size();
+    if (src < 0 || dst < 0 || src >= n || dst >= n || src == dst)
+        return;
+    if (src >= m_laneCell.size() || dst >= m_laneCell.size())
+        return;
+    std::swap(m_laneCell[src], m_laneCell[dst]);
+    const auto lanes = m_svc ? m_svc->lanes() : QVector<SyncLaneData>();
+    if (src < lanes.size())
+        m_laneCellById.insert(lanes[src].id, m_laneCell[src]);
+    if (dst < lanes.size())
+        m_laneCellById.insert(lanes[dst].id, m_laneCell[dst]);
+    relayoutMultiGrid();
+    applyLaneCellToSegments();
+    m_status->setStyleSheet(QStringLiteral("color:%1;").arg(Theme::Status::Ok));
+    m_status->setText(QStringLiteral("已交换窗位：%1 ↔ %2（已同步到导出）")
+                          .arg(src + 1).arg(dst + 1));
+}
+
+void ComposeWorkbenchWindow::applyLaneCellToSegments()
+{
+    if (m_laneCellById.isEmpty())
+        return;
+    int touched = 0;
+    for (auto &sg : m_segs) {
+        if (sg.lanes.isEmpty())
+            continue;
+        // 逐段按「机位 id → 窗位」重算：段内路数可能与当前预览不同，未安排的补空位
+        const int m = sg.lanes.size();
+        QVector<int> cells(m, -1);
+        QVector<bool> used(m, false);
+        for (int i = 0; i < m; ++i) {
+            const auto it = m_laneCellById.constFind(sg.lanes[i].id);
+            if (it != m_laneCellById.constEnd() && it.value() >= 0
+                && it.value() < m && !used[it.value()]) {
+                cells[i] = it.value();
+                used[it.value()] = true;
+            }
+        }
+        for (int i = 0, c = 0; i < m; ++i) {
+            if (cells[i] >= 0)
+                continue;
+            while (c < m && used[c])
+                ++c;
+            if (c >= m)
+                break;
+            cells[i] = c;
+            used[c] = true;
+        }
+        if (cells != sg.laneCell) {
+            sg.laneCell = cells;
+            ++touched;
+        }
+    }
+    if (touched > 0)
+        syncTimeline();
+}
+
+bool ComposeWorkbenchWindow::eventFilter(QObject *obj, QEvent *event)
+{
+    // 只处理宫格预览瓦片（其它控件走默认）
+    int idx = -1;
+    for (int i = 0; i < m_multiTiles.size(); ++i) {
+        if (m_multiTiles.at(i) == obj) {
+            idx = i;
+            break;
+        }
+    }
+    if (idx < 0)
+        return QDialog::eventFilter(obj, event);
+    switch (event->type()) {
+    case QEvent::MouseButtonPress: {
+        auto *me = static_cast<QMouseEvent *>(event);
+        if (me->button() == Qt::LeftButton) {
+            m_dragTile = idx;
+            m_dragStart = me->pos();
+        }
+        break;
+    }
+    case QEvent::MouseMove: {
+        auto *me = static_cast<QMouseEvent *>(event);
+        if (m_dragTile == idx && (me->buttons() & Qt::LeftButton)
+            && (me->pos() - m_dragStart).manhattanLength()
+                   >= QApplication::startDragDistance()) {
+            const int srcTile = m_dragTile;
+            auto *mime = new QMimeData;
+            mime->setData(QStringLiteral("application/x-lumenarc-lane"),
+                          QByteArray::number(srcTile));
+            auto *drag = new QDrag(m_multiTiles.at(srcTile));
+            drag->setMimeData(mime);
+            drag->setPixmap(m_multiTiles.at(srcTile)->grab());
+            drag->setHotSpot(m_dragStart);
+            m_dragTile = -1;
+            drag->exec(Qt::MoveAction);
+            return true;
+        }
+        break;
+    }
+    case QEvent::DragEnter:
+    case QEvent::DragMove: {
+        auto *de = static_cast<QDragMoveEvent *>(event);
+        if (de->mimeData()->hasFormat(
+                QStringLiteral("application/x-lumenarc-lane"))) {
+            de->acceptProposedAction();
+            return true;
+        }
+        break;
+    }
+    case QEvent::Drop: {
+        auto *de = static_cast<QDropEvent *>(event);
+        if (de->mimeData()->hasFormat(
+                QStringLiteral("application/x-lumenarc-lane"))) {
+            const int src = de->mimeData()
+                                ->data(QStringLiteral(
+                                    "application/x-lumenarc-lane"))
+                                .toInt();
+            de->acceptProposedAction();
+            swapLaneCells(src, idx);
+            return true;
+        }
+        break;
+    }
+    default:
+        break;
+    }
+    return QDialog::eventFilter(obj, event);
+}
+
 void ComposeWorkbenchWindow::stopPreviews() {
     if (m_svc)
         m_svc->closeAll();
@@ -1047,7 +1242,7 @@ void ComposeWorkbenchWindow::loadSinglePreview(const QString &path,
             });
     m_singlePreviewPath = path;
     if (!m_singleEngine->load(path)) {
-        m_status->setStyleSheet(QStringLiteral("color:#c0392b;"));
+        m_status->setStyleSheet(QStringLiteral("color:%1;").arg(Theme::Status::Error));
         m_status->setText(QStringLiteral("预览加载失败：%1").arg(path));
         return;
     }
@@ -1083,7 +1278,7 @@ void ComposeWorkbenchWindow::loadMultiPreview() {
         return;
     }
     if (checked.size() > kMaxLanes) {
-        m_status->setStyleSheet(QStringLiteral("color:#c0392b;"));
+        m_status->setStyleSheet(QStringLiteral("color:%1;").arg(Theme::Status::Error));
         m_status->setText(QStringLiteral("多通道最多 %1 路，请取消多余勾选").arg(kMaxLanes));
         return;
     }
@@ -1118,7 +1313,6 @@ void ComposeWorkbenchWindow::loadMultiPreview() {
         return;
     // 建瓦片
     const int n = lanes.size();
-    const int cols = (n <= 2) ? n : 2;
     for (int i = 0; i < n; ++i) {
         auto *tile = new CamTileWidget(m_multiPage);
         tile->setLaneName(lanes[i].displayName);
@@ -1131,9 +1325,59 @@ void ComposeWorkbenchWindow::loadMultiPreview() {
             for (int k = 0; k < m_multiTiles.size(); ++k)
                 m_multiTiles[k]->setAudible(k == i);
         });
-        m_multiGrid->addWidget(tile, i / cols, i % cols);
+        // P2.13 窗位自由安排：拖拽换位 + 右键「移到窗位…」
+        tile->setAcceptDrops(true);
+        tile->installEventFilter(this);
+        tile->setContextMenuPolicy(Qt::CustomContextMenu);
+        connect(tile, &QWidget::customContextMenuRequested, this,
+                [this, i](const QPoint &gp) {
+                    QMenu menu(this);
+                    const int cnt = m_multiTiles.size();
+                    for (int c = 0; c < cnt; ++c) {
+                        QAction *a = menu.addAction(
+                            QStringLiteral("移到窗位 %1").arg(c + 1));
+                        a->setCheckable(true);
+                        a->setChecked(c < m_laneCell.size()
+                                      && m_laneCell.at(i) == c);
+                        connect(a, &QAction::triggered, this, [this, i, c]() {
+                            swapLaneCells(i, c);
+                        });
+                    }
+                    menu.addSeparator();
+                    menu.addAction(QStringLiteral("恢复默认顺序"), this,
+                                   [this]() {
+                                       m_laneCellById.clear();
+                                       loadMultiPreview();
+                                   });
+                    menu.exec(gp);
+                });
         m_multiTiles << tile;
     }
+    // 窗位映射：优先用用户安排（按机位 id 记），未安排的按顺序补空位
+    m_laneCell = QVector<int>(n, -1);
+    QVector<bool> used(n, false);
+    for (int i = 0; i < n; ++i) {
+        const auto it = m_laneCellById.constFind(lanes[i].id);
+        if (it != m_laneCellById.constEnd() && it.value() >= 0
+            && it.value() < n && !used[it.value()]) {
+            m_laneCell[i] = it.value();
+            used[it.value()] = true;
+        }
+    }
+    for (int i = 0, c = 0; i < n; ++i) {
+        if (m_laneCell[i] >= 0)
+            continue;
+        while (c < n && used[c])
+            ++c;
+        if (c >= n)
+            break;
+        m_laneCell[i] = c;
+        used[c] = true;
+    }
+    for (int i = 0; i < n; ++i)
+        m_laneCellById.insert(lanes[i].id, m_laneCell[i]);
+    relayoutMultiGrid();
+    applyLaneCellToSegments();
     m_svc->setAudibleLane(0);
     m_svc->pause();
     m_markIn = m_markOut = -1;
@@ -1228,14 +1472,14 @@ void ComposeWorkbenchWindow::updateGuide() {
     int cur = 0;
     if (hasMaterial && !hasSegs) cur = 1;
     else if (hasSegs) cur = 3;
-    static const char *kOn =
-        "color:#fff;background:#3d6b8e;padding:2px 8px;border-radius:3px;font-weight:bold;";
-    static const char *kDone = "color:#7ec97e;padding:2px 8px;font-weight:bold;";
-    static const char *kOff  = "color:#888;padding:2px 8px;font-weight:bold;";
+    // 规范§1.3：步骤芯片色全部令牌派生（进行中=Info 淡底，完成=Ok，未到=Muted）
+    const QString kOn =
+        "color:" + Theme::TextTk::Primary + ";background:" + Theme::withAlpha(Theme::Status::Info, 45) + ";padding:2px 8px;border-radius:3px;font-weight:bold;";
+    const QString kDone = "color:" + Theme::Status::Ok + ";padding:2px 8px;font-weight:bold;";
+    const QString kOff  = "color:" + Theme::TextTk::Muted + ";padding:2px 8px;font-weight:bold;";
     const bool done[4] = {hasMaterial, hasSegs, hasSegs, false};
     for (int i = 0; i < 4; ++i)
-        m_stepLabels[i]->setStyleSheet(QString::fromLatin1(
-            i == cur ? kOn : (done[i] ? kDone : kOff)));
+        m_stepLabels[i]->setStyleSheet(i == cur ? kOn : (done[i] ? kDone : kOff));
     if (cur == 0)
         m_guideHint->setText(QStringLiteral(
             "先在左边点一个视频；要多机位同屏就勾 2~4 个机位"));
@@ -1253,12 +1497,13 @@ void ComposeWorkbenchWindow::updateGuide() {
         m_recordBtn->setText(armed ? QStringLiteral("⏹ 到这里，加入清单（O）")
                                    : QStringLiteral("⏺ 从这里开始（I）"));
         m_recordBtn->setStyleSheet(
-            armed ? QStringLiteral(
-                "QPushButton{background:#c0392b;color:#fff;font-weight:bold;border-radius:5px;padding:0 14px;}"
-                "QPushButton:disabled{background:#4a3a3a;color:#998;}")
-                  : QStringLiteral(
-                "QPushButton{background:#8c2f2f;color:#fff;font-weight:bold;border-radius:5px;padding:0 14px;}"
-                "QPushButton:disabled{background:#4a3a3a;color:#998;}"));
+            armed ?   // armed：Checked 态=金描边+金字+Accent 15% 淡底（规范§5）
+                "QPushButton{background:" + Theme::withAlpha(Theme::AccentTk::Solid, 15) + ";color:" + Theme::AccentTk::Text + ";border:1px solid " + Theme::AccentTk::Outline + ";font-weight:bold;border-radius:5px;padding:0 14px;}"
+                "QPushButton:disabled{background:transparent;color:" + Theme::TextTk::Muted + ";border-color:" + Theme::BorderTk::Default + ";}"
+                  :
+                "QPushButton{background:transparent;color:" + Theme::AccentTk::Text + ";border:1px solid " + Theme::AccentTk::Outline + ";font-weight:bold;border-radius:5px;padding:0 14px;}"
+                "QPushButton:hover{background:" + Theme::withAlpha(Theme::AccentTk::Solid, 10) + ";}"
+                "QPushButton:disabled{background:transparent;color:" + Theme::TextTk::Muted + ";border-color:" + Theme::BorderTk::Default + ";}");
     }
 }
 
@@ -1384,7 +1629,7 @@ void ComposeWorkbenchWindow::onMarkIn() {
 void ComposeWorkbenchWindow::onMarkOut() {
     const qint64 pos = previewPosMs();
     if (m_markIn >= 0 && pos <= m_markIn) {
-        m_status->setStyleSheet(QStringLiteral("color:#c0392b;"));
+        m_status->setStyleSheet(QStringLiteral("color:%1;").arg(Theme::Status::Error));
         m_status->setText(QStringLiteral("终点在起点之前——请拖到起点后面的画面再按 O"));
         return;
     }
@@ -1399,7 +1644,7 @@ void ComposeWorkbenchWindow::onMarkOut() {
 // ---------------------------------------------------------------------------
 void ComposeWorkbenchWindow::onAddSegment() {
     if (m_markIn < 0) {
-        m_status->setStyleSheet(QStringLiteral("color:#c0392b;"));
+        m_status->setStyleSheet(QStringLiteral("color:%1;").arg(Theme::Status::Error));
         m_status->setText(QStringLiteral("先按 I（或点红色圆钮）在画面上设起点"));
         return;
     }
@@ -1407,7 +1652,7 @@ void ComposeWorkbenchWindow::onAddSegment() {
     const qint64 inMs = m_markIn;
     const qint64 outMs = m_markOut >= 0 ? m_markOut : previewPosMs();
     if (outMs <= inMs) {
-        m_status->setStyleSheet(QStringLiteral("color:#c0392b;"));
+        m_status->setStyleSheet(QStringLiteral("color:%1;").arg(Theme::Status::Error));
         m_status->setText(QStringLiteral("终点须在起点之后"));
         return;
     }
@@ -1415,6 +1660,7 @@ void ComposeWorkbenchWindow::onAddSegment() {
     seg.outMs = outMs;
     if (m_multiActive && m_svc) {
         seg.lanes = m_svc->lanes();
+        seg.laneCell = m_laneCell;      // P2.13：宫格段带上当前窗位安排
         seg.audioLane = qMax(0, m_svc->audibleLane());
         seg.displayName = QStringLiteral("机位同屏（%1路）").arg(seg.lanes.size());
     } else {
@@ -1460,13 +1706,13 @@ void ComposeWorkbenchWindow::onProgramPlay() {
         return;
     }
     if (m_segs.isEmpty()) {
-        m_status->setStyleSheet(QStringLiteral("color:#c0392b;"));
+        m_status->setStyleSheet(QStringLiteral("color:%1;").arg(Theme::Status::Error));
         m_status->setText(QStringLiteral(
             "下方片段清单还是空的——先按 I/O 打点再「设为终点并加入」，剪出至少一段"));
         return;
     }
     if (m_multiActive) {
-        m_status->setStyleSheet(QStringLiteral("color:#c0392b;"));
+        m_status->setStyleSheet(QStringLiteral("color:%1;").arg(Theme::Status::Error));
         m_status->setText(QStringLiteral("宫格预览模式下不支持合成预览，先在左侧选单路素材"));
         return;
     }
@@ -1495,7 +1741,7 @@ void ComposeWorkbenchWindow::advanceProgram(int segIdx) {
     }
     const auto &sg = m_segs[segIdx];
     if (sg.isLanes()) {
-        m_status->setStyleSheet(QStringLiteral("color:#d4a017;"));
+        m_status->setStyleSheet(QStringLiteral("color:%1;").arg(Theme::AccentTk::Text));
         m_status->setText(
             QStringLiteral("第 %1 段是宫格段，合成预览暂不支持，已跳过").arg(segIdx + 1));
         advanceProgram(segIdx + 1);
@@ -1517,7 +1763,7 @@ void ComposeWorkbenchWindow::advanceProgram(int segIdx) {
                                     .arg(segIdx + 1)
                                     .arg(m_segs.size())
                                     .arg(segDisplayName(sg)));
-    m_status->setStyleSheet(QStringLiteral("color:#8a8a8a;"));
+    m_status->setStyleSheet(QStringLiteral("color:%1;").arg(Theme::TextTk::Second));
     m_status->setText(QStringLiteral("正在播放合成结果（第 %1/%2 段）")
                           .arg(segIdx + 1)
                           .arg(m_segs.size()));
@@ -1538,7 +1784,7 @@ void ComposeWorkbenchWindow::stopProgramPreview(const QString &why) {
     if (m_programLabel)
         m_programLabel->setText(QString());
     if (wasPlaying && !why.isEmpty()) {
-        m_status->setStyleSheet(QStringLiteral("color:#8a8a8a;"));
+        m_status->setStyleSheet(QStringLiteral("color:%1;").arg(Theme::TextTk::Second));
         m_status->setText(why);
     }
 }
@@ -1555,7 +1801,7 @@ void ComposeWorkbenchWindow::onSplitBlock() {
     const qint64 cut = previewPosMs();
     auto &sg = m_segs[idx];
     if (cut - sg.inMs <= 200 || sg.outMs - cut <= 200) {
-        m_status->setStyleSheet(QStringLiteral("color:#c0392b;"));
+        m_status->setStyleSheet(QStringLiteral("color:%1;").arg(Theme::Status::Error));
         m_status->setText(QStringLiteral("切点太靠近片段边缘（两端至少留 0.2 秒）"));
         return;
     }
@@ -1576,7 +1822,7 @@ void ComposeWorkbenchWindow::onSplitBlock() {
     right.annos = rightAn;
     m_segs.insert(idx + 1, right);
     syncTimeline();
-    m_status->setStyleSheet(QStringLiteral("color:#7ec97e;"));
+    m_status->setStyleSheet(QStringLiteral("color:%1;").arg(Theme::Status::Ok));
     m_status->setText(QStringLiteral("已在此切成 %1 段（两半可各自右键调倍速）")
                           .arg(m_segs.size()));
 }
@@ -1641,7 +1887,7 @@ void ComposeWorkbenchWindow::appendAnnoFromDialog(int type, const QRectF &normRe
     const qint64 a = parseMs(inEdit->text(), &ok1);
     const qint64 b = parseMs(outEdit->text(), &ok2);
     if (!ok1 || !ok2 || b - a < 200) {
-        m_status->setStyleSheet(QStringLiteral("color:#c0392b;"));
+        m_status->setStyleSheet(QStringLiteral("color:%1;").arg(Theme::Status::Error));
         m_status->setText(QStringLiteral("标注起止非法（至少 0.2 秒）"));
         return;
     }
@@ -1660,13 +1906,13 @@ void ComposeWorkbenchWindow::appendAnnoFromDialog(int type, const QRectF &normRe
     }
     sg.annos << an;
     syncTimeline();
-    m_status->setStyleSheet(QStringLiteral("color:#7ec97e;"));
+    m_status->setStyleSheet(QStringLiteral("color:%1;").arg(Theme::Status::Ok));
     m_status->setText(QStringLiteral("标注已加入（仅演示片烧录；证据片段画面零改动不携带）"));
 }
 
 void ComposeWorkbenchWindow::onAnnoToolSpotlight() {
     if (m_singleTile->zoom() > 1.01) {
-        m_status->setStyleSheet(QStringLiteral("color:#c0392b;"));
+        m_status->setStyleSheet(QStringLiteral("color:%1;").arg(Theme::Status::Error));
         m_status->setText(QStringLiteral("先中键复位画面缩放再框选标注"));
         return;
     }
@@ -1744,7 +1990,7 @@ void ComposeWorkbenchWindow::onBlockEdit(int idx) {
     const qint64 inV = parseMs(inEdit->text(), &ok1);
     const qint64 outV = parseMs(outEdit->text(), &ok2);
     if (!ok1 || !ok2 || outV <= inV) {
-        m_status->setStyleSheet(QStringLiteral("color:#c0392b;"));
+        m_status->setStyleSheet(QStringLiteral("color:%1;").arg(Theme::Status::Error));
         m_status->setText(QStringLiteral("片段区间非法，未保存"));
         return;
     }
@@ -1809,7 +2055,6 @@ SegmentExportEngine::Params ComposeWorkbenchWindow::buildParams(QString *err) {
     pp.outFps = m_fps;
     pp.canvas = QSize(1920, 1080);
     pp.evidenceCopy = m_evidenceRadio->isChecked();
-    pp.demoWatermark = !pp.evidenceCopy;
     pp.burnOsd = !pp.evidenceCopy && m_osdCheck->isChecked();
     if (m_cm && m_cm->isOpen())
         pp.caseLabel = m_caseNoCheck->isChecked() ? m_cm->meta().caseNo : QString();
@@ -1857,7 +2102,7 @@ void ComposeWorkbenchWindow::onStartExport() {
         int annoCount = 0;
         for (const auto &sg : m_segs) annoCount += sg.annos.size();
         if (annoCount > 0) {
-            m_status->setStyleSheet(QStringLiteral("color:#d4a017;"));
+            m_status->setStyleSheet(QStringLiteral("color:%1;").arg(Theme::AccentTk::Text));
             m_status->setText(QStringLiteral(
                 "提示：%1 条标注只在演示片烧录，证据片段画面零改动不会携带。").arg(annoCount));
         }
@@ -1867,7 +2112,7 @@ void ComposeWorkbenchWindow::onStartExport() {
     QString err;
     SegmentExportEngine::Params pp = buildParams(&err);
     if (pp.segments.isEmpty()) {
-        m_status->setStyleSheet(QStringLiteral("color:#c0392b;"));
+        m_status->setStyleSheet(QStringLiteral("color:%1;").arg(Theme::Status::Error));
         m_status->setText(err.isEmpty() ? QStringLiteral("参数非法") : err);
         return;
     }
@@ -1890,7 +2135,7 @@ void ComposeWorkbenchWindow::setExportRunning(bool running, int totalFrames) {
             m_openOutBtn->setVisible(false);
         if (m_etaLabel)
             m_etaLabel->setText(QStringLiteral("已用 0:00 · 估算中…"));
-        m_status->setStyleSheet(QStringLiteral("color:#666;"));
+        m_status->setStyleSheet(QStringLiteral("color:%1;").arg(Theme::TextTk::Muted));
         m_status->setText(QStringLiteral("导出进行中…"));
     }
     onModeChanged();
@@ -1928,11 +2173,11 @@ void ComposeWorkbenchWindow::setResult(bool ok, const QString &msg) {
     onModeChanged();
     syncTimeline();
     if (ok) {
-        m_status->setStyleSheet(QStringLiteral("color:#27ae60;"));
+        m_status->setStyleSheet(QStringLiteral("color:%1;").arg(Theme::Status::Ok));
         m_status->setText(QStringLiteral("✔ 导出完成：%1").arg(msg));
         m_openOutBtn->setVisible(true);
     } else {
-        m_status->setStyleSheet(QStringLiteral("color:#c0392b;"));
+        m_status->setStyleSheet(QStringLiteral("color:%1;").arg(Theme::Status::Error));
         m_status->setText(QStringLiteral("✖ %1").arg(msg));
     }
 }

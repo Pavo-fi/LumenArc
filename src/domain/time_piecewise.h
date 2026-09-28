@@ -116,6 +116,13 @@ struct PiecewiseTimeMap
     static constexpr int    kMaxSegments       = 32;     ///< 段数上限
     static constexpr qint64 kBoundaryMergeMs   = 2000;   ///< 精化后边界合并窗口
     static constexpr double kNormalRateDev     = 0.01;   ///< 判"正常录像"的 |rate−1| 容差
+    /// v1.18.x：整体倍率是否属于「变速/非实时导出」——阈值**必须**与 kNormalRateDev 一致，
+    /// 否则出现“既不算变速（进不了时间重建）、又不许应用速率”的无解缝隙
+    /// （2026-09-24 顺德公安导出件实测：画面时间 1.139× 播放进度，恰落在旧 0.15 之下）。
+    static bool isVariableRate(double rate)
+    {
+        return qAbs(rate - 1.0) > kNormalRateDev;
+    }
     /// 边界判定最小点对间隔（粗采样密度；加密点不参与判定）
     static constexpr qint64 kBoundaryJudgeMinGapMs = 30000;
     /// 边界精化搜索窗口（粗边界 ±；须 ≥ 最大粗点间隔，否则窗口可能为空）

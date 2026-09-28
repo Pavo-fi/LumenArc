@@ -57,6 +57,8 @@ signals:
     void cancelRequested();
 
 protected:
+    /// P2.13：预览瓦片拖拽换窗位（只作用于本工作台宫格；多机播放窗不受影响）
+    bool eventFilter(QObject *obj, QEvent *event) override;
     void hideEvent(QHideEvent *event) override;
     void closeEvent(QCloseEvent *event) override;
 
@@ -86,8 +88,18 @@ private slots:
 
 private:
     void rebuildMaterials();
+    /// 案件内重定位跟随（v1.18.x）：素材树 + 已排入时间线的段 + 预览路径
+    /// 改指新路径——不跟随就会出现“素材早换了、时间线还指着旧路径”
+    /// （2026-09-24 真机：导出把过期路径交给 ffmpeg 卡成 0% 假死）
+    void followRelocatedPath(const QString &oldPath, const QString &newPath);
     void loadSinglePreview(const QString &path, const QString &displayName);
     void loadMultiPreview();
+    /// P2.13：按窗位映射重排宫格瓦片（laneCell：第 i 路 → 格子序号）
+    void relayoutMultiGrid();
+    /// P2.13：把当前窗位映射写回所有宫格段（预览即所得）
+    void applyLaneCellToSegments();
+    /// P2.13：把第 src 路与第 dst 路交换窗位并刷新（拖拽/右键菜单共用）
+    void swapLaneCells(int src, int dst);
     void stopPreviews();
     qint64 previewPosMs() const;         ///< 当前预览位置（单路=流内；多通道=墙钟）
     qint64 previewDurationMs() const;    ///< 可打点的轴长
@@ -122,6 +134,12 @@ private:
     QWidget *m_multiPage = nullptr;
     QGridLayout *m_multiGrid = nullptr;
     QVector<CamTileWidget *> m_multiTiles;
+    /// P2.13 窗位映射：laneCell[i] = 第 i 路（按 m_multiTiles 顺序）占用的格子序号；
+    /// m_laneCellById 按机位 id 记住用户安排（重选机位/新增段后仍然生效）
+    QVector<int> m_laneCell;
+    QHash<QString, int> m_laneCellById;
+    int m_dragTile = -1;          ///< 拖拽起点瓦片下标（-1=无）
+    QPoint m_dragStart;           ///< 拖拽起点坐标（阈值判定）
     FfmpegVideoEngine *m_singleEngine = nullptr;   // 单路预览引擎
     MultiCamSyncService *m_svc = nullptr;          // 多通道预览服务
     QString m_singlePreviewPath;

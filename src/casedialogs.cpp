@@ -673,10 +673,10 @@ void BatchRelocateDialog::setRowStatus(int row)
     QString txt;
     QColor color(Theme::TextMuted);
     switch (r.status) {
-    case 1: txt = lang("✓ 已採用", "✓ Applied"); color = QColor(Theme::Success); break;
+    case 1: txt = lang("✓ 已采用", "✓ Applied"); color = QColor(Theme::Success); break;
     case 2: txt = lang("⚠ 指纹不一致（默认拒绝）", "⚠ Hash mismatch (rejected)");
         color = QColor(Theme::Danger); break;
-    case 3: txt = lang("✓ 已採用（留档）", "✓ Applied (archived)");
+    case 3: txt = lang("✓ 已采用（留档）", "✓ Applied (archived)");
         color = QColor(Theme::Accent); break;
     case 4: txt = lang("✗ 失败", "✗ Failed"); color = QColor(Theme::Danger); break;
     case 5: txt = lang("✗ 无候选", "✗ No candidate");
@@ -703,7 +703,7 @@ void BatchRelocateDialog::refreshSummary()
         }
     }
     m_summary->setText(
-        lang("缺失 %1 路 · 已採用 %2 · 待比对 %3 · 不一致 %4 · 无候选 %5",
+        lang("缺失 %1 路 · 已采用 %2 · 待比对 %3 · 不一致 %4 · 无候选 %5",
              "%1 missing · %2 applied · %3 pending · %4 mismatch · %5 no candidate")
             .arg(m_rows.size()).arg(adopted).arg(pending).arg(mismatch)
             .arg(missing)
@@ -783,7 +783,7 @@ void BatchRelocateDialog::onRowHashed(int row, bool ok, const QString &sha)
             r.note = lang("登记 %1… ≠ 候选 %2…", "reg %1… ≠ cand %2…")
                          .arg(reg.left(8), sha.left(8));
         } else {
-            // 一致（或无登记基线）→ 採用；knownSha 直接登记免二次哈希
+            // 一致（或无登记基线）→ 采用；knownSha 直接登记免二次哈希
             QString err;
             bool mismatch = false;
             if (m_cm->relocateVideo(r.videoId, r.candidatePath, &err,
@@ -809,7 +809,7 @@ void BatchRelocateDialog::onAllHashed()
     m_hashing = false;
     m_progress->setVisible(false);
     m_btnCancelHash->setVisible(false);
-    // 採用已落 meta：静默落盘（机器维护写，与哈希队列排空同理）
+    // 采用已落 meta：静默落盘（机器维护写，与哈希队列排空同理）
     if (m_cm->isDirty()) {
         QString err;
         m_cm->saveCase(&err);

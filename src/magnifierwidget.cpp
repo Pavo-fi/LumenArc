@@ -3,7 +3,7 @@
  * @brief 放大镜窗口实现：源区域计算/缩放/截图叠加同步
  * @author Huang Jingyun, Liu xinghua, Huang Wenhua
  * @date 2026-05-31
- * @version 0.3
+ * @version 0.4
  *
  * Copyright 2026 Huang Jingyun/Liu xinghua/Huang Wenhua. All rights reserved.
  * Licensed under the Apache License, Version 2.0
@@ -50,6 +50,8 @@ public:
     void setDisplayLut(const QByteArray &lut) { m_displayLut = lut; }
     /// 当前裁剪显示图（旋转+LUT 已应用）——快照全面化取用
     QImage currentImage() const { return m_frameImage; }
+    /// 显示链 LUT（空 = 恒等）——导出侧同表复用
+    QByteArray displayLut() const { return m_displayLut; }
 
 protected:
     void paintEvent(QPaintEvent *event) override;
@@ -306,6 +308,11 @@ void MagnifierWidget::setDisplayAdjust(const DisplayAdjust &adj)
 QImage MagnifierWidget::currentMagnifiedImage() const
 {
     return m_content ? m_content->currentImage() : QImage();
+}
+
+QByteArray MagnifierWidget::displayLut() const
+{
+    return m_content ? m_content->displayLut() : QByteArray();
 }
 
 void MagnifierWidget::onInternalOverlayWheelZoom(int delta, QPoint videoPos)

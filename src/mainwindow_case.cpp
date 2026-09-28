@@ -133,7 +133,7 @@ void MainWindow::enterCaseMode()
     m_caseDock->refreshTree();
     resizeDocks({m_caseDock}, {250}, Qt::Horizontal);
     m_caseStatusBtn->setText(
-        QStringLiteral("📁 ") + m_caseManager->meta().caseNo);
+        m_caseManager->meta().caseNo);  // 规范§6：emoji 禁令（原 📁 前缀已删）
     m_caseStatusBtn->setVisible(true);
     if (m_closeCaseAction)
         m_closeCaseAction->setEnabled(true);
@@ -363,8 +363,7 @@ void MainWindow::onCaseProperties()
         setWindowTitle(windowTitleWithCase(
             lang(QStringLiteral("追光者 Lumen Arc v") + QString(APP_VERSION), QStringLiteral("Lumen Arc v") + QString(APP_VERSION))));
         m_caseDock->refreshTree();
-        m_caseStatusBtn->setText(
-            QStringLiteral("📁 ") + m_caseManager->meta().caseNo);
+        m_caseStatusBtn->setText(m_caseManager->meta().caseNo);  // 规范§6：emoji 禁令
     }
 }
 

@@ -252,7 +252,7 @@ protected:
             sitemaprender::drawPoints(p, *data, r, laneColor, selected);
         // 扇面操作提示横幅（拍板：更显眼）——选中点位时画布底部常驻
         if (selected >= 0) {
-            const QString hint = tr("🖱 滚轮 = 转朝向     Shift+滚轮 = 调张角     下方属性条可精确输入");
+            const QString hint = tr("滚轮 = 转朝向     Shift+滚轮 = 调张角     下方属性条可精确输入");
             QFont f = p.font();
             f.setPixelSize(16);
             f.setBold(true);
@@ -469,10 +469,10 @@ SiteMapEditorDialog::SiteMapEditorDialog(CaseManager *cm, QWidget *parent)
     prop->addWidget(m_spread);
     prop->addWidget(m_radius);
     prop->addWidget(m_fontScale);
-    m_hint = new QLabel(tr("💡 选中点位后：滚轮=转朝向　Shift+滚轮=张角　Alt+滚轮=字号　或直接在此精确输入"), this);
-    m_hint->setStyleSheet(QStringLiteral(
-        "QLabel { color: #8a5a00; background: #fff3d6; border: 1px solid #e0b060;"
-        " border-radius: 4px; padding: 4px 8px; font-weight: bold; }"));
+    m_hint = new QLabel(tr("选中点位后：滚轮=转朝向　Shift+滚轮=张角　Alt+滚轮=字号　或直接在此精确输入"), this);
+    m_hint->setStyleSheet(  // 规范§1.3：警示条令牌派生（Accent 淡底+金字，深色主题）
+        "QLabel { color: " + Theme::AccentTk::Text + "; background: " + Theme::withAlpha(Theme::AccentTk::Solid, 10) + "; border: 1px solid " + Theme::withAlpha(Theme::AccentTk::Solid, 45) + ";"
+        " border-radius: 4px; padding: 4px 8px; font-weight: bold; }");
     prop->addWidget(m_hint, 1);
     lay->addLayout(prop);
 
@@ -499,8 +499,8 @@ SiteMapEditorDialog::SiteMapEditorDialog(CaseManager *cm, QWidget *parent)
         for (QDoubleSpinBox *sp : {m_heading, m_spread, m_radius, m_fontScale})
             sp->blockSignals(false);
         m_hint->setText(pt.orphan
-            ? tr("⚠️ 该机位已不在案件（孤儿点位，可删除）")
-            : tr("💡 选中点位后：滚轮=转朝向　Shift+滚轮=张角　Alt+滚轮=字号　或直接在此精确输入"));
+            ? tr("⚠ 该机位已不在案件（孤儿点位，可删除）")
+            : tr("选中点位后：滚轮=转朝向　Shift+滚轮=张角　Alt+滚轮=字号　或直接在此精确输入"));
     };
     m_canvas->onChanged = [this]() { saveData(); };
 

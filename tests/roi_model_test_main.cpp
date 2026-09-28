@@ -102,10 +102,10 @@ static void testFindAndRemove()
 
 static void testColors()
 {
-    CHECK(RoiModel::regionColor(0) == RoiModel::regionColor(7),
-          "color: 7-cycle for rect palette");
-    CHECK(RoiModel::polygonColor(0) == RoiModel::polygonColor(7),
-          "color: 7-cycle for poly palette");
+    CHECK(RoiModel::regionColor(0) == RoiModel::regionColor(6),
+          "color: 6-cycle for rect palette");
+    CHECK(RoiModel::polygonColor(0) == RoiModel::polygonColor(6),
+          "color: 6-cycle for poly palette");
     CHECK(RoiModel::regionColor(0) != RoiModel::polygonColor(0),
           "color: rect/poly palettes differ");
 }

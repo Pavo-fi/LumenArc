@@ -80,12 +80,16 @@ CaseOpenPanel::CaseOpenPanel(CaseManager *cm, QWidget *parent)
     auto *btnNew = new QPushButton(lang("新建案件…", "New Case…"), this);
     auto *btnOpen = new QPushButton(lang("打开案件…", "Open Case…"), this);
     auto *btnIndependent = new QPushButton(
-        lang("独立模式\n（不使用案件）", "Independent\n(no case)"), this);
+        lang("独立模式", "Independent"), this);   // 规范§10.1：括号教学移除
     for (auto *b : {btnNew, btnOpen, btnIndependent}) {
         b->setMinimumHeight(56);
         b->setMinimumWidth(150);
         b->setCursor(Qt::PointingHandCursor);
     }
+    // 规范§7.4：交互教学进 ToolTip（一行 ≤25 字）
+    btnNew->setToolTip(lang("开始新的案件", "Start a new case"));
+    btnOpen->setToolTip(lang("打开已有案件", "Open an existing case"));
+    btnIndependent->setToolTip(lang("不使用案件，直接进入", "Enter without a case"));
     // 主入口（新建）用品牌金强调；其余用卡片灰
     btnNew->setStyleSheet(QStringLiteral(
         "QPushButton { background:%1; color:%2; font-weight:bold;"
@@ -108,21 +112,20 @@ CaseOpenPanel::CaseOpenPanel(CaseManager *cm, QWidget *parent)
     lay->addSpacing(6);
 
     // ---- 最近案件 ----
-    auto *recentTitle = new QLabel(lang("最近案件（双击打开）", "Recent cases (double-click)"),
-                                   this);
+    // 规范§10.1：删括号教学，交互提示移入列表 ToolTip
+    auto *recentTitle = new QLabel(lang("最近案件", "Recent cases"), this);
     recentTitle->setStyleSheet(QStringLiteral(
         "font-weight:bold; color:%1;").arg(Theme::TextPrimary));
     lay->addWidget(recentTitle);
 
     m_recentList = new QListWidget(this);
+    m_recentList->setToolTip(lang("双击打开案件", "Double-click to open a case"));
     lay->addWidget(m_recentList, 1);
 
+    // 规范§9 空态：一句话结论 + 一个动作指向（≤20 字）
     m_emptyLabel = new QLabel(
-        lang("暂无最近案件。\n点击「新建案件」开始：视频、ROI 分析、校时证据、前处理成果将统一入案管理，"
-             "可校验完整性、打包移交。\n或选「独立模式」直接进入（与旧版一致）。",
-             "No recent cases.\nClick “New Case” to start: videos, ROI analysis, calibration "
-             "evidence and preprocessing results are managed in one place, with integrity "
-             "verification and handover packaging.\nOr choose “Independent” to enter directly."),
+        lang("暂无最近案件 — 点击「新建案件」开始",
+             "No recent cases — click 'New Case' to start"),
         this);
     m_emptyLabel->setAlignment(Qt::AlignCenter);
     m_emptyLabel->setWordWrap(true);

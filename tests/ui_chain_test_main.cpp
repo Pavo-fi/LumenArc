@@ -13,6 +13,7 @@
 #include <QToolButton>
 #include <QComboBox>
 #include <QSpinBox>
+#include <QCheckBox>
 #include <QLabel>
 #include <cstdio>
 #include "timesettingsdialog.h"
@@ -1018,6 +1019,203 @@ int main(int argc, char **argv)
                   "manual-2pt: drift = 86.4 s/day");
             CHECK(appliedL.wallMsOf(14400000) == baseL + 14414400,
                   "manual-2pt: long span mapping exact at pt2");
+        }
+    }
+
+    // ---- v1.18.x §98 回归锁：三点结果落库（自动应用 + 第 2 步并入）----
+    // 现场两轮实测（2026-09-26 12:12 旧 exe / 20:17 新 exe）都是：跑完 GO、抽帧齐全，
+    // 但 .vla 未更新 → 时间轴仍按 rate=1.0 走，用户报「时间还是对不上」。
+    // 根因一：自洽大倍率（非实时导出件）旧版留给用户点「按此倍率校时」——实战里用户不点。
+    //    → 现改为自动应用（本块 Case A 锁住）。
+    // 根因二：第 2 步落库的是旧工作面，把未应用的第 1 步结果丢弃。
+    //    → 现 4 个入口统一 absorbPendingFit（本块 Case B 逐个锁住）。
+    {
+        qRegisterMetaType<TimeCalibration>("TimeCalibration");
+        const qint64 base = QDateTime(QDate(2026, 9, 20), QTime(15, 0, 13),
+                                      Qt::LocalTime).toMSecsSinceEpoch();
+        const auto mkAt = [&](qint64 stream, double rate) {
+            TimeCalibration::Sample s;
+            s.streamMs = stream;
+            s.wallMs = base + qint64(double(stream) * rate);
+            s.conf = 0.95;
+            return s;
+        };
+        // 旧工作面：实测那种「2 点相隔 2 秒、rate=1.0」（重新导入继承来的）
+        TimeCalibration stale;
+        stale.source = TimeCalibration::Source::Ocr;
+        stale.dateKnown = true;
+        stale.samples = QVector<TimeCalibration::Sample>{mkAt(3080, 1.139),
+                                                        mkAt(5080, 1.139)};
+        stale.applyFit(TimeCalibration::fit(stale.samples));
+        CHECK(stale.isValid() && !stale.rateApplied,
+              "pending-fit: 旧工作面 2 点 rate=1.0 有效但不应用");
+
+        // ---- Case A：自洽大倍率 → 必须自动应用（用户不点按钮也要生效）----
+        {
+            TimeSettingsDialog dlg(QStringLiteral("dummy_auto.mp4"), 5080,
+                                   2741446, stale, QString(), &service, nullptr);
+            TimeCalibration applied;
+            int appliedCount = 0;
+            QObject::connect(&dlg, &TimeSettingsDialog::calibrationApplied,
+                             [&](const TimeCalibration &cc) {
+                                 applied = cc; ++appliedCount;
+                             });
+            TimeCalibration fit;
+            fit.source = TimeCalibration::Source::Ocr;
+            fit.dateKnown = true;
+            fit.samples = QVector<TimeCalibration::Sample>{mkAt(1080, 1.139),
+                                                           mkAt(1370722, 1.139),
+                                                           mkAt(2739326, 1.139)};
+            fit.applyFit(TimeCalibration::fit(fit.samples));
+            CHECK(qAbs(fit.rate - 1.139) < 0.002 && !fit.rateApplied,
+                  "auto-apply: 三点拟出 1.139× 而域层不自动应用（门控在 UI）");
+            CHECK(QMetaObject::invokeMethod(
+                      &dlg, "onThreePointReady", Qt::DirectConnection,
+                      Q_ARG(QString, QStringLiteral("dummy_auto.mp4")),
+                      Q_ARG(TimeCalibration, fit)),
+                  "auto-apply: onThreePointReady 可直驱");
+            CHECK(appliedCount == 1 && qAbs(applied.rate - 1.139) < 0.002
+                  && applied.rateApplied && applied.speedVariant,
+                  "auto-apply: 非实时导出件 1.139× 自动落库（旧版要用户点按钮→实测不点→不生效）");
+            auto *useBtn = dlg.findChild<QPushButton*>(
+                QStringLiteral("fitUseBtn"));
+            CHECK(useBtn && useBtn->text().contains(QStringLiteral("已应用")),
+                  "auto-apply: 按钮显示「已应用」");
+            CHECK(qAbs(applied.wallMsOf(2739326)
+                       - (base + qint64(2739326.0 * 1.139))) <= 1,
+                  "auto-apply: 尾点墙钟=15:52:13（现场口径）");
+            // 逃生门：勾「不校正时钟快慢」→ 立刻改回只定基准
+            auto *noDrift = dlg.findChild<QCheckBox*>(
+                QStringLiteral("noDriftCheck"));
+            CHECK(noDrift != nullptr, "auto-apply: 不校正勾选框在位");
+            if (noDrift) {
+                noDrift->setChecked(true);
+                CHECK(appliedCount == 2 && !applied.rateApplied,
+                      "auto-apply: 勾选不校正 → 重落库且不再应用倍率（逃生门有效）");
+                noDrift->setChecked(false);
+                CHECK(appliedCount == 3 && applied.rateApplied
+                      && qAbs(applied.rate - 1.139) < 0.002,
+                      "auto-apply: 取消勾选 → 恢复按倍率应用");
+            }
+        }
+
+        // ---- Case B：不自洽（疑似误读）→ 不自动应用；第 2 步四个入口必须并入 ----
+        TimeCalibration bad;
+        bad.source = TimeCalibration::Source::Ocr;
+        bad.dateKnown = true;
+        TimeCalibration::Sample wild = mkAt(1370722, 1.139);
+        wild.wallMs += 30000;   // 30 秒野点 → 不成直线（不自洽）
+        bad.samples = QVector<TimeCalibration::Sample>{mkAt(1080, 1.139), wild,
+                                                      mkAt(2739326, 1.139)};
+        bad.applyFit(TimeCalibration::fit(bad.samples));
+        CHECK(bad.isValid(), "pending-fit: 野点集仍可拟合");
+        CHECK(!TimeCalibration::rateChangeSelfConsistent(
+                  TimeCalibration::fit(bad.samples)),
+              "pending-fit: 野点集不自洽（不自动应用，交用户确认）");
+
+        for (int entry = 0; entry < 3; ++entry) {
+            TimeSettingsDialog dlg(QStringLiteral("dummy_pending.mp4"), 5080,
+                                   2741446, stale, QString(), &service, nullptr);
+            TimeCalibration applied;
+            int appliedCount = 0;
+            QObject::connect(&dlg, &TimeSettingsDialog::calibrationApplied,
+                             [&](const TimeCalibration &cc) {
+                                 applied = cc; ++appliedCount;
+                             });
+            CHECK(QMetaObject::invokeMethod(
+                      &dlg, "onThreePointReady", Qt::DirectConnection,
+                      Q_ARG(QString, QStringLiteral("dummy_pending.mp4")),
+                      Q_ARG(TimeCalibration, bad)),
+                  "pending-fit: onThreePointReady 可直驱");
+            CHECK(appliedCount == 0,
+                  "pending-fit: 不自洽大倍率 → 不自动应用（防静默采纳错字）");
+
+            if (entry == 0) {
+                auto *mon = dlg.findChild<QDateTimeEdit*>(
+                    QStringLiteral("truthMonitorEdit"));
+                auto *bj = dlg.findChild<QDateTimeEdit*>(
+                    QStringLiteral("truthBeijingEdit"));
+                auto *btn = dlg.findChild<QPushButton*>(
+                    QStringLiteral("adoptTruthBtn"));
+                CHECK(mon && bj && btn, "pending-fit: 方式二控件在位");
+                if (mon && bj && btn) {
+                    mon->setDateTime(QDateTime(QDate(2026, 9, 20), QTime(15, 0, 13)));
+                    bj->setDateTime(QDateTime(QDate(2026, 9, 20), QTime(15, 0, 13)));
+                    btn->click();
+                }
+            } else if (entry == 1) {
+                auto *dir = dlg.findChild<QComboBox*>(
+                    QStringLiteral("truthOffsetDir"));
+                auto *mins = dlg.findChild<QSpinBox*>(
+                    QStringLiteral("truthOffsetMins"));
+                auto *btn = dlg.findChild<QPushButton*>(
+                    QStringLiteral("adoptManualOffsetBtn"));
+                CHECK(dir && mins && btn, "pending-fit: 方式三控件在位");
+                if (dir && mins && btn) {
+                    dir->setCurrentIndex(1);   // 快
+                    mins->setValue(13);
+                    btn->click();
+                }
+            } else {
+                dlg.adoptPhotoTruth(834000, QStringLiteral("calib.jpg"),
+                                    QRect(10, 10, 100, 20), QRect(10, 40, 100, 20),
+                                    QStringLiteral("12:25:47"),
+                                    QStringLiteral("12:39:41"), false);
+            }
+
+            CHECK(appliedCount == 1,
+                  "pending-fit: 第 2 步落库一次（三个入口均须）");
+            CHECK(applied.samples.size() == 3,
+                  "pending-fit: 落库的是第 1 步三点结果（不是旧的两点）");
+            CHECK(!applied.rateApplied,
+                  "pending-fit: 不自洽结果不应用速率（只带基准）");
+            CHECK(applied.truthSet, "pending-fit: 北京时间对时同时保留");
+        }
+
+        // 清除对时：同样不得把已并入的结果抹回旧工作面
+        {
+            TimeSettingsDialog dlg(QStringLiteral("dummy_clear.mp4"), 5080,
+                                   2741446, stale, QString(), &service, nullptr);
+            TimeCalibration applied;
+            int appliedCount = 0;
+            QObject::connect(&dlg, &TimeSettingsDialog::calibrationApplied,
+                             [&](const TimeCalibration &cc) {
+                                 applied = cc; ++appliedCount;
+                             });
+            QMetaObject::invokeMethod(
+                &dlg, "onThreePointReady", Qt::DirectConnection,
+                Q_ARG(QString, QStringLiteral("dummy_clear.mp4")),
+                Q_ARG(TimeCalibration, bad));
+            auto *clearBtn = dlg.findChild<QPushButton*>(
+                QStringLiteral("clearTruthBtn"));
+            CHECK(clearBtn != nullptr, "pending-fit: 清除对时按钮在位");
+            if (clearBtn)
+                clearBtn->click();
+            CHECK(appliedCount == 1 && !applied.truthSet
+                  && applied.samples.size() == 3,
+                  "pending-fit: 清除对时后三点取样仍在（不回到旧工作面）");
+        }
+
+        // 未跑第 1 步（无 pending）→ 第 2 步沿用原工作面，不得凭空并入
+        {
+            TimeSettingsDialog dlg(QStringLiteral("dummy_nopending.mp4"), 0,
+                                   30000, stale, QString(), &service, nullptr);
+            TimeCalibration applied;
+            QObject::connect(&dlg, &TimeSettingsDialog::calibrationApplied,
+                             [&](const TimeCalibration &cc) { applied = cc; });
+            auto *mon = dlg.findChild<QDateTimeEdit*>(
+                QStringLiteral("truthMonitorEdit"));
+            auto *bj = dlg.findChild<QDateTimeEdit*>(
+                QStringLiteral("truthBeijingEdit"));
+            auto *btn = dlg.findChild<QPushButton*>(
+                QStringLiteral("adoptTruthBtn"));
+            if (mon && bj && btn) {
+                mon->setDateTime(QDateTime(QDate(2026, 9, 20), QTime(15, 0, 13)));
+                bj->setDateTime(QDateTime(QDate(2026, 9, 20), QTime(15, 0, 13)));
+                btn->click();
+                CHECK(applied.samples.size() == 2,
+                      "pending-fit: 无 pending 时第 2 步沿用原工作面（不凭空并入）");
+            }
         }
     }
 

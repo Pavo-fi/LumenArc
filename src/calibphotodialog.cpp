@@ -10,6 +10,7 @@
 #include "calibphotodialog.h"
 
 #include "i18n.h"
+#include "theme.h"
 
 #include <QDialogButtonBox>
 #include <QLabel>
@@ -46,7 +47,7 @@ CalibPhotoDialog::CalibPhotoDialog(const QString &imagePath, QWidget *parent)
     if (!m_pix.isNull()) {
         m_view = new QLabel(this);
         m_view->setMinimumSize(480, 320);
-        m_view->setStyleSheet(QStringLiteral("background:#20242a;"));
+        m_view->setStyleSheet(QStringLiteral("background:%1;").arg(Theme::Surface::Raised)); // 规范§1.3 令牌
         m_view->setAlignment(Qt::AlignCenter);
         const QSize fit = m_pix.size().scaled(kViewW, kViewH,
                                               Qt::KeepAspectRatio);
@@ -311,7 +312,7 @@ void ZoomPhotoView::mouseDoubleClickEvent(QMouseEvent *event)
 void ZoomPhotoView::paintEvent(QPaintEvent *)
 {
     QPainter p(this);
-    p.fillRect(rect(), QColor(0x20, 0x24, 0x2a));
+    p.fillRect(rect(), QColor(Theme::Surface::Raised));  // 规范§1.3 令牌
     if (m_pix.isNull()) {
         p.setPen(Qt::white);
         p.drawText(rect(), Qt::AlignCenter,
@@ -408,12 +409,12 @@ TruthPhotoConfirmDialog::TruthPhotoConfirmDialog(
                                   "double-click=fit); edit the times below "
                                   "if OCR misread; offset recalculates live."), this);
     title->setWordWrap(true);
-    title->setStyleSheet(QStringLiteral("color:#c90;font-weight:bold;"));
+    title->setStyleSheet(QStringLiteral("color:%1;font-weight:bold;").arg(Theme::AccentTk::Text)); // 规范§1.3 令牌
     right->addWidget(title);
 
     auto mkKey = [this](const QString &k) {
         auto *kl = new QLabel(k, this);
-        kl->setStyleSheet(QStringLiteral("color:#888;"));
+        kl->setStyleSheet(QStringLiteral("color:%1;").arg(Theme::TextTk::Second)); // 规范§1.3 令牌
         return kl;
     };
     auto mkRawRow = [this, mkKey](const QString &k, const QString &v) {
@@ -451,13 +452,13 @@ TruthPhotoConfirmDialog::TruthPhotoConfirmDialog(
 
     m_offsetLabel = new QLabel(this);
     m_offsetLabel->setWordWrap(true);
-    m_offsetLabel->setStyleSheet(QStringLiteral("font-weight:bold; font-size:14px;"));
+    m_offsetLabel->setStyleSheet(QStringLiteral("font-weight:bold; font-size:12px;")); // 规范§3 Body
     right->addWidget(m_offsetLabel);
     updateOffsetLabel();
     if (!crossDayNote.isEmpty()) {
         auto *note = new QLabel(crossDayNote, this);
         note->setWordWrap(true);
-        note->setStyleSheet(QStringLiteral("color:#c90;"));
+        note->setStyleSheet(QStringLiteral("color:%1;").arg(Theme::AccentTk::Text)); // 规范§1.3 令牌
         right->addWidget(note);
     }
 
@@ -467,11 +468,11 @@ TruthPhotoConfirmDialog::TruthPhotoConfirmDialog(
                                  "to verify; edits recalculate the offset live."),
                             this);
     warn->setWordWrap(true);
-    warn->setStyleSheet(QStringLiteral("color:#c90;"));
+    warn->setStyleSheet(QStringLiteral("color:%1;").arg(Theme::AccentTk::Text)); // 规范§1.3 令牌
     right->addWidget(warn);
     right->addStretch(1);
 
-    auto *useBtn = new QPushButton(lang("✅ 使用此偏差", "✅ Use this offset"),
+    auto *useBtn = new QPushButton(lang("✓ 使用此偏差", "✓ Use this offset"), // 规范§6 单色状态字符
                                    this);
     useBtn->setDefault(true);
     useBtn->setMinimumHeight(32);

@@ -1,4 +1,5 @@
 #include "videostatemanager.h"
+#include <QDir>
 
 VideoStateManager::VideoStateManager(QObject *parent)
     : QObject(parent)
@@ -76,7 +77,20 @@ bool VideoStateManager::magnifierRectOf(const QString &videoPath, QRect &out) co
 
 void VideoStateManager::removeState(const QString &videoPath)
 {
+    if (videoPath.isEmpty())
+        return;
     m_states.remove(videoPath);
+    // v1.18.x：键同一性归一（reviewer 2026-09-26）——saveState 存的是 openVideoFile
+    // 收到的那串路径，而调用方可能拿到另一种写法（正/反斜杠、目录大小写）。
+    // Windows 路径不区分大小写，用 cleanPath + CaseInsensitive 扫一遍抹干净。
+    const QString norm = QDir::cleanPath(videoPath);
+    for (auto it = m_states.begin(); it != m_states.end();) {
+        if (QString::compare(QDir::cleanPath(it.key()), norm,
+                             Qt::CaseInsensitive) == 0)
+            it = m_states.erase(it);
+        else
+            ++it;
+    }
 }
 
 void VideoStateManager::migrateKey(const QString &oldPath,

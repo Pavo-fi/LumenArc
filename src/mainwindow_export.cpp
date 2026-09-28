@@ -142,9 +142,29 @@ void MainWindow::onExportSegmentClip()
 }
 
 
+/// 把主窗口放大镜「当前所见」填入导出参数（所见即所得，v1.18.x）：
+/// 取景区/倍率/旋转/显示链 LUT + 所属源路径（合成多源时只对该源段生效）。
+/// 放大镜未开或无取景 → 不启用（导出回落满幅，与旧版逐位一致）。
+/// SSOT：全部取 MagnifierWidget 当前值（含面板实际使用的 LUT，不重建不推导）。
+static void fillMagnifierParams(SegmentExportEngine::Params *pp,
+                                const MagnifierWidget *mag, const QString &sourcePath)
+{
+    if (!pp || !mag)
+        return;
+    const QRect src = mag->currentSourceRect();
+    if (src.isEmpty())
+        return;
+    pp->magnifierPip = true;
+    pp->magnifierSrcRect = src;
+    pp->magnifierRotation = mag->displayRotation();
+    pp->magnifierZoom = mag->zoomLevel();
+    pp->magnifierLut = mag->displayLut();
+    pp->magnifierSourcePath = sourcePath;
+}
+
 /// 合成导出入口（v1.16.2）：双模式分发——证据直拷 / 多段合成走新管线；
 /// 单段+当前视频+原速+图表面板勾选 → 旧复合导出路径（曲线/语谱/放大镜全保真）
-void MainWindow::startComposeExport(const SegmentExportEngine::Params &ppIn)
+void MainWindow::startComposeExport(SegmentExportEngine::Params pp)
 {
     if (!m_workbench)
         return;
@@ -152,18 +172,34 @@ void MainWindow::startComposeExport(const SegmentExportEngine::Params &ppIn)
         m_workbench->setResult(false, lang("已有导出进行中", "Export already running"));
         return;
     }
-    if (ppIn.segments.size() == 1 && !ppIn.evidenceCopy
-        && ppIn.segments.first().sourcePath == m_sessionMgr->currentVideoPath()
-        && qAbs(ppIn.segments.first().rate - 1.0) < 0.01
-        && ppIn.segments.first().annos.isEmpty()   // 有标注 → 新管线烧录
+    // 放大镜当前所见入导出（两条管线共用）：旧路径此前自己填一份（同值），
+    // 新管线（多段/宫格/标注）此前完全没带放大镜——此处补齐。
+    // 证据模式（无损直拷）不重编码 → 放大镜无意义，不填。
+    if (!pp.evidenceCopy) {
+        fillMagnifierParams(&pp, m_magnifier, m_sessionMgr->currentVideoPath());
+        // 仅在清单里确有「放大镜所属源」的单视频段时才提示（多源合成易错配预期）
+        bool magUsed = false;
+        for (const auto &s : pp.segments)
+            if (!s.isLanes() && s.sourcePath == pp.magnifierSourcePath) {
+                magUsed = true;
+                break;
+            }
+        if (magUsed)
+            showOperationStatus(lang("导出含放大镜同框：左原图 + 右放大视图",
+                                     "Export includes magnifier split view"));
+    }
+    if (pp.segments.size() == 1 && !pp.evidenceCopy
+        && pp.segments.first().sourcePath == m_sessionMgr->currentVideoPath()
+        && qAbs(pp.segments.first().rate - 1.0) < 0.01
+        && pp.segments.first().annos.isEmpty()   // 有标注 → 新管线烧录
         && m_workbench->wantPanels()) {
         // 旧复合路径（图表/语谱/放大镜/标签 OSD 全套，v1.15.3 行为冻结）
         QVector<qint64> labelTimes;
         for (const ChartLabel &lb : m_chartPanel->labels())
             labelTimes.append(lb.timeMs);
         const speedplan::SpeedPlan plan = speedplan::planFromLabels(
-            ppIn.segments.first().inMs, ppIn.segments.first().outMs, labelTimes);
-        startSegmentExport(plan, ppIn.burnOsd, ppIn.outputPath);
+            pp.segments.first().inMs, pp.segments.first().outMs, labelTimes);
+        startSegmentExport(plan, pp.burnOsd, pp.outputPath);
         return;
     }
     if (!m_segmentExporter) {
@@ -179,13 +215,13 @@ void MainWindow::startComposeExport(const SegmentExportEngine::Params &ppIn)
                         showOperationStatus(lang("合成导出完成", "Compose export done"));
                 });
     }
-    const bool evidence = ppIn.evidenceCopy;
+    const bool evidence = pp.evidenceCopy;
     qint64 total = 0;
     if (!evidence)
-        for (const auto &s : ppIn.segments)
-            total += SegmentExportEngine::composeSegOutFrames(s, ppIn.outFps);
+        for (const auto &s : pp.segments)
+            total += SegmentExportEngine::composeSegOutFrames(s, pp.outFps);
     m_workbench->setExportRunning(true, evidence ? 100 : int(qMax<qint64>(1, total)));
-    m_segmentExporter->start(ppIn);
+    m_segmentExporter->start(pp);
 }
 
 
@@ -230,13 +266,9 @@ void MainWindow::startSegmentExport(const speedplan::SpeedPlan &planIn,
     // 图表标签入导出（曲线条竖标 + OSD 5 秒烧录，真机反馈拍板）
     if (m_chartPanel)
         pp.labels = m_chartPanel->labels();
-    // 放大镜开着且有取景 → 导出画面右下角 PIP 嵌入放大视图（真机反馈）
-    if (m_magnifier && !m_magnifier->currentSourceRect().isEmpty()) {
-        pp.magnifierPip = true;
-        pp.magnifierSrcRect = m_magnifier->currentSourceRect();
-        pp.magnifierRotation = m_magnifier->displayRotation();
-        pp.magnifierZoom = m_magnifier->zoomLevel();
-    }
+    // 放大镜开着且有取景 → 导出画面左右同框：左原图（取景括号）+ 右放大视图
+    // （右侧走放大镜显示链：旋转 + 画面调节 LUT，与屏幕逐位一致）
+    fillMagnifierParams(&pp, m_magnifier, m_sessionMgr->currentVideoPath());
 
     if (!m_segmentExporter) {
         m_segmentExporter = new SegmentExportEngine(this);

@@ -394,8 +394,22 @@ int main(int argc, char **argv)
         CHECK(cm.saveCase(&err), "saveCase");
         CHECK(!cm.isDirty(), "saved → clean");
 
-        // 移除 V002（不删数据）→ 高水位不回退
+        // 移除 V002（不删数据）→ 高水位不回退；信号带源路径（v1.18.x：
+        // 会话内存状态按路径为键，移除时必须能拿到路径去清，否则同路径重导会复活旧校时）
+        QString rmId, rmOrig, rmEff;
+        int rmCount = 0;
+        QObject::connect(&cm, &CaseManager::videoRemoved,
+                         [&](const QString &id, const QString &orig,
+                             const QString &eff) {
+                             rmId = id; rmOrig = orig; rmEff = eff; ++rmCount;
+                         });
         CHECK(cm.removeVideo(id2, false, &err), "removeVideo");
+        CHECK(rmCount == 1, "removeVideo → videoRemoved 一次");
+        CHECK(rmId == id2, "videoRemoved(id) 第一参 = 被移除 id");
+        CHECK(rmOrig == vid2,
+              "videoRemoved 第二参 = 登记路径（会话状态清理用）");
+        CHECK(!rmEff.isEmpty(),
+              "videoRemoved 第三参 = 实际打开路径（包内副本也清）");
         const QString id3 = cm.addVideo(vid3, &err);
         CHECK(id3 == "V03", "after remove: V03 (no reuse)");
         cm.saveCase(&err);

@@ -19,6 +19,7 @@
 #include <QRect>
 #include <QJsonObject>
 #include <QJsonArray>
+#include <QMetaType>
 #include <QtGlobal>
 #include <cmath>
 #include "time_piecewise.h"
@@ -100,6 +101,13 @@ struct TimeCalibration
     {
         if (!isValid())
             return false;
+        if (tickMode()) {
+            // P-98 秒级表：只要有真实墙钟锚点即有效（首锚墙钟须非零）
+            for (const auto &a : tickAnchors)
+                if (a.second != 0)
+                    return true;
+            return false;
+        }
         if (piecewiseMode()) {
             // v1.12.8（天河案实测）：分段全部零锚（sidecar 源均未校时，
             // wallStartMs=0）=「没有时间信息」——不算有效，否则继承后
@@ -113,10 +121,25 @@ struct TimeCalibration
     }
     double effectiveRate() const { return rateApplied ? rate : 1.0; }
 
+    // ---- P-98 秒级跳变对齐表（非空即生效，优先级最高）----
+    /// 每项 = (流内 ms, 该时刻画面墙钟 ms)：来自「像素盯 OSD 秒位跳变 + 稀疏 OCR 锚点」，
+    /// 相邻项约 1 秒、段内线性插值 → 帧级（≈40ms）精度，实测抽检 11/12 完全一致。
+    /// 加速导出件的跳秒（+2/+3 秒）已由像素字模识别处理，故表内不做速率假设。
+    QVector<QPair<qint64, qint64>> tickAnchors;
+    /// 该片跳过的画面秒总数（= 画面秒跨度 − 跳变数；加速导出丢帧的直接度量）
+    double tickSkippedSeconds = 0.0;
+    static constexpr int kTickAnchorMin = 2;   ///< 少于 2 项不生效
+    bool tickMode() const { return tickAnchors.size() >= kTickAnchorMin; }
+    /// 秒级表内线性插值（跳变 k → k+1 之间）
+    qint64 tickWallOf(qint64 streamMs) const;
+    qint64 tickStreamOf(qint64 wallMs) const;
+
     /// 全应用唯一换算入口（C3）：监控墙钟 = offset + rate×stream
-    /// 分段模式（piecewiseMode）下走查表，否则仿射
+    /// 优先级：秒级表 > 分段表 > 仿射
     qint64 wallMsOf(qint64 streamMs) const
     {
+        if (tickMode())
+            return tickWallOf(streamMs);
         if (piecewiseMode())
             return piecewise.wallMsOf(streamMs);
         return offsetMs + static_cast<qint64>(
@@ -125,6 +148,8 @@ struct TimeCalibration
     /// 反解：墙钟 → 流内毫秒
     qint64 streamMsOf(qint64 wallMs) const
     {
+        if (tickMode())
+            return tickStreamOf(wallMs);
         if (piecewiseMode())
             return piecewise.streamMsOf(wallMs);
         return static_cast<qint64>(
@@ -163,8 +188,12 @@ struct TimeCalibration
     static constexpr double kMinSignificantRateDev = 10.0 / 86400000.0;
     /// 两点拟合时的单点假设误差（OSD 秒级量化）：±1s
     static constexpr double kAssumedPointErrorMs = 1000.0;
-    /// 野点残差阈值：超过则提示剔除重拟合
-    static constexpr double kOutlierResidualMs = 3000.0;
+    /// 野点残差阈值：超过则提示剔除重拟合。
+    /// v1.18.x（2026-09-26 顺德平台导出件实测）：3s → 10s——该片画面时钟
+    /// **内部分段速率有波动**（实测逐段 1.10~1.17），三点对全局直线天然有 1~4 秒
+    /// 残差；阀值 3s 会把正常取样点误判成「读错」剔掉（剔完只剩 2 点、共线校验
+    /// 也失效）。真错读是分钟/小时级（年份 2026→2022、日期/上下午读错），不是几秒。
+    static constexpr double kOutlierResidualMs = 10000.0;
     /// 速率合理上限（1% ≈ 14.4 分钟/天）：超出几乎必为 OCR 误读，拒绝应用
     static constexpr double kMaxSaneRateDev = 0.01;
 
@@ -180,6 +209,69 @@ struct TimeCalibration
 
     /// 应用拟合结果：rateApplied = rateSignificant && rateSane
     void applyFit(const FitResult &fr);
+
+    /// v1.18.x：大倍率是否“自洽”——区分【非实时导出/变速件】与【OCR 误读】。
+    /// - |rate−1| > kConfirmableRateDev（50%）→ false：没有哪种导出会压缩一倍以上，
+    ///   日期/上下午读错典型就是 ~2×，必为错读；
+    /// - n≥3：测点仍近乎共线（最大残差 ≤ kOutlierResidualMs）→ true（真变速，可确认采用）；    /// - n==2：无残差信息可判 → true（UI 弹确认框，要求用户核对两点）。
+    /// 不自洽时继续当“误读”拒绝（静默采纳错字会污染整条时间轴）。
+    static bool rateChangeSelfConsistent(const FitResult &fr);
+    /// 可确认的非实时导出倍率上限（±50%，与分段重建速率上限同量级）
+    static constexpr double kConfirmableRateDev = 0.5;
+
+    /// v1.18.x（2026-09-26 顺德公安件实测「校时后还是错的」）：把「第 1 步已算出、
+    /// 用户尚未点应用」的拟合结果按统一门控落到模型上，供两处共用：
+    /// ① 「使用此结果 / 按此倍率校时」（onUseResult）；
+    /// ② 第 2 步「对真实时间」（北京时间对时落库前）——否则该步直接落库旧的
+    ///    工作面（m_working），把刚算出的三点结果静默丢弃 → 时间轴永远按 rate=1.0 走。
+    /// 门控与 onUseResult 完全一致：
+    /// - noDriftCorrection=true → 只定基准，不应用速率（rateApplied=false）；
+    /// - 自洽的大倍率（非实时导出件）→ rateApplied=true + speedVariant=true；
+    /// - 其余保持 applyFit 的判定（速率不可信则不应用）。
+    static void applyFitDecision(TimeCalibration &cal, bool noDriftCorrection);
+
+    /// v1.18.x：第 2 步（对真实时间）落库前的「并入未应用的第 1 步结果」判据
+    /// （纯函数，可测）：
+    /// - fitPending=false / fit 非法 / 非 OCR 三点 / 分段模式 → 不动 working，返回 false；
+    /// - 否则 working = fit（先过 applyFitDecision 门控）并返回 true。
+    /// 调用方（TimeSettingsDialog）负责同步自己的 pending 标志与提示文案。
+    static bool absorbPendingFit(TimeCalibration &working, const TimeCalibration &fit,
+                                 bool fitPending, bool noDriftCorrection);
+
+    /// v1.18.x：单点错读时的稳健拟合——n≥3 且最差测点残差 > kOutlierResidualMs 时
+    /// 剔除该点重拟合（*droppedIndex 回传被剔除样本下标，供 UI 标 ⚠）。
+    /// 依据：OCR 错读是常态（真实档实测约 16% 测点 wall 本身错，如年份 2026→2022），
+    /// 而一个离群点会让整条仿射拟合失真（三点里一个错点 → 速率必然荒谬 → 整单被拒）。
+    /// 剔除后仍不自洽则不剔（避免把“真变速”当错读剔掉）。
+    static FitResult fitDroppingWorstOutlier(const QVector<Sample> &samples,
+                                             int *droppedIndex = nullptr);
+
+    /// v1.18.x（2026-09-27 顺德件实测）：**日期合理性过滤**。
+    /// 同一次取样里，各点画面日期应一致（差 ≤1 天）；差几天/几年必是 OCR 错读
+    /// （实测：用户 ROI 把年份末位切掉 → 间歇读成 2023，导致拟合出 34583 倍荒谬速率，
+    /// 而「残差最大剔除」反而剔掉正确点 → 整单被拒 → 用户看到「校时不成功」）。
+    /// 做法：取墙钟中位数为中心，丢 |偏差| > maxDevMs（默认 1 天）的点。
+    /// 返回实际剔除数；*droppedCount 回传（可空）。
+    static int dropImplausibleDates(QVector<Sample> *samples,
+                                    qint64 maxDevMs = 86400000);
+
+    /// v1.18.x（2026-09-28 顺德 V18 实测）：**结构有效性**检查。
+    /// 24 小时制 OSD 的小时应为两位；解析出的 rawText 若呈「单位数小时」
+    /// （如 `5:00:02`），几乎必是前导位被框裁掉/漏读 —— 实测真值 15:00:02 读成
+    /// 5:00:02 → 整条时间轴偏 **10 小时**（用户截图：画面 15:27:41 / 图表 05:27:40）。
+    /// 返回 true = 结构可疑（单位数小时）。
+    static bool rawTextHourShort(const QString &rawText);
+    /// 剔除结构无效样本（先于离群剔除：否则「正确的点」会被当离群剔掉——
+    /// V18 实测：00:00:02 错读 + 16:31 尾巴把中间正确的 15:33:54 挤掉）。
+    /// 剩余不足 2 条则不动（返回 0）。返回实际剔除数。
+    static int dropStructurallyInvalid(QVector<Sample> *samples);
+    /// v1.18.x（2026-09-28 V18 实测）：**修复**「单位数小时」样本而不是丢弃。
+    /// 24 小时制 OSD 的小时若只读到一位，真值几乎必是 `10+h`（前导 1 是细笔画，
+    /// 压在亮背景上被漏读；实测 15:00:02 → `5:00:02`）。做法：用**其余两位小时样本**
+    /// 线性外推到该点，在 {h, 10+h} 里挑与期望值近的那个（差 <2 小时才采用），
+    /// 修正 wallMs 并标 ocrSuspicious（**rawText 原样保留**——取证口径）。
+    /// 返回修复数。
+    static int repairShortHourSamples(QVector<Sample> *samples);
 
     /// v7 旧格式迁移：日内秒偏移 → dateKnown=false 模型（rate=1.0）。
     /// 偏移为 0（旧数据"未校时"）→ Source::None，不产生空校时模型
@@ -212,3 +304,6 @@ struct TimeCalibration
 /// （"gaps:<数量>:<最大ms>" 类型化前缀，C1）。文件缺失/格式不符 → false。
 bool loadSidecarCalibration(const QString &videoPath, TimeCalibration *out,
                             QString *warning);
+
+// v1.18.x：信号/槽与 QMetaObject::invokeMethod 直驱（ui_chain 回归锁）需要元类型
+Q_DECLARE_METATYPE(TimeCalibration)

@@ -87,6 +87,10 @@ private slots:
                            const TimeCalibration &proposed);
     void onReconstructionReady(const QString &videoPath,
                                const TimeCalibration &proposed);
+    /// P-98 秒级对齐完成 / 不可用（回落时间重建）
+    void onTickAlignReady(const QString &videoPath,
+                          const TimeCalibration &proposed);
+    void onTickAlignFailed(const QString &videoPath, const QString &error);
     void onServiceFailed(const QString &videoPath, const QString &error);
     void onSampleItemChanged(QTableWidgetItem *item);
     void onUseResult();      ///< 结果区主按钮：应用 GO 候选（三点/重建）
@@ -129,6 +133,21 @@ private:
     void refreshWorkingSummary();
     void refitFromTable();
     void refitSummaryRefresh();
+    /// v1.18.x：手动启动时间重建（整片变速件默认走快路，需分段精修时点它）
+    void onRunReconstruction();
+    /// P-98：手动启动秒级跳变对齐（像素盯秒位跳变 + 稀疏锚点）
+    void onRunTickAlign();
+    /// v1.18.x：三点候选是否为「自洽的大倍率」（非实时导出/变速件，非 OCR 误读）
+    /// ——用户点「按此倍率校时」即按此倍率应用并标注变速
+    bool fitRateIsConfirmedVariable() const;
+    /// P-98：是否值得跑秒级跳变对齐（片内速率有波动或变速件 → 单直线不够）
+    bool tickAlignWorthIt(const TimeCalibration::FitResult &fr) const;
+    void startTickAlign(bool autoTriggered);
+    /// v1.18.x：把未应用的第 1 步结果并入工作面（返回是否并入）——
+    /// 第 2 步（北京时间对时）落库前调用，防旧工作面被当结果写进 .vla
+    bool absorbPendingFit();
+    /// v1.18.x：文件名时间戳与画面 OCR 日期不一致时的一行提示（可空）
+    QString filenameDateHint(qint64 ocrWallMs) const;
     void applyWorking(const TimeCalibration &cal);   ///< 应用候选并通知主窗口
     void maybeAutoApply();                           ///< GO 完成且无异常 → 自动应用
     void setGoBusy(bool busy, const QString &stageText);
@@ -141,6 +160,10 @@ private:
     qint64 m_currentPosMs = 0;
     qint64 m_durationMs = 0;
     QRectF m_roi;                    ///< 时间戳区域（归一化 0~1，无效=未框选）
+    /// v1.18.x（2026-09-28 实测）：**粘性 ROI** —— 框选 OCR 失败时手/自动路会把
+    /// m_roi 清空改跑全画面，导致秒级跳变对齐（需定位秒位）被守卫挡掉、功能静默不触发。
+    /// 这里记住用户最后框过的区域，专供秒级对齐使用。
+    QRectF m_roiSticky;
     bool m_waitingRoi = false;       ///< 等待主窗口框选结果
     bool m_roiRetried = false;       ///< v1.7.1：框选失败后已自动全画面重试
     TimeCalibration m_working;          // 工作副本（采用候选时更新）
@@ -152,6 +175,10 @@ private:
     bool m_updatingTable = false;
     bool m_detailsVisible = false;      // 结果细节折叠
     bool m_autoApplied = false;         // GO 完成已自动应用（防重启用按钮）
+    /// v1.18.x（2026-09-26 顺德件实测）：第 1 步已算出三点结果但用户尚未应用。
+    /// 此时第 2 步「对真实时间」直接落库旧 m_working 会静默丢弃该结果
+    /// （实测症状：非实时导出件永远按 rate=1.0 走 → 「校时后还是不准」）。
+    bool m_fitPending = false;
     GoStage m_goStage = GoStage::Idle;
 
     // UI
@@ -163,6 +190,8 @@ private:
     QLabel *m_progressLabel = nullptr;
     QLabel *m_resultLabel = nullptr;        // 一句话结果
     QPushButton *m_detailsBtn = nullptr;    // 查看细节 ▸/▾
+    QPushButton *m_reconBtn = nullptr;      // v1.18.x：手动起时间重建（分段精修）
+    QPushButton *m_tickBtn = nullptr;       // P-98：秒级精细对齐（像素盯秒位跳变）
     QWidget *m_detailsBox = nullptr;        // 细节折叠容器（取样点表等）
     QTableWidget *m_sampleTable = nullptr;
     QLabel *m_fitWarningLabel = nullptr;

@@ -227,7 +227,8 @@ signals:
     void caseDirtyChanged(bool dirty);
     void caseSaved();
     void videoAdded(const QString &id);
-    void videoRemoved(const QString &id);
+    void videoRemoved(const QString &id, const QString &originalPath,
+                      const QString &effectivePath);
     /// 视频引用信息变更（重定位/重登记后，面板刷新用）
     void videoInfoChanged(const QString &id);
     /// 重定位完成（M3：VideoStateManager 键迁移/当前路径跟随用）

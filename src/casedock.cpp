@@ -76,13 +76,13 @@ CaseDock::CaseDock(CaseManager *cm, QWidget *parent)
     // 删除入口；外部删除文件后需刷新反映）
     auto *btnRow = new QHBoxLayout();
     btnRow->setContentsMargins(0, 0, 0, 0);
-    m_btnDelete = new QPushButton(lang("🗑 删除选中", "🗑 Delete selected"), host);
+    // 规范§6：emoji 禁令——按钮纯文字，图标与文字不并用
+    m_btnDelete = new QPushButton(lang("删除选中", "Delete selected"), host);
     m_btnDelete->setEnabled(false);
-    m_btnDelete->setToolTip(lang(
-        "删除选中的视频：源文件在案件内则一并删除；案件外仅删分析结果（不可恢复）",
-        "Delete selected video: source inside case dir is also deleted; "
-        "outside sources are kept (irreversible)"));
-    auto *btnRefresh = new QPushButton(lang("🔄 刷新", "🔄 Refresh"), host);
+    // 规范§7.4：ToolTip 一行 ≤25 字，细节进确认对话框
+    m_btnDelete->setToolTip(lang("删除选中视频（不可恢复）",
+                                 "Delete selected video (irreversible)"));
+    auto *btnRefresh = new QPushButton(lang("刷新", "Refresh"), host);
     btnRefresh->setToolTip(lang("重新扫描案件目录文件状态",
                                 "Re-scan case files"));
     btnRow->addWidget(m_btnDelete);
@@ -196,8 +196,8 @@ void CaseDock::fillCameraGroups(QTreeWidgetItem *group)
     for (const CaseCameraGroup &g : meta.cameraGroups) {
         const QString gname = CaseModel::groupDisplayName(g);
         auto *gIt = new QTreeWidgetItem(group,
-            {QStringLiteral("📷 %1（%2 个文件）")
-                 .arg(gname).arg(g.memberIds.size())});
+            {lang("%1（%2 个文件）", "%1 (%2 files)")
+                 .arg(gname).arg(g.memberIds.size())});   // 规范§6/§10：去机位 emoji，包入 lang()
         gIt->setData(0, kRoleKind, QStringLiteral("camgroup"));
         gIt->setData(0, kRoleId, g.groupId);
         gIt->setData(0, kRolePath, g.groupId);   // 右键菜单非空守卫
@@ -217,16 +217,15 @@ void CaseDock::fillCameraGroups(QTreeWidgetItem *group)
             QString badgeTip;
             QColor badgeColor;
             const QString badge = hashBadge(*v, &badgeTip, &badgeColor);
-            const QString calMark = v->hasCalibration
-                ? QStringLiteral(" ⏰") : QString();
             const QString eff = m_caseManager->effectivePathFor(*v);
             const bool bundled = (eff != v->originalPath);
+            // 规范§6：emoji 禁令——包内副本改纯文字前缀；校时标记改 ToolTip 表达
             const QString name = bundled
-                ? QStringLiteral("📦") + QFileInfo(eff).fileName()
-                : QFileInfo(v->originalPath).fileName();
+                ? lang("（副本）", "(copy)") + QFileInfo(eff).fileName()
+                : QFileInfo(eff).fileName();
             const bool isOutput = mid.startsWith(QLatin1Char('P'));
             auto *it = new QTreeWidgetItem(gIt,
-                {QStringLiteral("%1  %2%3  %4").arg(v->id, name, calMark, badge)});
+                {QStringLiteral("%1  %2  %3").arg(v->id, name, badge)});
             it->setData(0, kRoleKind, isOutput ? QStringLiteral("output")
                                                : QStringLiteral("video"));
             it->setData(0, kRoleId, v->id);
@@ -261,19 +260,18 @@ void CaseDock::fillVideos(QTreeWidgetItem *group)
         QString badgeTip;
         QColor badgeColor;
         const QString badge = hashBadge(v, &badgeTip, &badgeColor);
-        const QString calMark = v.hasCalibration
-            ? QStringLiteral(" ⏰") : QString();
+        // 规范§6：emoji 禁令——校时标记改 ToolTip 表达（详情已在下方 tip）
         // 有效路径：包内副本兜底（双击直接可播，完整包零操作）
         const QString eff = m_caseManager->effectivePathFor(v);
         const bool bundled = (eff != v.originalPath);
         const QString cam = v.cameraLabel.isEmpty()
-            ? QString() : QStringLiteral(" 📷") + v.cameraLabel;
+            ? QString() : QStringLiteral(" @") + v.cameraLabel;   // 规范§6：去机位 emoji
         const QString name = bundled
-            ? QStringLiteral("📦") + QFileInfo(eff).fileName()
+            ? lang("（副本）", "(copy)") + QFileInfo(eff).fileName()   // 规范§6：去复本 emoji
             : QFileInfo(v.originalPath).fileName();
         auto *it = new QTreeWidgetItem(group,
-            {QStringLiteral("%1  %2%3%4  %5")
-                 .arg(v.id, name, calMark, cam, badge)});
+            {QStringLiteral("%1  %2%3  %4")
+                 .arg(v.id, name, cam, badge)});
         it->setData(0, kRoleKind, QStringLiteral("video"));
         it->setData(0, kRoleId, v.id);
         it->setData(0, kRolePath, eff);
@@ -299,7 +297,7 @@ void CaseDock::fillPreprocess(QTreeWidgetItem *group)
     for (int si = 0; si < sessions.size(); ++si) {
         const auto &p = sessions[si];
         auto *sIt = new QTreeWidgetItem(group,
-            {QStringLiteral("🗜 %1（%2 输出）")
+            {lang("%1（%2 输出）", "%1 (%2 outputs)")   // 规范§6/§10：去emoji入lang
                  .arg(QFileInfo(p.sessionDirRelPath).fileName())
                  .arg(p.outputRefs.size())});
         sIt->setFlags(Qt::ItemIsEnabled);
@@ -317,7 +315,7 @@ void CaseDock::fillPreprocess(QTreeWidgetItem *group)
         }
         for (const QString &sc : p.sidecarRelPaths) {
             auto *cIt = new QTreeWidgetItem(sIt,
-                {QStringLiteral("📄 ") + QFileInfo(sc).fileName()});
+                {QFileInfo(sc).fileName()});   // 规范§6：去emoji
             cIt->setData(0, kRoleKind, QStringLiteral("file"));
             cIt->setData(0, kRolePath, caseDir.absoluteFilePath(sc));
             cIt->setData(0, kRoleIdx, si);
@@ -336,7 +334,7 @@ void CaseDock::fillReports(QTreeWidgetItem *group)
     for (int ri = 0; ri < reports.size(); ++ri) {
         const QString &r = reports[ri];
         auto *it = new QTreeWidgetItem(group,
-            {QStringLiteral("📑 ") + QFileInfo(r).fileName()});
+            {QFileInfo(r).fileName()});   // 规范§6：去emoji
         it->setData(0, kRoleKind, QStringLiteral("file"));
         it->setData(0, kRolePath, caseDir.absoluteFilePath(r));
         it->setData(0, kRoleIdx, ri);
@@ -352,7 +350,7 @@ void CaseDock::fillSnapshots(QTreeWidgetItem *group)
     const auto files = dir.entryInfoList(QDir::Files, QDir::Name);
     for (const auto &fi : files) {
         auto *it = new QTreeWidgetItem(group,
-            {QStringLiteral("📷 ") + fi.fileName()});
+            {fi.fileName()});   // 规范§6：去emoji
         it->setData(0, kRoleKind, QStringLiteral("file"));
         it->setData(0, kRolePath, fi.absoluteFilePath());
         it->setToolTip(0, fi.absoluteFilePath()
@@ -411,7 +409,7 @@ void CaseDock::refreshTree()
     // v1.7.1 闪退修复：树全量重建 → 旧高亮指针必然悬空，先置空；
     // 重建完成后按保存的路径重新应用高亮
     m_currentHighlight = nullptr;
-    m_titleLabel->setText(QStringLiteral("📁 %1\n%2")
+    m_titleLabel->setText(QStringLiteral("%1\n%2")   // 规范§6：去emoji
         .arg(m_caseManager->meta().caseNo + QStringLiteral("-")
              + m_caseManager->meta().title,
              m_caseManager->caseDir()));
@@ -478,7 +476,10 @@ void CaseDock::setCurrentVideoPath(const QString &videoPath)
         // 视频时字符串比较失败致高亮不跟随
         if (p.compare(norm, Qt::CaseInsensitive) != 0)
             continue;
-        item->setBackground(0, QBrush(QColor(0x2A, 0x4A, 0x6E)));   // 蓝底
+        // 规范§1.3：播放高亮底由信息类义色派生（原硬编码蓝）
+        QColor hl(Theme::Info);
+        hl.setAlpha(90);
+        item->setBackground(0, QBrush(hl));
         QFont f = item->font(0);
         f.setBold(true);
         item->setFont(0, f);
@@ -709,7 +710,7 @@ void CaseDock::onContextMenu(const QPoint &pos)
                           const QString gid = m_caseManager->createGroup(
                               name.trimmed(), &err);
                           if (gid.isEmpty()) {
-                              QMessageBox::warning(this, lang("新建机位组", "New group"), err);
+                              QMessageBox::warning(this, lang("新建机位组失败", "New group failed"), err);   // 规范§9：结论先行
                               return;
                           }
                           m_caseManager->assignToGroup(id, gid, &err);
@@ -920,11 +921,11 @@ void CaseDock::renameGroupFlow(const QString &groupId)
         return;
     QString err;
     if (!m_caseManager->renameGroup(groupId, name.trimmed(), &err)) {
-        QMessageBox::warning(this, lang("机位组改名", "Rename group"), err);
+        QMessageBox::warning(this, lang("机位组改名失败", "Rename group failed"), err);   // 规范§9：结论先行
         return;
     }
     if (!m_caseManager->saveCase(&err))
-        QMessageBox::warning(this, lang("机位组改名", "Rename group"), err);
+        QMessageBox::warning(this, lang("机位组改名失败", "Rename group failed"), err);   // 规范§9：结论先行
     refreshTree();
 }
 

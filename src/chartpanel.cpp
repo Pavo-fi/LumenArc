@@ -61,7 +61,9 @@ ChartPanel::ChartPanel(QWidget *parent)
     m_chart->setMargins(QMargins(2, 35, 2, 2));
     m_chart->legend()->setVisible(true);
     m_chart->legend()->setAlignment(Qt::AlignBottom);
-    m_chart->legend()->setLabelColor(QColor(0xF5, 0xF0, 0xE8));
+    // 规范§8：轴/刻度/图例文字 TextMuted Caption
+    m_chart->legend()->setFont(fontSans(8));
+    m_chart->legend()->setLabelColor(QColor(Theme::TextTk::Muted));
     m_chart->setBackgroundBrush(QBrush(QColor(Theme::BgPanel)));
 
     connect(m_chart, &QChart::plotAreaChanged, this, &ChartPanel::updateTimeLabelPositions);
@@ -77,15 +79,17 @@ ChartPanel::ChartPanel(QWidget *parent)
     // 隐藏 Qt 自绘轴线/刻度（与自定义刻度线叠加会产生“额外刻度线”）；
     // 刻度样式统一由 updateTimeLabels 自绘控制
     m_axisX->setLineVisible(false);
-    m_axisX->setTitleBrush(QBrush(QColor(0xF5, 0xF0, 0xE8)));
-    m_axisX->setLabelsColor(QColor(0xF5, 0xF0, 0xE8));
+    m_axisX->setTitleFont(fontSans(8)); // 规范§8：Caption 11px
+    m_axisX->setTitleBrush(QBrush(QColor(Theme::TextTk::Muted)));
+    m_axisX->setLabelsColor(QColor(Theme::TextTk::Muted));
     m_axisX->setGridLineVisible(false);
 
     m_axisY = new QValueAxis();
     m_axisY->setTitleText(lang("亮度 (Y均值)", "Brightness (Y avg)"));
     m_axisY->setRange(0, 255);
-    m_axisY->setTitleBrush(QBrush(QColor(0xF5, 0xF0, 0xE8)));
-    m_axisY->setLabelsColor(QColor(0xF5, 0xF0, 0xE8));
+    m_axisY->setTitleFont(fontSans(8)); // 规范§8：Caption 11px
+    m_axisY->setTitleBrush(QBrush(QColor(Theme::TextTk::Muted)));
+    m_axisY->setLabelsColor(QColor(Theme::TextTk::Muted));
     m_axisY->setGridLineVisible(false);
 
     m_chart->addAxis(m_axisX, Qt::AlignBottom);
@@ -117,29 +121,34 @@ ChartPanel::ChartPanel(QWidget *parent)
 
     m_cursorLine = new QGraphicsLineItem(m_chart);
     m_cursorLine->setZValue(CURSOR_Z_VALUE);
-    QPen cursorPen{QColor(Theme::Accent)}; // 品牌金
-    cursorPen.setWidth(2);
-    cursorPen.setStyle(Qt::DashLine);
+    QPen cursorPen{QColor(Theme::Accent)}; // 规范§8：播放光标 = Accent 1px 实线
+    cursorPen.setWidth(1);
+    cursorPen.setStyle(Qt::SolidLine);
     m_cursorLine->setPen(cursorPen);
     m_cursorLine->setVisible(false);
 
     // Time label above cursor line
     m_cursorTimeBg = new QGraphicsRectItem(m_chart);
     m_cursorTimeBg->setZValue(CURSOR_Z_VALUE);
-    m_cursorTimeBg->setBrush(QBrush(QColor(37, 41, 50, 230)));
+    {
+        // 规范§1.3：token 派生（37,41,50 = BgCard）
+        QColor cursorBg(Theme::Surface::Overlay);
+        cursorBg.setAlpha(230);
+        m_cursorTimeBg->setBrush(QBrush(cursorBg));
+    }
     m_cursorTimeBg->setPen(Qt::NoPen);
     m_cursorTimeBg->setVisible(false);
 
     m_cursorTimeLabel = new QGraphicsSimpleTextItem(m_chart);
     m_cursorTimeLabel->setZValue(CURSOR_Z_VALUE + 1);
     m_cursorTimeLabel->setFont(fontMono(9));
-    m_cursorTimeLabel->setBrush(QBrush(QColor(0xF5, 0xF0, 0xE8)));
+    m_cursorTimeLabel->setBrush(QBrush(QColor(Theme::TextTk::Primary))); // 规范§8：光标读数 Mono，token 化
     m_cursorTimeLabel->setVisible(false);
 
     m_cursorDataLabel = new QGraphicsSimpleTextItem(m_chart);
     m_cursorDataLabel->setZValue(CURSOR_Z_VALUE + 1);
     m_cursorDataLabel->setFont(fontMono(9));
-    m_cursorDataLabel->setBrush(QBrush(QColor(0xF5, 0xF0, 0xE8)));
+    m_cursorDataLabel->setBrush(QBrush(QColor(Theme::TextTk::Primary))); // 规范§8：光标读数 Mono，token 化
     m_cursorDataLabel->setVisible(false);
 
     // A/B region markers（Okabe-Ito 色板）
@@ -170,8 +179,13 @@ ChartPanel::ChartPanel(QWidget *parent)
     m_labelBText->setVisible(false);
 
     m_abHighlight = new QGraphicsRectItem(m_chart);
-    m_abHighlight->setBrush(QBrush(QColor(86, 180, 233, 25)));
-    m_abHighlight->setPen(Qt::NoPen);
+    {
+        // 规范§8：A/B 选段 = Accent 15% 透明填充 + 1px Accent 描边
+        QColor abFill(Theme::AccentTk::Solid);
+        abFill.setAlphaF(0.15);
+        m_abHighlight->setBrush(QBrush(abFill));
+        m_abHighlight->setPen(QPen(QColor(Theme::AccentTk::Solid), 1));
+    }
     m_abHighlight->setZValue(0);
     m_abHighlight->setVisible(false);
 
@@ -179,7 +193,7 @@ ChartPanel::ChartPanel(QWidget *parent)
     connect(this, &QWidget::customContextMenuRequested, this, [this](const QPoint &pos) {
         QMenu menu;
         QAction *fitAllAction = menu.addAction(lang("全部适应", "Fit All"));
-        QAction *fitXAction = menu.addAction(lang("X轴适应（全时长）", "Fit X (full duration)"));
+        QAction *fitXAction = menu.addAction(lang("X轴适应", "Fit X"));  // 规范§7.3 禁括号补充
         menu.addSeparator();
         QAction *tickAction = menu.addAction(m_showTickMarks ?
             lang("隐藏刻度", "Hide Tick Marks") :
@@ -540,8 +554,8 @@ void ChartPanel::onDataReplaced()
                 m_axisYVolume->setTitleText(lang("音量 (dB)", "Volume (dB)"));
                 m_axisYVolume->setLabelFormat("%.0f");
                 m_axisYVolume->setLabelsVisible(true);
-                m_axisYVolume->setTitleBrush(QBrush(QColor(0xF5, 0xF0, 0xE8)));
-                m_axisYVolume->setLabelsColor(QColor(0xF5, 0xF0, 0xE8));
+                m_axisYVolume->setTitleBrush(QBrush(QColor(Theme::TextTk::Muted))); // 规范§8
+                m_axisYVolume->setLabelsColor(QColor(Theme::TextTk::Muted));
                 m_axisYVolume->setGridLineVisible(false);
                 m_chart->addAxis(m_axisYVolume, Qt::AlignRight);
             }
@@ -766,7 +780,7 @@ public:
         , m_color(color), m_text(text), m_timeStr(timeStr), m_host(host)
     {
         setBrush(color);
-        setPen(QPen(QColor(22, 24, 29), 1.5));
+        setPen(QPen(QColor(Theme::Surface::Base), 1.5));  // 规范§1.3 令牌
         setAcceptHoverEvents(true);
     }
 
@@ -1005,12 +1019,18 @@ void ChartPanel::rebuildSeries()
             series->setName(QString(lang("区域 %1", "Region %1")).arg(rectCounter + 1));
             QPen pen(RoiModel::regionColor(rectCounter));
             pen.setWidth(1);
+            // 规范§8：第 7 条起循环换虚线
+            if (i >= Theme::DataPalette.size())
+                pen.setStyle(Qt::DashLine);
             series->setPen(pen);
             rectCounter++;
         } else {
             series->setName(QString(lang("多边形 %1", "Polygon %1")).arg(polyCounter + 1));
             QPen pen(RoiModel::polygonColor(polyCounter));
             pen.setWidth(1);
+            // 规范§8：第 7 条起循环换虚线
+            if (i >= Theme::DataPalette.size())
+                pen.setStyle(Qt::DashLine);
             series->setPen(pen);
             polyCounter++;
         }
@@ -1089,14 +1109,14 @@ void ChartPanel::rebuildSeries()
             if (g < md->mdOnsets.size() && md->mdOnsets[g].tsMs >= 0) {
                 MdMark mk;
                 mk.kind = MdMark::Onset;
-                mk.color = Qt::red;
+                mk.color = QColor(Theme::Status::Error); // 规范§8：状态色用 token
                 mk.value = qreal(md->mdOnsets[g].tsMs);
                 mk.line = new QGraphicsLineItem(m_chart);
-                mk.line->setPen(QPen(Qt::red, 1, Qt::DashLine));
+                mk.line->setPen(QPen(QColor(Theme::Status::Error), 1, Qt::DashLine));
                 mk.line->setZValue(LABEL_Z_VALUE - 3);
                 mk.label = new QGraphicsSimpleTextItem(m_chart);
                 mk.label->setFont(fontSans(8));
-                mk.label->setBrush(QBrush(Qt::red));
+                mk.label->setBrush(QBrush(QColor(Theme::Status::Error)));
                 mk.label->setZValue(LABEL_Z_VALUE - 2);
                 m_mdMarks.append(mk);
             }
@@ -1118,8 +1138,8 @@ void ChartPanel::rebuildSeries()
         m_axisYVolume->setTitleText(lang("音量 (dB)", "Volume (dB)"));
         m_axisYVolume->setLabelFormat("%.0f");
         m_axisYVolume->setLabelsVisible(true);
-        m_axisYVolume->setTitleBrush(QBrush(QColor(0xF5, 0xF0, 0xE8)));
-        m_axisYVolume->setLabelsColor(QColor(0xF5, 0xF0, 0xE8));
+        m_axisYVolume->setTitleBrush(QBrush(QColor(Theme::TextTk::Muted))); // 规范§8
+        m_axisYVolume->setLabelsColor(QColor(Theme::TextTk::Muted));
         m_axisYVolume->setGridLineVisible(false);
         m_chart->addAxis(m_axisYVolume, Qt::AlignRight);
     }
@@ -1138,13 +1158,13 @@ void ChartPanel::rebuildSeries()
     // Legend text always visible; only icon color block toggles transparent/solid
     for (QLegendMarker *marker : m_chart->legend()->markers()) {
         QLineSeries *ls = qobject_cast<QLineSeries*>(marker->series());
-        QColor color = ls ? ls->pen().color() : QColor(0xF5, 0xF0, 0xE8);
+        QColor color = ls ? ls->pen().color() : QColor(Theme::TextTk::Primary); // 规范§1.3：token 化
         connect(marker, &QLegendMarker::clicked, this, [marker, color]() {
             bool vis = !marker->series()->isVisible();
             marker->series()->setVisible(vis);
             marker->setVisible(true);  // Force marker always visible
             marker->setBrush(vis ? QBrush(color) : Qt::transparent);
-            marker->setLabelBrush(QBrush(QColor(0xF5, 0xF0, 0xE8)));
+            marker->setLabelBrush(QBrush(QColor(Theme::TextTk::Muted))); // 规范§8：图例文字
         });
     }
 
@@ -1346,7 +1366,7 @@ void ChartPanel::updateTimeLabels()
             const QString text = formatDisplayTime(displayMsOf(tVideo));
             auto *item = new QGraphicsSimpleTextItem(text, m_chart);
             item->setFont(fontMono(9, QFont::Bold));
-            item->setBrush(QBrush(QColor(0xF5, 0xF0, 0xE8)));
+            item->setBrush(QBrush(QColor(Theme::TextTk::Muted))); // 规范§8：刻度文字 TextMuted
             item->setZValue(LABEL_Z_VALUE);
             m_timeLabelItems.append(item);
             m_labelVideoTimes.append(tVideo);
@@ -1354,7 +1374,7 @@ void ChartPanel::updateTimeLabels()
 
             if (m_showTickMarks) {
                 auto *tick = new QGraphicsLineItem(m_chart);
-                tick->setPen(QPen(QColor(154, 160, 171), 2));
+                tick->setPen(QPen(QColor(Theme::TextTk::Second), 2)); // 规范§8：token 化
                 qreal x = mapTimeToX(tVideo);
                 tick->setLine(x, bottom, x, bottom + 10);
                 tick->setZValue(LABEL_Z_VALUE - 1);
@@ -1369,7 +1389,7 @@ void ChartPanel::updateTimeLabels()
             const qreal x = mapTimeToX(g.streamPosMs);
             if (m_showTickMarks) {
                 auto *gl = new QGraphicsLineItem(m_chart);
-                gl->setPen(QPen(QColor(0xE0, 0x54, 0x54), 1, Qt::DashLine));
+                gl->setPen(QPen(QColor(Theme::Status::Error), 1, Qt::DashLine)); // 规范§8：缺口状态色用 token
                 gl->setLine(x, plotArea.top(), x, bottom);
                 gl->setZValue(LABEL_Z_VALUE - 3);
                 m_tickMarkItems.append(gl);
@@ -1378,7 +1398,7 @@ void ChartPanel::updateTimeLabels()
                 lang("缺 %1", "GAP %1").arg(fmtGapDuration(g.gapWallMs)),
                 m_chart);
             gt->setFont(fontMono(8, QFont::Bold));
-            gt->setBrush(QBrush(QColor(0xE0, 0x54, 0x54)));
+            gt->setBrush(QBrush(QColor(Theme::Status::Error)));
             gt->setZValue(LABEL_Z_VALUE + 1);
             m_timeLabelItems.append(gt);
             m_labelVideoTimes.append(g.streamPosMs);
@@ -1395,7 +1415,7 @@ void ChartPanel::updateTimeLabels()
         QString text = formatDisplayTime(tReal);
         auto *item = new QGraphicsSimpleTextItem(text, m_chart);
         item->setFont(fontMono(9, QFont::Bold));
-        item->setBrush(QBrush(QColor(0xF5, 0xF0, 0xE8)));
+        item->setBrush(QBrush(QColor(Theme::TextTk::Muted))); // 规范§8：刻度文字 TextMuted
         item->setZValue(LABEL_Z_VALUE);
         m_timeLabelItems.append(item);
         m_labelVideoTimes.append(tVideo);
@@ -1404,7 +1424,7 @@ void ChartPanel::updateTimeLabels()
         // Major tick mark（亮灰，2px）
         if (m_showTickMarks) {
             auto *tick = new QGraphicsLineItem(m_chart);
-            tick->setPen(QPen(QColor(154, 160, 171), 2));
+            tick->setPen(QPen(QColor(Theme::TextTk::Second), 2)); // 规范§8：token 化
             qreal x = mapTimeToX(tVideo);
             tick->setLine(x, bottom, x, bottom + 10);
             tick->setZValue(LABEL_Z_VALUE - 1);
@@ -1415,7 +1435,12 @@ void ChartPanel::updateTimeLabels()
     // --- 底部基线（贯穿整个绘图区，弱化分隔感） ---
     if (m_showTickMarks) {
         auto *baseline = new QGraphicsLineItem(m_chart);
-        baseline->setPen(QPen(QColor(58, 65, 82), 1));
+        {
+            // 规范§8：网格线（底部基线）= Border 50% 透明，仅水平线
+            QColor grid(Theme::BorderTk::Default);
+            grid.setAlphaF(0.5);
+            baseline->setPen(QPen(grid, 1));
+        }
         baseline->setLine(plotArea.left(), bottom, plotArea.right(), bottom);
         baseline->setZValue(LABEL_Z_VALUE - 4);
         m_tickMarkItems.append(baseline);
@@ -1436,7 +1461,7 @@ void ChartPanel::updateTimeLabels()
                 for (qint64 tMinorVideo = m0; tMinorVideo <= vMax;
                      tMinorVideo += minorStep) {
                     auto *tick = new QGraphicsLineItem(m_chart);
-                    tick->setPen(QPen(QColor(74, 80, 96), 1));
+                    tick->setPen(QPen(QColor(Theme::TextTk::Muted), 1)); // 规范§8：次刻度 TextMuted
                     qreal x = mapTimeToX(tMinorVideo);
                     tick->setLine(x, bottom, x, bottom + 5);
                     tick->setZValue(LABEL_Z_VALUE - 2);
@@ -1453,7 +1478,7 @@ void ChartPanel::updateTimeLabels()
                         break;
 
                     auto *tick = new QGraphicsLineItem(m_chart);
-                    tick->setPen(QPen(QColor(74, 80, 96), 1));
+                    tick->setPen(QPen(QColor(Theme::TextTk::Muted), 1)); // 规范§8：次刻度 TextMuted
                     qreal x = mapTimeToX(tMinorVideo);
                     tick->setLine(x, bottom, x, bottom + 5);
                     tick->setZValue(LABEL_Z_VALUE - 2);
@@ -1469,13 +1494,13 @@ void ChartPanel::updateTimeLabels()
         QString text = formatDisplayTime(startReal);
         auto *item = new QGraphicsSimpleTextItem(text, m_chart);
         item->setFont(fontMono(10, QFont::Bold));
-        item->setBrush(QBrush(QColor(0xF5, 0xF0, 0xE8)));
+        item->setBrush(QBrush(QColor(Theme::TextTk::Muted))); // 规范§8：刻度文字 TextMuted
         item->setZValue(LABEL_Z_VALUE + 2);
         m_startTimeLabel = item;
 
         if (m_showTickMarks) {
             auto *tick = new QGraphicsLineItem(m_chart);
-            tick->setPen(QPen(QColor(160, 160, 160), 2));
+            tick->setPen(QPen(QColor(Theme::TextTk::Second), 2)); // 规范§8：token 化
             tick->setLine(plotArea.left(), bottom, plotArea.left(), bottom + 12);
             tick->setZValue(LABEL_Z_VALUE);
             m_tickMarkItems.append(tick);
@@ -1488,13 +1513,13 @@ void ChartPanel::updateTimeLabels()
         QString text = formatDisplayTime(endReal);
         auto *item = new QGraphicsSimpleTextItem(text, m_chart);
         item->setFont(fontMono(10, QFont::Bold));
-        item->setBrush(QBrush(QColor(0xF5, 0xF0, 0xE8)));
+        item->setBrush(QBrush(QColor(Theme::TextTk::Muted))); // 规范§8：刻度文字 TextMuted
         item->setZValue(LABEL_Z_VALUE + 2);
         m_endTimeLabel = item;
 
         if (m_showTickMarks) {
             auto *tick = new QGraphicsLineItem(m_chart);
-            tick->setPen(QPen(QColor(160, 160, 160), 2));
+            tick->setPen(QPen(QColor(Theme::TextTk::Second), 2)); // 规范§8：token 化
             tick->setLine(plotArea.right(), bottom, plotArea.right(), bottom + 12);
             tick->setZValue(LABEL_Z_VALUE);
             m_tickMarkItems.append(tick);
@@ -1821,16 +1846,20 @@ void ChartPanel::showLabelTipNow()
         m_labelTip = new QLabel(nullptr, Qt::ToolTip | Qt::FramelessWindowHint);
         m_labelTip->setAttribute(Qt::WA_TransparentForMouseEvents);
         m_labelTip->setAttribute(Qt::WA_ShowWithoutActivating);
+        // 规范§1.3：token 派生（raised 面 92% + Border 85%）
         m_labelTip->setStyleSheet(QStringLiteral(
-            "QLabel { background-color: rgba(30, 33, 40, 0.92); color: #EDE8DF;"
-            "  border: 1px solid rgba(51, 57, 71, 0.85); border-radius: 6px;"
-            "  padding: 4px 8px; }"));
+            "QLabel { background-color: %1; color: %2;"
+            "  border: 1px solid %3; border-radius: 6px;"
+            "  padding: 4px 8px; }")
+            .arg(Theme::withAlpha(Theme::Surface::Raised, 92),
+                 Theme::TextTk::Primary,
+                 Theme::withAlpha(Theme::BorderTk::Default, 85)));
     }
     m_labelTip->setText(QStringLiteral(
         "<div style='color:%1; font-size:12px;'>%2</div>"
-        "<div style='color:#9AA0AB; font-size:11px; margin-top:2px;'>%3</div>")
+        "<div style='color:%4; font-size:11px; margin-top:2px;'>%3</div>")
         .arg(m_labelTipColor.name(), m_labelTipText.toHtmlEscaped(),
-             m_labelTipTime.toHtmlEscaped()));
+             m_labelTipTime.toHtmlEscaped(), Theme::TextTk::Second));
     m_labelTip->adjustSize();
 
     // 整体对齐点右上方：悬浮窗底部 = 点右上角锚点；屏幕边缘自动避让
@@ -1967,15 +1996,8 @@ void ChartPanel::wheelEvent(QWheelEvent *event)
  */
 void ChartPanel::addLabelAtTime(qint64 timeMs)
 {
-    static const QColor presetColors[] = {
-        // Okabe-Ito 色盲友好调色板
-        QColor(86, 180, 233),   // sky blue
-        QColor(230, 159, 0),    // orange
-        QColor(0, 158, 115),    // bluish green
-        QColor(213, 94, 0),     // vermillion
-        QColor(204, 121, 167),  // reddish purple
-        QColor(240, 228, 66),   // yellow
-    };
+    // 规范§8：预设色即 Theme::DataPalette（标签色不出板）
+    static const QVector<QColor> presetColors = Theme::DataPalette;
     static int colorIndex = 0;
 
     QDialog dlg(this->viewport());
@@ -1995,8 +2017,8 @@ void ChartPanel::addLabelAtTime(qint64 timeMs)
         auto *btn = new QPushButton(&dlg);
         btn->setFixedSize(32, 32);
         btn->setStyleSheet(QString(
-            "QPushButton { background-color: %1; border: 2px solid #333947; border-radius: 4px; }"
-            "QPushButton:hover { border: 2px solid white; }"
+            "QPushButton { background-color: %1; border: 2px solid " + Theme::BorderTk::Default + "; border-radius: 4px; }"
+            "QPushButton:hover { border: 2px solid " + Theme::TextTk::Primary + "; }"  // 规范§1.3 令牌
         ).arg(c.name()));
         connect(btn, &QPushButton::clicked, &dlg, [&dlg, &chosenColor, c]() {
             chosenColor = c;
@@ -2024,7 +2046,7 @@ void ChartPanel::addLabelAtTime(qint64 timeMs)
         QString text = lineEdit->text().trimmed();
         if (!text.isEmpty()) {
             if (!chosenColor.isValid()) {
-                chosenColor = presetColors[colorIndex % 6];
+                chosenColor = presetColors[colorIndex % presetColors.size()];
                 colorIndex++;
             }
             m_labels.append(ChartLabel{timeMs, text, chosenColor});

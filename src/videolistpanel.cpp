@@ -16,6 +16,8 @@
 #include <QHBoxLayout>
 #include <QPushButton>
 #include <QLabel>
+#include <QAbstractButton>
+#include <QMessageBox>
 #include <QFileInfo>
 #include <QFileDialog>
 #include <QDragEnterEvent>
@@ -229,6 +231,25 @@ void VideoListPanel::onRemoveClicked()
 
 void VideoListPanel::onClearClicked()
 {
+    if (m_videos.isEmpty())
+        return;
+    // 规范§9 破坏性确认：说明不可逆后果 + 主按钮用动作本身命名（DestructiveRole），
+    // 与 casedock.cpp 删除确认同一模式
+    QMessageBox box(this);
+    box.setWindowTitle(lang("清空视频列表", "Clear video list"));
+    box.setIcon(QMessageBox::Warning);
+    box.setText(lang(
+        "将删除全部 %1 个视频：\n列表内所有视频条目与分析顺序\n\n"
+        "源文件保留在磁盘上。此操作不可恢复！",
+        "Remove all %1 videos: every entry in the list and the playback order\n\n"
+        "Source files stay on disk. This cannot be undone!")
+                    .arg(m_videos.size()));
+    QAbstractButton *btnClear = box.addButton(
+        lang("清空列表", "Clear list"), QMessageBox::DestructiveRole);
+    box.addButton(lang("取消", "Cancel"), QMessageBox::RejectRole);
+    box.exec();
+    if (box.clickedButton() != btnClear)
+        return;
     clearVideos();
 }
 

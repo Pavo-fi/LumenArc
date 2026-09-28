@@ -72,6 +72,16 @@ public:
     /// 与 run()/runAtPositions() 互斥（isRunning 守卫）。
     void runCalibPhoto(const QString &imagePath, const QRect &monitorBox,
                        const QRect &beijingBox);
+
+    /// P-98 秒级跳变对齐（2026-09-27 拍板）：跑 probe 的 --tickscan ——
+    /// 像素盯 OSD 秒位跳变（位置用逐帧 PTS，幅度用字模聚类），稀疏 OCR 锚点定绝对值。
+    /// 实测：45 分钟片解码+分析 ~75 秒，抽检 11/12 完全一致、最大偏差 1 秒。
+    /// anchorsJson：{file: [[streamMs, wallMs], ...]}（调用方先跑 runAtPositions 产出）
+    /// tickOutJson：映射表输出路径（服务层读回后构造 TimeCalibration）。
+    /// 与 run()/runAtPositions() 互斥（isRunning 守卫）。
+    void runTickScan(const QString &videoPath, const QString &anchorsJson,
+                     const QString &tickOutJson, const QString &roiJson,
+                     const QString &workDir, qint64 trustedDurationMs);
     void cancel();
     bool isRunning() const;
 
@@ -88,6 +98,8 @@ signals:
                             const QVector<QPair<QString, double>> &monitorLines,
                             const QVector<QPair<QString, double>> &beijingLines,
                             const QString &error);
+    /// P-98：秒级跳变对齐跑完（ok=false 时 error 为可读原因，C2 不静默）
+    void tickScanFinished(const QString &videoPath, bool ok, const QString &error);
 
 private slots:
     void onReadyReadStderr();
@@ -104,6 +116,9 @@ private:
     int m_total = 0;
     bool m_cancelled = false;
     bool m_atMode = false;      // true = runAtPositions 取样模式（onFinished 分流）
+    bool m_tickMode = false;    // true = runTickScan 秒级跳变模式（onFinished 分流）
+    QString m_tickVideo;        // tickMode：回报用
+    QString m_tickOut;          // tickMode：probe 输出映射表路径
     bool m_calibPhotoMode = false; // true = runCalibPhoto 校时照片模式（分流）
     int m_availability = -1;    // -1 未检测 / 0 不可用 / 1 可用
     QString m_availError;

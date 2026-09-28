@@ -112,19 +112,25 @@ int RoiModel::findIndexByRoiId(int roiId) const
     return m_rectRoiIds.indexOf(roiId);
 }
 
+// 规范§8：数据系列颜色只从 DataPalette 顺序取色（第 7 条起循环）。
+// 域层不可 include theme.h（lumenarc_roi_model_test 仅链 Core+Gui），
+// 此板镜像 Theme::DataPalette 六色同序（改动必须两边同步）；矩形/多边形统一同板（规范§14）。
+static const QList<QColor> &dataPalette()
+{
+    static const QList<QColor> colors = {
+        QColor(86, 180, 233),   // 天蓝 sky blue
+        QColor(230, 159, 0),    // 橙 orange
+        QColor(0, 158, 115),    // 青绿 bluish green
+        QColor(213, 94, 0),     // 朱红 vermillion
+        QColor(204, 121, 167),  // 紫红 reddish purple
+        QColor(240, 228, 66)    // 黄 yellow
+    };
+    return colors;
+}
+
 QColor RoiModel::regionColor(int index)
 {
-    // Okabe-Ito 色盲友好调色板（与图表数据线/标签共用一套视觉语言）
-    static const QList<QColor> colors = {
-        QColor(213, 94, 0),     // 朱红 vermillion
-        QColor(230, 159, 0),    // 橙 orange
-        QColor(240, 228, 66),   // 黄 yellow
-        QColor(0, 158, 115),    // 青绿 bluish green
-        QColor(86, 180, 233),   // 天蓝 sky blue
-        QColor(0, 114, 178),    // 蓝 blue
-        QColor(204, 121, 167)   // 紫红 reddish purple
-    };
-    return colors[index % colors.size()];
+    return dataPalette()[index % dataPalette().size()];
 }
 
 // ==================== 多边形 ROI ====================
@@ -220,14 +226,6 @@ int RoiModel::findPolygonIndexByRoiId(int roiId) const
 
 QColor RoiModel::polygonColor(int index)
 {
-    static const QList<QColor> colors = {
-        QColor(255, 100, 100),   // 浅红 (Light red)
-        QColor(255, 180, 80),    // 杏黄 (Apricot)
-        QColor(255, 220, 100),   // 金色 (Gold)
-        QColor(100, 220, 130),   // 薄荷绿 (Mint)
-        QColor(100, 200, 255),   // 天蓝 (Sky blue)
-        QColor(160, 130, 220),   // 薰衣草 (Lavender)
-        QColor(220, 130, 180)    // 玫瑰 (Rose)
-    };
-    return colors[index % colors.size()];
+    // 规范§8：与矩形同一 DataPalette 顺序取色，偏移 +1 避免与同号矩形撞色，六色循环
+    return dataPalette()[(index + 1) % dataPalette().size()];
 }

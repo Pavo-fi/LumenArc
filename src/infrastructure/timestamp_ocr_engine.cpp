@@ -9,6 +9,16 @@
  * Licensed under the Apache License, Version 2.0
  */
 #include "timestamp_ocr_engine.h"
+
+// 取证日志门控（2026-09-28）：校时排查用的 calib_debug.log 只在显式开启时写，
+// 默认**不往程序目录写文件**（避免用户机器上留调试产物）。
+// 需要排查时设环境变量 LUMENARC_CALIB_DEBUG=1。
+static bool calibDebugEnabled()
+{
+    static const bool on =
+        qEnvironmentVariableIsSet("LUMENARC_CALIB_DEBUG");
+    return on;
+}
 #include "tool_paths.h"
 
 #include <QProcess>
@@ -235,6 +245,108 @@ void TimestampOcrEngine::run(const QStringList &paths, const QString &workDir,
     if (!m_process->waitForStarted(5000)) {
         failAll(PreprocessError::OcrEngineMissing,
                 QStringLiteral("failed to start python"));
+    }
+}
+
+void TimestampOcrEngine::runTickScan(const QString &videoPath,
+                                     const QString &anchorsJson,
+                                     const QString &tickOutJson,
+                                     const QString &roiJson,
+                                     const QString &workDir,
+                                     qint64 trustedDurationMs)
+{
+    if (isRunning() || videoPath.isEmpty())
+        return;
+    QString err;
+    if (!available(&err)) {
+        emit tickScanFinished(videoPath, false, err);
+        return;
+    }
+    const QString ffmpeg = ToolPaths::findFfmpegPath();
+    QString ffprobe = ToolPaths::findFfprobePath();
+    if (ffprobe.isEmpty() || !QFile::exists(ffprobe)) {
+        // 同目录推 ffprobe（打包同仓）
+        ffprobe = QFileInfo(ffmpeg).absoluteDir().absoluteFilePath(
+            QStringLiteral("ffprobe.exe"));
+        if (!QFile::exists(ffprobe))
+            ffprobe = QFileInfo(ffmpeg).absoluteDir().absoluteFilePath(
+                QStringLiteral("ffprobe"));
+    }
+    const QString script = QCoreApplication::applicationDirPath()
+        + QStringLiteral("/probe_timestamps.py");
+    QDir().mkpath(workDir);
+    const QString durPath = workDir + QStringLiteral("/tick_durations.json");
+    {
+        QJsonObject o;
+        o.insert(QDir::toNativeSeparators(videoPath),
+                 static_cast<double>(qMax<qint64>(0, trustedDurationMs)));
+        QFile f(durPath);
+        if (f.open(QIODevice::WriteOnly | QIODevice::Text))
+            f.write(QJsonDocument(o).toJson(QJsonDocument::Compact));
+    }
+    QStringList args{QStringLiteral("-X"), QStringLiteral("utf8"), script,
+                     QStringLiteral("--tickscan-out"), tickOutJson,
+                     QStringLiteral("--ffmpeg-path"), ffmpeg,
+                     QStringLiteral("--ffprobe-path"), ffprobe,
+                     QStringLiteral("--work-dir"), workDir,
+                     QStringLiteral("--duration-json"), durPath};
+    if (!anchorsJson.isEmpty())
+        args << QStringLiteral("--tickscan-anchors") << anchorsJson;
+    if (!roiJson.isEmpty())
+        args << QStringLiteral("--roi-json") << roiJson;
+    args << videoPath;
+
+    m_total = 1;
+    m_cancelled = false;
+    m_tickMode = true;
+    m_tickVideo = videoPath;
+    m_tickOut = tickOutJson;
+    m_stdoutBuf.clear();
+    m_stderrBuf.clear();
+
+    m_process = new QProcess(this);
+    m_process->setProgram(pythonExecutable());
+    m_process->setArguments(args);
+    QProcessEnvironment env = QProcessEnvironment::systemEnvironment();
+    env.insert(QStringLiteral("OMP_NUM_THREADS"), QStringLiteral("1"));
+    env.insert(QStringLiteral("OPENBLAS_NUM_THREADS"), QStringLiteral("1"));
+    env.insert(QStringLiteral("MKL_NUM_THREADS"), QStringLiteral("1"));
+    m_process->setProcessEnvironment(env);
+    connect(m_process, &QProcess::readyReadStandardOutput, this, [this]() {
+        m_stdoutBuf += m_process->readAllStandardOutput();
+    });
+    connect(m_process, &QProcess::readyReadStandardError,
+            this, &TimestampOcrEngine::onReadyReadStderr);
+    connect(m_process, qOverload<int, QProcess::ExitStatus>(&QProcess::finished),
+            this, [this](int code, QProcess::ExitStatus) { onFinished(code); });
+    // 看门狗（C4）：秒级跳变要解码全片（实测 45 分钟片 ~75 秒），按 3× 时长+C4 基线
+    if (!m_watchdog) {
+        m_watchdog = new QTimer(this);
+        m_watchdog->setSingleShot(true);
+        connect(m_watchdog, &QTimer::timeout, this, [this]() {
+            if (m_process) {
+                m_process->kill();
+                if (m_tickMode) {
+                    m_tickMode = false;
+                    emit tickScanFinished(m_tickVideo, false,
+                                          QStringLiteral("tickscan timeout"));
+                }
+            }
+        });
+    }
+    const qint64 wd = 300000 + qMax<qint64>(600000, trustedDurationMs * 3);
+    m_watchdog->start(static_cast<int>(qMin<qint64>(wd, 7200000)));
+    m_process->start();
+    if (!m_process->waitForStarted(5000)) {
+        // P1-2（reviewer）：必须复位模式位，否则此后所有 at 模式运行都被误路由到
+        // tick 分支（三点结果被吞；残留旧 map 还会被当成新结果应用）
+        m_tickMode = false;
+        m_tickVideo.clear();
+        m_tickOut.clear();
+        m_process->deleteLater();
+        m_process = nullptr;
+        emit tickScanFinished(videoPath, false,
+                              QStringLiteral("failed to start python"));
     }
 }
 
@@ -535,6 +647,40 @@ void TimestampOcrEngine::onFinished(int exitCode)
         return;
     }
 
+    // P-98：秒级跳变模式分流（probe 把映射表写文件，此处只判成败）
+    if (m_tickMode) {
+        m_tickMode = false;
+        const QString v = m_tickVideo;
+        const QString out = m_tickOut;
+        m_tickVideo.clear();
+        m_tickOut.clear();
+        // P2-3（reviewer）：读回 JSON 的 ok/error 字段为准，别用体积启发式
+        // （短路径的失败响应 <64B 会被误判成 exit 0）
+        bool ok = false;
+        QString err;
+        QFile mf(out);
+        if (exitCode == 0 && mf.exists() && mf.open(QIODevice::ReadOnly)) {
+            const QJsonObject root =
+                QJsonDocument::fromJson(mf.readAll()).object();
+            // 单文件 tickscan：取第一个 entry
+            for (auto it = root.begin(); it != root.end(); ++it) {
+                const QJsonObject ent = it.value().toObject();
+                ok = ent.value(QStringLiteral("ok")).toBool();
+                if (!ok)
+                    err = ent.value(QStringLiteral("error")).toString();
+                break;
+            }
+        }
+        if (!ok && err.isEmpty()) {
+            err = QStringLiteral("tickscan exit %1").arg(exitCode);
+            const QString tail = QString::fromUtf8(m_stderrBuf.right(400));
+            if (!tail.trimmed().isEmpty())
+                err += QStringLiteral(" :: ") + tail.trimmed();
+        }
+        emit tickScanFinished(v, ok, err);
+        return;
+    }
+
     if (exitCode != 0 && m_stdoutBuf.trimmed().isEmpty()) {
         if (m_atMode) {
             m_atMode = false;
@@ -562,6 +708,22 @@ void TimestampOcrEngine::onFinished(int exitCode)
     // ---- 校时取样模式解析 ----
     if (m_atMode) {
         m_atMode = false;
+        // TEMP-DEBUG（2026-09-26，校时「算了不落库」现场排查）——把 probe 的
+        // 原始 stdout/stderr 落到程序目录，供机外分析；定位后删除本块。
+        {
+            QFile dbg(QCoreApplication::applicationDirPath()
+                      + QStringLiteral("/calib_debug.log"));
+            if (calibDebugEnabled()
+                && dbg.open(QIODevice::WriteOnly | QIODevice::Append | QIODevice::Text)) {
+                dbg.write(QStringLiteral("\n===== [%1] atPositions exit=%2 =====\nSTDOUT:\n%3\nSTDERR(tail):\n%4\n")
+                              .arg(QDateTime::currentDateTime().toString(
+                                       QStringLiteral("yyyy-MM-dd HH:mm:ss.zzz")))
+                              .arg(exitCode)
+                              .arg(QString::fromUtf8(m_stdoutBuf))
+                              .arg(QString::fromUtf8(m_stderrBuf.right(4000)))
+                              .toUtf8());
+            }
+        }
         QVector<TimeCalibration::Sample> samples;
         const QJsonArray arr = doc.array();
         for (const QJsonValue &fv : arr) {
@@ -587,6 +749,19 @@ void TimestampOcrEngine::onFinished(int exitCode)
         if (samples.isEmpty()) {
             emit atPositionsFailed(QStringLiteral("ocr_all_failed"));
             return;
+        }
+        {
+            QFile dbg(QCoreApplication::applicationDirPath()
+                      + QStringLiteral("/calib_debug.log"));
+            if (calibDebugEnabled()
+                && dbg.open(QIODevice::WriteOnly | QIODevice::Append | QIODevice::Text)) {
+                QString s;
+                for (const auto &x : samples)
+                    s += QStringLiteral("  [engine] streamMs=%1 wall=%2 conf=%3 text=%4\n")
+                             .arg(x.streamMs).arg(x.wallMs).arg(x.conf).arg(x.rawText);
+                dbg.write((QStringLiteral("PARSED SAMPLES (%1):\n").arg(samples.size()) + s)
+                              .toUtf8());
+            }
         }
         emit atPositionsFinished(samples);
         return;

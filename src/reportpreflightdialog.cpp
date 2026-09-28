@@ -3,6 +3,7 @@
 #include "app/case_manager.h"
 #include "app/report_service.h"
 #include "domain/report_preflight.h"
+#include "theme.h"
 
 #include <QDialogButtonBox>
 #include <QFormLayout>
@@ -101,14 +102,14 @@ void ReportPreflightDialog::recheck()
     m_checks->clear();
     for (const auto &it : items) {
         const QString icon = it.level == ReportPreflightItem::Block
-            ? QStringLiteral("❌")
+            ? QStringLiteral("✗")
             : it.level == ReportPreflightItem::Warn
-                ? QStringLiteral("⚠️") : QStringLiteral("✅");
+                ? QStringLiteral("⚠") : QStringLiteral("✓");
         auto *row = new QTreeWidgetItem(m_checks, {icon, it.text});
         if (it.level == ReportPreflightItem::Block)
-            row->setForeground(1, QBrush(QColor(200, 40, 40)));
+            row->setForeground(1, QBrush(QColor(Theme::Status::Error)));  // 规范§1.3 令牌
         else if (it.level == ReportPreflightItem::Warn)
-            row->setForeground(1, QBrush(QColor(180, 130, 20)));
+            row->setForeground(1, QBrush(QColor(Theme::AccentTk::Text)));  // 规范§1.3 令牌
     }
 
     // 逐路补录表
@@ -130,7 +131,7 @@ void ReportPreflightDialog::recheck()
     const bool blocked = reportPreflightBlocked(items);
     m_genBtn->setEnabled(!blocked);
     m_genBtn->setToolTip(blocked
-        ? tr("存在 ❌ 阻断项，请先处理（缺失文件/全部未校时）")
+        ? tr("存在 ✗ 阻断项，请先处理（缺失文件/全部未校时）")
         : tr("补录已保存；点击生成 DOCX 报告"));
 }
 

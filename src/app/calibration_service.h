@@ -61,6 +61,15 @@ public:
     /// 首尾任一点被 OCR 错读会误判变速 → 白跑数分钟重建。
     void runQuickCheck(const QString &videoPath, qint64 durationMs,
                        const QRectF &roi = QRectF());
+
+    /// P-98 秒级跳变对齐（2026-09-27 拍板）：先抽 ~30 个稀疏 OCR 锚点，
+    /// 再跑像素盯秒位跳变（解码一趟）+ 字模聚类定跳幅 → 秒级映射表。
+    /// 实测：45 分钟片共 ~3 分钟；抽检 11/12 完全一致（最大偏差 1 秒）。
+    /// 结果经 tickAlignReady 发出（候选，含 tickAnchors）；
+    /// 失败（秒位不可用/跳变率异常/无锚点）经 tickAlignFailed 回报，
+    /// 调用方应回落「时间重建」。
+    void runTickAlign(const QString &videoPath, qint64 durationMs,
+                      const QRectF &roi = QRectF());
     /// 第三点确认（v1.2.2）：预检三点共线校验。true = 任一点疑似错读
     ///（时间不可信，应拒绝自动路由）。samples 任意顺序（内部排序）；
     /// 少于 3 点无法校验返回 false（维持首尾两点旧语义）。
@@ -117,6 +126,11 @@ signals:
                             const QVector<QPair<QString, double>> &monitorLines,
                             const QVector<QPair<QString, double>> &beijingLines,
                             const QString &error);
+    /// P-98 秒级对齐完成（候选，不生效；proposed.tickAnchors 非空）
+    void tickAlignReady(const QString &videoPath,
+                        const TimeCalibration &proposed);
+    /// P-98 秒级对齐不可用（可读原因；调用方回落时间重建）
+    void tickAlignFailed(const QString &videoPath, const QString &error);
     void failed(const QString &videoPath, const QString &error);
 
 private slots:
@@ -124,6 +138,10 @@ private slots:
     void onAtPositionsFailed(const QString &error);
 
 private:
+    /// P-98 阶段（复用 at-positions 回调：先锚点、后跳变扫描）
+    enum class TickStage { None, Anchors, Scan };
+    void onTickAnchorsFinished(const QVector<TimeCalibration::Sample> &samples);
+    void onTickScanFinished(const QString &videoPath, bool ok, const QString &err);
     void onReconBatchFinished(const QVector<TimeCalibration::Sample> &samples);
     void analyzeCoarse();        ///< 粗采样完成后：判边界 → 转加密或出结果
     void finalizeReconstruction(); ///< 加密完成后：detect → 构造候选
@@ -141,4 +159,15 @@ private:
     ReconStage m_reconStage = ReconStage::None;
     QVector<TimeCalibration::Sample> m_reconSamples;  ///< 粗采样+加密测点累积
     bool m_quickPending = false;   ///< 秒级预检进行中
+
+    // P-98 秒级跳变对齐状态
+    TickStage m_tickStage = TickStage::None;
+    // P-98.1：日期错读点「去 ROI 全帧重读」（实测：用户框切掉年份末位时
+    // ROI 读成 2023、全帧稳定读 2026）；只重试一轮，保留已通过日期闸的点
+    bool m_dateRetryPending = false;
+    bool m_dateRetryTried = false;
+    QVector<TimeCalibration::Sample> m_dateRetryKept;
+    QVector<TimeCalibration::Sample> m_tickSamples;   ///< 稀疏锚点（留档用）
+    QString m_tickOutPath;                            ///< probe 输出映射表路径
+    QString m_tickWorkDir;
 };

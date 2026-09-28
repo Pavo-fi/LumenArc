@@ -84,7 +84,7 @@ public:
     /// @brief 在多边形表内查找指定 ROI ID 的索引，未找到返回 -1
     int findPolygonIndexByRoiId(int roiId) const;
 
-    /// @brief 按索引返回调色板颜色（7色循环）
+    /// @brief 按索引返回调色板颜色（与矩形同一 Okabe-Ito 板，偏移 +1，7色循环；规范§8）
     static QColor polygonColor(int index);
 
 signals:

@@ -129,7 +129,7 @@ void ImagePreviewDialog::updateStatus()
 void ImagePreviewDialog::paintEvent(QPaintEvent *)
 {
     QPainter p(this);
-    p.fillRect(rect(), QColor(18, 19, 22));
+    p.fillRect(rect(), QColor(Theme::Surface::Base));  // 规范§1.3 令牌
     if (m_img.isNull()) {
         p.setPen(QColor(Theme::TextSecond));
         p.drawText(rect(), Qt::AlignCenter,

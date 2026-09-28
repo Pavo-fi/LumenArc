@@ -203,9 +203,8 @@ void ClipTimelineWidget::paintEvent(QPaintEvent *)
         QColor fill;
         QString label;
         if (clip->timeKnown && clip->startMs > 0) {
-            fill = clip->groupIndex == 0
-                ? QColor(Theme::Accent)
-                : Theme::DataPalette[clip->groupIndex % Theme::DataPalette.size()];
+            // 规范§8：系列色只从 DataPalette 顺序取色（含 group 0，不替换为品牌金）
+            fill = Theme::DataPalette[clip->groupIndex % Theme::DataPalette.size()];
             label = QString::number(clip->displayIndex);
         } else {
             fill = QColor(Theme::BgCard);

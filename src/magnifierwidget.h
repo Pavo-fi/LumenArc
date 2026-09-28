@@ -3,7 +3,7 @@
  * @brief 放大镜停靠窗口：滚轮缩放/光标跟随/截图叠加同步
  * @author Huang Jingyun, Liu xinghua, Huang Wenhua
  * @date 2026-05-31
- * @version 0.3
+ * @version 0.4
  *
  * Copyright 2026 Huang Jingyun/Liu xinghua/Huang Wenhua. All rights reserved.
  * Licensed under the Apache License, Version 2.0
@@ -13,6 +13,7 @@
 #include <QWidget>
 #include <QRect>
 #include <QImage>
+#include <QByteArray>
 #include "displayadjust.h"
 
 class OverlayWidget;
@@ -85,6 +86,10 @@ public:
     /// 当前放大视图的裁剪图（旋转+画面调节已应用，与放大视图逐位一致；
     /// §14 快照全面化用）。未收到帧时返回空图。
     QImage currentMagnifiedImage() const;
+
+    /// 放大视图显示链 LUT（旋转之后应用；空 = 恒等）。
+    /// 导出侧取用这张表，保证产物右半与放大视图逐位一致（所见即所得）。
+    QByteArray displayLut() const;
 
 signals:
     /// 源区域变化（原视频系）：光标跟随/滚轮缩放/中键平移/旋转/切视频

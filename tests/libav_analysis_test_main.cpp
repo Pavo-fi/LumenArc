@@ -813,6 +813,24 @@ int main(int argc, char **argv)
         video = QString::fromUtf8(argv[1]);
     if (argc > 2)
         audioVideo = QString::fromUtf8(argv[2]);
+    // v1.18.x 临时探针：打印 videoTiming（可信时长）——排查“校时取样跨度过短”
+    // （UI 有效时长 = min(引擎观测, 可信)；可信值错成几秒时取样只能落在片头）
+    if (qEnvironmentVariableIsSet("LUMENARC_TIMING_PROBE")) {
+        // 路径走 UTF-8 文件（避开控制台代码页把中文路径弄花）
+        QString probePath = video;
+        const QString pf = qEnvironmentVariable("LUMENARC_TIMING_PROBE_FILE");
+        if (!pf.isEmpty()) {
+            QFile f(pf);
+            if (f.open(QIODevice::ReadOnly))
+                probePath = QString::fromUtf8(f.readAll()).trimmed();
+        }
+        LibavAnalysisEngine probe;
+        const IAnalysisEngine::VideoTiming vt = probe.videoTiming(probePath);
+        fprintf(stderr, "[probe] videoTiming durationMs=%lld fps=%.3f exists=%d\n",
+                static_cast<long long>(vt.durationMs), double(vt.fps),
+                QFile::exists(probePath) ? 1 : 0);
+        return 0;
+    }
     testRealVideoAB(video);
     testAudioAB(audioVideo);
 

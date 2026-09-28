@@ -30,6 +30,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 
 import cv2
@@ -233,6 +234,35 @@ def preprocess(crop):
     return enhanced, opened
 
 
+def variant_image(crop, mode):
+    """同一裁剪的多种预处理变体（v1.18.x 鲁棒性）。
+
+    背景：OSD 是黑描边白字，压在亮天空上时个别字（实测年份末位“6”）
+    整体发黑——全局 OTSU 会把它归为背景“吃掉”，于是 OCR 读出一个**看似合理**
+    的错误日期（2026→2023，conf 0.95），而且旧链路拿到 full 命中就返回，
+    从不试其它变体。
+    变体：enh=增强灰图（原主路）/ inv=OTSU 反向（黑字变白字）/
+    ada=自适应阈值（行内黑白混排时最稳）。
+    """
+    gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY) if crop.ndim == 3 else crop
+    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+    en = clahe.apply(gray)
+    if mode == "enh":
+        return en
+    blur = cv2.GaussianBlur(en, (3, 3), 0)
+    if mode == "otsu":
+        _, b = cv2.threshold(blur, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+        b = cv2.morphologyEx(b, cv2.MORPH_OPEN, np.ones((2, 2), np.uint8))
+        return b
+    if mode == "inv":
+        _, b = cv2.threshold(blur, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+        return cv2.bitwise_not(b)
+    if mode == "ada":
+        return cv2.adaptiveThreshold(en, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+                                     cv2.THRESH_BINARY, 31, -5)
+    return en
+
+
 def ocr_image(img):
     """Run RapidOCR on one image. Returns list[{box, text, score}]."""
     if _engine is None:
@@ -403,18 +433,25 @@ def parse_timestamp(text, filename=""):
     return None
 
 
-def _search_crops(crops, filename, use_binary):
+def _search_crops(crops, filename, use_binary, variant=None):
     """Scan crops; 命中分级：full（完整日期）恒优先于 noyear/timeonly
     （窄裁剪碎片如 "11.1 03:18:01" 常被错配月日，full 行才是可信证据）。
     full 命中即提前结束（控制成本）。
     crops 元素为 (img, rect, scale)（crop_blocks 契约；全帧传 ((img,整图,1.0),)）。
-    命中 cand 带 fbox：命中行在原图坐标（P-60 ROI 自学习位置回报）。"""
+    命中 cand 带 fbox：命中行在原图坐标（P-60 ROI 自学习位置回报）。
+    variant：v1.18.x —— 指定预处理变体（enh/otsu/inv/ada），None = 旧行为
+    （use_binary 决定 enh/otsu）。"""
     best_full = None
     best_part = None
     for crop, rect, scale in crops:
-        enhanced, binary = preprocess(crop)
-        variant = binary if use_binary else enhanced
-        for text, score, bbox in merge_ocr_lines(ocr_image(variant)):
+        if variant is not None:
+            variant_img = variant_image(crop, variant)
+            variant_img = (cv2.cvtColor(variant_img, cv2.COLOR_GRAY2BGR)
+                           if variant_img.ndim == 2 else variant_img)
+        else:
+            enhanced, binary = preprocess(crop)
+            variant_img = binary if use_binary else enhanced
+        for text, score, bbox in merge_ocr_lines(ocr_image(variant_img)):
             if score < MIN_OCR_SCORE:
                 continue
             parsed = parse_timestamp(text, filename)
@@ -456,6 +493,15 @@ def ocr_frame(frame_path, filename, roi=None):
         crop = img[y0:y1, x0:x1]
         if crop.size == 0:
             return None
+        # v1.18.x：ROI 外扩一点再识别——用户框常把年份末位/首位切在框外
+        # （实测「2026」的 6 被切一半 → 读成 2023）。外扩量小，不引入干扰。
+        pad_x = max(6, int((x1 - x0) * 0.08))
+        pad_y = max(3, int((y1 - y0) * 0.30))
+        px0 = max(0, x0 - pad_x)
+        px1 = min(w, x1 + pad_x)
+        py0 = max(0, y0 - pad_y)
+        py1 = min(h, y1 + pad_y)
+        crop = img[py0:py1, px0:px1]
         # 放大 3 倍（时间戳字号小，放大后 OCR 更稳）
         crop = cv2.resize(crop, None, fx=3.0, fy=3.0,
                           interpolation=cv2.INTER_CUBIC)
@@ -464,11 +510,78 @@ def ocr_frame(frame_path, filename, roi=None):
             crop = cv2.resize(crop,
                               (OCR_MAX_WIDTH, int(ch * OCR_MAX_WIDTH / cw)),
                               interpolation=cv2.INTER_AREA)
-        best = _search_crops([(crop, (0, 0, cw, ch), 1.0)], filename,
-                             use_binary=False)
+        # v1.18.x 鲁棒性（黑描边白字压在亮背景上时个别字整位发黑，实测年份末位
+        # 2026→2023）：**精确 ROI 与外扩 ROI 都试，再按多变体多数表决**。
+        # 单独任一策略都会漏：实测把框左移 0.3% 时只用精确 ROI 能读对（外扩反而丢），
+        # 左移 0.9% 时精确 ROI 读错而外扩/反向能读出正确值。
+        # 成本控制：同裁剪的 enh+inv 两遍一致即返回（绝大多数帧走这里）。
+        def _roi_crops(ax0, ay0, ax1, ay1):
+            c = img[ay0:ay1, ax0:ax1]
+            if c.size == 0:
+                return None
+            c = cv2.resize(c, None, fx=3.0, fy=3.0,
+                           interpolation=cv2.INTER_CUBIC)
+            chh, cww = c.shape[:2]
+            if cww > OCR_MAX_WIDTH:
+                c = cv2.resize(c, (OCR_MAX_WIDTH,
+                                   int(chh * OCR_MAX_WIDTH / cww)),
+                               interpolation=cv2.INTER_AREA)
+            return [(c, (0, 0, cww, chh), 1.0)]
+
+        exact_crops = _roi_crops(x0, y0, x1, y1)
+        pad_crops = _roi_crops(px0, py0, px1, py1)
+        # 快路（2026-09-28 实测教训）：先只跑 1 遍「精确 ROI + 增强灰图」；
+        # 置信度足够高就直接返回 —— 否则正常帧会被多变体拖成 2~3 倍耗时
+        # （实测 30 锚点 85s → 225s）。只有低置信/无命中/读数可疑时才上外扩与变体。
+        fast = _search_crops(exact_crops, filename, use_binary=False,
+                             variant="enh") if exact_crops else None
+        if fast is not None and fast.get("kind") == "full"                 and fast.get("conf", 0.0) >= FAST_PATH_CONF:
+            fast["roiNorm"] = [float(roi[0]), float(roi[1]),
+                               float(roi[2]), float(roi[3])]
+            return fast
+        cands = []
+        best = None
+        best_part = None
+        for cset in (exact_crops, pad_crops):
+            if cset is None:
+                continue
+            for v in ("enh", "inv"):
+                r = _search_crops(cset, filename, use_binary=False, variant=v)
+                if r is not None and r.get("kind") == "full":
+                    cands.append(r)
+                    if len(cands) >= 2 and (cands[-1]["dt"], cands[-1]["ms"]) == \
+                            (cands[0]["dt"], cands[0]["ms"]):
+                        # 取「互相一致的那两个」（不能 max(cands[:2])——中间那个
+                        # 可能是异议者；reviewer P2-5）
+                        best = max((cands[0], cands[-1]), key=lambda x: x["conf"])
+                        best["variantsAgree"] = 2
+                        break
+                elif r is not None and best_part is None:
+                    best_part = r      # 无日期的 time-only 行：留作兜底
+            if best is not None:
+                break
         if best is None:
-            best = _search_crops([(crop, (0, 0, cw, ch), 1.0)], filename,
-                                 use_binary=True)
+            if not cands:
+                for cset in (exact_crops, pad_crops):
+                    if cset is None:
+                        continue
+                    best = _search_crops(cset, filename, use_binary=True)
+                    if best is not None:
+                        break
+                if best is None:
+                    best = best_part   # 兜底：time-only 行也要出结果（不比旧版少）
+            else:
+                groups = {}
+                for r in cands:
+                    groups.setdefault((r["dt"], r["ms"]), []).append(r)
+                top = max(groups.values(),
+                          key=lambda g: (len(g), max(x["conf"] for x in g)))
+                best = max(top, key=lambda x: x["conf"])
+                best["variantsAgree"] = len(top)
+                if len(top) == 1 and len(cands) > 1:
+                    # 各候选全不一致 → 降权标记（上层多帧投票/日期一致性闸处置）
+                    best["conf"] = best["conf"] * 0.7
+                    best["variantDisagree"] = True
         if best is not None:
             best["roiNorm"] = [float(roi[0]), float(roi[1]),
                                float(roi[2]), float(roi[3])]
@@ -560,8 +673,25 @@ def vote(candidates):
 
 
 def ocr_side(cands, filename, roi=None):
-    """OCR one side (head/tail) with incremental voting: stop as soon as two
-    frames agree (halves the common-case inference count)."""
+    """OCR one side (head/tail/candidate) with incremental voting.
+
+    v1.18.x（2026-09-24 顺德公安件实测）：人工框选的时间戳区域对某些 OSD
+    （薄白字压在树叶/暗底上）会切掉年份首位或引入干扰——同一帧带 ROI 读成
+    「2022年」（年份错）甚至整帧 ocr_failed，去掉 ROI 后「2026年…」conf 0.95
+    全对。故：ROI 一路无结果时自动退回自动分块识别，取置信更高者
+    （ROI 是用户明确指定，成功时仍优先）。
+    """
+    w, conf, chosen, used = _ocr_side_pass(cands, filename, roi)
+    if w > 0 or roi is None:
+        return w, conf, chosen, used
+    w2, conf2, chosen2, used2 = _ocr_side_pass(cands, filename, None)
+    if w2 > 0 and conf2 >= conf:
+        return w2, conf2, chosen2, used2
+    return w, conf, chosen, used
+
+
+def _ocr_side_pass(cands, filename, roi):
+    """One voting pass（无 ROI 回退）：两帧一致即早停，省一半推理。"""
     points = []
     used = []
     for rel_ms, path in cands:
@@ -736,6 +866,20 @@ def process_file_frames_only(video_path, ffmpeg_path, frame_dir, duration_ms):
     return out
 
 
+def _widen_roi(roi, left=0.40, right=0.05, up=0.30, down=0.30):
+    """把用户框扩成「时间行条带」供 OCR 用（归一化坐标，裁到 [0,1]）。
+
+    框切掉年份末位时（实测 2026→2023/202G），原样读必错；放宽窗口即可含全整行。
+    """
+    if roi is None:
+        return None
+    x0, y0, x1, y1 = roi
+    w = x1 - x0
+    h = y1 - y0
+    return (max(0.0, x0 - w * left), max(0.0, y0 - h * up),
+            min(1.0, x1 + w * right), min(1.0, y1 + h * down))
+
+
 def process_file_at(video_path, ffmpeg_path, frame_dir, duration_ms, positions,
                     roi=None):
     """Calibration sampling mode (V1 plan §3.2, --at-json): for each requested
@@ -753,21 +897,55 @@ def process_file_at(video_path, ffmpeg_path, frame_dir, duration_ms, positions,
     for pos in positions:
         pos = max(0, int(pos))
         cands = []
-        for off_ms in (-250, 0, 250):
-            ss = pos + off_ms
-            if ss < 0:
-                continue
-            if duration_ms and ss >= duration_ms:
-                continue
-            p = os.path.join(frame_dir, f"at_{pos}_{off_ms:+d}.png")
-            el, actual = extract_frame(ffmpeg_path, video_path, p,
-                                       ss=ss / 1000.0)
+        # v1.18.x（2026-09-24 顺德公安件实测：坏 GOP/残帧使尾部 -ss 只能取到
+        # 垃圾帧 → ocr_failed → 三点只剩两个相邻点 → 快慢测不出、校时静默退化成
+        # 只定基准）：① 尾部请求改用 -sseof（文件末帧，实测可读）且位置按 dur-1s
+        # 估算（±1s 相对 40 分钟基线可忽略）；② 中段失败时把重试窗口从 ±250ms
+        # 放宽到 ±1s/±2.5s（每档仍用 showinfo 实测真实位置，位置安全）。
+        near_eof = bool(duration_ms) and pos >= duration_ms - 6000
+        if near_eof:
+            p = os.path.join(frame_dir, f"at_{pos}_eof.png")
+            el, _actual = extract_frame(ffmpeg_path, video_path, p, sseof=True)
             if el >= 0:
-                cands.append((actual if actual is not None and actual >= 0
-                              else ss, p))
+                cands.append((max(0, int(duration_ms) - 1000), p))
+        if not cands:
+            # 快路（2026-09-28 第二轮）：先取 1 帧、用**放宽后的条带窗口**识别；
+            # 高置信 full 命中即采用 → 省掉 3~7 帧的定位与多变体 OCR。
+            # 上一轮失败的原因是窗口没放宽（年份被切 → 读数不达标）而非快路本身。
+            first_off = -250
+            first_ss = pos + first_off
+            if first_ss >= 0 and not (duration_ms and first_ss >= duration_ms):
+                p0 = os.path.join(frame_dir, f"at_{pos}_{first_off:+d}png")
+                el0, act0 = extract_frame(ffmpeg_path, video_path, p0,
+                                          ss=first_ss / 1000.0)
+                if el0 >= 0:
+                    rel0 = act0 if (act0 is not None and act0 >= 0) else first_ss
+                    w0, c0, ch0, _u0 = ocr_side([(rel0, p0)],
+                                                os.path.basename(video_path),
+                                                _widen_roi(roi))
+                    if (w0 > 0 and ch0 is not None and c0 >= FAST_PATH_CONF
+                            and ch0.get("kind") == "full"):
+                        cands.append((rel0, p0))
+            if not cands:
+                for off_ms in (-250, 0, 250, -1000, 1000, -2500, 2500):
+                    ss = pos + off_ms
+                    if ss < 0:
+                        continue
+                    if duration_ms and ss >= duration_ms:
+                        continue
+                    p = os.path.join(frame_dir, f"at_{pos}_{off_ms:+d}.png")
+                    el, actual = extract_frame(ffmpeg_path, video_path, p,
+                                               ss=ss / 1000.0)
+                    if el >= 0:
+                        cands.append((actual
+                                      if actual is not None and actual >= 0
+                                      else ss, p))
         all_extracted.extend(cands)
+        # v1.18.x（2026-09-28 实测）：用户框常把年份末位切在框外（读成 2023/202G/2202）。
+        # OCR 时把窗口**放宽成条带**（左 +40%、右 +5%、上下 +30%）——框的语义只用于
+        # 「告诉软件时间戳在哪」，读取窗口宽一点更稳；这也让单帧高置信快路能命中。
         w, conf, chosen, used = ocr_side(cands, os.path.basename(video_path),
-                                        roi)
+                                        _widen_roi(roi))
         if w > 0 and chosen is not None:
             img = ""
             for rel, path in used:
@@ -898,6 +1076,355 @@ def calibphoto_main(argv):
         return 1
 
 
+# ---------------------------------------------------------------------------
+# P-98 秒级跳变对齐（--tickscan）：不用 OCR 求跳幅
+#   位置 = ffprobe 逐帧 PTS（解码器会丢帧，不能用帧号÷fps）
+#   幅度 = 秒位字模聚类后的数字环序差（加速导出会有 +2/+3 跳秒）
+#   绝对值 = 稀疏 OCR 锚点（区间余量按「间隔」分配）
+# 实测（2026-09-27 顺德 JA382，45:41）：解码 75s + 分析 10s；随机 12 点独立抽检
+#   10 点完全一致 / 2 点差 1 秒。
+# ---------------------------------------------------------------------------
+TICK_MASK_TH = 160      # OSD 文字纯白
+TICK_MIN_CHANGE = 20    # 字模变化像素数下限（滤 1 像素级抖动）
+TICK_MIN_SEP = 8        # 跳变最小间隔（帧）
+TICK_TOL_PX = 35        # 字模 XOR 绝对像素阈值（比例阈值会把不同数字并类）
+TICK_MAX_STEP = 6       # 合理跳幅上限（超过视为误判）
+FAST_PATH_CONF = 0.93   # ROI 首读置信度≥此值即直接采用（省掉多变体开销）
+
+
+def _tick_pts(ffprobe, video):
+    """逐帧 PTS（秒）。缺失时返回 []，由调用方回落。"""
+    try:
+        out = subprocess.run(
+            [ffprobe, "-v", "error", "-select_streams", "v:0",
+             "-show_entries", "frame=pts_time", "-of", "csv=p=0", video],
+            capture_output=True, text=True, timeout=1800)
+        pts = [float(x) for x in out.stdout.split() if x.strip()]
+        return pts if len(pts) > 10 else []
+    except Exception:
+        return []
+
+
+def _tick_open(ffmpeg, video, crop, ss=None, t=None, showinfo=False):
+    x, y, w, h = crop
+    cmd = [ffmpeg, "-hide_banner",
+           "-loglevel", ("info" if showinfo else "quiet")]
+    if ss is not None:
+        cmd += ["-ss", ("%.3f" % ss)]
+    if t is not None:
+        cmd += ["-t", ("%.3f" % t)]
+    vf = "crop=%d:%d:%d:%d,format=gray" % (w, h, x, y)
+    if showinfo:
+        vf += ",showinfo"
+    cmd += ["-i", video, "-vf", vf,
+            "-fps_mode", "passthrough", "-f", "rawvideo", "-pix_fmt",
+            "gray", "-"]
+    p = subprocess.Popen(cmd, stdout=subprocess.PIPE,
+                         stderr=(subprocess.PIPE if showinfo
+                                 else subprocess.DEVNULL))
+    return p, w * h
+
+
+def _tick_pts_from_showinfo(proc, sink):
+    """后台线程：从 showinfo 的 stderr 按帧顺序取 pts_time。
+
+    与像素这趟合并（不必单独跑一遍 ffprobe 逐帧列表，实测省 ~2.5 分钟）。
+    """
+    pat = re.compile(r"pts_time:([0-9.]+)")
+    while True:
+        line = proc.stderr.readline()
+        if not line:
+            break
+        try:
+            s = line.decode("utf-8", "ignore")
+        except Exception:
+            continue
+        m = pat.search(s)
+        if m:
+            sink.append(float(m.group(1)))
+
+
+def _tick_locate(ffmpeg, video, roi_px, duration_ms):
+    """在 ROI 内自动定位「秒位」列区间。
+
+    做法：多窗口采样求逐列字模变化剖面 → 最右强列 R（秒个位右端）→
+    取 [R-47, R+2]（秒两位字宽 ~48px）。不扫“连续热区”：实测该法会把
+    分钟位也圈进来（跳变翻倍、聚类 110 类）。
+    """
+    x0, y0, x1, y1 = [int(round(v)) for v in roi_px]
+    w = max(16, x1 - x0)
+    h = max(8, y1 - y0)
+    dur = max(1.0, duration_ms / 1000.0)
+    acc = np.zeros(w, dtype=np.int64)
+    for i in range(6):
+        ss = dur * (i + 1) / 7.0
+        proc, fsz = _tick_open(ffmpeg, video, (x0, y0, w, h), ss=ss, t=1.2)
+        prev = None
+        carry = b""
+        while True:
+            chunk = proc.stdout.read(fsz * 200)
+            if not chunk:
+                break
+            buf = carry + chunk
+            cnt = len(buf) // fsz
+            if cnt == 0:
+                carry = buf
+                continue
+            carry = buf[cnt * fsz:]
+            m = (np.frombuffer(buf[:cnt * fsz], dtype=np.uint8)
+                 .reshape(cnt, h, w) > TICK_MASK_TH)
+            if prev is not None:
+                acc += np.logical_xor(m[0], prev).sum(axis=0)
+            if cnt > 1:
+                acc += np.logical_xor(m[1:], m[:-1]).sum(axis=(0, 1))
+            prev = m[-1].copy()
+        proc.stdout.close()
+        proc.wait()
+    if acc.max() <= 0:
+        return None
+    hot = np.nonzero(acc >= acc.max() * 0.3)[0]
+    if len(hot) == 0:
+        return None
+    r = int(hot[-1]) + 1              # 最右强列右端（ROI 内局部坐标）
+    left = max(0, r - 48)
+    width = min(w - left, 50)
+    if width < 16:
+        return None
+    return (x0 + left, y0, width, h)
+
+
+def _tick_cluster(patches, pidx):
+    reps = []
+    labels = np.zeros(len(pidx), dtype=np.int32)
+    for i, p in enumerate(pidx):
+        m = patches[p].reshape(-1)
+        if reps:
+            R = np.stack(reps)
+            d = np.logical_xor(R, m).sum(axis=1)
+            c = int(np.argmin(d))
+            if d[c] <= TICK_TOL_PX:
+                labels[i] = c
+                continue
+        reps.append(m)
+        labels[i] = len(reps) - 1
+    return labels, len(reps)
+
+
+def _tick_cycle(labels):
+    """相邻跳变的转移关系 → 数字环序（多数转移 = 秒 +1）。"""
+    trans = {}
+    for i in range(len(labels) - 1):
+        a, b = int(labels[i]), int(labels[i + 1])
+        trans.setdefault(a, {})
+        trans[a][b] = trans[a].get(b, 0) + 1
+    succ = {c: max(cnt.items(), key=lambda kv: kv[1])[0]
+            for c, cnt in trans.items()}
+    best = []
+    for start in list(succ.keys()):
+        order, seen, cur = [start], {start}, start
+        while True:
+            nxt = succ.get(cur)
+            if nxt is None or nxt in seen:
+                break
+            order.append(nxt)
+            seen.add(nxt)
+            cur = nxt
+        if len(order) > len(best):
+            best = order
+    return best
+
+
+def _tick_frame_size(ffprobe, video):
+    try:
+        out = subprocess.run(
+            [ffprobe, "-v", "error", "-select_streams", "v:0",
+             "-show_entries", "stream=width,height", "-of", "csv=p=0", video],
+            capture_output=True, text=True, timeout=120)
+        parts = [int(x) for x in out.stdout.replace(chr(10), ",").split(",")
+                 if x.strip().isdigit()]
+        if len(parts) >= 2:
+            return parts[0], parts[1]
+    except Exception:
+        pass
+    return 0, 0
+
+
+def tickscan_one(ffmpeg, ffprobe, video, anchors, roi_px, duration_ms,
+                 evidence_dir=""):
+    """返回 (result_dict, error_str)。"""
+    pts = []                       # 与像素同趟取（showinfo stderr）
+    fw, fh = _tick_frame_size(ffprobe, video)
+    if fw <= 0:
+        fw, fh = 1920, 1080
+    if not roi_px or len(roi_px) != 4:
+        # 2026-09-28 实测：**全帧自动找秒位不可靠**——整帧里会锁到别的高频变化
+        # 区域（跳变数 2 倍、聚类类数爆炸、白跑 20 分钟）。故无 ROI 直接失败，
+        # 由 UI 侧保证有框（粘性 ROI / 案内框选记忆）或提示用户框一下。
+        return None, "no_roi"
+    if max(roi_px) <= 1.5:
+        # ROI 与 at 模式同为**归一化**坐标（0~1）→ 换算视频像素供列定位用
+        roi_px = [roi_px[0] * fw, roi_px[1] * fh,
+                  roi_px[2] * fw, roi_px[3] * fh]
+    if duration_ms <= 0:
+        duration_ms = ffprobe_duration_ms(ffmpeg, video)
+    crop = _tick_locate(ffmpeg, video, roi_px, duration_ms)
+    if crop is None:
+        return None, "seconds_block_not_found"
+    print("PROGRESS:0|1|5.0", file=sys.stderr, flush=True)
+
+    x, y, w, h = crop
+    proc, fsz = _tick_open(ffmpeg, video, crop, showinfo=True)
+    pts_thr = threading.Thread(target=_tick_pts_from_showinfo,
+                               args=(proc, pts), daemon=True)
+    pts_thr.start()
+    changes, patches, pframes = [], [], []
+    prev = None
+    carry = b""
+    n = 0
+    while True:
+        chunk = proc.stdout.read(fsz * 500)
+        if not chunk:
+            break
+        buf = carry + chunk
+        cnt = len(buf) // fsz
+        if cnt == 0:
+            carry = buf
+            continue
+        carry = buf[cnt * fsz:]
+        m = (np.frombuffer(buf[:cnt * fsz], dtype=np.uint8)
+             .reshape(cnt, h, w) > TICK_MASK_TH)
+        if prev is not None:
+            d = int(np.logical_xor(m[0], prev).sum())
+            changes.append(d)
+            if d >= TICK_MIN_CHANGE:
+                patches.append(m[0].copy())
+                pframes.append(n)
+        if cnt > 1:
+            cc = np.logical_xor(m[1:], m[:-1]).sum(axis=(1, 2))
+            changes.extend(int(v) for v in cc)
+            for j, v in enumerate(cc):
+                if v >= TICK_MIN_CHANGE:
+                    patches.append(m[j + 1].copy())
+                    pframes.append(n + j + 1)
+        prev = m[-1].copy()
+        n += cnt
+        if n % 5000 < cnt:
+            pct = 5.0 + 70.0 * min(1.0, n / float(max(1, duration_ms) / 40.0))
+            print(("PROGRESS:%d|%d|%.1f" % (n, len(pts), pct)),
+                  file=sys.stderr, flush=True)
+        # 护栏 A（2026-09-28 实测教训）：秒位只该每秒跳 ~1 次；若解码途中跳变数
+        # 明显超量，说明框错了/锁到别的高频区域 —— 立刻中止，别白跑几十分钟。
+        if len(patches) > 2000 and len(patches) > (n / 25.0) * 1.6:
+            proc.kill()
+            return None, ("tick_rate_implausible_early cands=%d frames=%d"
+                          % (len(patches), n))
+    proc.stdout.close()
+    proc.wait()
+    pts_thr.join(timeout=30)
+    if len(pts) < n * 0.9:          # showinfo 不可用 → 回落独立 ffprobe 逐帧
+        pts = _tick_pts(ffprobe, video)
+    if len(pts) < 20:
+        return None, "no_pts"
+    print("PROGRESS:1|1|80.0", file=sys.stderr, flush=True)
+
+    ch = np.array(changes, dtype=np.int32)
+    idx = np.nonzero(ch >= TICK_MIN_CHANGE)[0]
+    ppos = {int(f): i for i, f in enumerate(pframes)}
+    ticks, pidx = [], []
+    for i in idx:
+        f = int(i) + 1
+        if f not in ppos:
+            continue
+        if ticks and f - ticks[-1] < TICK_MIN_SEP:
+            if ch[f - 1] > ch[ticks[-1] - 1]:
+                ticks[-1], pidx[-1] = f, ppos[f]
+            continue
+        ticks.append(f)
+        pidx.append(ppos[f])
+    if len(ticks) < 20:
+        return None, "too_few_ticks"
+    labels, n_cls = _tick_cluster(np.array(patches, dtype=np.uint8), pidx)
+    if n_cls > 200:
+        # 秒位两位数字最多 60 类；类数爆炸 = 框错/画面里别的东西在动
+        return None, ("too_many_glyph_classes %d" % n_cls)
+    order = _tick_cycle(labels)
+    pos_of = {c: i for i, c in enumerate(order)}
+    L = len(order)
+    cf = [min(f, len(pts) - 1) for f in ticks]
+    tsec = [pts[f] * 1000.0 for f in cf]
+    # 合理性闸：跳变数应对得上「锚点推出的画面秒数」（约 1 次/秒）——
+    # 圈宽/圈错会立刻表现为倍率异常（实测圈宽 → 2 倍跳变、聚类 110 类）
+    aa0 = sorted((int(a[0]), int(a[1])) for a in anchors if int(a[1]) > 0)
+    if len(aa0) >= 2:
+        expected = (aa0[-1][1] - aa0[0][1]) / 1000.0 + 1.0
+        ratio = len(ticks) / max(1.0, expected)
+        if ratio > 1.25 or ratio < 0.55:
+            return None, ("tick_rate_implausible ratio=%.2f ticks=%d expected=%.0f"
+                          % (ratio, len(ticks), expected))
+    steps = []
+    for i in range(len(ticks) - 1):
+        a, b = int(labels[i]), int(labels[i + 1])
+        s = 0
+        if a in pos_of and b in pos_of and L > 1:
+            s = (pos_of[b] - pos_of[a]) % L
+            if s == 0 or s > TICK_MAX_STEP:
+                s = 0
+        steps.append(s)
+
+    # 锚点校正：区间余量按「间隔」分配（漏检的跳变表现为间隔异常长）
+    aa = sorted((int(a[0]), int(a[1])) for a in anchors if int(a[1]) > 0)
+    adjusted = 0
+    for k in range(len(aa) - 1):
+        t1, v1 = aa[k]
+        t2, v2 = aa[k + 1]
+        ks = [q for q in range(len(steps)) if t1 < tsec[q] <= t2]
+        if not ks:
+            continue
+        need = int(round((v2 - v1) / 1000.0))
+        have = sum(steps[q] for q in ks)
+        delta = need - have
+        gaps = [tsec[q] - tsec[q - 1] for q in ks]
+        ordk = [q for _, q in sorted(zip(gaps, ks), key=lambda z: -z[0])]
+        if delta > 0:
+            for q in ordk[:delta]:
+                steps[q] += 1
+                adjusted += 1
+        elif delta < 0:
+            for q in ordk[::-1][:abs(delta)]:
+                if steps[q] > 0:
+                    steps[q] = 0
+                    adjusted += 1
+    print("PROGRESS:1|1|95.0", file=sys.stderr, flush=True)
+
+    cum = [0]
+    for s in steps:
+        cum.append(cum[-1] + s)
+    total = cum[-1]
+    # 跳变 k 处画面秒 = 锚点值 + (k0 到 k 的秒数增量)，其中 k0 = 锚点前最后一跳：
+    # 用 cum[k] - cum[k0]（★ 不能写成 cum[k+1]-cum[k0+1]——那会漏掉 k0 那一跳，
+    #   实测造成全表系统性 -1 秒）；锚点前无跳变时 k0 = -1（基量 -1 → 首跳即 +1 秒）。
+    if aa:
+        t0, v0 = aa[0]
+        k0 = max([q for q in range(len(ticks)) if tsec[q] <= t0], default=-1)
+    else:
+        t0, v0, k0 = 0, 0, -1
+    base = cum[k0] if k0 >= 0 else -1
+    rows = []
+    for q in range(len(ticks)):
+        rows.append([int(tsec[q]), int(v0) + (cum[q] - base) * 1000])
+    span_s = max(1.0, (tsec[-1] - tsec[0]) / 1000.0)
+    expected = total + 1
+    res = {"file": video, "ok": True, "fps": len(pts) / max(0.001, pts[-1] - pts[0]),
+           "frames": len(pts), "ticks": len(ticks), "classes": n_cls,
+           "cycleLen": L, "advanceSeconds": total,
+           "expectedSeconds": expected,
+           "tickRatio": len(ticks) / float(max(1, expected)),
+           "skippedSeconds": max(0, expected - len(ticks)),
+           "anchors": len(aa), "adjusted": adjusted,
+           "spanSeconds": span_s, "map": rows}
+    return res, ""
+
+
 def main():
     # v1.12.5：校时照片模式先行分流（不需 ffmpeg/工作目参数）
     if len(sys.argv) > 1 and sys.argv[1] == "calibphoto":
@@ -923,6 +1450,12 @@ def main():
     ap.add_argument("--roi-json", default="",
                     help="optional user-selected timestamp ROI: "
                          "JSON {file: [x0,y0,x1,y1]} in video pixels")
+    ap.add_argument("--tickscan-out", default="",
+                    help="P-98 秒级跳变对齐：输出映射表 JSON（配合 --tickscan-anchors）")
+    ap.add_argument("--tickscan-anchors", default="",
+                    help="tickscan 锚点：JSON {file: [[streamMs, wallMs], ...]}")
+    ap.add_argument("--ffprobe-path", default="",
+                    help="tickscan 需要（默认取 ffmpeg 同目录的 ffprobe）")
     args = ap.parse_args()
 
     if not os.path.isfile(args.ffmpeg_path):
@@ -978,6 +1511,39 @@ def main():
                         for k, v in json.load(f).items()}
         except (json.JSONDecodeError, ValueError, AttributeError) as e:
             print(f"WARNING:roi-json parse failed: {e}", file=sys.stderr)
+
+    # ---- P-98 秒级跳变对齐模式（--tickscan-out）----
+    if args.tickscan_out:
+        tick_anchors = {}
+        if args.tickscan_anchors and os.path.isfile(args.tickscan_anchors):
+            try:
+                with open(args.tickscan_anchors, "r", encoding="utf-8") as f:
+                    tick_anchors = {os.path.normpath(k): v
+                                    for k, v in json.load(f).items()}
+            except (json.JSONDecodeError, ValueError, AttributeError) as e:
+                print(f"WARNING:tickscan-anchors parse failed: {e}",
+                      file=sys.stderr)
+        fp = args.ffprobe_path
+        if not fp:
+            base = os.path.dirname(args.ffmpeg_path)
+            cand = os.path.join(base, "ffprobe.exe")
+            fp = cand if os.path.isfile(cand) else os.path.join(base, "ffprobe")
+        out = {}
+        for f in files:
+            res, err = tickscan_one(args.ffmpeg_path, fp, f,
+                                    tick_anchors.get(f, []), rois.get(f),
+                                    durations.get(f, 0))
+            if res is None:
+                out[f] = {"file": f, "ok": False, "error": err}
+                print(f"WARNING:{f}:tickscan {err}", file=sys.stderr, flush=True)
+            else:
+                out[f] = res
+        with open(args.tickscan_out, "w", encoding="utf-8") as fh:
+            json.dump(out, fh, ensure_ascii=False)
+        print("PROGRESS:1|1|100.0", file=sys.stderr, flush=True)
+        sys.stdout.write(json.dumps(out, ensure_ascii=False))
+        sys.stdout.write(chr(10))
+        return
 
     if at_positions:
         # v1.2.1：按位置分片并行（单文件多位置也并行；证据帧文件名含

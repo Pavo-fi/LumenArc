@@ -3,6 +3,8 @@
 #include "infrastructure/cloud_account.h"
 #include "infrastructure/credential_store.h"
 
+#include "theme.h"
+
 #include <QFormLayout>
 #include <QGroupBox>
 #include <QHBoxLayout>
@@ -89,7 +91,7 @@ AccountDialog::AccountDialog(QWidget* parent) : QDialog(parent) {
 
     auto* btnRow = new QHBoxLayout();
     m_signoutBtn = new QPushButton(QStringLiteral("退出登录"), this);
-    m_signoutBtn->setStyleSheet(QStringLiteral("color:#c0392b;"));
+    m_signoutBtn->setStyleSheet(QStringLiteral("color:%1;").arg(Theme::Status::Error));
     auto* closeBtn = new QPushButton(QStringLiteral("关 闭"), this);
     closeBtn->setDefault(true);
     btnRow->addWidget(m_signoutBtn);
@@ -118,14 +120,14 @@ void AccountDialog::setBusy(bool busy, const QString& hint) {
     m_editBox->setEnabled(!busy && !m_isInvite);
     m_signoutBtn->setEnabled(!busy);
     if (busy) {
-        m_status->setStyleSheet(QStringLiteral("color:#666;"));
+        m_status->setStyleSheet(QStringLiteral("color:%1;").arg(Theme::TextTk::Muted));
         m_status->setText(hint.isEmpty() ? QStringLiteral("处理中…") : hint);
     }
 }
 
 void AccountDialog::fail(const QString& machineCode, const QString& serverMsg) {
     setBusy(false);
-    m_status->setStyleSheet(QStringLiteral("color:#c0392b;"));
+    m_status->setStyleSheet(QStringLiteral("color:%1;").arg(Theme::Status::Error));
     m_status->setText(tr_err(machineCode, serverMsg));
 }
 
@@ -143,7 +145,7 @@ void AccountDialog::onSendCode() {
             fail(r.error, r.message);
             return;
         }
-        m_status->setStyleSheet(QStringLiteral("color:#27ae60;"));
+        m_status->setStyleSheet(QStringLiteral("color:%1;").arg(Theme::Status::Ok));
         m_status->setText(QStringLiteral("验证码已发送到当前手机号（5 分钟内有效）"));
         m_countdownLeft = 60;
         m_sendBtn->setEnabled(false);
@@ -183,7 +185,7 @@ void AccountDialog::onSubmitProfile() {
             c.org = org;
             CredentialStore::save(c);
             setBusy(false);
-            m_status->setStyleSheet(QStringLiteral("color:#27ae60;"));
+            m_status->setStyleSheet(QStringLiteral("color:%1;").arg(Theme::Status::Ok));
             m_status->setText(QStringLiteral("资料已更新。新建案件与报告将使用新的姓名和单位。"));
             m_infoLabel->setText(QStringLiteral("当前账号：%1（%2）\n登录方式：手机号 %3")
                                      .arg(name, org, maskPhone(m_uid)));

@@ -56,11 +56,18 @@ public:
             QPointF center {0.5, 0.5};
         };
         QVector<LaneZoomSpec> laneZooms;
-        /// 单路放大镜（magnifierPip 且 srcRect 非空生效；原视频系裁剪区）
+        // ---- 放大镜同框（v1.18.x 所见即所得）----
+        // magnifierPip 且 srcRect 非空 → 导出画面左侧=源画面（带取景括号）+ 右侧=放大视图；
+        // 单路（run）与合成单视频段（runCompose）同款版式（drawMagnifierSplit 共用）。
         bool magnifierPip = false;
         QRect magnifierSrcRect;
         int magnifierRotation = 0;
         qreal magnifierZoom = 1.0;
+        /// 放大视图显示链 LUT（256 字节，空=恒等）——与放大镜面板同一张表，
+        /// 保证产物右半与屏幕放大视图逐位一致（仅缩放比例不同）。
+        QByteArray magnifierLut;
+        /// 放大镜所属源路径（合成多源时仅对该源的单视频段生效；空=不校验，单源旧口径）
+        QString magnifierSourcePath;
 
         /// 图表标签（单路模式）：曲线条打竖标 + 播到标签时刻 OSD 烧录
         /// 内容显示 5 秒隐去（真机反馈拍板）
@@ -86,6 +93,10 @@ public:
             /// （SyncLaneData 快照，与多机播放窗同口径；暂不支持合并轨 lane）
             QVector<SyncLaneData> lanes;
             int audioLane = -1;          ///< 宫格段主听路（越界/未全程覆盖 → 该段静音）
+            /// P2.13（2026-09-28 用户拍板「每个视频自由选窗位」）：`laneCell[i]` =
+            /// 第 i 路占用哪个格子（行优先 0 基）。空/越界 → 按原顺序（向后兼容）。
+            /// 预览（工作台宫格）与导出、覆盖条/OSD 名共用同一份映射（避免所见非所得）。
+            QVector<int> laneCell;
             QString displayName;         ///< 显示名（时间线块/清单），空=自动
             /// P2：宫格布局 0=均分宫格（默认） 1=主听路大窗（左 2/3）+其余右侧纵列
             int gridLayout = 0;
@@ -102,8 +113,6 @@ public:
         QHash<QString, TimeCalibration> calibrationByPath;
         /// P2：按源路径取 .vla 路径（burnRoi/burnChart 段的数据源；缺省=源旁 .vla）
         QHash<QString, QString> vlaPathByPath;
-        /// 演示片强制角标「分析演示材料 · 非原始证据」（右上，不可关）
-        bool demoWatermark = false;
         /// 证据模式：无损直拷 + 侧车清单 JSON（不经过合成管线，像素零改动）
         bool evidenceCopy = false;
         /// 证据清单签署人（账号档案姓名/单位；调用方从 CredentialStore 填）

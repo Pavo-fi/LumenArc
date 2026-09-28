@@ -529,11 +529,18 @@ bool CaseManager::removeVideo(const QString &id, bool deleteData,
             QDir(d.filePath(QStringLiteral("evidence/calibration/") + id))
                 .removeRecursively();
         }
+        // v1.18.x：信号携带源路径——移除后不能从 meta 反查（记录已被删），
+        // 而会话内存状态按路径为键，必须用它在移除时清掉（否则同路径重新导入
+        // 会把旧校时/旧分析「复活」——顺德件实测「重新导入还是不行」的成因之一）。
+        // 第三参 = 实际打开用的路径：原件缺失时案件树开的是包内副本
+        // （effectivePathFor），与登记路径不同键，得一并清。
+        const QString removedPath = m_meta.videos[i].originalPath;
+        const QString removedEff = effectivePathFor(m_meta.videos[i]);
         m_meta.videos.remove(i);
         if (m_meta.lastVideoId == id)
             m_meta.lastVideoId.clear();
         setModified();
-        emit videoRemoved(id);
+        emit videoRemoved(id, removedPath, removedEff);
         return true;
     }
     if (error) *error = QStringLiteral("案件中没有该文件 %1").arg(id);
@@ -643,9 +650,16 @@ int CaseManager::pruneMissingFiles(QString *error)
         const auto &v = m_meta.videos[i];
         if (!QFileInfo::exists(v.originalPath)
             && !QFileInfo::exists(effectivePathFor(v))) {
+            // v1.18.x：prune 也必须发 videoRemoved——否则会话内存状态无人清，
+            // 「外部删除→自动清登记→文件恢复后重新导入」会带着旧校时复活
+            // （与 removeVideo 同根因，2026-09-26 reviewer 逮到的缺口）
+            const QString pid = v.id;
+            const QString porig = v.originalPath;
+            const QString peff = effectivePathFor(v);
             m_meta.videos.remove(i);
-            if (m_meta.lastVideoId == v.id)
+            if (m_meta.lastVideoId == pid)
                 m_meta.lastVideoId.clear();
+            emit videoRemoved(pid, porig, peff);
             ++removed;
         }
     }
@@ -654,13 +668,19 @@ int CaseManager::pruneMissingFiles(QString *error)
         auto &p = m_meta.preprocessSessions[i];
         const QString sdir = caseDir.absoluteFilePath(p.sessionDirRelPath);
         if (!QDir(sdir).exists()) {
+            // 会话整段消失：其中的输出引用也一并视为移除（逐个发信号清会话状态）
+            for (const auto &o : p.outputRefs)
+                emit videoRemoved(o.id, o.originalPath, o.originalPath);
             m_meta.preprocessSessions.remove(i);
             ++removed;
             continue;
         }
         for (int j = p.outputRefs.size() - 1; j >= 0; --j) {
             if (!QFileInfo::exists(p.outputRefs[j].originalPath)) {
+                const QString oid = p.outputRefs[j].id;
+                const QString opath = p.outputRefs[j].originalPath;
                 p.outputRefs.remove(j);
+                emit videoRemoved(oid, opath, opath);
                 ++removed;
             }
         }

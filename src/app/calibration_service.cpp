@@ -74,6 +74,8 @@ CalibrationService::CalibrationService(IAnalysisEngine *analysisEngine,
             this, &CalibrationService::onAtPositionsFinished);
     connect(m_ocrEngine, &TimestampOcrEngine::atPositionsFailed,
             this, &CalibrationService::onAtPositionsFailed);
+    connect(m_ocrEngine, &TimestampOcrEngine::tickScanFinished,
+            this, &CalibrationService::onTickScanFinished);
     connect(m_ocrEngine, &TimestampOcrEngine::ocrProgress, this,
             [this](int done, int total, const QString &) {
                 emit progress(QStringLiteral("ocr %1/%2").arg(done).arg(total));
@@ -133,6 +135,9 @@ void CalibrationService::runThreePoint(const QString &videoPath,
 
     m_pendingVideo = videoPath;
     m_pendingDurationMs = dur;
+    m_dateRetryTried = false;      // P-98.1：新一轮取样复位重读标记
+    m_dateRetryPending = false;
+    m_dateRetryKept.clear();
     QDir().mkpath(evidenceDirFor(videoPath));
     emit progress(QStringLiteral("sampling"));
     m_ocrEngine->runAtPositions(videoPath, dedup, dur,
@@ -245,6 +250,11 @@ void CalibrationService::cancel()
     m_quickPending = false;
     m_reconStage = ReconStage::None;
     m_reconSamples.clear();
+    m_tickStage = TickStage::None;
+    m_tickSamples.clear();
+    m_dateRetryPending = false;    // P2-9
+    m_dateRetryTried = false;
+    m_dateRetryKept.clear();
 }
 
 bool CalibrationService::isRunning() const
@@ -261,29 +271,50 @@ void CalibrationService::onAtPositionsFinished(
     const QString video = m_pendingVideo;
     if (video.isEmpty())
         return;
+    // 日期合理性过滤后的取样点（三点/重建共用；见 dropImplausibleDates 注释）
+    QVector<TimeCalibration::Sample> samples_used = samples;
+    if (m_tickStage == TickStage::Anchors) {
+        onTickAnchorsFinished(samples);
+        return;
+    }
     if (m_quickPending) {
         m_quickPending = false;
         // at 模式按位置分片并行，聚合顺序 = 完成顺序（随机）：先按 streamMs
         // 排序，首尾语义才成立（与 onReconBatchFinished 同一防御）。
-        auto sorted = samples;
+        auto sorted = samples_used;
         std::sort(sorted.begin(), sorted.end(),
                   [](const TimeCalibration::Sample &a,
                      const TimeCalibration::Sample &b) {
                       return a.streamMs < b.streamMs;
                   });
-        // 首尾两点：整体速率 + 疑似变速判定（>15% 偏差）
+        // 首尾两点：整体速率 + 疑似变速判定（阈值 kNormalRateDev = 1%）
         double rate = 1.0;
         bool suspicious = false;
         bool ocrSuspect = false;
         if (sorted.size() >= 2) {
-            const qint64 ds = sorted.last().streamMs - sorted.first().streamMs;
-            const qint64 dw = sorted.last().wallMs - sorted.first().wallMs;
-            if (ds > 0 && sorted.first().wallMs > 0 && sorted.last().wallMs > 0)
+            // v1.18.x：先剔除明显错读点再算速率/共线性——单个错点（年份错读）
+            // 未剔除时首尾速率荒谬且“不成直线”，旧逻辑直接判“请重新框选”死路。
+            int dropped = -1;
+            const TimeCalibration::FitResult rt =
+                TimeCalibration::fitDroppingWorstOutlier(sorted, &dropped);
+            QVector<TimeCalibration::Sample> eff = sorted;
+            if (dropped >= 0 && dropped < eff.size())
+                eff[dropped].used = false;
+            const qint64 ds = eff.last().streamMs - eff.first().streamMs;
+            const qint64 dw = eff.last().wallMs - eff.first().wallMs;
+            if (ds > 0 && eff.first().wallMs > 0 && eff.last().wallMs > 0)
                 rate = static_cast<double>(dw) / ds;
-            suspicious = std::fabs(rate - 1.0) > 0.15;
+            if (!rt.ok && sorted.size() >= 3)
+                rate = 1.0;   // 剔除后仍拟合不出 → 保持中性速率，交三点路径处理
+            suspicious = PiecewiseTimeMap::isVariableRate(rate);
+            // 阈值取 kNormalRateDev（1%）而不是旧的 0.15：见 PiecewiseTimeMap::isVariableRate 注释
+            // ——1%~15% 的时间压缩件（公安平台非实时导出，顺德实测 1.139）
+            // 旧阈值既不放它进时间重建、三点拟合的 1% 合理域又拒绝应用速率 → 永远校不准。
+            // OCR 误读仍由 ocrSuspect（三点共线校验）拦，不靠大阈值兜底。
             // 第三点确认（v1.2.2）：中点墙钟必须落在首尾直线上，
             // 否则首尾/中点任一点疑似错读 → 拒绝路由，防误判变速白跑重建。
-            ocrSuspect = quickCheckSamplesInconsistent(sorted);
+            // v1.18.x：已剔除一个错读点的不再重复报“疑似错读”（否则用户卡在“请重新框选”）。
+            ocrSuspect = (dropped < 0) && quickCheckSamplesInconsistent(sorted);
         }
         emit quickCheckReady(video, rate, suspicious, ocrSuspect);
         return;
@@ -293,16 +324,98 @@ void CalibrationService::onAtPositionsFinished(
         return;
     }
 
+    // v1.18.x（2026-09-27 实测）：先剔日期错读点——用户 ROI 切掉年份末位时会间歇
+    // 读出 2023（实际 2026）；不剔则拟合出 34583 倍荒谬速率 → 整单被拒 → 用户
+    // 看到「校时不成功」（顺德 JA382 真实复现）。
+    QVector<TimeCalibration::Sample> sane = samples_used;
+    if (m_dateRetryPending) {
+        // 重试批次回来：与首轮通过日期闸的点合并后继续（不再重复过滤）
+        m_dateRetryPending = false;
+        for (const auto &k : m_dateRetryKept)
+            sane.append(k);
+        for (const auto &k : samples)
+            sane.append(k);
+        std::sort(sane.begin(), sane.end(),
+                  [](const TimeCalibration::Sample &a,
+                     const TimeCalibration::Sample &b) {
+                      return a.streamMs < b.streamMs;
+                  });
+        QVector<TimeCalibration::Sample> dedup;
+        for (const auto &k : sane) {
+            bool dup = false;
+            for (const auto &d : dedup)
+                if (d.streamMs == k.streamMs) { dup = true; break; }
+            if (!dup && k.wallMs > 0)
+                dedup.append(k);
+        }
+        sane = dedup;
+        m_dateRetryKept.clear();
+        emit progress(QStringLiteral("date-retry merged %1 pt(s)").arg(sane.size()));
+    } else {
+        // v1.18.x（V18 实测）：**先剔结构无效点**（单位数小时 = 前导位被切/漏读，
+        // 如 15:00:02 读成 5:00:02），再剔日期离群——顺序反了会把「正确的点」
+        // 当离群剔掉（V18：错读的头点 + 低置信尾点把中间正确的 15:33:54 挤掉）。
+        // 先**修**单位数小时（细笔画前导 1 被漏读：15:00:02 → 5:00:02），
+        // 修不动的再剔——只剔的话会把这条样本的锚点信息一起丢掉。
+        const int shortFixed = TimeCalibration::repairShortHourSamples(&sane);
+        if (shortFixed > 0)
+            emit progress(QStringLiteral("short-hour repaired %1 pt(s)")
+                              .arg(shortFixed));
+        const int structDropped = TimeCalibration::dropStructurallyInvalid(&sane);
+        if (structDropped > 0)
+            emit progress(QStringLiteral("structured-drop %1 pt(s)")
+                              .arg(structDropped));
+        const int dateDropped = TimeCalibration::dropImplausibleDates(&sane);
+        if (dateDropped > 0) {
+            emit progress(QStringLiteral("date-sanity dropped %1 pt(s)")
+                              .arg(dateDropped));
+            // P-98.1：去 ROI 全帧重读（实测用户框切掉年份末位 → ROI 读 2023；
+            // 全帧稳定读 2026）。只一次，防环；重试点 = 首轮样本里
+            // 不在 sane 中的位置。
+            if (!m_dateRetryTried) {
+                QVector<qint64> retryPos;
+                for (const auto &s : samples) {
+                    bool kept = false;
+                    for (const auto &k : sane)
+                        if (k.streamMs == s.streamMs) { kept = true; break; }
+                    if (!kept && s.streamMs >= 0)
+                        retryPos.append(s.streamMs);
+                }
+                if (!retryPos.isEmpty() && sane.size() >= 1) {
+                    m_dateRetryTried = true;
+                    m_dateRetryPending = true;
+                    m_dateRetryKept = sane;
+                    emit progress(QStringLiteral("date-retry %1 pt(s) full-frame")
+                                      .arg(retryPos.size()));
+                    m_ocrEngine->runAtPositions(video, retryPos, m_pendingDurationMs,
+                                                evidenceDirFor(video), QRectF());
+                    return;   // 等重试批次回调
+                }
+            }
+        }
+    }
+    if (sane.size() >= 2)
+        samples_used = sane;
     TimeCalibration cal;
     cal.source = TimeCalibration::Source::Ocr;
-    cal.samples = samples;
+    cal.samples = samples_used;
     cal.dateKnown = true;
     cal.calibratedAtMs = QDateTime::currentMSecsSinceEpoch();
     double minConf = 1.0;
-    for (const auto &s : samples)
+    for (const auto &s : samples_used)
         minConf = qMin(minConf, s.conf);
     cal.conf = minConf;
-    cal.applyFit(TimeCalibration::fit(samples));
+    // v1.18.x：单点错读自动剔除（年份 2026→2022 这类错读会让三点拟合完全失真：
+    // 要么整单被拒、要么算出荒谬倍率）——剔除的样本标 ocrSuspicious 供 UI 显示 ⚠，
+    // 用户仍可在测点表里重新勾选它。
+    int dropped = -1;
+    const TimeCalibration::FitResult rt =
+        TimeCalibration::fitDroppingWorstOutlier(samples_used, &dropped);
+    if (dropped >= 0 && dropped < cal.samples.size()) {
+        cal.samples[dropped].used = false;
+        cal.samples[dropped].ocrSuspicious = true;
+    }
+    cal.applyFit(rt);
     emit threePointReady(video, cal);
 }
 
@@ -536,12 +649,210 @@ void CalibrationService::finalizeReconstruction()
     emit reconstructionReady(video, cal);
 }
 
+// ---------------------------------------------------------------------------
+// P-98 秒级跳变对齐（2026-09-27）：稀疏锚点 → 像素盯秒位跳变 → 秒级映射表
+// ---------------------------------------------------------------------------
+void CalibrationService::runTickAlign(const QString &videoPath, qint64 durationMs,
+                                      const QRectF &roi)
+{
+    if (videoPath.isEmpty() || isRunning())
+        return;
+    qint64 dur = durationMs;
+    if (dur <= 0 && m_analysisEngine)
+        dur = m_analysisEngine->trustedDurationMs(videoPath);
+    const qint64 streamDur = probeVideoStreamDurationMs(videoPath);
+    if (streamDur > 0 && (dur <= 0 || streamDur < dur))
+        dur = streamDur;
+    if (dur <= 0)
+        return;
+
+    m_pendingVideo = videoPath;
+    m_pendingDurationMs = dur;
+    m_roi = roi;
+    m_tickSamples.clear();
+    m_tickStage = TickStage::Anchors;
+
+    // P2-7：太短的件（<60 秒）锚点/秒级表无意义，早退避免白跑与负位置
+    if (dur < 60000) {
+        m_tickStage = TickStage::None;
+        m_pendingVideo.clear();
+        emit tickAlignFailed(videoPath, QStringLiteral("clip_too_short"));
+        return;
+    }
+
+    // 锚点：全片等距 ~30 点（每 ~90 秒一个）。实测单点 ~10 秒（4 路并行 → 约 1~2 分钟）
+    const int n = 30;
+    QVector<qint64> positions;
+    positions.append(1000);
+    for (int i = 1; i < n - 1; ++i)
+        positions.append(1000 + (dur - 4000) * i / (n - 1));
+    if (dur > 6000)
+        positions.append(dur - 3000);
+    std::sort(positions.begin(), positions.end());
+    QVector<qint64> dedup;
+    for (qint64 p : positions) {
+        if (dedup.isEmpty() || p - dedup.last() > 1000)
+            dedup.append(p);
+    }
+    QDir().mkpath(evidenceDirFor(videoPath));
+    emit progress(QStringLiteral("tick anchors %1 pts").arg(dedup.size()));
+    m_ocrEngine->runAtPositions(videoPath, dedup, dur,
+                                evidenceDirFor(videoPath), roi);
+}
+
+void CalibrationService::onTickAnchorsFinished(
+    const QVector<TimeCalibration::Sample> &samples)
+{
+    const QString video = m_pendingVideo;
+    auto valid = samples;
+    std::sort(valid.begin(), valid.end(),
+              [](const TimeCalibration::Sample &a, const TimeCalibration::Sample &b) {
+                  return a.streamMs < b.streamMs;
+              });
+    // 显式剔除错读点：**别用「首个锚点链式外推」**——首个锚点错读（正是
+    // ROI 切年份末位场景）会把后面所有好点判成离群（reviewer P2-2）；
+    // 改用「墙钟中位数 + 1 天容差」的稳健口径（错读是年级，真变速不会差一天）。
+    QVector<TimeCalibration::Sample> withWall;
+    for (const auto &s : valid)
+        if (s.wallMs > 0)
+            withWall.append(s);
+    QVector<TimeCalibration::Sample> ok = withWall;
+    if (ok.size() >= 2)
+        TimeCalibration::repairShortHourSamples(&ok);    // 先修后剔（同三点路径）
+    if (ok.size() >= 2)
+        TimeCalibration::dropStructurallyInvalid(&ok);
+    if (ok.size() >= 3)
+        TimeCalibration::dropImplausibleDates(&ok);
+    if (ok.size() < 8) {
+        m_tickStage = TickStage::None;
+        m_pendingVideo.clear();
+        emit tickAlignFailed(video,
+                             QStringLiteral("tick_anchors_insufficient %1").arg(ok.size()));
+        return;
+    }
+    m_tickSamples = ok;
+
+    const QString dir = evidenceDirFor(video) + QStringLiteral("/tickscan");
+    QDir().mkpath(dir);
+    m_tickWorkDir = dir;
+    m_tickOutPath = dir + QStringLiteral("/tick_map.json");
+    const QString anchorsPath = dir + QStringLiteral("/anchors.json");
+    QJsonArray arr;
+    for (const auto &s : ok) {
+        QJsonArray one;
+        one.append(static_cast<double>(s.streamMs));
+        one.append(static_cast<double>(s.wallMs));
+        arr.append(one);
+    }
+    QJsonObject root;
+    root.insert(QDir::toNativeSeparators(video), arr);
+    {
+        QFile f(anchorsPath);
+        if (!f.open(QIODevice::WriteOnly | QIODevice::Text)) {
+            m_tickStage = TickStage::None;
+            emit tickAlignFailed(video, QStringLiteral("anchors write failed"));
+            return;
+        }
+        f.write(QJsonDocument(root).toJson(QJsonDocument::Compact));
+    }
+    const QString roiPath = dir + QStringLiteral("/roi.json");
+    {
+        QJsonObject r;
+        if (m_roi.isValid()) {
+            // 域内归一化 ROI → 视频像素（与 at 模式同口径；宽高由域外提供？）
+            // 此处用归一化值×1920/1080 的旧口径不可靠 → 交给 probe 的原生支持：
+            // probe 的 --roi-json 期望像素，故需要帧尺寸；改由 Python 侧按归一化处理
+            r.insert(QDir::toNativeSeparators(video),
+                     QJsonArray{m_roi.x(), m_roi.y(),
+                                m_roi.x() + m_roi.width(),
+                                m_roi.y() + m_roi.height()});
+        }
+        QFile f(roiPath);
+        if (f.open(QIODevice::WriteOnly | QIODevice::Text))
+            f.write(QJsonDocument(r).toJson(QJsonDocument::Compact));
+    }
+    m_tickStage = TickStage::Scan;
+    emit progress(QStringLiteral("tick scan (decode+glyph)"));
+    m_ocrEngine->runTickScan(video, anchorsPath, m_tickOutPath, roiPath, dir,
+                             m_pendingDurationMs);
+}
+
+void CalibrationService::onTickScanFinished(const QString &videoPath, bool ok,
+                                            const QString &err)
+{
+    m_tickStage = TickStage::None;
+    m_pendingVideo.clear();
+    if (!ok) {
+        emit tickAlignFailed(videoPath, err);
+        return;
+    }
+    QFile f(m_tickOutPath);
+    if (!f.open(QIODevice::ReadOnly)) {
+        emit tickAlignFailed(videoPath, QStringLiteral("tick map missing"));
+        return;
+    }
+    const QJsonObject root = QJsonDocument::fromJson(f.readAll()).object();
+    const QJsonObject ent =
+        root.value(QDir::toNativeSeparators(videoPath)).toObject();
+    if (!ent.value(QStringLiteral("ok")).toBool()) {
+        emit tickAlignFailed(videoPath,
+                             ent.value(QStringLiteral("error")).toString(
+                                 QStringLiteral("tickscan failed")));
+        return;
+    }
+    const QJsonArray map = ent.value(QStringLiteral("map")).toArray();
+    TimeCalibration cal;
+    cal.source = TimeCalibration::Source::Ocr;
+    cal.dateKnown = true;
+    for (const QJsonValue &v : map) {
+        const QJsonArray a = v.toArray();
+        if (a.size() == 2)
+            cal.tickAnchors.append(qMakePair(
+                static_cast<qint64>(a.at(0).toDouble()),
+                static_cast<qint64>(a.at(1).toDouble())));
+    }
+    if (!cal.tickMode()) {
+        emit tickAlignFailed(videoPath, QStringLiteral("tick map too small"));
+        return;
+    }
+    cal.tickSkippedSeconds = ent.value(QStringLiteral("skippedSeconds")).toDouble(0.0);
+    cal.samples = m_tickSamples;
+    const qint64 sSpan = cal.tickAnchors.last().first - cal.tickAnchors.first().first;
+    const qint64 wSpan = cal.tickAnchors.last().second - cal.tickAnchors.first().second;
+    cal.rate = (sSpan > 0) ? double(wSpan) / double(sSpan) : 1.0;
+    cal.rateApplied = std::fabs(cal.rate - 1.0)
+                      > TimeCalibration::kMinSignificantRateDev;
+    cal.speedVariant = cal.rateApplied;
+    cal.offsetMs = cal.tickAnchors.first().second
+                   - static_cast<qint64>(std::llround(cal.rate * cal.tickAnchors.first().first));
+    cal.conf = 0.95;
+    cal.calibratedAtMs = QDateTime::currentMSecsSinceEpoch();
+    cal.boundaryCount = 0;
+    emit tickAlignReady(videoPath, cal);
+}
+
 void CalibrationService::onAtPositionsFailed(const QString &error)
 {
     const QString video = m_pendingVideo;
+    // 必须在 clear() 之前取：否则 `video == m_pendingVideo` 恒假，
+    // tick 阶段既不发 tickAlignFailed 也不复位 → 状态机卡在 Anchors，
+    // 后续三点/重建的 at 回调全被路由到 tick 锚点分支吞掉（reviewer P1-1）
+    const bool tickActive = (m_tickStage != TickStage::None);
+    const bool tickScanning = (m_tickStage == TickStage::Scan);
     m_pendingVideo.clear();
     if (m_quickPending) {
         m_quickPending = false;
+    }
+    m_dateRetryPending = false;    // P2-9：失败路径也复位日期重读标志
+    m_dateRetryKept.clear();
+    if (tickActive) {
+        // P-98：锚点阶段失败 → 回报不可用（调用方回落时间重建）
+        m_tickStage = TickStage::None;
+        m_tickSamples.clear();
+        if (!tickScanning) {
+            emit tickAlignFailed(video, error);
+            return;
+        }
     }
     if (m_reconStage != ReconStage::None) {
         m_reconStage = ReconStage::None;

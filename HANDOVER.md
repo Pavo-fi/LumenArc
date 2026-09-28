@@ -5,27 +5,42 @@
 
 ## 表头（每次写完 HANDOVER 与 WORK_HISTORY 后必须同步更新本表头——规则 R2）
 
-- **当前 HEAD**：施工批（2026-09-10 §92 P-81 微变分析落地：**已编译链接通过，待运行验证**；
-  上一批 2026-09-07 §91 v1.17.0 MainWindow 拆解收官 P-76~P-80 全勾销）
+- **当前 HEAD**：施工批（2026-09-27 §99 P-98 秒级对齐**集成完成**（±1 秒 / 端到端 2m40s，已自校验）
+  + 2026-09-26 §98 校时「第 2 步落库丢结果」修复（非实时导出件
+  第 2 步必并入第 1 步结果 + 移除视频清会话状态）+ §97 校时死结修复（含第二轮：坏帧/ROI/错读点）+
+  §96 版面拍板 + §95 多源导出 0% 假死 + §94 放大镜同框：**测试全绿，LumenArc.exe 待重链（应用在运行）**）
 - **构建**：`cmd //c "build_tmp\build_target.bat ALL"`；测试：`QT_QPA_PLATFORM=offscreen`
   + PATH 含 `C:\code\Qt\6.8.0\msvc2022_64\bin`（配置：`build_tmp\reconfigure.bat`）
-- **全回归基线**（19 套，v1.17.0 后）：mw 117 / ui_chain 103（2 已知遗留）/
-  libav 26 / case 270 / case_e2e 51 / segment 120 / sync 195 / preprocess 268 /
-  calibration 99 / piecewise 129 / report 52 / docx 23 / roi 23 / sidecar 34 /
-  task 41 / v17 37 / snapshot 36（新增）/ vla PASS / denoise ALL PASS
-  （sitemap 127 = 环境遗留，旧 exe 同表现）
+- **全回归基线**（19 套，v1.17.0 后）：mw 140 / ui_chain **160**（2 已知遗留：synth.mp4 fixture 缺失）/
+  libav 26 / case **274** / case_e2e 51 / segment 156（↑§94 同框导出 + §95 stderr/过期路径/定格回归 + §96 版面像素断言）/
+  sync 195 / preprocess 268 / calibration 131（↑§98：applyFitDecision 四例 + absorbPendingFit 五例）/
+  piecewise 129 / report 52 / docx 23 / roi 23 /
+  sidecar 34 / task 41 / v17 37 / snapshot 36 / vla PASS / denoise ALL PASS
+  （sitemap 127 = 环境遗留，旧 exe 同表现；mw 的 Space 播放标签偶发红一次，复跑绿=计时抖动）
 - **云端**（CloudBase）：env `lumenarc-prod-d6gcdfb6a8873d906`；四函数已部署+HTTP 触发器已通；
   改函数后 `cd build_tmp/tcb_deploy && MSYS_NO_PATHCONV=1 tcb fn deploy <name> --force --yes`；
   AUTH_SECRET 在 build_tmp/tcb_deploy/.auth_secret（不入库）；详见 docs/cloudbase/README.md
 - **当前保留批次**（新→旧，R2 限 5 批）：
-  第七十八批 §91（v1.17.0 MainWindow 拆解收官：四阶段五提交）·
-  第七十七批 §90（P2.8：聚光灯 50%/条带全量化+语谱/打开输出文件夹）·
-  第七十六批 §89（切割/倍速/ETA/编码提速+标注轨 v1）·
-  第七十五批 §88（覆盖条/部分覆盖音轨/播放头联动+v1.16.2 打包）·
-  第七十四批 §87（四步引导改版+快捷键对齐剪映/PR）。
-  （§86 ROI/曲线滚动条 批 已归档 WORK_HISTORY——见下）
-- **最近归档动作**：2026-09-07 §91 批——§86（合成导出 P2：ROI/曲线滚动条+宫格
-  +ffmpeg8 排雷+docx 原子写）移入 WORK_HISTORY.md 末尾（R2 限 5 批）；
+  第八十五批 §101（15 点读成 5 点：细笔画前导 1 漏读 → 修复而非丢弃）·
+  第八十四批 §100（合成导出宫格窗位自由安排：预览拖拽/右键换位 + 映射进导出）·
+  第八十三批 §99（P-98 OSD 秒跳变：秒级对齐**已并入应用**（自动触发）+ 端到端）·
+  第八十二批 §98（校时第 2 步落库丢结果：非实时导出件永远校不准 + 会话状态按路径复活）·
+  第八十一批 §97（校时死结：1%~15% 非实时导出件无法校准 → 阈值对齐+确认采用+快路）·
+  第八十批 §96（版面拍板：宫格时间轴示意移最下方 + 删演示片红字角标）·
+  第七十九批 §95（多源导出 0% 假死：stderr 管道死锁 + 过期路径预检 + 重定位跟随）·
+  第七十九批 §94（放大镜同框导出：所见即所得 + 版式抽函数 + 接线守卫）。
+  （§90 P2.8 聚光灯/条带/打开输出文件夹 批、§91 MainWindow 拆解、§92/§93 微变分析
+  已归档 WORK_HISTORY——见下）
+- **最近归档动作**：2026-09-26 §98 批——§91（v1.17.0 MainWindow 拆解收官）、§92（P-81 微变
+  分析落地）、§93（微变变化率曲线现状）三批移入 WORK_HISTORY.md 末尾（R2 限 5 批：
+  此前 HANDOVER 实际残留 8 节，本次补齐归档并把表头改为如实描述）；
+  早前：2026-09-24 §97 批——§90（P2.8 聚光灯 50%/条带全量化+语谱/打开输出文件夹）移入；
+  早前：2026-09-24 §96 批——§89（切割/倍速/ETA/编码提速+标注轨 v1）移入；
+  早前：2026-09-24 §95 批——§88（覆盖条/部分覆盖音轨/播放头联动+v1.16.2 打包）移入；
+  早前：2026-09-21 §94 批——§87（四步引导改版+快捷键对齐剪映/PR）移入
+  WORK_HISTORY.md 末尾（R2 限 5 批）；
+  早前：2026-09-07 §91 批——§86（合成导出 P2：ROI/曲线滚动条+宫格
+  +ffmpeg8 排雷+docx 原子写）移入 WORK_HISTORY.md 末尾；
   早前：2026-09-04 §90 批——§85（工作台本体）移入 WORK_HISTORY.md 末尾；
   早前：2026-09-04 §89 批——§84（P1 引擎多段双模式）移入；
   早前：2026-09-03 §88 批——§83（MLT melt 构建）移入；
@@ -49,344 +64,471 @@
 # 工作记录（2026-09-03，第七十一批）——合成导出器 P1 + 账号 v1.2~v1.4 + 引擎三连修 + MLT 基建
 # ============================================================================
 
-## 93. 微变变化率曲线：并行实现现状与剩余工作（2026-09-11 接管交接）
+# ============================================================================
+# 工作记录（2026-09-21，第七十九批）——放大镜同框导出（所见即所得）+ 引擎版式抽函数 + 接线守卫
+# ============================================================================
 
-### 背景
-P-81（微变叠加显示，§92）之上的追加需求：引擎对整段视频逐秒计算 ROI 内微变统计量
-（blkMax/medD，单位=灰度级，不乘显示增益），产出 μ+3σ 阈值 + 首帧微变 onset（连续≥3s），
-图表渲染曲线 + .vla 持久化 + 面板按钮触发。判据/标定值/接线契约都在
-`C:/Users/MJ/AppData/Local/Temp/microchange-research/`：`curve_stage1_brief.md`（数据层）、
-`curve_stage2_brief.md`（UI 层，含并行模式角色 A 实现者/B 验收者定义）、
-`stage2_wiring_map.md`（299 行精确接线地图，file:line 全部实证过）。
+# ============================================================================
+# 工作记录（2026-09-24，第七十九批补）——多源导出 0% 假死：stderr 管道死锁
+# ============================================================================
 
-### 现状（截至 2026-09-11 11:00，两路 worker 均阵亡，父代理接管）
-| 块 | 状态 |
-|---|---|
-| S1 契约层：analysis_snapshot.h microdiff 通道（mdTs/mdRows[每 ROI 2 行 blkMax,medD]/mdEntries/mdOnsets/microdiff::MicroDiffOnset/mdStatMu/Sigma/Threshold/mdBaseStartMs/mdBaseDurMs）+ setMicroDiff；ianalysis_engine.h MicroDiffCurveParams + startMicroDiffAnalysis（默认发 analysisFailed）；TaskRegistry 注册；task_service 分发/合并；microdiff_curve.{h,cpp} 纯函数（roiFrameStats/aggregateSeconds/detectOnset）；CMake 登记 | ✅ 已落地 |
-| S1 libav 引擎：openVideo + Pass A 复用 extractMicroDiffBaseline + Pass B 全片扫描 + onset 判定 | ⚠️ 代码写完，**openVideo bug**（下） |
-| S1 engine_test `microdiff-curve <video> <x,y,w,h> <baseStartMs> <baseDurMs>` 子命令（含 `--pure-only` 纯函数自检） | ✅ 已写，**真实素材验证未跑** |
-| S2 A 图表：chartpanel.{h,cpp} +250 行（m_mdSeries 每 ROI 粗线 blkMax/细线 medD、阈值虚线、首帧微变竖线+文本、MdMark 结构、5 个插入点齐全） | ⚠️ **L1222 API bug**（下），从未编译成功 |
-| S2 B .vla：timeline_model.cpp MDCF 块 + META channels 条目 + lumenarc_vla_test 往返用例 | ❌ 未动 |
-| S2 C UI：microdiffdialog「计算变化率曲线」按钮+信号、MainWindow::onMicroDiffCurve、onTaskStarted 分支、“基准已采集成功”状态（需新增 3 成员 + mainwindow.cpp:505 / wiring:615 两处复位） | ❌ 未动 |
+# ============================================================================
+# 工作记录（2026-09-24，第八十批）——版面拍板：宫格时间轴示意移最下方 + 删演示红字角标
+# ============================================================================
 
-### 两个已知 bug（必修，位置精确）
-1. **S1 openVideo 5s 重探测失败**（`libav_analysis_engine.cpp:320-380`）：worker 实测
-   `[trace] openVideo: pix fmt NONE after fast probe, re-probing 5s` 后最终仍无 pix fmt，
-   Pass B 无法解码；而同素材 **Pass A（microdiff_baseline.cpp 的 extractMicroDiffBaseline）
-   打开正常** → bug 在引擎 openVideo 自己的探测/解码逻辑（嫌疑：fast_probe 副作用后未
-   avformat_flush、重探测解码帧数不足、stream 索引处理）。worker 死时正在对照
-   microdiff_baseline.cpp 已审查的打开段，直接照那段重写 openVideo 的 pix fmt 获取即可。
-2. **S2 chartpanel.cpp:1222 不存在的 API**：`formatDisplayTime(m_cal.toDisplay(mk.value))`
-   —— 成员实为 `m_calibration`，`toDisplay` 不存在；应改 `formatDisplayTime(displayMsOf(mk.value))`
-   （接续 worker 死前已定位，尚未改）。同区域可能还有类似问题，修后对照接线地图第 1 节
-   把 chartpanel 微变段整体过一遍。
+# ============================================================================
+# 工作记录（2026-09-28 晚，第八十五批）——「15 点读成 5 点」：细笔画前导 1 漏读
+# ============================================================================
 
-### 构建产物状态（无一个是绿的，接管后先跑 build_lumenarc.bat 看树状态）
-- `build/`：LumenArc.exe 09:57（**曲线前**版本）；lumenarc_engine_test.exe 10:52（含 S1 引擎
-  代码，当时编译通过“Pass A 无警告”）；lumenarc_vla_test.exe 13:15（⚠️ 异常未来时间戳，
-  不可信，用前重构建）
-- `build2/`：CMake configure 完成（`build2_lumenarc.bat` 已被 worker 修正为纯 ASCII），
-  无 LumenArc.exe（后台构建随 worker 阵亡；且 chartpanel bug 意味着那次构建本就会编译失败）
+## 101. 小时前导位「1」被细笔画漏读 → 整条时间轴偏 10 小时（V18 实测）
 
-### worker 阵亡记录与教训
-- stage1 worker（90min 预算）：死于 **API 层 "Request timed out"**（非预算），死在调试 openVideo 中途
-- stage2 第一 worker：**派工时忘设 timeoutMs 吃 30min 默认超时**（父代理流程失误，同一坑两次）
-- stage2 接续 worker（90min）：同样死于 "Request timed out"，死在 sed 修 chartpanel 中途
-- 结论：qwen 供应在本时段不稳（scout 档位之前也因冷启动空响应被路由排除）。教训：
-  ① 派工**必须显式 timeoutMs**；② 派工提示词应要求 worker **每 15 分钟把进度增量写进报告文件**
-  （断点可接管，本次两个 worker 死时进度只存在于上下文里）；③ bat 含中文注释必须纯 ASCII
-  （cmd.exe GBK 解读会把引号撑坏，build2_lumenarc.bat 已修）
+- **现场**（用户截图 + `V18.vla` 取证）：画面 OSD `15:27:41`，校时后图表 `05:27:40`
+  —— **整条偏 10 小时**。落库样本实录：
+  ```
+  stream=0        text='2026年09月20 星期日 5:00:02'   ← 单位数小时（真值 15:00:02）
+  stream=2030931  text='...15:33:54'  conf=0.95  used=**False**  ← 正确的那条被当离群剔了
+  stream=4657834  text='...16:31:18'  conf=0.7
+  → 剩 05:00:02 + 16:31:18 拟合 rate=8.9（荒谬）→ rateApplied=false，只拿错锚点
+  ```
+- **根因两层**：
+  ① **OCR 漏细笔画**：OSD 的 `15` 里那根竖 `1` 压在亮天空上、又细 → 模型读出 `5:00:02`
+     （放大窗口无效：实测外扩后 enh/otsu/ada 反而「无命中」，只有 inv 读出同样的 `5:00:02`）；
+  ② **剔离群剔错了边**：错读的头点 + 低置信尾点一起，把中间**正确**的 15:33:54
+     挤成「残差最大」剔掉 → 剩下的锚点来自错读。
+- **修（三层，都在域层可测）**：
+  1. `TimeCalibration::rawTextHourShort`：**结构有效性**——24 小时制 OSD 的小时必须是两位；
+     单位数小时（`5:00:02`）= 前导位被切/漏读（全角冒号也认）。
+  2. `TimeCalibration::repairShortHourSamples`：**修而不是丢**——单位数小时 h 只有
+     `h` / `10+h` 两种可能，用**其余两位小时样本线性外推**挑与期望值近者（差 <2 小时才采用），
+     改派生值并标 `ocrSuspicious`（⚠），**rawText 原样保留**（取证口径）。
+     V18：外推期望 14:49 → 候选 {05:00, 15:00} → 取 15:00:02（差 10 分钟）→ 三点拟合
+     rate≈1.18、锚点回到 15:00 附近（修复前偏 **−600 分钟**）。
+  3. 服务层顺序固定为**先修后剔**（`repairShortHourSamples` → `dropStructurallyInvalid`
+     → `dropImplausibleDates` → `fitDroppingWorstOutlier`），三点路径与秒级锚点路径同款。
+- **实测复核**：用 V18 真实三条 rawText 做域层回归（`calibration_test` 157 → **171**）：
+  结构检查正/负例、修复后首点=15:00:02、原文保留、⚠ 标记、三点速率≈1.18、
+  锚点回到 15:00 附近；并保留「只剔不修会丢锚点」的对照说明。
+- **顺带确认**：V14 的秒级对齐**已经成功落库**——案徽标实录「OCR 30点, rate=1.139
+  （秒级对齐 2800 个秒锚点）」（§99.5 的「长任务结果丢失」修复 + 粘性 ROI 生效）。
+- **待办**：V18 需用户重跑一次「自动校时」（速率 1.18 属变速 → 会自动接秒级对齐）。
 
-### 剩余工作清单（按序，父代理已接管）
-1. 修 chartpanel.cpp:1222（bug 2）→ `cmd //c "C:\Users\MJ\AppData\Local\Temp\microchange-research\build_lumenarc.bat"`
-   确认树编译（预期还有 chartpanel 同类编译错，逐个修）
-2. 修 openVideo（bug 1，对照 microdiff_baseline.cpp 打开段）→ 重建 engine_test →
-   `build\Release\lumenarc_engine_test.exe microdiff-curve --pure-only`（纯函数自检：
-   恒定帧无 onset / 阶跃帧 onset 在阶跃秒 / 短基准段拒绝）
-3. **真实素材硬验收**：`build\Release\lumenarc_engine_test.exe microdiff-curve "C:\Users\MJ\Desktop\20260722广州增城\监控视频\明景拼接视频_20260722172528 00_33_43-01_03_41~1.mp4" 961,54,227,209 700000 180000`
-   预期：noiseFloor≈3.0 / 基准段 medD≈5.1 / **onset≈936000ms±5000**（烧录时标 05:49:23）/
-   onset 前 10s blkMax≈8~9、onset 后 30s 内阶跃到 ≈30+。对不上 = 算法实现错，回查 microdiff_curve.cpp
-4. S2 B：timeline_model.cpp MDCF 块（**version 保持 10**，>10 被 F4 拒载；未知块已有 opaque
-   保全 L963-994，旧版读新文件不崩不丢）+ META channels 条目 + lumenarc_vla_test 仿现有 3 个
-   v10 用例加 MDCF 往返（接线地图第 2/6 节；CMake 不用改）
-5. S2 C：microdiffdialog 按钮+信号（仅基准段已设置时可用）+ onMicroDiffCurve（照抄 onAnalyze
-   装配，末行 `m_taskService->start(AnalysisChannels::microdiff(), …, MicroDiffCurveParams{baseStartMs,baseDurMs})`）
-   + onTaskStarted 加分支（别掉进“亮度分析中”else）+ 基准完成状态 3 成员与两处复位
-6. 全构建绿（LumenArc + lumenarc_vla_test + lumenarc_engine_test 三目标）+ 跑全部测试
-7. CHANGELOG 未发布节 + 本节状态更新 → 交用户 UI 验证（6 步流程见 §92，曲线追加：
-   面板点「计算变化率曲线」→ 约 3~4 分钟进度 → 图表出现 blkMax/medD 双线 + 阈值虚线 +
-   “首帧微变 05:49:23”竖线标记）
+# ============================================================================
+# 工作记录（2026-09-28，第八十四批）——合成导出宫格「窗位自由安排」（用户拍板）
+# ============================================================================
 
-### 文件清单（本功能）
-- 新建：`src/domain/microdiff_curve.{h,cpp}`、`src/domain/microdiff_core.{h,cpp}`（§92）、
-  `src/infrastructure/microdiff_baseline.{h,cpp}`（§92）
-- 修改：`src/domain/analysis_snapshot.h`、`src/infrastructure/ianalysis_engine.h`、
-  `src/infrastructure/libav_analysis_engine.{h,cpp}`、`src/app/analysis_controller.cpp`、
-  `src/app/analysis_task_service.{h,cpp}`、`src/chartpanel.{h,cpp}`、`tests/engine_test_main.cpp`、
-  `CMakeLists.txt`
-- 未动（待 S2 B/C）：`src/domain/timeline_model.cpp`、`src/microdiffdialog.{h,cpp}`、
-  `src/mainwindow.{h,cpp}`、`src/mainwindow_wiring.cpp`（C 部分的 onMicroDiffCurve 等）、
-  `tests/vla_load_test_main.cpp`
+## 100. 每个视频自己挑窗位：预览拖拽换位 + 映射进导出（所见即所得）
 
-### 接管结果（2026-09-11 收尾，父代理亲自完成）
-§93 上面是 11:00 的断点快照；**以下为接管后全部完成**，两段功能均已落地并验证。
+- **缘起**：用户实测反馈「合成导出的位置不能调整，要能自由调整每个视频在哪个窗位」。
+  旧实现里宫格窗位 = `lanes` 数组顺序（工作台按「校时路升序 + 临时路随后」排序后
+  行优先摆放），用户无法干预 —— 想把人/车出现在哪一格完全靠运气。
+- **数据模型**：`SegmentExportEngine::Params::ComposeSeg` 新增
+  `QVector<int> laneCell`（**第 i 路 → 格子序号**，行优先 0 基；空/越界 = 原顺序，
+  向后兼容）。导出渲染 `runCompose` 的 `cellRectOf(i)` 按它取格子 →
+  **预览与导出共用同一份映射**（避免所见非所得）。
+- **工作台交互**（`ComposeWorkbenchWindow`）：
+  · **拖拽换位**：左键按住瓦片拖到另一格松手即交换（QDrag + 自定义 MIME
+    `application/x-lumenarc-lane`，拖动时带瓦片截图作拖影）；
+  · **右键菜单**：某瓦片 →「移到窗位 1..N」（打勾显示当前窗位）+「恢复默认顺序」；
+  · 换位后状态栏提示「已交换窗位：1 ↔ 2（已同步到导出）」。
+- **记忆与同步**：`m_laneCellById`（**按机位 id** 记窗位）→ 重选机位、新增段、
+  切回多路预览都保持用户安排；每次换位 `applyLaneCellToSegments()` 把映射按
+  **段内 lane id** 重算写回**所有**已建的宫格段（段内路数不同时未安排的补空位）。
+  新段创建即带上当前映射。主听路大窗布局（gridLayout=1）语义不变。
+- **测试**：`segment_test` 156 → **160**（+4 像素级）：两路纯色源（红/蓝）→
+  默认左红右蓝；`seg.laneCell={1,0}` → 两格**互换**（抽帧取两格中心取色断言）。
+  mw 140 / calibration 157 等其余套件全绿。
+- **陷阱**：① 第一版把映射打进了 `runMultiCam`（旧多机导出路径，走 ffmpeg 图），
+  而工作台走的是 `runCompose`（进程内渲染 + 底部覆盖条）——**改错函数**编译期即报
+  `Params 无 laneCell`，已改正；② `ComposeWorkbenchWindow` 继承 **QDialog** 不是
+  QMainWindow（`eventFilter` 基类调用写错会编译失败）。
 
-**1. 真凶不是 openVideo（stage1 死前误判）**。openVideo 实际正常（trace 显示 5s 重探测后
-`final pix fmt=0` = YUV420P）。引擎首帧崩溃的真因是 **`microdiff_curve.cpp` 的
-`roiFrameStats` 8×8 分块索引越界写堆**：`nx=ny=8, bw=w/8, bh=h/8`，但 `by=y/bh` 在
-y=208（h=209）、`bx=x/bw` 在 x=224..226（w=227）时取到 8，`blkSum[8*8+8]` 写到只有 64 元素
-的 vector 之外 → 首帧即堆破坏崩溃（16×16 纯函数自检因整除而漏检）。修法：
-`qMin(nx-1, x/bw)` / `qMin(ny-1, y/bh)` 钳制 + 补 227×209 非整除回归用例。
+# ============================================================================
+# 工作记录（2026-09-27，第八十三批）——P-98 OSD 秒跳变：不用 OCR 的秒级对齐（原型已自校验）
+# ============================================================================
 
-**2. 第二个 bug（接管时发现，语义级）**：`detectOnset` 从视频第 0 秒起找首次过阈，
-而本素材横跨日出、基准段之前画面与基准差异巨大（首秒 blkMax≈54），导致首帧微变被误判为
-t=0。修法：首帧微变只在**基准段结束之后**判定（基准段是参照系，之前时段用户并未标记为
-干净）；纯函数补“基准段前阶跃不得报”用例。
+## 99. 秒级对齐不必跑 40~60 分钟：像素盯「秒位跳变」+ 稀疏 OCR 锚点（实测 ±1 秒）
 
-**3. 真实素材硬验收通过**（明景拼接 2560×1440@20fps，ROI 961,54,227,209，基准 700000~880000ms）：
-```
-seconds=1799  mu=8.316 sigma=1.096 threshold=11.605
-onset: tsMs=936000 direction=1
-[onset-10s] 926000ms blkMax= 9.23   [onset -1s] 935000ms blkMax= 9.39
-[onset +0s] 936000ms blkMax=11.85   [onset +4s] 940000ms blkMax=31.12
-```
-→ onset=936000ms = 烧录 05:49:23，与 Python 原型标定**逐秒一致**；干净段 μ 与原型 8.8 吻合。
+- **缘起**：用户问「秒级对齐没有更好的方案吗？一定要这么长时间？」。旧口径 =
+  时间重建 257 个 OCR 点（61 粗 + 196 加密）× **实测 10 秒/点** ≈ 40~60 分钟；
+  且单直线模型对本案只能到 **±10~19 秒**（实测 30 点：均方根 6.4 秒，
+  该片画面时钟**内部分段速率 1.02~1.33 波动**，不是恒定 1.139）。
+- **新路线（不用 OCR 求跳幅）**：画面时间戳**秒位每秒跳一次**——一趟解码盯那块像素：
+  1. 跳变的**位置** = 帧级（用 ffprobe 逐帧 PTS，不经帧号）；
+  2. 跳变的**幅度** = 把跳变帧的秒位字模聚类（00~59 共 **60 类**），
+     数字环序差即精确跳幅（该片有 **+2/+3/+4 跳秒** 共 ~190 次 = 加速导出丢帧实证）；
+  3. **绝对时间** = 稀疏 OCR 锚点（沿用现有 probe，每 ~90 秒一点，30 点）；
+     锚点区间内按**间隔**（不是变化幅度）分配余量。
+- **实测（顺德 JA382，45:41，68392 解码帧）**：
+  | 阶段 | 耗时 |
+  |---|---|
+  | ffprobe 逐帧 PTS | ~5 秒 |
+  | 解码取字模变化 + 跳变补丁 | **75~77 秒** |
+  | 聚类/环序/定幅/锚点校正 | ~10 秒 |
+  | 锚点 OCR（30 点，现口径） | ~5 分钟串行（**可并行 → ~1.5 分钟**） |
+  → **总计 3~7 分钟**（旧 40~60 分钟）。
+- **自校验（用户要求「自行验证结果是否对」）**：随机抽 **12 个位置**（非锚点）现场抽帧 OCR 比对：
+  **10 个完全一致（0 ms），2 个差 1 秒，最大偏差 1000 ms**。
+  再独立核对：像素链推出总秒数 **3122 秒** vs OCR 实测增量 **3120 秒**（差 0.06%）；
+  2800 次跳变里只有 **26 次（0.9%）**需要锚点校正。
+- **踩过的坑（都已修，写进 `tools/osd_tick_probe.py` 注释）**：
+  ① 管道 `read()` 余数被丢 → **静默丢 1400 帧（2%）**，跳变链全错（必须带 carry 缓冲）；
+  ② **解码器会丢帧**（容器 68536 vs 解码 68392，丢 144 帧 ≈ 5.8 秒漂移）→
+     必须用 **ffprobe PTS**，不能用「帧号 ÷ fps」；
+  ③ 秒位区域要截**两位数字**（个位 26px 只 10 类，区分度不够）；
+  ④ 比对要在**白色字模**上做（宽区域直接比灰度会被树叶背景运动淹没：实测 67100 帧全部触发）；
+  ⑤ 聚类容差要用**绝对像素数**（比例阈值 0.12×2208=265px 会把不同数字并类，实测聚成 16 类）；
+  ⑥ 锚点校正的余量要按**间隔**分配（按变化幅度分实测在 t=1564s 处偏 −8 秒，
+     而该处 OSD 完全清晰——漏检的跳变表现为「间隔异常长」）。
+- **原型**：`tools/osd_tick_probe.py`（probe / extract / analyze 三阶段，含 --holdout 独立校验）。
+- **已并入应用（2026-09-27，用户拍板两件：取样模式 + 存表）**：
+  ① `probe_timestamps.py --tickscan` 新模式（秒位列自动定位 / ffprobe PTS **并入解码这趟**
+     （省 ~2.5 分钟）/ 字模聚类 60 类 / 环序定幅 / 按间隔锚点校正 / **tickRatio 合理性闸**）；
+  ② `TimeCalibration.tickAnchors`（delta 编码入 .vla `tick_map`，老读取端忽略未知键）+
+     `wallMsOf/streamMsOf` 优先级 = **秒级表 > 分段 > 仿射**；徽标文案「（秒级对齐 N 个秒锚点）」；
+  ③ `TimestampOcrEngine::runTickScan` + `CalibrationService::runTickAlign`
+     （30 个稀疏锚点 → 像素扫描 → 构造候选；锚点<8 或跳变率异常 → `tickAlignFailed` 回落）；
+  ④ 校时窗口加「秒级精细对齐」钮 + **自动触发**（三点后 `isVariableRate(rate) || 残差>2s`
+     且已框选 ROI）+ 失败提示改用「时间重建」；未框选时先引导框选（实测无 ROI = `no_roi`）。
+- **端到端实测（应用自身 C++ 链路，`lumenarc_reconstruction_test --tick --roi …`）**：
+  `anchors=2800 rate=1.1263 skipped=287s span=3086s`，**8 checks 0 failures**，**总耗时 2m40s**
+  （30 锚点 OCR ~85s + 像素扫描 ~75s）——vs 旧「时间重建」40~60 分钟。
+  测试：calibration **157**（+16 秒级表 + 5 日期合理性过滤）/ mw 140 /
+  case 274 / segment 156 / sync 195 / piecewise 129 / sidecar 34 / case_e2e 51 /
+  ui_chain 166（2 条 synth.mp4 fixture 既有遗留）。
+- **排查坑（写进代码注释）**：① 集成测试回调忘 `qApp->quit()` 且失败是**同步**发生的
+  → `quit()` 在 `exec()` 前被吃掉，白等看门狗 10/30 分钟（已加 `if (!done)` 守卫 +
+  消费 `--roi` 的值，否则会被误当 python 路径）；② 秒位定位在无 ROI 时直接 `no_roi`
+  → UI 改为先引导框选。
+- **§99.1（2026-09-27 晚）V14「校时不成功」真因 = 年份错读 + 剔点剔错边**：
+  `calib_debug.log` 实录（18:20 那次）——三点 OCR 把首点读成 **2023**年（实际 2026；
+  用户 ROI 把年份末位切掉，§97 第二轮同现象复现），`fitDroppingWorstOutlier` 以 2023 为锚
+  算出残差最大的点是**正确的** 15:00:17 → 剔掉好点、留下错点 → 2 点拟合 **rate=34583**
+  → `RateInsane` 且不自洽 → **不自动应用** → `.vla` 一直不变 → 用户看到「校时不成功」。
+  修：`TimeCalibration::dropImplausibleDates`（**日期合理性过滤**：以墙钟中位数为中心剔
+  |偏差| > 1 天的点——真错读是年级，真变速不会差一天），接入三点/预检/秒级锚点三条路径
+  的拟合前。**calibration 152 → 157**（+5：用日志真实三点值复现「未过滤速率荒谬」→
+  过滤后 rate≈1.1396 自洽 → 可自动应用；日期一致时一点不剔）。
+- **§99.2 UI 回滚（用户 2026-09-27 拍板）**：上一批「UI 规范达标」改动被用户判定破坏了
+  主界面与多机窗（画面调节被收进「⋯」溢出菜单、播放/暂停/停止三键并一键、ROI 按钮撤出工具栏、
+  多机窗 emoji 图标被删导致按钮行重排）。已 checkout 回滚 8 个文件：`mainwindow_ui.cpp`
+  （回滚后**重新贴回 §98 的 videoRemoved 清理 lambda**）、`mainwindow.h`（保留 §95 的
+  `startComposeExport` 传值签名）、`mainwindow.cpp`、`mainwindow_wiring.cpp`、
+  `aboutdialog`（h+cpp）、`multicamplaybackwindow.cpp`、`playbackadjustpanel.cpp`。
+  **回滚前已整批备份**（系统临时目录下 lumenarc_uibatch_backup：ui_batch.patch + 8 文件原样），
+  后续要保留其中哪些（命名/tooltip 规范、去 emoji 等）可选择性重贴。
+  其余被同一批改动的对话框（casedialogs / segmentexportdialog 等）未回滚（用户未提及）。
+- **§99.3（2026-09-27 深夜）「6 是黑色的」鲁棒性专项**（用户实测反馈：年份末位
+  黑描边白字压在亮天空上 → 整位发黑难辨；ROI 切进字里时 OCR 间歇读成 2023）：
+  ① **probe：精确 ROI + 外扩 8% ROI 双裁剪 × 多变体（增强灰图/OTSU 反向/自适应）多数表决**
+     —— 先试精确 ROI（保证不比旧版差），再试外扩；同裁剪两变体一致即返回（成本控制），
+     候选全不一致则**降权 ×0.7 + 标 `variantDisagree`**。切框矩阵实测（框左界逐步右移）：
+     +0.3% 恢复 2026（修掉我中途引入的外扩退化）、+0.6% 双变体互证 2026、
+     +0.9% 以上仍错读（框切进字内，本质无解）。
+  ② **service：日期异常点「去 ROI 全帧重读」**（`m_dateRetryPending` 一轮，防环）：
+     实测该片 ROI 读 2023、**全帧稳定读 2026（conf 0.92~0.95）**；重读点与首轮通过
+     日期闸的点合并去重后再拟合。新一轮 GO 复位重试标记。
+  测试：calibration 157 / mw 140 / piecewise 129 / case 274 / sync 195 / sidecar 34 /
+  segment 156 全绿。exe 待重链（用户应用在运行；已另出 `LumenArc_fix.exe` 供即时验证）。
+- **§99.4（2026-09-27 深夜）reviewer 审查收口**（只读审查报 BLOCKER 0 / P1 3 / P2 11，全清）：
+  · **P1-1（我引入的真 bug）**：`onAtPositionsFailed` 里我用 `video == m_pendingVideo`
+    判 tick 阶段——而该函数在**上一行**已 `m_pendingVideo.clear()` → 条件恒假 →
+    锚点失败既不发 `tickAlignFailed` 也不复位 `m_tickStage` → 状态机卡在 Anchors，
+    此后三点/预检/重建的 at 回调全被路由进 tick 锚点分支**吞掉**（重建粗采样 60 点
+    还会意外触发一次 tick 扫描）。修：clear() 前先取 `tickActive/tickScanning` 再判。
+  · **P1-2**：`runTickScan` 的 `waitForStarted` 失败路径没复位 `m_tickMode`
+    （三兄弟里唯独它漏）→ 此后所有 at 模式运行被误路由，残留旧 map 还会被当新结果应用。
+    修：该分支复位模式位 + 清 process。
+  · **P1-3**：秒级对齐是**异步 2~4 分钟**，用户可能在这期间做第 2 步「对真实时间」；
+    而 tick 候选不含 truth* 字段、`applyWorking` 整包替换 → **静默丢掉北京时间偏移**
+    （报告时间口径错）。修：`onTickAlignReady` 把工作面的 truth* 与 calibNote 补进候选，
+    并在对时预览行提示「已保留此前的对时」。
+  · P2 一并收口：① 秒级表**表外外推改用端部相邻段斜率**（原用 1.0，加速件会低估；
+    域层单测同步改为区间断言）；② 锚点合理性闸改**中位数口径**（原「首个锚点链式
+    ×1.14」——首个锚点错读会把后面好点全判离群，恰是本功能目标场景）；
+    ③ 引擎 tick 成败改**读回 JSON 的 ok 字段**（原 `size>64` 启发式把短路径的失败
+    响应误判成成功）；④ 「秒级精细对齐」钮在三点出结果后即启用（原来正常件永远点不了）；
+    ⑤ 勾选「不修正时钟快慢」对秒级表无效 → 文案说明；⑥ `dur<60s` 早退；
+    ⑦ `cancel()`/失败路径复位 dateRetry 标志；⑧ probe 表决短路修正（原 `max(cands[:2])`
+    可能选中异议者）+ time-only 行保留兜底（不再比旧版少出结果）；⑨ 删仓库根 `nul`
+    （ripgrep os error 1 元凶）。
+  · 回归：calibration 157 / piecewise 129 / mw 140 / case 274 / sync 195 / sidecar 34 /
+    segment 156 / case_e2e 51 / ui_chain 166（2 条既有 fixture 遗留）。exe 23:26 重链。
+  · 未做（记 PENDING）：服务层「tick 锚点失败」路径的专项回归测试（P1-1 正是测试盲区）；
+    正常件读数对比抽查（reviewer 本环境无法跑）；表外/重复 wall 边界单测。
+- **§99.5（2026-09-28）「时快时慢」真因 + 提速 + 长任务结果丢失**（用户实测三问）：
+  ① **真因**：`.vla` 里 `tick_map` 锚点数 = 0，落库的是**单直线 1.143×** —— 而该片内部速率
+     1.02~1.17 抖，单直线必然「时快时慢」。为什么秒级没进去？现场取证发现
+     **案件目录里的 tick_map.json 是 ok=True / 2800 锚点（09:28:01 写出）**——
+     秒级**算出来了**，但 `.vla` 最后写入是 09:20（更早的单直线）→ **用户在秒级跑完前退出了
+     应用，结果随对话框销毁而丢**。修：新增 `MainWindow::wireTickAlignPersistence()`——
+     无对话框（关窗/切走视频）时把 `tickAlignReady` 结果直接落库 + 刷徽标 + 状态栏提示。
+  ② 另一处触发缺失：自动触发条件要求 `m_roi` 有效，而「框选 OCR 失败 → 清框选全画面重试」
+     会把 `m_roi` 清空 → 秒级被静默挡掉。修：**粘性 ROI**（`m_roiSticky` 记住用户框过的区域，
+     专供秒级定位秒位）。
+  ③ **提速实测（回答「多进程 OCR 会快吗」）**：本机 **4 核**，`--workers 8` vs 4 = 220s vs 225s
+     （**无收益**）；单次定位抽帧仅 0.4s、全片顺序解码 74s。真正的瓶颈是「逐点 3~7 帧 ×
+     多变体 OCR」。修：**OCR 读取窗口放宽成条带**（左 +40%/右 +5%/上下 +30%——用户框常把年份
+     末位切在框外，原来因此读数不达标而掉回全量重试）+ **单帧高置信快路**（conf≥0.93 且
+     complete 即采用）→ **30 锚点 220s → 87s（2.5×）**；端到端 `--tick` 实测 **3 分 02 秒**
+     （`anchors=2800 rate=1.1394 skipped=323s`，8 checks 绿）。
+  ④ 试错并撤回：全帧自动找秒位（锁错区域 + 聚类类数爆炸白跑 20 分钟）→ 加护栏
+     「解码途中跳变率抽查」+「类数上限 200」；单帧快路第一版（窗口未放宽 → 307s，更慢）→ 撤回后
+     连同窗口放宽一起重做才见效。
+  回归：calibration 157 / mw 140 / piecewise 129 / case 274 / sync 195 / sidecar 34 /
+  segment 156 全绿；exe 11:00 重链。
+- **待办**：① 错读点自动重取（检测到日期异常时对该位置去 ROI 全帧重读并合并；
+  根因是 ROI 切掉年份末位——也可在校时窗口提示「框左扩一点」）；
+  ② 「UI 规范达标」批次按用户意愿选择性重贴。
+- **待办（未做）**：并入应用（新取样模式 + .vla 存表；PiecewiseTimeMap::kMaxSegments=32
+  装不下 ~2800 个秒级锚点 → 需新增 tick 表字段或自适应分段压缩）。
+- **边界**：需 OSD 秒位可读且每秒跳（DVR/平台导出常态）；OSD 长期被遮挡/无秒 → 回落现有路线。
 
-**4. S2 A 图表**：修 `chartpanel.cpp:1222` 不存在的 API（`m_cal.toDisplay` →
-`displayMsOf`+`formatDisplayTime`）、`clearMdSeries` 值/指针遍历错（`auto *mk` →
-`const MdMark &mk`）；另新增无头图表渲染用例（**纯 microdiff 快照**——正是会撞三处早退
-陷阱的那条路径）→ `[chart-md] series=2 points=5 render=1200x400 => PASS`。
+# ============================================================================
+# 工作记录（2026-09-26，第八十二批）——校时「第 2 步落库丢结果」：非实时导出件永远校不准
+# ============================================================================
 
-**5. S2 B .vla**：新增 `MDCF` 块（**version 保持 10**；未知块 opaque 字节保全已存在）+
-META channels 声明 kind=microdiff + 读路径对称解析（上限防御 roiCount≤1024 /
-secondCount≤1e6）；`lumenarc_vla_test` 新增 MDCF 往返 → **57 项检查 0 失败**。
+## 98. 「重新导入了还是不行」根因：第 2 步对真实时间落库的是旧工作面（三点结果被静默丢弃）
 
-**6. S2 C UI**：面板新增「计算变化率曲线」按钮（基准采集成功才解锁，`setBaselineReady`）+
-`curveRequested` 信号 + `MainWindow::onMicroDiffCurve`（校验视频/基准/ROI → 装配 ROI →
-`taskService->start(microdiff, …, IAnalysisEngine::MicroDiffCurveParams{baseStartMs,baseDurMs})`）
-+ `onTaskStarted` 加微变分支（不再掉进“亮度分析中”）+ 基准就绪状态 3 成员与
-openVideoFile / 清空列表两处复位。
+- **缘起**：用户复测 §97 修复后报「我重新导入了 还是不行」——顺德均安 JA382
+  `659…_2026_09_22_17_51_59_258_PM.mp4`（案内 V14，1.139× 非实时导出件）。
+- **现场取证链**（全部可复查）：
+  1. **链路本身正常**：用软件自带 python+ffmpeg 按应用同款参数（案内 ROI + `--at-json`）
+     在机外复现三点：`1080→15:00:13 / 5080→15:00:17 / 2739326→15:52:13`，conf 均 0.95
+     → 拟合 **rate=1.139**。证明 §97 的 `-sseof` 尾部修复 + ROI 回退都已生效。
+  2. **落库的却是旧数据**：读案内 `videos/V14.vla`（mtime 09-26 12:12:47）——只有
+     **2 个样本、相隔 2 秒**（streamMs 3080/5080、wall 15:00:15/15:00:17）、`rate=1.0`、
+     `rateApplied=false`，且 `frameImg` 指向 **`evidence/calibration/V13/…`（该目录已不存在）**
+     → 数据来源是 **09-24 23:10 那次（视频当时还是 V13）的旧校准**（`calibratedAtMs` 同刻）。
+  3. **今天确实跑过 GO**：`evidence/calibration/V14/1ac620c07d2d_at/` 有 09-26 12:11:58~12:12:40
+     抽的 4 帧（at_1080/at_5080/at_1370722/at_2739326），且 `.vla` 的 `truthSource="manualOffset"`、
+     `truthCheckedAtMs` = .vla mtime（12:12:47）→ 用户在第 1 步之后做了第 3 步「直输偏移量」。
+- **根因（两个独立缺陷叠在一起）**：
+  1. **第 2 步落库的是工作面 `m_working`，不是刚算出的三点结果**。
+     `maybeAutoApply()` 对 `RateInsane`（|rate−1|>1%）刻意**不自动应用**（§97 拍板：等用户点
+     「按此倍率校时」）；用户没点那个按钮，直接走到第 3 步对真实时间——而
+     `onAdoptTruthManualOffset()` 等 **4 处**（`onAdoptTruth` / `onAdoptTruthManualOffset` /
+     `onClearTruth` / `adoptPhotoTruth`）都是 `emit calibrationApplied(m_working)`，于是
+     **继承来的旧 2 点 rate=1.0 校准被原样写进 .vla** → 时间轴从每一刻都偏，整片偏 ~6 分 22 秒。
+     （用户感知：「点了自动校时、也对了北京时间，但时间还是不对」。）
+  2. **移除视频后同路径重新导入会把旧校时「复活」**：`VideoStateManager` 按**文件路径**
+     持存 `TimeCalibration`/ROI/分析快照，而 `removeState()` **全库零调用**——移除 V13 后
+     内存状态仍在该路径名下；重新导入成 V14 时 `openVideoFile` 开头
+     `saveCurrentState(currentPath…)` 又把旧状态写回（当前路径与旧路径相同），
+     于是新视频一进来就带着旧校时与旧 ROI。（`case.json` 12:11:12 建 C16/V14 组时
+     校时徽标已是「OCR 2点, rate=1.000」——导入那刻就继承了。）
+- **修复**：
+  1. **domain 下沉判据（可测）**：`TimeCalibration::applyFitDecision(cal, noDriftCorrection)`
+     ——把 onUseResult 里原地的「不校正勾选 / 自洽大倍率 → 应用速率+标变速」门控抽成
+     唯一实现（两处共用，防判定漂移）；`TimeCalibration::absorbPendingFit(working, fit,
+     fitPending, noDriftCorrection)`——第 2 步落库前的并入判据（纯函数：非 pending/非法/
+     非 OCR 三点/分段模式 → 不并入）。
+  2. **对话框**：新增 `m_fitPending`（`onThreePointReady` 置位、`applyWorking` 消费清零）；
+     `onUseResult` 改调 domain 判据；**4 处第 2 步入口落库前统一 `absorbPendingFit()`**
+     （并入了就在结果行提示「✓ 已同时采用第 1 步的三点结果（倍率 1.139×）」）。
+     → 用户即便不点「按此倍率校时」，只要做了第 2 步，三点结果也会一并落库。
+  3. **会话状态不再复活**：`CaseManager::videoRemoved` 信号带源路径
+     （`(id, originalPath)`；emit 时记录已从 meta 删除、事后无法反查），`MainWindow` 收到后
+     `m_sessionMgr->removeState(path)`；若移除的正是当前播放视频，同时清 `m_calibration`
+     并熄灭图表/徽标校时。
+- **测试**：calibration **113→131**（+18：`applyFitDecision` 四例——自洽 1.139× 应用+标变速 /
+  勾选不校正只定基准 / 不自洽野点不应用 / 钟准不应用；`absorbPendingFit` 五例——pending 并入
+  且 `wallMsOf(2739326)` 回到 15:52:13 / 勾选不校正仍并入基准 / 无 pending 不动工作面 /
+  分段模式不并入 / 空 fit 不并入）；mw 140 / piecewise 129 / case 270 / sync 195 / segment 156 全绿。
+- **顺带修的既有测试脆弱点**：`segment_test` 的「右上无演示红字角标」断言把顶部逐路彩条的
+  橄榄色（实测 176,119,0 的 DataPalette 机位色）误判成红字（判据 `qGreen<130&&qBlue<130`）
+  → 稳定 1 failure；收紧为 `<90` 后 156 全绿（不是本次改动引入的回归）。
+- **教训**：
+  ① **「用户必须多点一下」的确认式设计，若后续步骤会落库，就必须把待应用结果带上**——
+     否则用户照常往下走，得到的是旧值，且界面不会报错（静默错最贵）。
+  ② 以「路径」为键的会话缓存，**移除时必须删键**；否则「删了再加」等于旧数据回魂。
+  ③ 排查这类「算了但没生效」问题时，先比 `证据帧 mtime` 与 `落库对象时间戳`——
+     本次两者差 42 秒就锁定了「算过、但落的不是它」。
 
-**7. 构建与测试**：`LumenArc` / `lumenarc_vla_test` / `lumenarc_engine_test` /
-`lumenarc_ui_chain_test` 四目标 Release 全绿；vla 测试 0 FAIL；engine 纯函数 6 项 PASS。
+### 98.1 第二轮（reviewer 审查收口；只读审查提 P1×2 + P2×7，无 BLOCKER）
 
-**教训补一条**：stage1 的“openVideo 5s 失败”是**在错误假设上耗掉了整个预算**——它握着
-真实素材（一次 `microdiff-curve` 实跑只要 4 分钟就能定位到 roiFrameStats），却选择反复
-重读打开代码。下次遇到“某函数失败”，**先用真实输入跑一次拿现象/栈，再读代码**。
+- **P1-1 prune 路径同根因漏清**（`pruneMissingFiles` 直接 `videos.remove(i)` 不发
+  `videoRemoved` → 外部删除文件→自动清登记→文件恢复后重导，旧校时依旧复活）：
+  改为在 `remove` 前取 id/路径并 `emit videoRemoved`（videos 与 preprocess outputRefs 两处）。
+- **P1-2 接线无回归锁**（18 条 domain 断言锁不住「置位/4 处调用/清位」这条线，删一行
+  `absorbPendingFit()` 也能全绿）：`ui_chain_test` 新增 §98 块 **+28 checks**，用
+  `QMetaObject::invokeMethod(onThreePointReady)` 注入 1.139× 自洽大倍率，再**逐个入口**
+  触发第 2 步（方式二手动两时间 / 方式三直输偏移量 / 方式一校时图片 / 清除对时）断言
+  `samples==3 + rate≈1.139 + rateApplied + speedVariant + 尾点墙钟 15:52:13`，并加
+  「无 pending 时不得凭空并入」的反向用例。**变异验证**：依次把 4 处调用改成 no-op，
+  4 次均转红（改后还原 → 绿）；两个不参测的变异（连声明/内部实现一起改）则直接编译失败。
+  为定位断言给 `m_useBtn` 加 `objectName=fitUseBtn`；`TimeCalibration` 补
+  `Q_DECLARE_METATYPE`（invokeMethod 直驱需要）。
+- **P2 一并收口**：
+  · `videoRemoved` 信号补**第三参 = 实际打开路径**（`effectivePathFor`；原件缺失时案件树开的是
+    包内副本，与登记路径不同键）→ MainWindow 两个路径都清；移除当前播放视频时额外出状态栏提示。
+  · `VideoStateManager::removeState` 改**模糊匹配**（`QDir::cleanPath` + 大小写不敏感扫键）——
+    修键同一性（正/反斜杠、目录大小写差异）。
+  · `m_fitPending` 生命周期补齐：重建判「正常录像」（非 piecewise）、OCR 失败终态、
+    取消、以及用户把测点全勾除（`!fr.ok`）时均清位——防第 2 步把已被取代的旧 fit 当结果并入
+    / 提示文案与实际不符。
+  · 手动录入取代自动结果时显式提示（原拟合倍率未采用）。
+- **顺带修的既有构建缺口**：`lumenarc_ui_chain_test` 目标漏列 `src/domain/filename_timestamp.cpp`
+  （§97 的 `filenameDateHint` 引入依赖）→ 该测试自 §97 起**一直链接失败**（HANDOVER 表头的
+  「ui_chain 132」是旧 exe 数字）。CMakeLists 补齐后重建，现 **160 checks**。
+- **回归**：calibration 131 / piecewise 129 / mw 140（Space 标签计时抖动偶发 1 次，复跑绿）/
+  case **274**（+4：`videoRemoved` 三参实测）/ sync 195 / sidecar 34 / segment 156 /
+  ui_chain **160**（2 条为 synth.mp4 fixture 缺失的既有遗留）/ case_e2e 51。
+- **LumenArc.exe 已重链**（2026-09-26 16:13，新文案已验在二进制内），待用户按 P2.14 配方真机复测。
 
-### 状态（接管后）
-- ✅ 数据层 + UI 层全部实现并编译通过（四目标绿）；曲线数值与原型标定逐秒一致
-- ✅ 无头可验证项全绿（纯函数 / MDCF 往返 / 微变图表渲染）
-- ⏳ **待用户界面验证**（无法无头验证）：① 面板「计算变化率曲线」按钮仅在基准采集成功后
-  解锁；② 点击后进度条 0→100%（约 3~4 分钟），状态栏显示“正在计算变化率曲线”；③ 完成后
-  图表出现每 ROI 两条线（blkMax 粗 / medD 细）+ 水平虚线（μ+3σ）+ 红竖线（首帧微变
-  05:49:23）；④ 保存工程后重开曲线仍在（MDCF 块）；⑤ 取消按钮能中断（引擎协作取消）
-- ❗ 未做：CHANGELOG 版本号（仍是“未发布”）——按惯例等用户验证通过后定版
+# ============================================================================
+# 工作记录（2026-09-24，第八十一批）——校时死结修复：非实时导出件（1%~15%）无法校准
+# ============================================================================
 
-### 状态（11:00 断点快照，保留作历史）
+## 97. 校时总是不准的根因：平台导出件 1.139× 时间压缩落在阈值缝隙 + 快路优先
 
-## 92. P-81 微变分析落地（2026-09-10）
+- **缘起**：用户报「这条公安导出件校时总是不准」——顺德均安 JA382 员工村门口,
+  `659…_2026_09_22_17_51_59_258_PM.mp4`（1920×1080 HEVC，45:41，750MB，案内 V12）。
+- **实测取证**（每 5 分钟抽帧读画面 OSD，10 点）：文件 45:41，画面钟走了 52:02 →
+  **整片 1.139×**（逐段 1.10~1.17 = 导出加速/丢帧，非摄像机钟快慢；同案 V01/V03 实测 1.000）。
+  文件名时间戳是**导出/下载时刻**（2026-09-22 17:51:59），画面内容实为 2026-09-20 15:00:13
+  （差 2 天 2 小时 51 分 46 秒）。
+- **根因（三处阈值不齐 → 1%~15% 压缩件落在无解缝隙）**：
+  1. 预检 `|rate−1| > 0.15` 才判「疑变速」→ 1.139 被当**正常录像**，走三点 OCR；
+  2. 三点/两点拟合合理域 `TimeCalibration::kMaxSaneRateDev = 0.01` → 判 `RateInsane` →
+     **rateApplied=false**（静默退回 rate=1.0）→ 每 20 分钟偏 ~2.8 分钟、整片偏 ~6 分 22 秒；
+  3. 手动两点 → 弹「数值不合理」直接拒绝（死路）。
+  分段重建（`PiecewiseTimeMap`，速率上限 ±150%）本可表达 1.139，但预检根本不放它进去。
+- **修复**：
+  1. `PiecewiseTimeMap::isVariableRate()`（阈值 = `kNormalRateDev` = 1%）+ 预检改用它 →
+     1%~15% 压缩件与三点合理域**无缝衔接**；OCR 误读仍由三点共线校验（`ocrSuspect`）拦。
+  2. `TimeCalibration::rateChangeSelfConsistent()`：大倍率**自洽**判据——n≥3 且残差 ≤3s、
+     n==2 交用户确认、`|rate−1| > 50%` 一律当误读（日期/上下午读错典型 ~2×）→
+     区分【非实时导出件】与【读数错误】。
+  3. 校时对话框：自洽大倍率不再禁用按钮/不再硬拒 → 文案「画面时间约为播放进度的 1.139 倍
+     （疑似非实时导出/抽帧，不是读数错误）」+「**按此倍率校时**」，确认后
+     `rateApplied=true + speedVariant=true`（状态栏/报告标注「非实时导出件（画面时间 ≈1.139×
+     播放进度）」）；手动两点同款确认框（原文案保留给不自洽/荒谬倍率，并修「拄→戳」错别字）。
+  4. **快路优先**：整片一致（三点共线）时不再自动启重建，先走三点 → 用户点按钮立即采用；
+     新增「时间重建」按钮供分段精修（点不成直线时仍自动重建）。
+  5. 新增**文件名↔画面日期差**提示（本件差 2 天，防人工采信文件名时间）。
+- **性能实测（本次顺带量到）**：OCR 逐点 ~25~45s（bundled PaddleOCR CPU）；
+  45 分钟长片重建 = 61 粗点（实测 ~25 min）+ 196 加密点（~20-30 min）→ **总 40~60 min**，
+  而片内抖动 <10%（不足以切段）时结果与全局倍率等价——这就是把快路设为默认的实证依据。
+- **开发探针**：`lumenarc_libav_test` 增 `LUMENARC_TIMING_PROBE[_FILE]=1` —— 打印
+  `videoTiming`（可信时长/fps），用于排查“取样跨度过短”类问题（本次即用它确认
+  引擎 2741446ms / 可信 2741446ms 都对，把矛头转向采样与 OCR）。
+- **测试**：calibration **113** checks 全绿（+14：1.139× 三点共线→自洽、含 30s 野点→不自洽、
+  两点→交确认、2.0×→仍拒；路由 1.139/0.98→变速、1.005/0.995→正常）；piecewise 129 / mw 140 /
+  segment 156 全绿（`testInsaneRateRejected` 语义不变：域层仍判 insane，UI 层多“用户确认后强制应用”出口）。
+- **文档**：MANUAL §四·1/§四·3（1% 触发、按倍率校时、快路/重建二选一、文件名≠画面时间）+ 错别字。
+- **第二轮（用户复测「校时后时间还是错的」→ 读案内 `videos/V13.vla` 现场取证）**：实际落库的校准
+  只有 **2 个样本、相隔 2 秒**（15:00:15@3.08s / 15:00:17@5.08s）→ 跨度太短、速率根本测不出
+  （`rateApplied=false`，只定基准）→ 必然越走越偏。链路复现（应用同款
+  `probe_timestamps.py --at-json` + 用户框选 ROI，跑三点位置）实测三个病因：
+  1. **尾部采样失败**：`-ss 2738.4s` 在这条坏 GOP/残帧 HEVC 上取到垃圾帧 → `ocr_failed`
+     （同一文件头部 1s 与文件末帧却能读）→ 三点只剩两个相邻点；
+  2. **人工 ROI 反而更差**：同一帧带用户 ROI 读成「**2022**年」（年份错）甚至整帧失败，
+     去掉 ROI 自动分块后「2026年…」conf 0.95 全对——ROI 裁切切掉年份首位/引入背景干扰；
+  3. **单点错读让三点拟合失真**：一个错点 → 残差/倍率荒谬 → 旧逻辑要么整单被拒、
+     要么预检判「不成直线」只提示“请重新框选”（死路，且用户照做会更糟）。
+  修：（a）`probe_timestamps.py`：尾部位置（距片尾 ≤6s）改用 `-sseof` 取文件末帧，
+  中段重试窗口 ±250ms → ±1s/±2.5s（每档仍用 showinfo 实测真实位置）；（b）ROI 一路无结果
+  或置信更低时自动退回自动分块识别（ROI 成功仍优先）；（c）domain 新增
+  `TimeCalibration::fitDroppingWorstOutlier()`（n≥3 且残差>3s 才剔；剔后仍不自洽则不剔）+
+  服务层三点路径自动剔除并标 `ocrSuspicious`（测点表显示 ⚠）+ 预检先剔再算速率/共线 +
+  对话框 `ocrSuspect` 分支不再判死（继续三点并提示看 ⚠ 行）+ 跨度 <60s 且速率不显著时
+  显式提示「只能定基准，无法判断快慢」。
+  **复测**：应用同款命令（带 ROI 三点）现在三个样本落点全对（1080→15:00:13 /
+  2739326→15:52:13；中间那个年份错读点被自动剔除）→ 拟合倍率 1.139 → 走「按此倍率校时」→ 正确；
+  calibration 113 / piecewise 129 / mw 140 / segment 156 全绿。
 
-### 背景
-火调行业"微变分析"（应急管理部天津消防研究所+天津大学+海康"火察"同类原理：央视
-《危机现场》第 4 集展示"微变视频分析展现烟气流动的过程"）。落地前先用 Python 原型在
-**真实案件素材**（2026-07-22 广州增城，明景拼接 2560×1440/20fps/3.16Mbps/30min）上
-做了可行性实测，关键结论直接决定了参数与首版取舍：
+## 96. 版面拍板：宫格「时间轴示意」移最下方 + 删演示片红字角标
 
-- 固定基准不可用：30 分钟跨日出，全域漂移累积 **36 灰度级** ≫ 烟信号 2~5 级 → 必须用户标记干净基准段。
-- 滚动基准可压回 2~3 级，但会**吸收渐进式变化**，检出比固定基准晚约 90 秒 → 首版选固定基准。
-- 光照是**空间非均匀**的，仅减全局中值不够；但用全画面均值做增益补偿会**抵消烟信号**
-  （烟使全画变暗）→ 首版**不做光照补偿**。
-- 单帧原始偏差直接放大 = 纯 H.264 块噪声 → 必须时域一致性 + 空间低通（v1 曾漏，观感无法对标）。
-- ROI 定向（227×209）实测：干净基准段噪声 med|D| = 3.0 级；烟在 **05:49:23** 首次持续
-  越过 3σ（最活跃 8×8 分块 8.8→31.7），与调查员肉眼判断（05:49:00）基本同步。
-- 用户明确要求：原视须**保留彩色**，不做灰度显示。
+- **缘起**：用户 2026-09-24 17:58 真机截图（1920×38 条带：覆盖条 + 右上红字）——
+  「不太喜欢这条的注释 文字删掉 时间轴示意放在最下方」：覆盖条原本画在 videoRect
+  顶部，压住了瓦片顶部的机位名徽标与画面。
+- **改动（runCompose 宫格段）**：
+  - 版面改「上宫格 + 下覆盖条」（与多机窗 runMultiCam 同口径）：新增 gridRect
+    （videoRect 扣除条带高 stripH=8+路数×6+9）承载 cellRectOf/主听路大窗几何；
+    stripRect 固定到 videoRect 最下方；OSD 跟到 gridRect 底部（条带之上）；
+    「条带右收 350px 避水印」特例随水印一并删除。
+  - 删除演示片右上红字角标「分析演示材料 · 非原始证据」，`Params::demoWatermark`
+    字段一并删除（R10 不留死参数；工作台与测试 8 处赋值同步清理）。证据口径由
+    「证据原始片段」（无损直拷 + .forensic.json）承担；演示片仍带左下
+    `1x · 时间 · 案件号` OSD（时间口径说明）。
+- **测试**：新增 `testComposeLanesStripAtBottomLayout`（纯灰源 color=gray 做像素断言：
+  ① 底部带存在贯穿条带高度的白色游标竖线；② 瓦片内容区仍为源灰（未被条带叠层）；
+  ③ 右上区域红色像素数=0（无演示红字））。segment **156** checks 全绿。
+- **真机素材校对**：用用户 4 路（P01/P02/C11@修正后路径/C06 D10）实导 1.5s@1080p 抽帧
+  核对：条带在最下方、四路机位名徽标露出、无红字（临时 REPRO_REAL_GRID 入口已撤）。
 
-### 新增文件
-| 文件 | 职责 |
-|---|---|
-| `src/domain/microdiff_core.{h,cpp}` | 纯计算核心（无 QObject/Widgets）：中值基准、时域环缓冲、盒式低通、JET LUT、噪声基底标定 |
-| `src/microdiff.{h,cpp}` | 显示层 QImage 胶水：`computeMicroDiff`（每帧推进环缓冲）/ `renderMicroDiff`（纯渲染） |
-| `src/infrastructure/microdiff_baseline.{h,cpp}` | 独立 libav 解码一遍算基准与噪声基底（惰性 sws 建表，P-55 同规） |
-| `src/microdiffdialog.{h,cpp}` | 非模态设置面板（等级/强度/模式/范围/时域窗 + 基准段采集与进度） |
+## 95. 多源导出 0% 假死根因：ffmpeg stderr 管道无人读（+ 过期路径预检 + 重定位跟随）
 
-修改：`videowidget.{h,cpp}`（显示链末级）、`mainwindow.{h,cpp}`（编排/ROI 解析/基准采集）、
-`mainwindow_ui.cpp`（工具栏按钮）、`mainwindow_wiring.cpp`（接线+启用禁用）、`CMakeLists.txt`。
+- **症状**（用户 2026-09-24 16:51 真机截图）：4 路宫格（C01/C02 前处理 + C11 + C06 D10）
+  导出「演示片」到 `exports/LACompose_0924_165031.mp4`：进度恒 **0%**、已用 0:00、
+  状态「导出进行中…」，点「取消导出」无反应，只能杀进程。
+- **活进程取证（未修前）**：ffmpeg 子进程 **ReadTransferCount=0**（一个字节没读 stdin）/
+  `WriteTransferCount=2366` / CPU 0.06s → **阻塞在写 stderr**；LumenArc 4 核 100%（4 路解码空转）；
+  `exports/` 里**产物文件都没生成**（ffmpeg 没走到开输出）。
+- **根因两件套**：
+  1. **源路径过期**：那条命令的第 3 个 `-i` 是
+     `桌面/20260920佛山顺德/监控视频/1号视频（电房旁边）/hiv00835.mp4`（少一级 `视频/`），
+     实际在 `桌面/20260920佛山顺德/视频/监控视频/…/hiv00835.mp4`（case.json 16:36 已更新，
+     应用 16:30 启动 → 工作台素材/时间线还是旧路径快照）。
+  2. **stderr 管道死锁**：`QProcess` 的 stderr 管道在工作线程无人读、只有 **4096B**；
+     4 路源开场信息（banner+逐路 Input 块）实测 **~4.6KB（本工程真实路径）/ 11.5KB（多流测试源）**
+     → 写满即阻塞 → ffmpeg 永不读 stdin、产物不生成、引擎背压后每帧 5s 蠕进 →
+     用户看到的「0% 卡死」；收尾还 `waitForFinished(-1)` 无限等 → 「取消」也无效。
+     A/B 实测（`build_tmp/probe_stderr_ab.py` 同款命令行）：stderr 不读 →
+     ReadTransfer=17.7MB/WriteTransfer=4096 卡住；stderr 落文件 → 正常收敛（日志 4656B）。
+- **修复**：
+  - 引擎四个 ffmpeg 调用点（单路/多机/多段/证据直拷+concat）统一
+    `attachFfmpegStderrLog()`：stderr 落 `<产物>.ffmpeg.log` 旁车 + `-nostats`；
+    成功删日志、失败保留并在错误文案里带日志尾部（取代 `readAllStandardError`）。
+  - 收尾等待改有界 `waitFfmpegFinishBounded()`（180s；超时杀进程 + 报「收尾超时」）。
+  - 导出前**源存在性预检** `checkSourcesExist()`（多机/多段/证据逐条列「机位：路径」）→
+    缺文件立刻类型化报错并指引「批量重新定位」，不再把不存在的 `-i` 交给 ffmpeg。
+  - 工作台**跟随重定位**：`CaseManager::videoRelocated` → 素材树 + 已排入时间线的段
+    （单视频段 + lanes 逐路）+ 预览路径改指新路径（消掉根因 1）。
+- **测试**：segment **144** checks 全绿——新增
+  `testComposeStaleSourceFailsFast`（4 路里混 2 条幽灵路径：20s 内必须给结论、
+  失败文案点名「源文件不存在」+ 机位名/文件名、不落半成品）+
+  `testComposeManyInputsStderrNoDeadlock`（自造 1 视频+10 音频流源 ×4 路 →
+  开场 stderr ≈11.5KB » 4096B；必须 90s 内出片、时长 ≈4s、成功不留旁车日志）+
+  `testComposeLanesOffsetPtsNotFrozen`（`-output_ts_offset 90000` 复刻 DVR start_time：
+  瓦片内部 t=0.2s vs 0.8s 必须有差异）+ `testEvidenceFfmpegFailureKeepsLog`
+  （源存在但非媒体 → 必须报错且保留旁车日志）。
+- **同一投诉域顺带修：多路宫格/多机导出画面定格**——`SeqDecoder` 拿【容器绝对 PTS】
+  与【流内 0 基 target】比大小，DVR/NVR 流 start_time 几万秒（实测 hiv00835=37533s）
+  → 首帧就判「已覆盖」→ **每路只解 1 帧**（画面定格，只有 OSD/游标在动）。修：
+  `SeqDecoder` 记容器起点，seek 目标与帧 PTS 都减它（与 run()/runCompose 单源段同款，
+  即 v1.15.3 湛江遂溪冻结根因的漏改点）。反证：临时去掉归一 → 新断言立刻红
+  （实测帧差 0.00=定格），恢复后 152 checks 全绿。
+- **教训（已登记 PENDING 验收）**：① 外部进程同步等待**一律要超时**；
+  ② 子进程 stdout/stderr **要么读、要么落文件**，绝不留在无人读的管道上；
+  ③ 「素材/时间线快照」类缓存必须在案件重定位时跟随。
 
-### 关键设计决策
-1. **两段式 API**（重要）：时域环缓冲必须**每帧只推进一次**。`computeMicroDiff` 在
-   `onFrameReady` 调（推进环缓冲）；`renderMicroDiff` 在 `rebuildAdjustedFrame` 调（纯函数）。
-   这样拖亮度滑杆/改旋转/重绘都不会污染时域平均。
-2. **做在共用显示链上**（与 displayadjust 同级）：旋镜/钉图/全屏/证据快照共用该链，
-   因此"微变局部放大"零额外开发自动获得。
-3. **基准独立解码一遍**：不改 `ffmpeg_video_engine` 的播放状态机（注入同步解码风险高）。
-4. **坐标顺序**：`原始帧 → renderMicroDiff → 旋转 → LUT`。ROI 与基准都定义在**原始坐标系**，
-   先叠加后旋转才能保证任何旋转档位不错位。
-5. **噪声基底放渲染段**：扣基底/乘增益都在 render，所以暂停时拖等级滑杆**即时生效**。
-6. 取证红线：仅影响显示与证据快照；分析数据/ROI/导出证据仍走原始帧（与画面调节同规）。
+## 94. 放大镜同框导出：合成管线补齐放大镜（所见即所得）
 
-### 首版参数（实测标定）
-等级 1..5 → 增益 20/15/11.25/8.44/6.33；时域窗 11 帧；空间 σ=5；噪声基底由基准段自标定。
-
-### 测试方法（用户可观察步骤）
-1. 打开一段有早期烟/火的监控（例：`明景拼接视频_20260722172528 00_33_43-01_03_41~1.mp4`）。
-2. 把播放头拖到**起火前**（例 05:48），工具栏点「微变分析」，面板里把基准段设为
-   05:45:27 起 120 秒，点「采集基准」（约 16 秒，进度条+取消）。
-3. 在画面上圈出怀疑区域（例 x=961 y=54 w=227 h=209 的"友谊专业空调"铺面），
-   勾「启用微变分析」，处理范围选「仅当前 ROI 区域」。
-4. 预期：画面基本不变；把播放头拖到 **05:49:27** 附近，ROI 内出现黄→红色云团并随
-   烟扩散（05:53 后大片深红）。等级调到 1 更敏感、调到 5 更保守；叠加强度 0 时不染色。
-5. 反向验证：基准段设错（含烟）时应**看不出**微变或效果明显变差。
-6. 回归：关闭微变后画面与之前逐位一致；亮度/音频分析、ROI、导出不受影响。
-
-### 代码审查与修复（2026-09-10 同批）
-reviewer 审查后修复（均已落地并随本批编译通过）：
-- **F-1** 换视频/清空列表未清基准 → `openVideoFile` 与清空列表 handler 各加 `clearMicroDiffBaseline()`
-  （否则同分辨率的下一个视频与旧基准求差 → 整屏假阳性）
-- **F-2** seek/逐帧未重置时域环 → `scrubEnded`（图表+语谱）、`onSeekFromChart` 非拖拽分支、
-  `Key_Left/Right` 逐帧均加 `resetMicroDiffTemporal()`（否则拖时间轴即出假变化云）
-- **F-3** 基准提取（同步约 16s）期间可切视频 → 返回后加 `currentVideoPath()==path` 守卫
-- **F-4** 并排对比模式 overlay 错位 2×（且 ROI 落盘坐标会错）→ `videoDisplayRect()` 该模式下取左半
-- **F-5** 放大镜/钉图/副屏全屏拿不到微变（原文档承诺未实现）→ 新增
-  `VideoWidget::applyMicroDiffTo()`（纯渲染、不推进环缓冲），wiring 转发已叠加微变帧；
-  连接顺序上 VideoWidget 先接 `frameReady`（setVideoEngine 时），故放大镜取到的缓存帧与本帧同步
-- P2-1 中值基准先校验后分配；P2-2 时域累加改 int32；P2-3 纠正两处显示链顺序注释；
-  P2-5 `setMicroDiffBaseline` 补尺寸契约；P2-6 基准提取一并锁定像素格式；P2-7 seek 失败不再静默；
-  P2-8 ROI 变更推送去掉 isVisible 守卫；P2-9 `State::configure` 加环缓冲内存上限（超限自动降时域窗）
-
-### 未完成的下一件事：变化率曲线（本轮中止）
-已派 worker 实现"微变变化率曲线"（新 `microdiff` 分析通道 + 图表曲线 + 首帧微变判定 + .vla），
-**worker 30 分钟超时，产物为不可用半成品**：只写了 `analysis_snapshot.h`/`timeline_model.cpp`
-的一部分与 `src/domain/microdiff_curve.{h,cpp}`，且 engine/controller/task-service/chart 均未接线、
-CMake 未登记，且 `analysis_snapshot.h` 的 `setMicroDiff` 有参数重名编译错误（`sigma` 同时作
-`double` 与 `QList<double>`）。**已整体 `git checkout` 回退 + 删除 microdiff_curve.*，树已干净**。
-
-下次重开建议（避免重蹈超时）：
-1. **拆成两次交付**，先只做"引擎产出曲线数据 + 控制台/测试可见"，再做图表与 .vla；不要把
-   通道/引擎/图表/持久化/UI 一次塞给一个子代理（本轮就是因为 brief 过大 + 中途追加审查修复而超时）。
-2. 判据与统计量已有实测标定，直接用：每 ROI 行 `blkMax`（最灵敏）与 `medD`；
-   单位=灰度级（不乘显示增益）；首帧判据 = `stat > 干净段 μ+3σ 且连续≥3 秒`；
-   方向 `signedD<0` 为烟挡光、`>0` 为火光；输出需双时标。
-3. 参考真实标的：真素材实测首帧微变在 05:49:23（blkMax 8.8→31.7），可与肉眼判断互校。
-
-### 状态
-- ✅ 编译 + 链接通过（MSVC Release x64；`build/Release/LumenArc.exe` 2026-09-10 18:52，
-  8814080 字节；`lumenarc_ui_chain_test` 目标也通过）
-- ✅ 代码审查已完成，必修项 F-1~F-5 与 P2 已全部落地并重新编译通过
-- ⏳ **未运行验证**：上表 6 步测试步骤待执行（本版已含全部修复，可直接用于验证）
-- ❗ 下次开工：跑上表 6 步验证；确认观感后再做变化率曲线（按上面 3 条建议重开）
-
----
-
-## 91. v1.17.0 MainWindow 拆解收官：四阶段五提交（P-76~P-80 全勾销）
-
-- **背景**：v1.9 拆 app 层后 UI 壳复胖至 mainwindow.cpp 4770 行 + R3/R5/Q5
-  三笔红线债。方案 `docs/DEVELOPMENT_PLAN_V1.17_CN.md`（2026-09-06 用户 Q1~Q7
-  全按推荐拍板）；回退点 `safety/pre-mw-split-20260906` 标签 @ `7d66ce0`。
-- **阶段 A（`e99c947`）multi-TU 拆分**（P-79）：4770 行 → 7 翻译单元
-  （core 1819 / ui 1532 / wiring 640 / case 555 / magnifier 343 / snapshot 389 /
-  export 266）；单类 API 零变化（public 区零 diff 门槛）；buildStamp 迁
-  build_stamp.h inline。纯移动零重写，头文件只 +private 声明。
-- **阶段 B（`01ad822`）红线债收口**：B1 ChartPanel::xAxisRange() 只读 getter
-  消 R3 穿透；B2 currentVideoPath → VideoSessionManager SSOT + PlaybackSettings
-  组件（R5，47+10+3 处收口，三条边界不变量保留并有 testCurrentPathSsot 闸）；
-  B3 KeyGuardFilter 守卫+转发（Q5，18 键 switch 搬 handleGlobalShortcut，
-  禁 QShortcut 拍板保留）。
-- **阶段 C（`e30d534`）SnapshotComposer**（P-80）：C0 六个渲染函数自
-  OverlayWidget 静态成员迁 FrameAnnotation 纯模块（R1 方向修正，含
-  segment_export_engine/ui_chain 调用方）；C1 SnapshotInputs 输入集闭合，
-  onSnapshotQuick 280 行 → 95 行薄壳；C2 lumenarc_snapshot_test 像素断言
-  36 checks（映射单元/OSD/分段几何/分屏/PNG 元数据）。
-- **阶段 D（`0e4e2e5`）切换/恢复闸 + 扇出瘦身**：先补 testSwitchRestore
-  （双合成视频 a→b→a，Key_A/Key_B 端到端）——**逮住 B3 遗留真 bug**：
-  KeyGuardFilter 只写 filterKeyPress 未 override eventFilter 本体，8 处
-  installEventFilter 改挂后全局快捷键实际失效（B 阶段无键路测试漏过）；
-  修复后 openVideoFile 恢复/清空扇出抽 applyRestoredState/resetForNewVideo/
-  enableVideoActions（305 → ~150 行，行为冻结由 D1 闸验证）。
-- **回归基线**：19 套全绿（见表头）；版本 bump 1.17.0（CMake 单一真源）；
-  PENDING P-76~P-80 勾销。
-- **真机点检**：✅ 2026-09-07 用户确认全部通过（RELEASE_CHECKLIST_V1.17_CN.md
-  10 项：行为冻结 7 条 + 快捷键 9 键 + ▶ 按钮/标题版本 2 项）→ **v1.17.0 封板**。
-
-## 90. P2.8 实测修订：聚光灯 50% 上限 / 条带全量化+语谱 / 打开输出文件夹
-
-- **聚光灯**：放大终点从满屏改为居中 50% 面积（边长 ×0.7071，保持聚焦框宽高比）；
-  变暗不再随放满撤销（全程保持，聚焦区提亮覆盖）；聚焦框边常驻。
-- **曲线条全量化**（用户："跟主视频窗一样，旧版导出已实现"）：drawChartStrip 签名
-  改 (cursorMs, rangeStartMs, rangeEndMs)——整段铺显不滚动不缩放，游标=白线贯穿
-  移动；新增语谱热力带（spectrogram[freq][time]→40% 高热力条，低频在下，
-  蓝→青→黄→红简易色带，specMin/Max 归一）；曲线区=亮度+音量+标签竖标。
-  引擎调用传 seg.inMs/outMs。
-- **导出完成**：进度行「📂 打开输出文件夹」按钮现身（QDesktopServices 开目录）。
-- 测试：segment 120 全绿（条带调用改新签名，游标中点断言）；全回归 9 套绿；
-  手册/PDF/包重出。
-
-## 89. 工作台 P2.7：切割/倍速/ETA/编码提速 + 标注轨 v1（聚光灯/箭头/字幕）
-
-- **用户实测反馈六连**：①要切割按钮 ②倍速要更简便 ③导出慢 ④进度要已用/预计
-  ⑤导出是否无损 ⑥要聚光灯/箭头/字幕轨。
-- **切割**：✂按钮+Ctrl+B（剪映同款），预览位置严格落段内（两端≥200ms）才可切；
-  两半继承素材/倍速/宫格；标注按切点分家（跨界标注两边各留夹取副本）。
-- **倍速简化**：块右键「倍速」子菜单 ×0.5/1/1.25/1.5/2/4（当前档打勾）+双击自定义不变。
-- **编码提速**（慢的根因=软编 medium）：pickH264EncoderFast——候选逐一**实跑冒烟**
-  （testsrc2 1s→null，防 nvenc 在名单但无驱动运行期炸）→ h264_nvenc(p4/cq21)
-  → libx264 veryfast/crf18 → openh264 → h264_mf；作用于 runCompose+旧复合路径；
-  **runMultiCam 冻结路径刻意不动**。本机 RTX 5080 冒烟 nvenc rc=0。
-- **ETA**：setExportRunning 起 QElapsedTimer，setProgress 报「已用 m:ss · 预计剩余 m:ss」。
-- **标注轨 v1**：ComposeAnno{Spotlight,Arrow,Caption; inMs/outMs 源域; rect 归一化;
-  text; colorRgb} 挂 ComposeSeg.annos；引擎单视频段逐帧烧录（compose_render
-  drawAnnotations：聚光灯=剩余区 145α 变暗淡入淡出+聚焦框 smoothstep 放大至满幅；
-  箭头=起→止 5px+三角头；字幕=底部黑带白字 64px 上偏移避 OSD/曲线条）。
-  UI：标注条三钮（预览位置落单视频段才亮）→ 🎯/↗ 起 AnnoPickOverlay 拖框
-  （CamTileWidget 新增 videoFitRect 公开映射，zoom>1 先复位提示）→ 弹窗起止/颜色/
-  文本；时间线块上方 chips 行（🎯↗💬，右键删）；💬免框选直弹窗。证据模式有标注→
-  黄字提示不携带；有标注段自动绕开旧复合全保真路径（走新管线才烧得出）。
-- **测试**：segment 120 全绿（标注 e2e：字幕亮像素/红箭头像素/聚光灯四角压暗Δ≥20，
-  KEEP_ANNO_FRAMES 调试位）；mw 110 全绿（切割 e2e：直发 sliderMoved——
-  **setValue 不发 sliderMoved 信号**，qWait 等 seek；Space 从 smoke 撤下防真播放漂移）。
-- **陷阱**：offscreen 环境无 CJK 字体→字幕断言用 ASCII；ffmpeg 抽帧 -ss 放 -i 后
-  （精确 seek 防尾帧空帧）。
-
-## 88. 合成导出 P2.6 收官：覆盖条/部分覆盖音轨/播放头联动 + v1.16.2 打包排雷
-
-- **宫格段覆盖条**（runCompose lanes 分支）：画面顶部每路一行 3px 彩条（段内覆盖
-  区间=syncLaneWallStart/End ∩ [in,out]，Theme::DataPalette 与机位名同色）+白竖线
-  游标；右上水印 350px 让位。无画面格本就有「该时刻无画面」占位（§85）。
-- **部分覆盖音轨细分**：新增 `AudioSegPart{label,inMs,outMs,rate}` +
-  `buildAudioFilterChainV2`（段=子片序列：有源片 atrim/atempo/aresample 归一，
-  盲区片 anullsrc 等长静音，段内 concat 再段间 concat）；runCompose 宫格段映射改为
-  盲区头/有源中/盲区尾三片（全盖/全盲退化为单片，单视频段单片不变——旧
-  buildAudioFilterChainMulti 保留供既有断言）。**e2e 实锤**：LAMerged 主听路只盖
-  前半 → ffprobe astats 覆盖区 RMS -65dB（监控音本低）vs 盲区 -120dB 死寂。
-- **播放头联动**：ComposeTimelineWidget::setPlaySeg——预览位置落入段源区间时块顶
-  画 ▼（单路按 sourcePath+in/out 匹配，多通道按墙钟覆盖）。
-- **v1.16.2 打包排雷**：pack_release.py 此前 EXCLUDE_DIRS 仅 cases → mlt/ 385 条目
-  ~160MB 混进 zip；+mlt 排除后 v1.16.2 包 290MB、mlt 0 条目、必含 13/13。
-  CMakeLists project(VERSION) → 1.16.2。
-- **测试**：segment 115 全绿（V2 链 7 断言+部分覆盖 RMS e2e）；全回归 9 套绿。
-- **教训**：ffmpeg astats 判静音用 "-inf" 解析；监控源 RMS 绝对值低，须用
-  覆盖/盲区差值判定（≥25dB）而非绝对阈值。
-
-## 87. 工作台四步引导改版（新手向重构）+ 快捷键对齐剪映/PR
-
-- **缘起**：用户实测"打开视频编辑页无所适从"——拍板新手向重构（用户补充：
-  I/O 保留给提示+快捷键尽量对齐剪映/PR）。
-- **四步引导条**（顶部常驻）：①选素材→②截片段→③排顺序→④导出，当前步蓝底
-  高亮、完成步绿色；右侧一句白话动态提示随状态机切换（updateGuide()：
-  无素材→提示选素材 / 有素材无片段→提示截取键位 / 有片段→提示排序导出）。
-- **截取改版**：红色圆钮录音笔式单键流（⏺从这里开始(I) → ⏹到这里加入清单(O)，
-  armed 态变亮红）；I/O 按钮保留并标快捷键；onMarkOut 设终点即提交（一拍成片）；
-  提交后打点自动清零；开始导出钮无片段时禁用（可观测态）。
-- **快捷键**（QShortcut WindowShortcut + 输入框聚焦守卫；运输控件全部 NoFocus
-  防空格被按钮吃掉）：空格/K=播放暂停、I=起点、O=终点并加入、回车=等价O、
-  ←/→=逐帧(按 fps)、Shift+←/→=±1s、J/L=±5s、Home/End、Delete=删选中块、
-  Ctrl+E=开始导出。
-- **导出面板**：白话二选一（演示片——带角标红标用于汇报 / 证据原始片段——零改动
-  用于存档送检）+ tooltip 解释；OSD/案号/图表/ROI/曲线收进「更多选项▸」折叠面板；
-  「保存到」+「更改…」+大蓝钮「开始导出（Ctrl+E）」。
-- **陷阱**：QStringLiteral 不能包运行时三元表达式（编译错）；工作台 onMaterialChanged
-  读 currentItem——测试里 emit itemClicked 前须 setCurrentItem；slider seek 异部，
-  提交前须等 positionChanged（测试 qWait 1500）。
-- **测试**：mw 107 全绿（工作台引导流 e2e：点视频→红点 arm→seek→提交→导出钮亮；
-  快捷键 smoke 不崩）；手册七·2 整节重写（四步流+快捷键表）+PDF 重出。
-
+- **缘起**：用户实测提问「导出会把我的放大镜倍率也导出吗？所见即所得可以吗」——
+  核查：仅**旧复合单段路径**（run()，v1.15.3 拍板）会左右同框；**合成导出（多段/
+  多视频/宫格/标注）完全没带放大镜参数**（工作台 buildParams 不填、startComposeExport
+  不填）→ 多视频导出丢放大镜；且旧路径右半不过放大镜的旋转/画面调节（与屏幕不一致）。
+- **引擎**：新 `drawMagnifierSplit()`（匿名命名空间；run() 与 runCompose 单视频段
+  共用，R9 防版式漂移）——左=整幅原图+金色四角括号+×N 徽章（旧口径不变），
+  右=裁剪→旋转→`applyDisplayLut`（与放大镜面板**同一张表**）→等比居中。
+  Params +`magnifierLut`（256 级，空=恒等零开销）+`magnifierSourcePath`
+  （多源合成只对取景所属源生效，防取景错配到别的视频）；
+  runCompose 单视频段按同框绘制，ROI/标注映射改用「左半实际显示矩形」。
+- **UI**：MagnifierWidget +`displayLut()`（放大视图显示链 SSOT，导出直接取用，
+  不重建不推导）；mainwindow_export.cpp +`fillMagnifierParams()`，两个导出入口共用
+  （startComposeExport 改传值以回填；**证据直拷不填**——无损直拷不重编码）；
+  开始导出时状态栏提示「导出含放大镜同框」。
+- **测试**：segment **134** checks 全绿——新增 `testComposeMagnifierSplit`（同框/对照/
+  旋转 90 三产物抽帧断言：右半走 LUT、左半==原始像素、对照=满幅原图、
+  右半==裁剪+显示链 PSNR≥20dB、错参照（无 LUT）明显更差、旋转改变右半）；
+  mw **140** checks 全绿（放大镜接线守卫：`displayLut()` 与画面调节同表、
+  `currentMagnifiedImage() == 裁剪→旋转→LUT` = 界面与导出同链的硬约束）。
+  顺带修 testAudioChainV2 过期断言（§86 起音频链尾接 `apad`，断言未同步 →
+  该 1 项长期 FAIL 转绿）。
+- **文档**：MANUAL §九放大镜 / §七·2 合成导出④ / 功能表 + README 功能表同步；
+  CMake：segment 测试补 `displayadjust.cpp`（applyDisplayLut 依赖）。
+- **边界与口径**：① 证据直拷（无损）不受影响（像素零改动红线优先）；
+  ② 左半保持原始像素（延续「视频导出不烧画面调节」的取证口径），仅右半走显示链；
+  ③ 放大镜关闭或无取景 → 不填参数，产物与旧版逐位一致（回归零风险）。
+  ④ 多机位宫格段仍走多机窗导出选段的逐瓦片放大 PIP 口径（不变）。

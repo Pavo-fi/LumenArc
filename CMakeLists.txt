@@ -757,6 +757,7 @@ add_executable(lumenarc_segment_test
     tests/segment_test_main.cpp
     src/infrastructure/segment_export_engine.cpp
     src/infrastructure/compose_render.cpp
+    src/displayadjust.cpp           # 放大镜显示链 LUT（导出右半与放大镜同表，applyDisplayLut）
     src/domain/roi_model.cpp
     src/domain/time_calibration.cpp
     src/domain/time_piecewise.cpp
@@ -833,6 +834,8 @@ add_executable(lumenarc_ui_chain_test
     src/domain/time_calibration.cpp
     src/domain/time_piecewise.cpp
     src/domain/truth_time_parse.cpp  # v1.12.5 对时文本解析（对话框依赖）
+    src/domain/filename_timestamp.cpp  # §97 文件名↔画面日期差提示（filenameDateHint 依赖；
+                                       # 漏此源 → ui_chain_test 链接失败，2026-09-26 补）
     src/domain/roi_model.cpp
     src/domain/guide_line_model.cpp
 )

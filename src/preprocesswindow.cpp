@@ -79,8 +79,8 @@ protected:
         QPainter p(this);
         p.drawPixmap(rect(), m_pm);
         if (!m_sel.isNull()) {
-            p.setPen(QPen(QColor("#F0B429"), 2));
-            p.fillRect(m_sel, QColor(240, 180, 41, 60));
+            p.setPen(QPen(QColor(Theme::AccentTk::Solid), 2));
+            p.fillRect(m_sel, QColor(Theme::withAlpha(Theme::AccentTk::Solid, 60.0 / 255.0)));
             p.drawRect(m_sel);
         }
     }
@@ -404,8 +404,8 @@ void PreprocessWindow::refreshCaseBanner()
         return;
     }
     m_caseBannerLabel->setText(
-        lang("📁 案件模式：成果自动导入《%1》",
-             "📁 Case mode: results auto-imported into “%1”")
+        lang("案件模式：成果自动导入《%1》",
+             "Case mode: results auto-imported into “%1”")
             .arg(m_caseManager->meta().caseNo
                  + QStringLiteral("-") + m_caseManager->meta().title));
     // 输出目录行：导入案件 = 会话目录（横幅控路径，禁手改）；独立输出 = 恢复手选
@@ -444,7 +444,7 @@ QWidget *PreprocessWindow::buildPageImport()
     auto *hintLbl = new QLabel(lang("把监控录像文件拖到这里\n或点击下方「添加文件」",
                                     "Drop surveillance video files here\nor click Add below"), hint);
     hintLbl->setAlignment(Qt::AlignCenter);
-    hintLbl->setStyleSheet(QStringLiteral("color:%1; font-size:15px;")
+    hintLbl->setStyleSheet(QStringLiteral("color:%1; font-size:11px;")  // 规范§3：辅助说明=Caption 11px
                                .arg(Theme::TextSecond));
     hintLay->addWidget(hintLbl);
     lay->addWidget(hint);
@@ -823,7 +823,7 @@ QWidget *PreprocessWindow::buildPageReview()
     m_reviewSummary = new QLabel(w);
     m_reviewSummary->setWordWrap(true);
     m_reviewSummary->setStyleSheet(QStringLiteral(
-        "color:%1; font-size:14px; padding:6px; background:%2; border-radius:6px;")
+        "color:%1; font-size:12px; padding:6px; background:%2; border-radius:6px;")
         .arg(Theme::TextPrimary, Theme::BgPanel));
     lay->addWidget(m_reviewSummary);
 
@@ -992,7 +992,7 @@ void PreprocessWindow::rebuildProblemPanel()
                                 "⚠ %1 issue(s) need your attention before merging")
                                .arg(pending), m_problemPanel);
     hdr->setWordWrap(true);
-    hdr->setStyleSheet(QStringLiteral("color:%1; font-size:15px; font-weight:bold;")
+    hdr->setStyleSheet(QStringLiteral("color:%1; font-size:13px; font-weight:600;")  // 规范§3：Title 13px DemiBold
                            .arg(Theme::Accent));
     m_problemLay->addWidget(hdr);
 
@@ -1027,7 +1027,7 @@ void PreprocessWindow::rebuildProblemPanel()
         auto *mid = new QVBoxLayout();
         auto *title = new QLabel(card);
         title->setWordWrap(true);
-        title->setStyleSheet(QStringLiteral("color:%1; font-size:14px;")
+        title->setStyleSheet(QStringLiteral("color:%1; font-size:13px; font-weight:600;")  // 规范§3：Title
                                  .arg(Theme::TextPrimary));
         auto *sub = new QLabel(card);
         sub->setWordWrap(true);
@@ -1293,7 +1293,7 @@ QWidget *PreprocessWindow::makeCard(const SortEntry &e, int groupIdx,
         auto *lbl = new QLabel(card);
         lbl->setFixedSize(230, 130);
         lbl->setAlignment(Qt::AlignCenter);
-        lbl->setStyleSheet(QStringLiteral("background:#000; border-radius:4px;"));
+        lbl->setStyleSheet(QStringLiteral("background:%1; border-radius:4px;").arg(Theme::Surface::Base));
         if (!pm.isNull())
             lbl->setPixmap(pm);
         else
@@ -1846,7 +1846,7 @@ QWidget *PreprocessWindow::buildPageRun()
     m_runProgress->setTextVisible(true);
     lay->addWidget(m_runProgress);
     m_runStatus = new QLabel(lang("等待开始", "Idle"), w);
-    m_runStatus->setStyleSheet(QStringLiteral("font-size:14px; color:%1;")
+    m_runStatus->setStyleSheet(QStringLiteral("font-size:12px; color:%1;")  // 规范§3：Body 12px
                                    .arg(Theme::TextPrimary));
     lay->addWidget(m_runStatus);
     m_runEta = new QLabel(w);
@@ -1872,7 +1872,7 @@ QWidget *PreprocessWindow::buildPageRun()
         .arg(Theme::BgPanel, Theme::Border));
     auto *rcLay = new QVBoxLayout(m_resultCard);
     m_resultTitle = new QLabel(m_resultCard);
-    m_resultTitle->setStyleSheet(QStringLiteral("font-size:18px; font-weight:bold;"));
+    m_resultTitle->setStyleSheet(QStringLiteral("font-size:13px; font-weight:600;"));
     rcLay->addWidget(m_resultTitle);
     m_resultOutput = new QLabel(m_resultCard);
     m_resultOutput->setTextInteractionFlags(Qt::TextSelectableByMouse);
@@ -2164,7 +2164,7 @@ void PreprocessWindow::onFinished(const PreprocessReport &report)
     if (noOp) {
         m_resultTitle->setText(lang("✓ 无需处理", "✓ Nothing to do"));
         m_resultTitle->setStyleSheet(QStringLiteral(
-            "font-size:18px; font-weight:bold; color:%1;").arg(Theme::Success));
+            "font-size:13px; font-weight:600; color:%1;").arg(Theme::Success));
         m_resultOutput->setText(lang(
             "该文件已是合格 MP4（H.264、关键帧 ≤2.5 秒），可直接在主窗口播放；"
             "无需转码或拼接。",
@@ -2200,7 +2200,7 @@ void PreprocessWindow::onFinished(const PreprocessReport &report)
     if (haveOutput) {
         m_resultTitle->setText(lang("✓ 拼接完成", "✓ Merge finished"));
         m_resultTitle->setStyleSheet(QStringLiteral(
-            "font-size:18px; font-weight:bold; color:%1;").arg(Theme::Success));
+            "font-size:13px; font-weight:600; color:%1;").arg(Theme::Success));
         m_resultOutput->setText(lang("输出文件：%1（%2，用时 %3）", "Output: %1 (%2, took %3)")
             .arg(report.outputPath, fmtBytes(fi.size()),
                  fmtDuration(m_runTimer.elapsed())));
@@ -2363,7 +2363,7 @@ void PreprocessWindow::onFinished(const PreprocessReport &report)
         // 防现场反馈：未产出文件时禁止绿勾成功
         m_resultTitle->setText(lang("⚠ 未产出输出文件", "⚠ No output file produced"));
         m_resultTitle->setStyleSheet(QStringLiteral(
-            "font-size:18px; font-weight:bold; color:%1;").arg(Theme::Danger));
+            "font-size:13px; font-weight:600; color:%1;").arg(Theme::Danger));
         m_resultOutput->setText(lang(
             "拼接流程已结束但没有任何输出文件（详见详细日志与证据报告）。",
             "Merge finished but produced no output (see log and evidence report)."));
@@ -2418,7 +2418,7 @@ void PreprocessWindow::onFailed(PreprocessError error, const QString &detail)
     }
     m_resultTitle->setText(lang("✗ 拼接未完成", "✗ Merge not completed"));
     m_resultTitle->setStyleSheet(QStringLiteral(
-        "font-size:18px; font-weight:bold; color:%1;").arg(Theme::Danger));
+        "font-size:13px; font-weight:600; color:%1;").arg(Theme::Danger));
     m_resultOutput->setText(plain);
     m_resultEvidence->setText(lang("错误信息：%1", "Error: %1").arg(detail));
     m_resultCard->setVisible(true);
@@ -2490,7 +2490,7 @@ void PreprocessWindow::onIntegrityFinished(
         bool isBad = false;
         for (const auto &r : bad)
             if (r.filePath == f) { isBad = true; break; }
-        st->setText(isBad ? lang("❌ 数据损坏", "❌ corrupted")
+        st->setText(isBad ? lang("✗ 数据损坏", "✗ corrupted")
                           : lang("✓ 完整", "✓ ok"));
         if (isBad)
             st->setForeground(Qt::red);
@@ -2513,7 +2513,7 @@ void PreprocessWindow::onIntegrityFinished(
                    .arg(results.size()).arg(bad.size());
             for (const auto &r : results)
                 ts << (r.errorCount > 0
-                           ? QStringLiteral("❌ %1：%2 处 NAL 错误\n")
+                           ? QStringLiteral("✗ %1：%2 处 NAL 错误\n")
                                .arg(r.filePath).arg(r.errorCount)
                            : QStringLiteral("✓ %1\n").arg(r.filePath));
             ts.flush();
@@ -2851,7 +2851,7 @@ void PreprocessWindow::promptGroupAssignment(
         lang("本次前处理产物请归入机位组（同组的文件才可同轴播放）：",
              "Assign each output to a camera group (only same-group files share an axis):"),
         &dlg));
-    const QString NEW_TAG = QStringLiteral("➕ ") +
+    const QString NEW_TAG =
         lang("创建新摄像头…", "New camera...");
     QVector<QComboBox *> combos;
     for (const Row &r : rows) {

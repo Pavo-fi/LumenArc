@@ -35,6 +35,7 @@
 #include <QFile>
 #include <QWheelEvent>
 #include <QElapsedTimer>
+#include <QTransform>
 #include <QSlider>
 #include <QCheckBox>
 #include <QPushButton>
@@ -832,6 +833,32 @@ static void testMagnifierRestore(QApplication &app)
     CHECK(qAbs(mag->currentSourceRect().center().x() - 160) <= 4
          && qAbs(mag->currentSourceRect().center().y() - 120) <= 4,
           "mag: re-open anchored near saved center");
+
+    // ---- 所见即所得导出接线（v1.18.x）：放大镜视图就是导出右半的 SSOT ----
+    {
+        DisplayAdjust adj;
+        adj.brightness = 20;
+        adj.gammaPercent = 130;
+        mag->setDisplayAdjust(adj);
+        pump(app, 50);
+        CHECK(mag->displayLut() == adj.buildLut(),
+              "mag: displayLut 与画面调节同表（导出右半直接取用，不重建不推导）");
+        // 同一帧：面板内容 == 导出右半渲染链（裁剪 → 旋转 → LUT）
+        QImage frame(320, 240, QImage::Format_RGB32);
+        for (int y = 0; y < 240; ++y)
+            for (int x = 0; x < 320; ++x)
+                frame.setPixel(x, y, qRgb((x * 3) % 256, (y * 5) % 256, 128));
+        mag->onFrameReady(frame);
+        pump(app, 50);
+        const QRect magSrc = mag->currentSourceRect();
+        CHECK(!magSrc.isEmpty(), "mag: 取景区非空（导出右半依据）");
+        QImage expect = frame.copy(magSrc);
+        if (mag->displayRotation() != 0)
+            expect = expect.transformed(QTransform().rotate(mag->displayRotation()));
+        expect = applyDisplayLut(expect, mag->displayLut());
+        CHECK(mag->currentMagnifiedImage() == expect,
+              "mag: 面板内容 == 裁剪→旋转→LUT（导出右半同链，所见即所得）");
+    }
 }
 
 // ---------------------------------------------------------------------------

@@ -109,9 +109,9 @@ SegmentExportDialog::SegmentExportDialog(const speedplan::SpeedPlan &plan,
     m_lastHint = new QLabel(this);
     m_lastHint->setWordWrap(true);
     m_lastHint->setVisible(false);
-    m_lastHint->setStyleSheet(QStringLiteral(
-        "QLabel { color: #8a5a00; background: #fff3d6; border: 1px solid #e0b060;"
-        " border-radius: 4px; padding: 4px 8px; font-weight: bold; }"));
+    m_lastHint->setStyleSheet(  // 规范§1.3：深色主题警示条改用令牌派生（Accent 淡底+金字）
+        "QLabel { color: " + Theme::AccentTk::Text + "; background: " + Theme::withAlpha(Theme::AccentTk::Solid, 10) + "; border: 1px solid " + Theme::withAlpha(Theme::AccentTk::Solid, 45) + ";"
+        " border-radius: 4px; padding: 4px 8px; font-weight: bold; }");
     lastRow->addWidget(m_lastHint, 1);
     m_restoreBtn = new QPushButton(lang("恢复上次变速", "Restore last speeds"), this);
     m_restoreBtn->setVisible(false);
@@ -163,8 +163,8 @@ SegmentExportDialog::SegmentExportDialog(const speedplan::SpeedPlan &plan,
     m_resultLabel->setWordWrap(true);
     lay->addWidget(m_resultLabel);
     // 成功后显示「打开所在文件夹」（真机反馈：导完想立刻定位产物）
-    m_openFolderBtn = new QPushButton(lang("📂 打开所在文件夹",
-                                           "📂 Open containing folder"), this);
+    m_openFolderBtn = new QPushButton(lang("打开所在文件夹",  // 规范§6 去 emoji
+                                           "Open containing folder"), this);
     m_openFolderBtn->setVisible(false);
     connect(m_openFolderBtn, &QPushButton::clicked, this, [this]() {
         const QString path = m_openFolderBtn->property("outPath").toString();
@@ -293,7 +293,7 @@ void SegmentExportDialog::setResult(bool ok, const QString &msg)
     setExportRunning(false);
     if (ok) {
         m_resultLabel->setStyleSheet("color: " + Theme::Success + ";");
-        m_resultLabel->setText(lang("✅ 已导出：", "✅ Exported: ") + msg);
+        m_resultLabel->setText(lang("✓ 已导出：", "✓ Exported: ") + msg);
         m_openFolderBtn->setProperty("outPath", msg);
         m_openFolderBtn->setVisible(true);
     } else if (msg == QStringLiteral("已取消")) {
@@ -301,7 +301,7 @@ void SegmentExportDialog::setResult(bool ok, const QString &msg)
         m_resultLabel->setText(lang("已取消。", "Cancelled."));
     } else {
         m_resultLabel->setStyleSheet("color: " + Theme::Danger + ";");
-        m_resultLabel->setText(lang("❌ 导出失败：", "❌ Failed: ") + msg);
+        m_resultLabel->setText(lang("✗ 导出失败：", "✗ Failed: ") + msg);
     }
     if (!ok && m_openFolderBtn)
         m_openFolderBtn->setVisible(false);

@@ -123,6 +123,9 @@ QString ProjectIO::calibrationBadgeSummary(const TimeCalibration &cal)
     QString s = lang("%1 %2点, rate=%3", "%1 %2pts, rate=%3")
         .arg(src).arg(cal.samples.size())
         .arg(cal.effectiveRate(), 0, 'f', 3);
+    if (cal.tickMode())
+        s += lang("（秒级对齐 %1 个秒锚点）", " (second-level, %1 ticks)")
+                 .arg(cal.tickAnchors.size());
     if (cal.piecewiseMode())
         s += lang("（分段重建）", " (piecewise)");
     return s;

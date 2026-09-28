@@ -29,9 +29,83 @@ extern "C" {
 #include "infrastructure/tool_paths.h"
 #include "compose_render.h"
 #include "theme.h"
+#include "displayadjust.h"   // applyDisplayLut：放大镜显示链 LUT（纯数据+QImage，无 Widgets）
 
 namespace {
 constexpr const char *kErrPrefix = "[SEGMENT_EXPORT] ";
+
+/// ffmpeg stderr 旁车日志路径（<产物>.ffmpeg.log）
+static QString ffmpegLogPath(const QString &outputPath)
+{
+    return outputPath + QStringLiteral(".ffmpeg.log");
+}
+
+/// 启动 ffmpeg 前统一接线：stderr 落文件。
+/// 缘由（2026-09-24 真机 4 路宫格实测）：QProcess 的 stderr 管道在工作线程里
+/// 无人读（本线程不跑事件循环），为 4096 字节；源越多开场信息（banner+逐路
+/// Input 块）越大，写满后 ffmpeg 永久阻塞在 stderr 写、**再不读 stdin**
+/// （实测 ReadTransferCount=0 / WriteTransferCount=2366 / 进度恒 0%）。
+/// 落文件后即使错误刷屏也不会阻塞，且失败可留证（成功由调用方删除）。
+static void attachFfmpegStderrLog(QProcess *proc, QStringList *args, const QString &outputPath)
+{
+    if (args && !args->contains(QStringLiteral("-nostats")))
+        args->insert(1, QStringLiteral("-nostats"));   // 紧跟 -y：全局选项，先于 -i
+    const QString log = ffmpegLogPath(outputPath);
+    QFile::remove(log);
+    proc->setStandardErrorFile(log, QIODevice::WriteOnly | QIODevice::Truncate);
+}
+
+/// 失败时的 stderr 尾部（stderr 已落文件，不再走管道）
+static QString ffmpegStderrTail(const QString &outputPath, int maxBytes)
+{
+    QFile f(ffmpegLogPath(outputPath));
+    if (!f.open(QIODevice::ReadOnly))
+        return QString();
+    return QString::fromLocal8Bit(f.readAll().right(maxBytes)).trimmed();
+}
+
+/// 成功后清理旁车日志（失败保留：用户可看、可入报告）
+static void removeFfmpegStderrLog(const QString &outputPath)
+{
+    QFile::remove(ffmpegLogPath(outputPath));
+}
+
+/// 收尾等待（有界）：C4 对外部进程的同步等待必须有超时——背压保证收尾待消化
+/// ≤256MB（数秒级），180s 不到即视为异常，杀进程并把日志尾部带回给用户。
+static bool waitFfmpegFinishBounded(QProcess *proc, int timeoutMs = 180000)
+{
+    if (proc->waitForFinished(timeoutMs))
+        return true;
+    proc->kill();
+    proc->waitForFinished(5000);
+    return false;
+}
+
+/// 源文件存在性预检（多机/合成）：缺失即类型化报错。
+/// 不做预检的后果：ffmpeg 拿到不存在的 -i 只能报错，而此前该错误被
+/// “stderr 管道无人读” 吞成永久卡死——用户看到的是进度 0% 假死，
+/// 而不是“文件已移动”。labels 与 paths 同序（可空）：报错逐条给「机位/来源：路径」。
+static bool checkSourcesExist(const QStringList &paths, QString *err,
+                              const QStringList &labels = QStringList())
+{
+    QStringList missing;
+    for (int i = 0; i < paths.size(); ++i) {
+        const QString &f = paths.at(i);
+        if (QFileInfo::exists(f))
+            continue;
+        const QString label = (i < labels.size() && !labels.at(i).isEmpty())
+            ? labels.at(i) + QStringLiteral("：") : QString();
+        const QString item = label + f;
+        if (!missing.contains(item))
+            missing << item;
+    }
+    if (missing.isEmpty())
+        return true;
+    if (err)
+        *err = QStringLiteral("源文件不存在（可能已移动/改名，请用案件「批量重新定位」重新指向后重试）：")
+               + missing.join(QStringLiteral("；"));
+    return false;
+}
 
 /// 编码器探测（P-68④ 实锤：LGPL 版 ffmpeg 无 libx264；按 ffmpeg 二进制路径缓存）
 /// 优先 libx264（画质/体积最优）→ libopenh264（LGPG 版自带）→ h264_mf（Windows 保底）
@@ -268,6 +342,61 @@ static void drawPipImage(QPainter &painter, const QRect &cell,
     painter.drawText(QRect(dst.left() + 4, dst.top(), 72, 18),
                      Qt::AlignVCenter | Qt::AlignLeft,
                      QStringLiteral("放大镜 ×%1").arg(zoomForBadge, 0, 'f', 1));
+}
+
+/// 放大镜「左右同框」绘制（单路复合导出 run 与合成单视频段 runCompose 共用，
+/// 避免两处版式漂移）：左 = 源画面（原始像素，取景区金色四角括号 + ×N 徽章，
+/// 与主界面视频面板同款）+ 右 = 放大视图。
+/// 所见即所得：右半走放大镜显示链（裁剪 → 旋转 → 画面调节 LUT，与放大镜面板
+/// 逐位一致，仅缩放比例不同）；恒等（旋转 0 + 空表）时与旧版产物逐位相同。
+/// @param lut 放大镜显示链 LUT（256 字节；空/长度不符 = 恒等）
+/// @param leftRect 出参：左半实际显示矩形（ROI/标注按它映射；可空）
+/// @return false = 无有效取景或画面区过窄 → 调用方回落满幅居中
+static bool drawMagnifierSplit(QPainter &painter, const QRect &videoRect,
+                               const QImage &frame, const QRect &srcRectIn,
+                               int rotation, qreal zoom, const QByteArray &lut,
+                               QRect *leftRect = nullptr)
+{
+    if (frame.isNull() || videoRect.width() < 240 || videoRect.height() <= 0)
+        return false;
+    const QRect src = srcRectIn.intersected(QRect(0, 0, frame.width(), frame.height()));
+    if (src.isEmpty())
+        return false;
+
+    const int halfW = videoRect.width() / 2 - 3;
+    const QRect leftHalf(videoRect.x(), videoRect.y(), halfW, videoRect.height());
+    const QRect rightHalf(videoRect.x() + halfW + 6, videoRect.y(),
+                          videoRect.width() - halfW - 6, videoRect.height());
+
+    // ---- 左：源画面（等比居中）+ 取景括号（主界面同款：衬影+主体+倍率徽章）----
+    const QImage scaledL = frame.scaled(leftHalf.size(), Qt::KeepAspectRatio,
+                                        Qt::SmoothTransformation);
+    const QRect dispL(leftHalf.x() + (leftHalf.width() - scaledL.width()) / 2,
+                      leftHalf.y() + (leftHalf.height() - scaledL.height()) / 2,
+                      scaledL.width(), scaledL.height());
+    painter.drawImage(dispL, scaledL);
+    if (leftRect)
+        *leftRect = dispL;
+    {
+        const double sx = double(dispL.width()) / frame.width();
+        const double sy = double(dispL.height()) / frame.height();
+        const QRect mk(dispL.x() + int(src.x() * sx), dispL.y() + int(src.y() * sy),
+                       qMax(1, int(src.width() * sx)), qMax(1, int(src.height() * sy)));
+        drawMagnifierBrackets(painter, mk, zoom, qMax(1, dispL.height() / 540),
+                              qMax(10, dispL.height() / 36));
+    }
+
+    // ---- 右：放大视图（与放大镜面板同一显示链）----
+    QImage crop = frame.copy(src);
+    if (rotation % 360 != 0)
+        crop = crop.transformed(QTransform().rotate(rotation));
+    crop = applyDisplayLut(crop, lut.size() == 256 ? lut : QByteArray());
+    const QImage scaledR = crop.scaled(rightHalf.size(), Qt::KeepAspectRatio,
+                                      Qt::SmoothTransformation);
+    painter.drawImage(rightHalf.x() + (rightHalf.width() - scaledR.width()) / 2,
+                      rightHalf.y() + (rightHalf.height() - scaledR.height()) / 2,
+                      scaledR);
+    return true;
 }
 
 void SegmentExportEngine::layoutRects(const QSize &canvas, bool hasChart, bool hasSpec,
@@ -525,6 +654,7 @@ void SegmentExportEngine::run()
 
     QProcess proc;
     proc.setProgram(ffmpeg);
+    attachFfmpegStderrLog(&proc, &args, p.outputPath);   // 可能补 -nostats → 先于 setArguments
     proc.setArguments(args);
     proc.start();
     if (!proc.waitForStarted(10000)) {
@@ -622,55 +752,12 @@ void SegmentExportEngine::run()
             const int vx = videoRect.x() + (videoRect.width() - scaled.width()) / 2;
             const int vy = videoRect.y() + (videoRect.height() - scaled.height()) / 2;
             // v1.15.3 拍板：放大镜导出 = 主界面同款左右 50% 并列——
-            // 左半边原图（源区域金色四角括号标记），右半边放大视图。
-            if (p.magnifierPip && !p.magnifierSrcRect.isNull()
-                && videoRect.width() >= 240) {
-                const int halfW = videoRect.width() / 2 - 3;
-                const QRect leftHalf(videoRect.x(), videoRect.y(),
-                                     halfW, videoRect.height());
-                const QRect rightHalf(videoRect.x() + halfW + 6, videoRect.y(),
-                                      videoRect.width() - halfW - 6,
-                                      videoRect.height());
-                // 左侧：原图（等比居中）
-                QImage scaledL = curFrame.scaled(leftHalf.size(),
-                                                 Qt::KeepAspectRatio,
-                                                 Qt::SmoothTransformation);
-                const QRect dispL(
-                    leftHalf.x() + (leftHalf.width() - scaledL.width()) / 2,
-                    leftHalf.y() + (leftHalf.height() - scaledL.height()) / 2,
-                    scaledL.width(), scaledL.height());
-                painter.drawImage(dispL, scaledL);
-                // 源区域金色四角括号（主界面同款：衬影+主体+倍率徽章）
-                {
-                    const QRect src = p.magnifierSrcRect.intersected(
-                        QRect(0, 0, curFrame.width(), curFrame.height()));
-                    if (src.isValid() && !src.isEmpty()) {
-                        const double sx = double(dispL.width())
-                                          / curFrame.width();
-                        const double sy = double(dispL.height())
-                                          / curFrame.height();
-                        const QRect mk(dispL.x() + int(src.x() * sx),
-                                       dispL.y() + int(src.y() * sy),
-                                       qMax(1, int(src.width() * sx)),
-                                       qMax(1, int(src.height() * sy)));
-                        drawMagnifierBrackets(painter, mk, p.magnifierZoom,
-                                              qMax(1, dispL.height() / 540),
-                                              qMax(10, dispL.height() / 36));
-                    }
-                }
-                // 右侧：放大视图（同源裁剪 → 旋转 → 等比填满右半）
-                QImage crop = curFrame.copy(p.magnifierSrcRect.intersected(
-                    QRect(0, 0, curFrame.width(), curFrame.height())));
-                if (p.magnifierRotation != 0)
-                    crop = crop.transformed(QTransform().rotate(p.magnifierRotation));
-                QImage scaledR = crop.scaled(rightHalf.size(),
-                                             Qt::KeepAspectRatio,
-                                             Qt::SmoothTransformation);
-                painter.drawImage(
-                    rightHalf.x() + (rightHalf.width() - scaledR.width()) / 2,
-                    rightHalf.y() + (rightHalf.height() - scaledR.height()) / 2,
-                    scaledR);
-            } else {
+            // 左半边原图（源区域金色四角括号标记），右半边放大视图
+            // （v1.18.x：右半走放大镜显示链——旋转+画面调节 LUT，与屏幕逐位一致）。
+            if (!(p.magnifierPip
+                  && drawMagnifierSplit(painter, videoRect, curFrame, p.magnifierSrcRect,
+                                        p.magnifierRotation, p.magnifierZoom,
+                                        p.magnifierLut))) {
                 painter.drawImage(vx, vy, scaled);
             }
 
@@ -806,12 +893,15 @@ void SegmentExportEngine::run()
         emit finished(false, QStringLiteral("已取消"));
         return;
     }
-    proc.waitForFinished(-1);
+    // 收尾等待有界：stderr 已落文件（无无人读管道→无死锁），180s 内必须退出
+    const bool finishOk = waitFfmpegFinishBounded(&proc);
     const bool ok = !errMsg.isEmpty() ? false
-                    : (proc.exitStatus() == QProcess::NormalExit && proc.exitCode() == 0);
+                    : (finishOk && proc.exitStatus() == QProcess::NormalExit
+                       && proc.exitCode() == 0);
+    if (!finishOk && errMsg.isEmpty())
+        errMsg = QStringLiteral("ffmpeg 收尾超时（180s 未退出）");
     if (!ok && errMsg.isEmpty())
-        errMsg = QStringLiteral("ffmpeg 编码失败：")
-                 + QString::fromLocal8Bit(proc.readAllStandardError()).right(500);
+        errMsg = QStringLiteral("ffmpeg 编码失败：") + ffmpegStderrTail(p.outputPath, 500);
     av_packet_free(&pkt);
     av_frame_free(&fr);
     sws_freeContext(sws);
@@ -822,6 +912,7 @@ void SegmentExportEngine::run()
         fail(errMsg);
         return;
     }
+    removeFfmpegStderrLog(p.outputPath);   // 成功不留旁车
     emit progress(int(totalFrames), int(totalFrames));
     emit finished(true, p.outputPath);
 }
@@ -843,6 +934,11 @@ struct SeqDecoder {
     QImage cur;
     double curPtsMs = -1.0;
     bool eof = false;
+    /// 容器起点（ms）：DVR/NVR 流的包 PTS 从 start_time 起算（如 33583s），
+    /// 而调用方传的是流内 0 基毫秒——不归一会导致首帧 PTS 远大于 target，
+    /// pullTo 永远“已覆盖” → 整路只解 1 帧（画面定格）。
+    /// 修法与 run()/runCompose 单源段同款（v1.15.3 湛江遂溪冻结根因）。
+    qint64 startTimeMs = 0;
 
     bool open(const QString &path, qint64 startMs, QString *err)
     {
@@ -868,10 +964,13 @@ struct SeqDecoder {
             return false;
         }
         tb = fmt->streams[vstream]->time_base;
+        startTimeMs = (fmt->start_time != AV_NOPTS_VALUE) ? fmt->start_time / 1000 : 0;
         pkt = av_packet_alloc();
         fr = av_frame_alloc();
-        if (startMs > 0) {
-            av_seek_frame(fmt, vstream, av_rescale_q(startMs, AV_TIME_BASE_Q, tb),
+        if (startMs > 0 || startTimeMs > 0) {
+            // seek 目标 = 容器起点 + 流内起点（绝对时间戳域）
+            av_seek_frame(fmt, vstream,
+                          av_rescale_q(startTimeMs + startMs, AVRational{1, 1000}, tb),
                           AVSEEK_FLAG_BACKWARD);
             avcodec_flush_buffers(dec);
         }
@@ -898,7 +997,7 @@ struct SeqDecoder {
                 const int64_t pts = (fr->best_effort_timestamp != AV_NOPTS_VALUE)
                                         ? fr->best_effort_timestamp : fr->pts;
                 if (pts == AV_NOPTS_VALUE) { av_frame_unref(fr); continue; }
-                const double ms = double(pts) * tb.num * 1000.0 / tb.den;
+                const double ms = double(pts) * tb.num * 1000.0 / tb.den - startTimeMs;
                 if (ms < discardBeforeMs - 1.0) { av_frame_unref(fr); continue; }
                 sws = sws_getCachedContext(sws, fr->width, fr->height,
                                            AVPixelFormat(fr->format),
@@ -940,6 +1039,19 @@ void SegmentExportEngine::runMultiCam()
         emit finished(false, QLatin1String(kErrPrefix) + msg);
     };
     const int n = p.lanes.size();
+    // 源存在性预检：缺文件立即报错（带机位名；不拿不存在的 -i 去起 ffmpeg）
+    {
+        QStringList lanePaths, laneNames;
+        for (const auto &l : p.lanes) {
+            lanePaths << l.path;
+            laneNames << l.displayName;
+        }
+        QString missingErr;
+        if (!checkSourcesExist(lanePaths, &missingErr, laneNames)) {
+            fail(missingErr);
+            return;
+        }
+    }
     // ---- 每路解码器（打不开的路标记但继续——其他路照常，格内画错误占位）----
     QVector<SeqDecoder *> decs(n, nullptr);
     QVector<QString> laneErr(n);
@@ -1029,6 +1141,7 @@ void SegmentExportEngine::runMultiCam()
 
     QProcess proc;
     proc.setProgram(ffmpeg);
+    attachFfmpegStderrLog(&proc, &args, p.outputPath);   // 可能补 -nostats → 先于 setArguments
     proc.setArguments(args);
     proc.start();
     if (!proc.waitForStarted(10000)) {
@@ -1209,17 +1322,21 @@ void SegmentExportEngine::runMultiCam()
         emit finished(false, QStringLiteral("已取消"));
         return;
     }
-    proc.waitForFinished(-1);
-    const bool ok = errMsg.isEmpty()
+    const bool finishOk = waitFfmpegFinishBounded(&proc);
+    const bool ok = errMsg.isEmpty() && finishOk
         && proc.exitStatus() == QProcess::NormalExit && proc.exitCode() == 0;
     if (!ok) {
-        if (errMsg.isEmpty())
+        if (!finishOk)
+            errMsg = QStringLiteral("ffmpeg 收尾超时（180s 未退出）：")
+                     + ffmpegStderrTail(p.outputPath, 300);
+        else if (errMsg.isEmpty())
             errMsg = QStringLiteral("ffmpeg 编码失败：")
-                     + QString::fromLocal8Bit(proc.readAllStandardError()).right(500);
+                     + ffmpegStderrTail(p.outputPath, 500);
         QFile::remove(p.outputPath);
         fail(errMsg);
         return;
     }
+    removeFfmpegStderrLog(p.outputPath);
     emit progress(int(totalFrames), int(totalFrames));
     emit finished(true, p.outputPath + audioNote);
 }
@@ -1336,13 +1453,30 @@ void SegmentExportEngine::runCompose()
 
     // ---- 源清单（去重，首见序）+ 音频探测 ----
     QStringList uniqFiles;
+    QStringList uniqLabels;   // 与 uniqFiles 同序（机位名/文件名：缺失报错可读性）
+    auto addUniqSource = [&](const QString &path, const QString &label) {
+        const int idx = uniqFiles.indexOf(path);
+        if (idx < 0) {
+            uniqFiles << path;
+            uniqLabels << label;
+        } else if (!label.isEmpty() && uniqLabels.at(idx).isEmpty()) {
+            uniqLabels[idx] = label;
+        }
+    };
     for (const auto &s : p.segments) {
-        if (s.isLanes()) {
+        if (s.isLanes())
             for (const auto &l : s.lanes)
-                if (!uniqFiles.contains(l.path))
-                    uniqFiles << l.path;
-        } else if (!uniqFiles.contains(s.sourcePath)) {
-            uniqFiles << s.sourcePath;
+                addUniqSource(l.path, l.displayName);
+        else
+            addUniqSource(s.sourcePath, QFileInfo(s.sourcePath).fileName());
+    }
+    // 源存在性预检：缺文件立即类型化报错（不把不存在的 -i 交给 ffmpeg，
+    // 否则只能靠它的报错——而那条报错此前会被无人读的 stderr 管道吞成假死）
+    {
+        QString missingErr;
+        if (!checkSourcesExist(uniqFiles, &missingErr, uniqLabels)) {
+            fail(missingErr);
+            return;
         }
     }
     QHash<QString, bool> hasAudioOf;
@@ -1444,6 +1578,7 @@ void SegmentExportEngine::runCompose()
 
     QProcess proc;
     proc.setProgram(ffmpeg);
+    attachFfmpegStderrLog(&proc, &args, p.outputPath);   // 可能补 -nostats → 先于 setArguments
     proc.setArguments(args);
     proc.start();
     if (!proc.waitForStarted(10000)) {
@@ -1494,32 +1629,47 @@ void SegmentExportEngine::runCompose()
                 break;
             }
             // P2 布局：0=均分宫格；1=主听路大窗（左 2/3）+其余右侧纵列
+            // v1.18.x（真机反馈）：时间轴示意（覆盖条）改放**最下方**——宫格上收让位，
+            // 不再压住瓦片顶部的机位名/画面（原条带画在 videoRect 顶部）
+            const int stripH = 8 + ln * 6 + 9;                 // 条带本体 + 留白
+            const QRect gridRect(videoRect.x(), videoRect.y(), videoRect.width(),
+                                 videoRect.height() - stripH);
+            const QRect stripRect(videoRect.x() + 6, gridRect.bottom() + 4,
+                                  videoRect.width() - 12, stripH - 6);
             const bool mainBig = (seg.gridLayout == 1) && ln >= 2;
             const int cols = (ln <= 2) ? ln : 2;
             const int rows = (ln + cols - 1) / cols;
-            const int cellW = videoRect.width() / cols;
-            const int cellH = videoRect.height() / rows;
-            const int mainW = videoRect.width() * 2 / 3;
-            const int sideW = videoRect.width() - mainW;
-            const int sideH = (ln > 1) ? videoRect.height() / (ln - 1) : 0;
+            const int cellW = gridRect.width() / cols;
+            const int cellH = gridRect.height() / rows;
+            const int mainW = gridRect.width() * 2 / 3;
+            const int sideW = gridRect.width() - mainW;
+            const int sideH = (ln > 1) ? gridRect.height() / (ln - 1) : 0;
             auto cellRectOf = [&](int i) -> QRect {
                 if (mainBig) {
                     const int main = qBound(0, seg.audioLane, ln - 1);
                     if (i == main)
-                        return QRect(videoRect.x() + 2, videoRect.y() + 2,
-                                     mainW - 4, videoRect.height() - 4);
+                        return QRect(gridRect.x() + 2, gridRect.y() + 2,
+                                     mainW - 4, gridRect.height() - 4);
                     int order = 0;
                     for (int j = 0; j < ln; ++j) {
                         if (j == main) continue;
                         if (j == i)
-                            return QRect(videoRect.x() + mainW + 2,
-                                         videoRect.y() + order * sideH + 2,
+                            return QRect(gridRect.x() + mainW + 2,
+                                         gridRect.y() + order * sideH + 2,
                                          sideW - 4, sideH - 4);
                         ++order;
                     }
                 }
-                const int cx = videoRect.x() + (i % cols) * cellW;
-                const int cy = videoRect.y() + (i / cols) * cellH;
+                // P2.13（2026-09-28 用户拍板「每个视频自由选窗位」）：均分宫格按
+                // seg.laneCell（第 i 路 → 格子序号）摆放；空/越界走原顺序（向后兼容）
+                int cellIdx = i;
+                if (i < seg.laneCell.size()) {
+                    const int c = seg.laneCell.at(i);
+                    if (c >= 0 && c < ln)
+                        cellIdx = c;
+                }
+                const int cx = gridRect.x() + (cellIdx % cols) * cellW;
+                const int cy = gridRect.y() + (cellIdx / cols) * cellH;
                 return QRect(cx + 2, cy + 2, cellW - 4, cellH - 4);
             };
             int calLane = -1;   // 校正时间基准路：首条已校时路
@@ -1578,22 +1728,18 @@ void SegmentExportEngine::runCompose()
                         painter.setBrush(Qt::NoBrush);
                         painter.drawRect(cell);
                     }
-                    // ---- P2.6 覆盖条：每路一行（灰底+彩色覆盖区间），白线=当前时刻 ----
+                    // ---- P2.6 覆盖条（时间轴示意）：每路一行（灰底+彩色覆盖区间），
+                    // 白线=当前时刻。v1.18.x：固定在最下方（真机反馈）----
                     {
-                        const int stripH = 8 + ln * 6;
-                        QRect strip(videoRect.x() + 6, videoRect.y() + 6,
-                                    videoRect.width() - 12, stripH);
-                        if (p.demoWatermark)   // 右上水印 340px 防叠
-                            strip.setRight(strip.right() - 350);
                         painter.setPen(Qt::NoPen);
                         painter.setBrush(QColor(0, 0, 0, 130));
-                        painter.drawRoundedRect(strip, 4, 4);
+                        painter.drawRoundedRect(stripRect, 4, 4);
                         const double span = double(qMax<qint64>(1, seg.outMs - seg.inMs));
                         for (int i = 0; i < ln; ++i) {
                             const SyncLaneData &l = seg.lanes[i];
-                            const int ry = strip.y() + 4 + i * 6;
+                            const int ry = stripRect.y() + 4 + i * 6;
                             painter.setBrush(QColor(70, 73, 82));
-                            painter.drawRect(strip.x() + 6, ry, strip.width() - 12, 3);
+                            painter.drawRect(stripRect.x() + 6, ry, stripRect.width() - 12, 3);
                             const double a = double(qMax(syncLaneWallStart(l), seg.inMs)
                                                     - seg.inMs) / span;
                             const double b = double(qMin(syncLaneWallEnd(l), seg.outMs)
@@ -1601,13 +1747,13 @@ void SegmentExportEngine::runCompose()
                             if (b > a) {
                                 painter.setBrush(QColor(Theme::DataPalette[
                                     i % Theme::DataPalette.size()]));
-                                painter.drawRect(strip.x() + 6 + int(a * (strip.width() - 12)),
-                                                 ry, int((b - a) * (strip.width() - 12)), 3);
+                                painter.drawRect(stripRect.x() + 6 + int(a * (stripRect.width() - 12)),
+                                                 ry, int((b - a) * (stripRect.width() - 12)), 3);
                             }
                         }
                         const double cx = (wall - seg.inMs) / span;
-                        painter.fillRect(strip.x() + 6 + int(cx * (strip.width() - 12)),
-                                         strip.y() + 2, 2, strip.height() - 4,
+                        painter.fillRect(stripRect.x() + 6 + int(cx * (stripRect.width() - 12)),
+                                         stripRect.y() + 2, 2, stripRect.height() - 4,
                                          QColor(255, 255, 255));
                     }
                     // ---- 信息角标（校正时间=基准路墙钟→北京时间）----
@@ -1631,28 +1777,13 @@ void SegmentExportEngine::runCompose()
                         f.setPixelSize(22);
                         f.setBold(true);
                         painter.setFont(f);
-                        const QRect osdRect(videoRect.left() + 12, videoRect.bottom() - 40,
-                                            videoRect.width() - 24, 32);
+                        const QRect osdRect(gridRect.left() + 12, gridRect.bottom() - 40,
+                                            gridRect.width() - 24, 32);
                         painter.setPen(Qt::NoPen);
                         painter.setBrush(QColor(0, 0, 0, 140));
                         painter.drawRoundedRect(osdRect.adjusted(-6, -2, 6, 2), 6, 6);
                         painter.setPen(QColor(Theme::Accent));
                         painter.drawText(osdRect, Qt::AlignVCenter | Qt::AlignLeft, osd);
-                    }
-                    if (p.demoWatermark) {
-                        const QString wm = QStringLiteral("分析演示材料 · 非原始证据");
-                        QFont f = painter.font();
-                        f.setPixelSize(20);
-                        f.setBold(true);
-                        painter.setFont(f);
-                        const int wpx = painter.fontMetrics().horizontalAdvance(wm);
-                        const QRect wmRect(videoRect.right() - wpx - 24,
-                                           videoRect.top() + 8, wpx + 24, 30);
-                        painter.setPen(Qt::NoPen);
-                        painter.setBrush(QColor(0, 0, 0, 150));
-                        painter.drawRoundedRect(wmRect, 4, 4);
-                        painter.setPen(QColor(255, 96, 96));
-                        painter.drawText(wmRect, Qt::AlignCenter, wm);
                     }
                 }
                 const QByteArray bytes(reinterpret_cast<const char *>(canvas.constBits()),
@@ -1776,6 +1907,11 @@ void SegmentExportEngine::runCompose()
                   seg.sourcePath, seg.sourcePath + QStringLiteral(".vla")))
             : ComposeOverlay{};
         const bool stripOn = seg.burnChart && overlay.hasData();
+        // v1.18.x 所见即所得：放大镜取景仅烧录到它所属源的单视频段
+        // （多源合成时若逐段都烧，取景坐标会错配到别的视频上）
+        const bool segMagnifier = p.magnifierPip && !p.magnifierSrcRect.isNull()
+            && (p.magnifierSourcePath.isEmpty()
+                || p.magnifierSourcePath == seg.sourcePath);
         QRect segVideoRect = videoRect;
         QRect stripRect;
         if (stripOn) {
@@ -1808,15 +1944,26 @@ void SegmentExportEngine::runCompose()
                                                 Qt::SmoothTransformation);
                 const int vx = segVideoRect.x() + (segVideoRect.width() - scaled.width()) / 2;
                 const int vy = segVideoRect.y() + (segVideoRect.height() - scaled.height()) / 2;
-                painter.drawImage(vx, vy, scaled);
+                // 放大镜同框（左原图/右放大，与主界面顶行所见同款）；
+                // 未启用则回落满幅居中——videoDisp 为左半实际显示矩形（ROI/标注按它映射）
+                QRect videoDisp(vx, vy, scaled.width(), scaled.height());
+                bool magDrawn = false;
+                if (segMagnifier) {
+                    QRect leftRect;
+                    magDrawn = drawMagnifierSplit(painter, segVideoRect, curFrame,
+                                                  p.magnifierSrcRect, p.magnifierRotation,
+                                                  p.magnifierZoom, p.magnifierLut, &leftRect);
+                    if (magDrawn)
+                        videoDisp = leftRect;
+                }
+                if (!magDrawn)
+                    painter.drawImage(vx, vy, scaled);
                 // P2：ROI 烧录（源像素坐标→实际显示矩形映射）
                 if (seg.burnRoi && overlay.loaded)
-                    drawRoiOverlay(painter, QRect(vx, vy, scaled.width(), scaled.height()),
-                                   curFrame.size(), overlay);
+                    drawRoiOverlay(painter, videoDisp, curFrame.size(), overlay);
                 // P2.7：标注轨（聚光灯/箭头/字幕，源域时刻驱动）
                 if (!seg.annos.isEmpty())
-                    drawAnnotations(painter, QRect(vx, vy, scaled.width(), scaled.height()),
-                                    curFrame, seg.annos, qint64(target));
+                    drawAnnotations(painter, videoDisp, curFrame, seg.annos, qint64(target));
 
                 if (p.burnOsd) {
                     QString timeStr;
@@ -1847,22 +1994,9 @@ void SegmentExportEngine::runCompose()
                     painter.setPen(QColor(Theme::Accent));
                     painter.drawText(osdRect, Qt::AlignVCenter | Qt::AlignLeft, osd);
                 }
-                if (p.demoWatermark) {
-                    // 演示片强制角标（右上，红字黑底，不可关——取证自保拍板）
-                    const QString wm = QStringLiteral("分析演示材料 · 非原始证据");
-                    QFont f = painter.font();
-                    f.setPixelSize(20);
-                    f.setBold(true);
-                    painter.setFont(f);
-                    const int wpx = painter.fontMetrics().horizontalAdvance(wm);
-                    const QRect wmRect(videoRect.right() - wpx - 24,
-                                       videoRect.top() + 8, wpx + 24, 30);
-                    painter.setPen(Qt::NoPen);
-                    painter.setBrush(QColor(0, 0, 0, 150));
-                    painter.drawRoundedRect(wmRect.adjusted(-6, -2, 6, 2), 6, 6);
-                    painter.setPen(QColor(255, 96, 96));
-                    painter.drawText(wmRect, Qt::AlignCenter, wm);
-                }
+            // 演示片角标已按用户拍板取消（2026-09-24：“不喜欢这句话，文字删掉”）——
+            // 不再在画面上烧「分析演示材料 · 非原始证据」；证据口径由「证据原始片段」
+            // （无损直拷 + .forensic.json）承担，演示片仍带左下时间/案件 OSD
                 // P2：曲线滚动条（跟随游标，窗口 30s）
                 if (stripOn)
                     drawChartStrip(painter, stripRect, overlay, qint64(target),
@@ -1894,12 +2028,13 @@ void SegmentExportEngine::runCompose()
     }
 
     proc.closeWriteChannel();
-    proc.waitForFinished(-1);
-    const bool procOk = (proc.exitStatus() == QProcess::NormalExit
+    const bool finishOk = waitFfmpegFinishBounded(&proc);
+    const bool procOk = (finishOk && proc.exitStatus() == QProcess::NormalExit
                          && proc.exitCode() == 0);
 
     if (cancelled || m_cancelled) {
         QFile::remove(p.outputPath);
+        removeFfmpegStderrLog(p.outputPath);
         emit finished(false, QStringLiteral("已取消"));
         return;
     }
@@ -1910,10 +2045,13 @@ void SegmentExportEngine::runCompose()
     }
     if (!procOk) {
         QFile::remove(p.outputPath);
-        fail(QStringLiteral("ffmpeg 编码失败：")
-             + QString::fromLocal8Bit(proc.readAllStandardError()).right(300));
+        fail(QStringLiteral("ffmpeg ")
+             + (finishOk ? QStringLiteral("编码失败：") 
+                         : QStringLiteral("收尾超时（180s 未退出）："))
+             + ffmpegStderrTail(p.outputPath, 400));
         return;
     }
+    removeFfmpegStderrLog(p.outputPath);
     emit progress(int(totalFrames), int(totalFrames));
     emit finished(true, p.outputPath + (anyAudio ? QString() : QStringLiteral("（无音轨）")));
 }
@@ -2001,6 +2139,20 @@ void SegmentExportEngine::runEvidenceCopy()
 
     // ---- 逐段直拷（关键帧对齐，侧车已声明）----
     QStringList parts;
+    // 源存在性预检：证据直拷逐段 -i，缺一即整单不可信
+    {
+        QStringList srcPaths, srcLabels;
+        for (const auto &s : p.segments) {
+            srcPaths << s.sourcePath;
+            srcLabels << QFileInfo(s.sourcePath).fileName();
+        }
+        QString missingErr;
+        if (!checkSourcesExist(srcPaths, &missingErr, srcLabels)) {
+            cleanup();
+            fail(missingErr);
+            return;
+        }
+    }
     for (int i = 0; i < p.segments.size(); ++i) {
         const auto &seg = p.segments.at(i);
         const QString tmp = QStringLiteral("%1/part%2.mp4")
@@ -2016,6 +2168,7 @@ void SegmentExportEngine::runEvidenceCopy()
              << tmp;
         QProcess proc;
         proc.setProgram(ffmpeg);
+        attachFfmpegStderrLog(&proc, &args, p.outputPath);   // 可能补 -nostats → 先于 setArguments
         proc.setArguments(args);
         proc.start();
         if (!proc.waitForStarted(10000)) {
@@ -2034,7 +2187,7 @@ void SegmentExportEngine::runEvidenceCopy()
             }
         }
         if (proc.exitStatus() != QProcess::NormalExit || proc.exitCode() != 0) {
-            const QString tail = QString::fromLocal8Bit(proc.readAllStandardError()).right(300);
+            const QString tail = ffmpegStderrTail(p.outputPath, 300);
             cleanup();
             fail(QStringLiteral("直拷失败（段 %1）：%2").arg(i + 1).arg(tail));
             return;
@@ -2058,13 +2211,17 @@ void SegmentExportEngine::runEvidenceCopy()
             lf.write(QStringLiteral("file '%1'\n").arg(esc).toUtf8());
         }
         lf.close();
+        QStringList catArgs;
+        catArgs << QStringLiteral("-y") << QStringLiteral("-nostats")
+                << QStringLiteral("-f") << QStringLiteral("concat")
+                << QStringLiteral("-safe") << QStringLiteral("0")
+                << QStringLiteral("-i") << listFile
+                << QStringLiteral("-c") << QStringLiteral("copy")
+                << p.outputPath;
         QProcess proc;
         proc.setProgram(ffmpeg);
-        proc.setArguments({QStringLiteral("-y"), QStringLiteral("-f"),
-                           QStringLiteral("concat"), QStringLiteral("-safe"),
-                           QStringLiteral("0"), QStringLiteral("-i"), listFile,
-                           QStringLiteral("-c"), QStringLiteral("copy"),
-                           p.outputPath});
+        attachFfmpegStderrLog(&proc, &catArgs, p.outputPath);
+        proc.setArguments(catArgs);
         proc.start();
         while (!proc.waitForFinished(500)) {
             if (m_cancelled) {
@@ -2077,7 +2234,7 @@ void SegmentExportEngine::runEvidenceCopy()
             }
         }
         if (proc.exitStatus() != QProcess::NormalExit || proc.exitCode() != 0) {
-            const QString tail = QString::fromLocal8Bit(proc.readAllStandardError()).right(300);
+            const QString tail = ffmpegStderrTail(p.outputPath, 300);
             cleanup();
             fail(QStringLiteral("拼接失败：") + tail);
             return;
@@ -2088,6 +2245,7 @@ void SegmentExportEngine::runEvidenceCopy()
         return;
     }
     emit progress(75, 100);
+    removeFfmpegStderrLog(p.outputPath);   // 成功不留旁车（失败保留：拼接/直拷日志）
 
     // ---- 完整性哈希（源 + 产物）----
     QStringList srcHashes;

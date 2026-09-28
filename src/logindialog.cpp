@@ -1,3 +1,4 @@
+#include "theme.h"
 #include "logindialog.h"
 
 #include "infrastructure/cloud_account.h"
@@ -88,7 +89,7 @@ LoginDialog::LoginDialog(QWidget* parent) : QDialog(parent) {
                                              "您填写的姓名和单位会自动用于案件录入和分析报告生成相关功能，请妥善填写。"),
                               m_regLayer);
     notice->setWordWrap(true);
-    notice->setStyleSheet(QStringLiteral("color:#b26a00;"));
+    notice->setStyleSheet(QStringLiteral("color:") + Theme::AccentTk::Text + ";"); // 规范§1.3 令牌
     rv->addWidget(notice);
     auto* rf = new QFormLayout();
     m_name = new QLineEdit(m_regLayer);
@@ -133,7 +134,7 @@ LoginDialog::LoginDialog(QWidget* parent) : QDialog(parent) {
 
     m_status = new QLabel(this);
     m_status->setWordWrap(true);
-    m_status->setStyleSheet(QStringLiteral("color:#c0392b;"));
+    m_status->setStyleSheet(QStringLiteral("color:%1;").arg(Theme::Status::Error));
     root->addWidget(m_status);
 
     // v1.18.0：改为成员并在 busy 期间禁用 —— 请求在途时若直接退出，main() 返回 0
@@ -179,14 +180,14 @@ void LoginDialog::setBusy(bool busy, const QString& hint) {
     m_invBtn->setEnabled(!busy);
     if (m_quitBtn) m_quitBtn->setEnabled(!busy);
     if (busy) {
-        m_status->setStyleSheet(QStringLiteral("color:#666;"));
+        m_status->setStyleSheet(QStringLiteral("color:%1;").arg(Theme::TextTk::Muted));
         m_status->setText(hint.isEmpty() ? QStringLiteral("处理中…") : hint);
     }
 }
 
 void LoginDialog::fail(const QString& machineCode, const QString& serverMsg) {
     setBusy(false);
-    m_status->setStyleSheet(QStringLiteral("color:#c0392b;"));
+    m_status->setStyleSheet(QStringLiteral("color:%1;").arg(Theme::Status::Error));
     m_status->setText(tr_err(machineCode, serverMsg));
 }
 
@@ -221,7 +222,7 @@ void LoginDialog::onSendCode() {
             fail(r.error, r.message);
             return;
         }
-        m_status->setStyleSheet(QStringLiteral("color:#27ae60;"));
+        m_status->setStyleSheet(QStringLiteral("color:%1;").arg(Theme::Status::Ok));
         m_status->setText(QStringLiteral("验证码已发送，请查收短信（5 分钟内有效）"));
         m_countdownLeft = 60;
         m_sendBtn->setEnabled(false);
@@ -244,7 +245,7 @@ void LoginDialog::onSmsLogin() {
             // 第二层：新用户补全姓名/单位
             setBusy(false);
             showRegistrationLayer(true);
-            m_status->setStyleSheet(QStringLiteral("color:#666;"));
+            m_status->setStyleSheet(QStringLiteral("color:%1;").arg(Theme::TextTk::Muted));
             m_status->setText(QStringLiteral("验证通过，请补全注册信息"));
             return;
         }

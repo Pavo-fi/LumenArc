@@ -1,19 +1,22 @@
 #include "snapshotpanel.h"
 
+#include "i18n.h"
+
 #include <QVBoxLayout>
 #include <QHBoxLayout>
 #include <QGroupBox>
 
 SnapshotPanel::SnapshotPanel(QWidget *parent)
-    : QDockWidget("Snapshot Fusion", parent)
+    : QDockWidget(lang("快照融合", "Snapshot Fusion"), parent)
 {
     auto *container = new QWidget(this);
     auto *layout = new QVBoxLayout(container);
 
+    // 规范§10.4：面板字符串全走 lang() 双语（此前整块硬编码英文）
     // Capture / Clear buttons
     auto *btnLayout = new QHBoxLayout();
-    auto *captureBtn = new QPushButton("Capture Frame");
-    auto *clearBtn = new QPushButton("Clear");
+    auto *captureBtn = new QPushButton(lang("截取帧", "Capture Frame"));
+    auto *clearBtn = new QPushButton(lang("清空", "Clear"));
     btnLayout->addWidget(captureBtn);
     btnLayout->addWidget(clearBtn);
     layout->addLayout(btnLayout);
@@ -25,21 +28,21 @@ SnapshotPanel::SnapshotPanel(QWidget *parent)
     });
 
     // Brightness
-    layout->addWidget(new QLabel("Brightness"));
+    layout->addWidget(new QLabel(lang("亮度", "Brightness")));
     m_brightnessSlider = new QSlider(Qt::Horizontal);
     m_brightnessSlider->setRange(-100, 100);
     m_brightnessSlider->setValue(0);
     layout->addWidget(m_brightnessSlider);
 
     // Contrast
-    layout->addWidget(new QLabel("Contrast"));
+    layout->addWidget(new QLabel(lang("对比度", "Contrast")));
     m_contrastSlider = new QSlider(Qt::Horizontal);
     m_contrastSlider->setRange(-100, 100);
     m_contrastSlider->setValue(0);
     layout->addWidget(m_contrastSlider);
 
     // Opacity
-    layout->addWidget(new QLabel("Opacity"));
+    layout->addWidget(new QLabel(lang("不透明度", "Opacity")));
     m_opacitySlider = new QSlider(Qt::Horizontal);
     m_opacitySlider->setRange(0, 100);
     m_opacitySlider->setValue(50);

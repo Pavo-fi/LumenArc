@@ -3,6 +3,7 @@
 #include "infrastructure/cloud_account.h"
 #include "infrastructure/crash_handler.h"
 #include "infrastructure/credential_store.h"
+#include "theme.h"
 
 #include <QCheckBox>
 #include <QJsonObject>
@@ -42,13 +43,13 @@ FeedbackDialog::FeedbackDialog(QWidget* parent) : QDialog(parent) {
 void FeedbackDialog::onSubmit() {
     const QString text = m_text->toPlainText().trimmed();
     if (text.isEmpty()) {
-        m_status->setStyleSheet(QStringLiteral("color:#c0392b;"));
+        m_status->setStyleSheet(QStringLiteral("color:%1;").arg(Theme::Status::Error)); // 规范§1.3 令牌
         m_status->setText(QStringLiteral("请填写反馈内容"));
         return;
     }
     const Credential cred = CredentialStore::load();
     if (!cred.valid()) {
-        m_status->setStyleSheet(QStringLiteral("color:#c0392b;"));
+        m_status->setStyleSheet(QStringLiteral("color:%1;").arg(Theme::Status::Error)); // 规范§1.3 令牌
         m_status->setText(QStringLiteral("登录状态异常，请重启软件"));
         return;
     }
@@ -62,19 +63,19 @@ void FeedbackDialog::onSubmit() {
     }
 
     m_submit->setEnabled(false);
-    m_status->setStyleSheet(QStringLiteral("color:#666;"));
+    m_status->setStyleSheet(QStringLiteral("color:%1;").arg(Theme::TextTk::Muted)); // 规范§1.3 令牌
     m_status->setText(QStringLiteral("正在提交…"));
 
     CloudAccount::instance().submitFeedback(cred.token, text, diag, [this](const CloudAccount::Result& r) {
         m_submit->setEnabled(true);
         if (!r.ok) {
-            m_status->setStyleSheet(QStringLiteral("color:#c0392b;"));
+            m_status->setStyleSheet(QStringLiteral("color:%1;").arg(Theme::Status::Error)); // 规范§1.3 令牌
             m_status->setText(r.error == QLatin1String("network") || r.error == QLatin1String("timeout")
                                   ? QStringLiteral("网络连接失败，请检查网络后重试")
                                   : QStringLiteral("提交失败：") + r.message);
             return;
         }
-        m_status->setStyleSheet(QStringLiteral("color:#27ae60;"));
+        m_status->setStyleSheet(QStringLiteral("color:%1;").arg(Theme::Status::Ok)); // 规范§1.3 令牌
         m_status->setText(QStringLiteral("已收到您的反馈，感谢支持！"));
         m_text->clear();
         m_text->setEnabled(false);

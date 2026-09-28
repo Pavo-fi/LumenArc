@@ -17,6 +17,7 @@
  *  - wallMsOf/streamMsOf 往返一致性、v7 旧格式迁移
  */
 #include "domain/time_calibration.h"
+#include "domain/time_piecewise.h"   // v1.18.x：变速路由阈值判据
 #include "domain/truth_time_parse.h"
 
 #include <QCoreApplication>
@@ -174,7 +175,9 @@ static void testOutlierExcludeRefit()
 {
     const double rate = 1.0004;
     const qint64 x1 = 940000, x2 = 1880000, x3 = 2820000;
-    auto outlier = pt(x2, kOff + static_cast<qint64>(std::llround(rate * x2)) + 10000); // 偏 10s
+    // v1.18.x：阀值 3s→10s 后，野点用例需真属于「错读量级」——取 30s（与 §97 野点用例同量级；
+    // 秒级偏差（≤10s）属分段速率波动，不应被当错读剔）
+    auto outlier = pt(x2, kOff + static_cast<qint64>(std::llround(rate * x2)) + 30000);
     QVector<TimeCalibration::Sample> samples = {
         pt(0, kOff),
         pt(x1, kOff + static_cast<qint64>(std::llround(rate * x1))),
@@ -440,6 +443,411 @@ static void testTruthArchiveRoundTrip()
 }
 
 // ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// v1.18.x（2026-09-24 顺德公安导出件实测 1.139×）：非实时导出/变速件的判据
+// ---------------------------------------------------------------------------
+/// 「自洽的大倍率」= 非实时导出件（可确认采用）；散点/荒谬倍率 = OCR 误读（拒绝）
+static void testRateChangeSelfConsistent()
+{
+    const qint64 base = kOff;
+    // 三点共线、倍率 1.139（画面时间比播放进度快 13.9%）→ 自洽
+    const auto frOk = TimeCalibration::fit({
+        pt(0, base),
+        pt(600000, base + qint64(600000 * 1.139)),
+        pt(1200000, base + qint64(1200000 * 1.139))});
+    CHECK(frOk.ok && frOk.warning == TimeCalibration::FitWarning::RateInsane,
+          "1.139x -> RateInsane (beyond 1% sane bound)");
+    CHECK(TimeCalibration::rateChangeSelfConsistent(frOk),
+          "1.139x collinear -> self-consistent (non-realtime export)");
+
+    // 同一倍率但中间点被读错 30 秒 → 不成直线 → 不自洽（按误读处理）
+    const auto frOutlier = TimeCalibration::fit({
+        pt(0, base),
+        pt(600000, base + qint64(600000 * 1.139) + 30000),
+        pt(1200000, base + qint64(1200000 * 1.139))});
+    CHECK(!TimeCalibration::rateChangeSelfConsistent(frOutlier),
+          "outlier residual 30s -> not self-consistent");
+
+    // 两点：无残差信息 → 交用户确认（自洽）
+    const auto frTwo = TimeCalibration::fit({pt(0, base), pt(600000, base + 660000)});
+    CHECK(frTwo.ok && TimeCalibration::rateChangeSelfConsistent(frTwo),
+          "two points large rate -> ask user (self-consistent)");
+
+    // 荒谬倍率（日期/上下午读错典型 ~2x）→ 超可确认上限，一律按误读拒绝
+    const auto frDouble = TimeCalibration::fit({pt(0, base), pt(600000, base + 1200000)});
+    CHECK(qAbs(frDouble.rate - 2.0) < 1e-9
+              && !TimeCalibration::rateChangeSelfConsistent(frDouble),
+          "2.0x beyond confirmable bound -> still rejected as misread");
+}
+
+/// v1.18.x：单点错读（年份 2026→2022）自动剔除——三点里一个错点必须先剔再拟合
+static void testFitDroppingWorstOutlier()
+{
+    const qint64 base = kOff;          // 2026-09-20 15:00:13 附近
+    // 真实关系：wall = base + 1.139×stream（平台加速导出，顺德公安件实测）
+    auto mk = [&](qint64 stream) {
+        return pt(stream, base + qint64(double(stream) * 1.139));
+    };
+    QVector<TimeCalibration::Sample> s = {mk(1080), mk(3080), mk(2739326)};
+    // 中间那个点年份读错 4 年（2026→2022）
+    s[1].wallMs = base + qint64(3080.0 * 1.139)
+                  - qint64(4LL * 365 * 86400 * 1000);
+    const auto raw = TimeCalibration::fit(s);
+    CHECK(raw.warning != TimeCalibration::FitWarning::None,
+          "含错读点：直接拟合必报警（残差大/倍率荒谬）");
+    int dropped = -1;
+    const auto robust = TimeCalibration::fitDroppingWorstOutlier(s, &dropped);
+    CHECK(dropped == 1, "稳健拟合剔除错读点（下标 1）");
+    CHECK(robust.ok && robust.pointsUsed == 2, "剔点后仍有 2 点可用");
+    CHECK(std::fabs(robust.rate - 1.139) < 0.002,
+          qPrintable(QStringLiteral("剔点后速率≈1.139（实测 %1）")
+                         .arg(robust.rate, 0, 'f', 4)));
+
+    // 无错读：不得误剔
+    int dropped2 = -1;
+    const auto clean = QVector<TimeCalibration::Sample>{mk(1080), mk(3080), mk(2739326)};
+    const auto r2 = TimeCalibration::fitDroppingWorstOutlier(clean, &dropped2);
+    CHECK(dropped2 == -1 && r2.pointsUsed == 3, "无错读时不剔点");
+}
+
+/// 预检路由阈值必须与「正常录像」容差一致：否则 1%~15% 压缩件掉进无解缝隙
+static void testVariableRateRouting()
+{
+    CHECK(PiecewiseTimeMap::isVariableRate(1.139),
+          "1.139x -> variable-rate (time reconstruction)");
+    CHECK(PiecewiseTimeMap::isVariableRate(0.98), "0.98x -> variable-rate");
+    CHECK(!PiecewiseTimeMap::isVariableRate(1.005), "1.005x -> normal recording");
+    CHECK(!PiecewiseTimeMap::isVariableRate(0.995), "0.995x -> normal recording");
+}
+
+/// v1.18.x（2026-09-26 顺德件「校时后还是错的」根因回归）：第 1 步结果落工作面的
+/// 唯一门控。第 2 步「对真实时间」必须走同一实现——否则它落库旧工作面，把刚算出的
+/// 三点结果静默丢弃（时间轴永远按 rate=1.0 走）。
+static void testApplyFitDecision()
+{
+    const qint64 base = 1789887613000;   // 09-20 15:00:13（实测复现值）
+    const auto mk = [&](qint64 stream) {
+        return pt(stream, base + qint64(double(stream) * 1.139));
+    };
+
+    // ① 自洽大倍率（非实时导出件）→ 应用速率 + 标变速
+    TimeCalibration plan;
+    plan.source = TimeCalibration::Source::Ocr;
+    plan.dateKnown = true;
+    plan.samples = QVector<TimeCalibration::Sample>{mk(1080), mk(1370722), mk(2739326)};
+    plan.applyFit(TimeCalibration::fit(plan.samples));
+    CHECK(!plan.rateApplied, "域层 applyFit 仍判 insane（不改语义）");
+    TimeCalibration::applyFitDecision(plan, /*noDriftCorrection=*/false);
+    CHECK(plan.rateApplied && plan.speedVariant,
+          "自洽 1.139x → 应用速率并标变速（按此倍率校时同款）");
+    CHECK(std::fabs(plan.rate - 1.139) < 0.002, "落库速率≈1.139");
+
+    // ② 「不校正时钟快慢」勾选 → 只定基准，速率不应用
+    TimeCalibration nodrift = plan;
+    nodrift.rateApplied = false;
+    nodrift.speedVariant = false;
+    TimeCalibration::applyFitDecision(nodrift, /*noDriftCorrection=*/true);
+    CHECK(!nodrift.rateApplied, "勾选不校正 → rateApplied=false（用户意图优先）");
+
+    // ③ 不自洽的大倍率（野点 30s）→ 不应用速率
+    TimeCalibration bad;
+    bad.source = TimeCalibration::Source::Ocr;
+    bad.samples = QVector<TimeCalibration::Sample>{
+        mk(1080), pt(1370722, base + qint64(1370722.0 * 1.139) + 30000),
+        mk(2739326)};
+    bad.applyFit(TimeCalibration::fit(bad.samples));
+    TimeCalibration::applyFitDecision(bad, /*noDriftCorrection=*/false);
+    CHECK(!bad.rateApplied, "不自洽大倍率 → 不应用速率（仍当误读拒）");
+
+    // ④ 正常录像（rate≈1）→ 保持 applyFit 判定（显著才应用）
+    TimeCalibration normal;
+    normal.source = TimeCalibration::Source::Ocr;
+    normal.samples = QVector<TimeCalibration::Sample>{
+        pt(0, base), pt(600000, base + 600000), pt(1200000, base + 1200000)};
+    normal.applyFit(TimeCalibration::fit(normal.samples));
+    TimeCalibration::applyFitDecision(normal, /*noDriftCorrection=*/false);
+    CHECK(!normal.rateApplied, "钟准（无显著漂移）→ 不应用速率，只定基准");
+}
+
+/// v1.18.x 回归（顺德件「重新导入还是不行」的第 2 步落库路径）：
+/// 第 2 步（对真实时间）落库前必须并入未应用的第 1 步结果，
+/// 否则旧工作面（实测：继承来的 2 点 rate=1.0）被当结果写进 .vla。
+/// v1.18.x 现场值回归（2026-09-26 顺德 JA382 平台导出件，应用实抽的三帧原值）：
+/// 该片**内部分段速率有波动**（逐段 1.10~1.17），三点对全局直线有 1~3 秒残差——
+/// 旧门限 3s 会把这个正常点当「错读」剔掉（剔完只剩 2 点，共线校验失效）。
+/// P-98 秒级跳变对齐表：插值、反解、优先级、序列化往返
+static void testTickAnchorTable()
+{
+    // 构造一段「加速导出」序列：流内每 ~900ms 走 1 个画面秒，含 +2 跳秒
+    const qint64 w0 = 1789887613000;   // 15:00:13
+    TimeCalibration c;
+    c.source = TimeCalibration::Source::Ocr;
+    c.dateKnown = true;
+    c.offsetMs = w0;
+    c.rate = 1.14;
+    c.rateApplied = true;              // 仿射也有值 → 验证 tick 优先级
+    c.samples = QVector<TimeCalibration::Sample>{pt(1080, w0), pt(2739326, w0 + 3120000)};
+    QVector<qint64> streams{1080, 2000, 2900, 3800, 4700};
+    for (int i = 0; i < streams.size(); ++i)
+        c.tickAnchors.append(qMakePair(streams[i], w0 + i * 1000));
+    c.tickSkippedSeconds = 323.0;
+
+    CHECK(c.tickMode(), "tick: 表非空即生效");
+    CHECK(c.isEffective(), "tick: 有效校时");
+    // 段内线性插值（锚点之间）
+    CHECK(c.wallMsOf(1080) == w0, "tick: 首锚精确");
+    CHECK(c.wallMsOf(4700) == w0 + 4000, "tick: 末锚精确");
+    CHECK(c.wallMsOf(2450) == w0 + 1000 + 500, "tick: 段内插值（2500 处应 +1500）");
+    // 范围外按**端部相邻段斜率**延伸（不夹取成常量；P2-1：不能用 1.0）
+    // 本用例锚点间隔 900~920ms→1s，端部斜率 ≈1.111
+    {
+        const qint64 d0 = c.wallMsOf(0) - w0;      // 负值：首锚前
+        const qint64 d1 = c.wallMsOf(6000) - (w0 + 4000);
+        CHECK(d0 < 0 && d0 > -1300 && d0 < -1080,
+              qPrintable(QStringLiteral("tick: 首锚前按斜率延伸（%1ms）").arg(d0)));
+        CHECK(d1 > 1300 && d1 < 1600,
+              qPrintable(QStringLiteral("tick: 末锚后按斜率延伸（%1ms）").arg(d1)));
+    }
+    // 反解往返
+    for (qint64 s : {qint64(1080), qint64(2450), qint64(4700)}) {
+        const qint64 back = c.streamMsOf(c.wallMsOf(s));
+        CHECK(std::llabs(back - s) <= 1,
+              qPrintable(QStringLiteral("tick: 往返 %1 → %2").arg(s).arg(back)));
+    }
+    // 仿射被秒级表覆盖（同样输入两者结果不同）
+    TimeCalibration affine = c;
+    affine.tickAnchors.clear();
+    CHECK(affine.wallMsOf(2450) != c.wallMsOf(2450),
+          "tick: 秒级表优先于仿射");
+
+    // 序列化往返（delta 编码）
+    const TimeCalibration r = TimeCalibration::fromJson(c.toJson());
+    CHECK(r.tickAnchors.size() == c.tickAnchors.size(), "tick: 往返锚点数一致");
+    bool same = r.tickAnchors.size() == c.tickAnchors.size();
+    for (int i = 0; same && i < r.tickAnchors.size(); ++i)
+        same = (r.tickAnchors.at(i) == c.tickAnchors.at(i));
+    CHECK(same, "tick: 往返锚点逐项一致");
+    CHECK(std::fabs(r.tickSkippedSeconds - 323.0) < 0.5, "tick: 跳秒数往返");
+    CHECK(r.wallMsOf(2450) == c.wallMsOf(2450), "tick: 往返后换算一致");
+
+    // 少于 2 项不生效（退回仿射/分段）
+    TimeCalibration one;
+    one.source = TimeCalibration::Source::Ocr;
+    one.dateKnown = true;
+    one.offsetMs = w0;
+    one.tickAnchors.append(qMakePair(qint64(0), w0));
+    CHECK(!one.tickMode(), "tick: 单项不成表");
+}
+
+/// v1.18.x 现场值回归（2026-09-27 calib_debug.log 实录）：ROI 切掉年份末位 →
+/// OCR 间歇把 2026 读成 2023 → 旧逻辑「残差最大剔除」反而剔掉正确的 15:00:17，
+/// 剩下 2 点算出 34583 倍荒谬速率 → 整单被拒（用户看到「V14 校时不成功」）。
+/// 修：日期合理性过滤（中位数 ±1 天）先剔错读点，再用剩下的点拟合。
+static void testImplausibleDateDropped()
+{
+    const auto ms = [](int y, int mo, int d, int h, int mi, int sec) {
+        return QDateTime(QDate(y, mo, d), QTime(h, mi, sec), Qt::LocalTime)
+            .toMSecsSinceEpoch();
+    };
+    QVector<TimeCalibration::Sample> s{
+        pt(1080, ms(2023, 9, 20, 15, 0, 13)),      // ← 错读（应为 2026）
+        pt(5080, ms(2026, 9, 20, 15, 0, 17)),
+        pt(2739326, ms(2026, 9, 20, 15, 52, 13))};
+
+    // 未过滤时：旧逻辑剔掉的是「正确点」，速率荒谬（复现现场）
+    int dropped = -1;
+    const auto bad = TimeCalibration::fitDroppingWorstOutlier(s, &dropped);
+    CHECK(!bad.rateSane,
+          qPrintable(QStringLiteral("现场复现：未过滤时速率荒谬（%1）").arg(bad.rate)));
+
+    // 过滤后：错读点被剔，剩下两点拟合出正确倍率
+    QVector<TimeCalibration::Sample> sane = s;
+    const int n = TimeCalibration::dropImplausibleDates(&sane);
+    CHECK(n == 1 && sane.size() == 2,
+          qPrintable(QStringLiteral("日期过滤：剔 %1 点，剩 %2").arg(n).arg(sane.size())));
+    const auto good = TimeCalibration::fit(sane);
+    CHECK(good.ok && std::fabs(good.rate - 1.1396) < 0.005,
+          qPrintable(QStringLiteral("过滤后倍率≈1.1396（实测 %1）").arg(good.rate)));
+    CHECK(TimeCalibration::rateChangeSelfConsistent(good),
+          "过滤后判自洽（非实时导出件）→ 可自动应用");
+
+    // 真变速/正常件不受影响（日期一致时一点不剔）
+    QVector<TimeCalibration::Sample> same{
+        pt(1080, ms(2026, 9, 20, 15, 0, 13)),
+        pt(1370722, ms(2026, 9, 20, 15, 26, 14)),
+        pt(2739326, ms(2026, 9, 20, 15, 52, 13))};
+    CHECK(TimeCalibration::dropImplausibleDates(&same) == 0,
+          "日期一致时不过滤（不动正常/变速件）");
+}
+
+/// v1.18.x 现场值回归（2026-09-28 顺德 V18 实录）：框切掉小时前导位 →
+/// OSD 15:00:02 读成 `5:00:02`（单位数小时）→ 与低置信尾点一起把中间**正确**的
+/// 15:33:54 挤成离群 → 剩下错头点当锚 → 时间轴偏 10 小时（用户截图实证）。
+static void testShortHourStructInvalid()
+{
+    const auto ms = [](int h, int mi, int sec) {
+        return QDateTime(QDate(2026, 9, 20), QTime(h, mi, sec), Qt::LocalTime)
+            .toMSecsSinceEpoch();
+    };
+    // 结构检查：单位数小时判可疑；正常两位小时不受影响
+    CHECK(TimeCalibration::rawTextHourShort(
+              QStringLiteral("2026年09月20 星期日 5:00:02")),
+          "结构检查：`5:00:02` 判为可疑（前导位被切）");
+    CHECK(!TimeCalibration::rawTextHourShort(
+              QStringLiteral("2026年09月20 星期日 15:00:02")),
+          "结构检查：`15:00:02` 正常");
+    CHECK(!TimeCalibration::rawTextHourShort(
+              QStringLiteral("2026年09月20 星期日 16:31:18")),
+          "结构检查：`16:31:18` 正常");
+
+    QVector<TimeCalibration::Sample> s{
+        pt(0, ms(5, 0, 2)),          // 错读（真值 15:00:02）
+        pt(2030931, ms(15, 33, 54)), // 正确
+        pt(4657834, ms(16, 31, 18))};
+    s[0].rawText = QStringLiteral("2026年09月20 星期日 5:00:02");
+    s[1].rawText = QStringLiteral("2026年09月20 星期日 15:33:54");
+    s[2].rawText = QStringLiteral("2026年09月20 星期日 16:31:18");
+
+    // 未过滤：旧逻辑把「正确的中间点」剔掉，剩下错点当锚（复现现场 10 小时偏差）
+    int dropped = -1;
+    const auto bad = TimeCalibration::fitDroppingWorstOutlier(s, &dropped);
+    CHECK(dropped != 0,
+          qPrintable(QStringLiteral("现场复现：未过滤时剔掉的是 %1 号点（非错读点）")
+                         .arg(dropped)));
+
+    // ★ 修复（V18 真正需要的）：用其余两点外推 → 在 {5, 15} 里挑近的 → 15:00:02
+    QVector<TimeCalibration::Sample> fixed = s;
+    const int nf = TimeCalibration::repairShortHourSamples(&fixed);
+    CHECK(nf == 1, qPrintable(QStringLiteral("短小时修复：修 %1 条").arg(nf)));
+    CHECK(fixed.at(0).wallMs == ms(15, 0, 2),
+          qPrintable(QStringLiteral("修后首点=15:00:02（实测 %1）")
+                         .arg(QDateTime::fromMSecsSinceEpoch(fixed.at(0).wallMs)
+                                  .toString(QStringLiteral("HH:mm:ss")))));
+    CHECK(fixed.at(0).rawText.contains(QStringLiteral("5:00:02")),
+          "修复保留 OCR 原文（取证口径），仅改派生值并标 ⚠");
+    CHECK(fixed.at(0).ocrSuspicious, "修复点标 ocrSuspicious（UI 显示 ⚠）");
+    const auto f3 = TimeCalibration::fit(fixed);
+    CHECK(f3.ok && f3.rate > 1.0 && f3.rate < 1.4,
+          qPrintable(QStringLiteral("三点（含修复点）速率≈1.18（实测 %1）").arg(f3.rate)));
+    // 三点不共线（前段速率≈1.00、后段≈1.31），最小二乘直线在片头有 ~2 分钟残差
+    // ——这是**片内变速**，由自动触发的秒级跳变对齐收拾；本断言只锁「不再差 10 小时」。
+    const double offMin3 = (f3.offsetMs - ms(15, 0, 2)) / 60000.0;
+    CHECK(std::fabs(offMin3) < 5.0,
+          qPrintable(QStringLiteral("修后锚点回到 15:00 附近（实测差 %1 分钟；"
+                                    "修复前 -600 分钟）").arg(offMin3, 0, 'f', 1)));
+
+    // 对照：不走修复、只剔结构无效点 → 剩两条正确点，锚点不再来自错读
+    QVector<TimeCalibration::Sample> sane = s;
+    const int n = TimeCalibration::dropStructurallyInvalid(&sane);
+    CHECK(n == 1 && sane.size() == 2,
+          qPrintable(QStringLiteral("结构过滤：剔 %1 点，剩 %2").arg(n).arg(sane.size())));
+    const auto good = TimeCalibration::fit(sane);
+    CHECK(good.ok && good.rate > 0.5 && good.rate < 2.0,
+          qPrintable(QStringLiteral("过滤后速率落入合理域（实测 %1）").arg(good.rate)));
+    // 锚点不再落在错读的 05:00 上：剩下两点都在**后半段**（该段速率 ≈1.31），
+    // 外推到片头天然有 ~10 分钟残差 —— 这属「片内变速」，由自动触发的
+    // **秒级跳变对齐**收拾；本断言只锁住「不再炸成 10 小时」。
+    const double offMin = (good.offsetMs - ms(15, 0, 2)) / 60000.0;
+    CHECK(std::fabs(offMin) < 60.0,
+          qPrintable(QStringLiteral("过滤后锚点落在 15:00 附近（实测差 %1 分钟；"
+                                    "修复前为 -600 分钟）").arg(offMin, 0, 'f', 1)));
+    CHECK(std::fabs(offMin) > 1.0,
+          "tick: 残差 >1 分钟 → 属片内变速（应由秒级对齐接手，用例留档）");
+}
+
+static void testFieldRateWobbleNotDropped()
+{
+    // 应用 20:17 那次实际抽到的三帧（均人工核过可读）
+    const auto mkWall = [](int h, int m, int s) {
+        return QDateTime(QDate(2026, 9, 20), QTime(h, m, s), Qt::LocalTime)
+            .toMSecsSinceEpoch();
+    };
+    QVector<TimeCalibration::Sample> s{
+        pt(3080, mkWall(15, 0, 15)),
+        pt(923201, mkWall(15, 17, 41)),
+        pt(2737326, mkWall(15, 52, 11))};
+
+    const auto fr = TimeCalibration::fit(s);
+    CHECK(fr.ok && fr.pointsUsed == 3, "现场件：三点均可用");
+    CHECK(std::fabs(fr.rate - 1.1397) < 0.001,
+          qPrintable(QStringLiteral("现场件：全局倍率≈1.1397（实测 %1）").arg(fr.rate)));
+    CHECK(fr.maxResidualMs < TimeCalibration::kOutlierResidualMs,
+          qPrintable(QStringLiteral("现场件：秒级残差（%1ms）不得超阀值")
+                         .arg(fr.maxResidualMs)));
+    int dropped = -1;
+    const auto robust = TimeCalibration::fitDroppingWorstOutlier(s, &dropped);
+    CHECK(dropped == -1 && robust.pointsUsed == 3,
+          "现场件：秒级速率波动不得被当错读剔除（剔了就没共线校验了）");
+    CHECK(TimeCalibration::rateChangeSelfConsistent(fr),
+          "现场件：判为自洽（非实时导出件）→ 可自动应用");
+}
+
+static void testAbsorbPendingFit()
+{
+    const qint64 base = 1789887613000;
+    const auto mk = [&](qint64 stream) {
+        return pt(stream, base + qint64(double(stream) * 1.139));
+    };
+
+    // 未应用的第 1 步结果：三点共线 1.139×
+    TimeCalibration fit;
+    fit.source = TimeCalibration::Source::Ocr;
+    fit.dateKnown = true;
+    fit.samples = QVector<TimeCalibration::Sample>{mk(1080), mk(1370722), mk(2739326)};
+    fit.applyFit(TimeCalibration::fit(fit.samples));
+
+    // 旧工作面：实测那种「2 点相隔 2 秒、rate=1.0」（重新导入继承来的）
+    TimeCalibration stale;
+    stale.source = TimeCalibration::Source::Ocr;
+    stale.dateKnown = true;
+    stale.samples = QVector<TimeCalibration::Sample>{mk(3080), mk(5080)};
+    stale.applyFit(TimeCalibration::fit(stale.samples));
+
+    // ① pending → 并入，且速率被应用（时间轴从「每一刻都偏」回到正确）
+    TimeCalibration working = stale;
+    CHECK(TimeCalibration::absorbPendingFit(working, fit, /*fitPending=*/true,
+                                            /*noDriftCorrection=*/false),
+          "pending 三点结果 → 并入工作面");
+    CHECK(working.rateApplied && working.speedVariant,
+          "并入后速率已应用（非实时导出件 1.139×）");
+    CHECK(working.samples.size() == 3, "并入的是第 1 步的三点结果，不是旧的两点");
+    CHECK(std::fabs(working.rate - 1.139) < 0.002, "并入后 rate≈1.139");
+    CHECK(working.wallMsOf(2739326)
+              == base + qint64(2739326.0 * 1.139) + 0
+              || std::llabs(working.wallMsOf(2739326)
+                            - (base + qint64(2739326.0 * 1.139))) <= 1,
+          "尾点墙钟=15:52:13（正确口径）");
+
+    // ② 未勾选不校正 / 勾选 → 只定基准（沿用第 1 步结果但不改速率）
+    TimeCalibration nodrift = stale;
+    CHECK(TimeCalibration::absorbPendingFit(nodrift, fit, true, true),
+          "勾选不校正也仍然并入基准");
+    CHECK(!nodrift.rateApplied, "勾选不校正 → rateApplied=false");
+    CHECK(nodrift.samples.size() == 3, "勾选不校正 → 仍然是第 1 步的三点");
+
+    // ③ 无 pending（用户只做了第 1 步手动录入）→ 不动工作面
+    TimeCalibration manual = stale;
+    manual.offsetMs = 123456;
+    CHECK(!TimeCalibration::absorbPendingFit(manual, fit, /*fitPending=*/false, false),
+          "无 pending → 不并入");
+    CHECK(manual.offsetMs == 123456, "不并入时工作面保持原样");
+
+    // ④ 分段重建结果不是「三点待应用」→ 不并入（走 piecewiseMode 分支）
+    TimeCalibration pw = fit;
+    pw.piecewise.segments.append(TimeSegment{0, base, 1.0});
+    pw.piecewise.streamEndMs = 2739326;
+    pw.piecewiseApplied = true;
+    TimeCalibration pwWorking = stale;
+    CHECK(!TimeCalibration::absorbPendingFit(pwWorking, pw, true, false),
+          "分段模式 → 不并入");
+
+    // ⑤ 非法 fit → 不并入
+    TimeCalibration empty;
+    TimeCalibration keep = stale;
+    CHECK(!TimeCalibration::absorbPendingFit(keep, empty, true, false),
+          "空/非法第 1 步结果 → 不并入");
+}
+
 int main(int argc, char *argv[])
 {
     QCoreApplication app(argc, argv);
@@ -453,6 +861,15 @@ int main(int argc, char *argv[])
     testNoisyStrongDrift();
     testOutlierExcludeRefit();
     testInsaneRateRejected();
+    testRateChangeSelfConsistent();
+    testApplyFitDecision();
+    testAbsorbPendingFit();
+    testFieldRateWobbleNotDropped();
+    testImplausibleDateDropped();
+    testShortHourStructInvalid();
+    testTickAnchorTable();
+    testFitDroppingWorstOutlier();
+    testVariableRateRouting();
     testExcludeDownToSingle();
     testSameStreamPosition();
     testRoundTrip();

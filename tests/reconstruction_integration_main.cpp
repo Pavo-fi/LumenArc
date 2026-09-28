@@ -63,6 +63,10 @@ int main(int argc, char **argv)
     CalibrationService service(nullptr);
     for (int i = 2; i < argc; ++i) {
         const QString a = QString::fromLocal8Bit(argv[i]);
+        if (a == QLatin1String("--roi")) {
+            ++i;              // 消费其值（否则会被误当 python 路径）
+            continue;
+        }
         if (!a.startsWith(QLatin1String("--")))
             service.setPythonExecutable(a);
     }
@@ -87,7 +91,82 @@ int main(int argc, char **argv)
                          fprintf(stderr, "  stage: %s\n", qPrintable(stage));
                      });
 
+    // P-98 秒级跳变对齐（--tick）：稀疏锚点 → 像素盯秒位跳变 → 秒级映射表
+    const bool tickMode = argsList.contains(QStringLiteral("--tick"));
+    // 可选 --roi x,y,w,h（归一化；QRectF 语义）——P-98 秒位定位需框选区域
+    QRectF tickRoi;
+    {
+        const int ri = argsList.indexOf(QStringLiteral("--roi"));
+        if (ri >= 0 && ri + 1 < argsList.size()) {
+            const QStringList p = argsList.at(ri + 1).split(QLatin1Char(','));
+            if (p.size() == 4)
+                tickRoi = QRectF(p[0].toDouble(), p[1].toDouble(),
+                                 p[2].toDouble(), p[3].toDouble());
+        }
+    }
+    QObject::connect(&service, &CalibrationService::tickAlignReady,
+                     [&](const QString &, const TimeCalibration &cal) {
+                         result = cal;
+                         done = true;
+                         app.quit();
+                     });
+    QObject::connect(&service, &CalibrationService::tickAlignFailed,
+                     [&](const QString &, const QString &e) {
+                         error = QStringLiteral("tick: ") + e;
+                         done = true;
+                         app.quit();
+                     });
+
     fprintf(stderr, "video: %s\n", qPrintable(video));
+    if (tickMode) {
+        if (!tickRoi.isValid()) {
+            fprintf(stderr, "FAIL: --tick 需 --roi x,y,w,h（归一化）\n");
+            return 2;
+        }
+        service.runTickAlign(video, 0, tickRoi);
+        // 失败可能是同步发生的（如 python 缺失）：已 done 则不再进事件循环
+        // ——否则 quit() 在 exec() 之前被吃掉，白等到定时器（实测白等 10/30 分钟）
+        if (!done) {
+            QTimer::singleShot(600000, &app, &QCoreApplication::quit);
+            app.exec();
+        }
+        if (!done) {
+            fprintf(stderr, "FAIL: tick align timeout\n");
+            return 1;
+        }
+        if (!error.isEmpty()) {
+            fprintf(stderr, "FAIL: %s\n", qPrintable(error));
+            return 1;
+        }
+        CHECK(result.tickMode(), "tick: 秒级表生效");
+        CHECK(result.isEffective(), "tick: 有效校时");
+        CHECK(result.tickAnchors.size() >= 500,
+              qPrintable(QStringLiteral("tick: 锚点数 %1 >= 500")
+                             .arg(result.tickAnchors.size())));
+        CHECK(result.rate > 1.05 && result.rate < 1.30,
+              qPrintable(QStringLiteral("tick: 倍率 %1 合理")
+                             .arg(result.rate, 0, 'f', 4)));
+        // 插值自洽：锚点处精确、反解往返 ≤1ms
+        const auto a0 = result.tickAnchors.first();
+        const auto a1 = result.tickAnchors.last();
+        CHECK(result.wallMsOf(a0.first) == a0.second, "tick: 首锚精确");
+        CHECK(result.wallMsOf(a1.first) == a1.second, "tick: 末锚精确");
+        CHECK(a1.second > a0.second, "tick: 墙钟单调递增");
+        int back = 0;
+        const int stride = qMax(1, result.tickAnchors.size() / 10);
+        for (int i = 0; i < result.tickAnchors.size(); i += stride) {
+            const auto a = result.tickAnchors.at(i);
+            if (std::llabs(result.streamMsOf(result.wallMsOf(a.first)) - a.first) <= 1)
+                ++back;
+        }
+        CHECK(back >= 9, qPrintable(QStringLiteral("tick: 往返一致 %1/10").arg(back)));
+        fprintf(stderr, "tick: anchors=%d rate=%.4f skipped=%.0fs span=%.0fs\n",
+                result.tickAnchors.size(), result.rate, result.tickSkippedSeconds,
+                (a1.second - a0.second) / 1000.0);
+        fprintf(stderr, "reconstruction_integration(tick): %d checks, %d failures\n",
+                g_checks, g_failures);
+        return g_failures ? 1 : 0;
+    }
     service.runReconstruction(video, 0);
     // 看门狗：25 分钟（粗采样 60 点 + 加密 160 点，每点 ~3s）。
     // --expect-normal 正常文件无加密阶段，5 分钟足够；挂起即失败（P0 回归）。

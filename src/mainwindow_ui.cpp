@@ -1350,7 +1350,8 @@ void MainWindow::buildServices()
         [this](const QString &videoPath) {
             return m_caseManager->evidenceDirFor(videoPath);
         });
-
+    // P-98：秒级对齐（2~4 分钟长任务）结果落库接线——关窗/切视频也不丢结果
+    wireTickAlignPersistence();
 }
 
 /// @brief 案件模式 UI：案件折叠占位条 + CaseDock + 折叠条 + 打开面板 + CaseManager 接线 + 状态栏📁
@@ -1498,7 +1499,34 @@ void MainWindow::buildCaseUi(const QString &collapseBtnStyle)
             m_caseDock->refreshTree();
     };
     connect(m_caseManager, &CaseManager::videoAdded, this, refreshDock);
-    connect(m_caseManager, &CaseManager::videoRemoved, this, refreshDock);
+    // v1.18.x §98：移除视频 = 丢弃该路径的会话内存状态（校时/帧选回忆/分析快照）。
+    // 此前 VideoStateManager::removeState 全库零调用 → 同路径重新导入会把旧校时
+    // 「复活」（实测：顺德件移除 V13 后导入为 V14，仍带着旧的 2 点 rate=1.0 校准）。
+    connect(m_caseManager, &CaseManager::videoRemoved, this,
+            [this, refreshDock](const QString &, const QString &originalPath,
+                                const QString &effectivePath) {
+                const QString cur = m_sessionMgr->currentVideoPath();
+                bool clearedCurrent = false;
+                for (const QString &p : {originalPath, effectivePath}) {
+                    if (p.isEmpty())
+                        continue;
+                    if (!cur.isEmpty()
+                        && QString::compare(QDir::cleanPath(p),
+                                            QDir::cleanPath(cur),
+                                            Qt::CaseInsensitive) == 0)
+                        clearedCurrent = true;
+                    m_sessionMgr->removeState(p);
+                }
+                if (clearedCurrent) {
+                    m_calibration = TimeCalibration();
+                    m_chartPanel->setCalibration(m_calibration);
+                    showOperationStatus(lang(
+                        "该视频已移出案件，内存中的校时/分析已清除（文件仍在播放）",
+                        "Video removed from case: in-memory calibration/analysis "
+                        "cleared (playback continues)"));
+                }
+                refreshDock();
+            });
     connect(m_caseManager, &CaseManager::videoInfoChanged, this, refreshDock);
     connect(m_caseManager, &CaseManager::hashProgress, this, refreshDock);
     // v1.3.0 M2 任务8：前处理会话登记/sidecar 归类等落盘即刷新——

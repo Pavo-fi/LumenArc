@@ -106,7 +106,9 @@ private slots:
     /// 曲线分析区合成 PNG，OSD 烧录标签/时间码，入案件 snapshots/。
     void onSnapshotQuick();
     void onExportSegmentClip();   // 合成导出入口（v1.16.2 起：多段+双模式；单段全保真走旧复合路径）
-    void startComposeExport(const SegmentExportEngine::Params &params);
+    void startComposeExport(SegmentExportEngine::Params params);   // 传值：放大镜所见回填后再分发（见 mainwindow_export.cpp）
+    /// P-98：秒级对齐结果落库接线（无对话框时也持久化，防长任务结果丢失）
+    void wireTickAlignPersistence();
     /// P-68：导出面板「开始导出」执行体（底图采集 + 引擎启动）
     void startSegmentExport(const speedplan::SpeedPlan &plan, bool burnOsd,
                             const QString &outPath);

@@ -21,6 +21,7 @@ extern "C" {
 #include "infrastructure/segment_export_engine.h"
 #include "infrastructure/compose_render.h"
 #include "infrastructure/tool_paths.h"
+#include "displayadjust.h"          // 放大镜显示链 LUT（导出右半同表）
 #include "domain/timeline_model.h"
 #include "domain/sync_model.h"
 #include <QTemporaryDir>
@@ -384,7 +385,6 @@ static void testComposeEndToEnd()
     pp.outFps = 5.0;
     pp.canvas = QSize(640, 480);
     pp.burnOsd = true;          // 流内时间回落（无校正）
-    pp.demoWatermark = true;    // 强制角标
     pp.caseLabel = QStringLiteral("TEST-CASE");
     QFile::remove(pp.outputPath);
 
@@ -406,6 +406,581 @@ static void testComposeEndToEnd()
           QStringLiteral("compose e2e 时长≈2000ms（实测 %1）").arg(dur));
     CHECK(!hasAudio, "compose e2e 无音轨（basic.mp4 源无音频）");
     QFile::remove(pp.outputPath);
+}
+
+// ---------------------------------------------------------------------------
+// 放大镜同框导出（v1.18.x 所见即所得）：右半 = 放大镜显示链（裁剪→旋转→LUT）
+// ---------------------------------------------------------------------------
+/// 抽产物某时刻帧（PNG → QImage；失败返回空图）
+static QImage grabFrameAt(const QString &path, double atSec)
+{
+    QTemporaryDir dir;
+    if (!dir.isValid())
+        return QImage();
+    const QString png = dir.path() + QStringLiteral("/f.png");
+    QProcess p;
+    p.start(ToolPaths::findFfmpegPath(),
+            {QStringLiteral("-v"), QStringLiteral("error"),
+             QStringLiteral("-ss"), QString::number(atSec, 'f', 3),
+             QStringLiteral("-i"), path,
+             QStringLiteral("-frames:v"), QStringLiteral("1"),
+             QStringLiteral("-y"), png});
+    if (!p.waitForFinished(60000) || !QFile::exists(png))
+        return QImage();
+    return QImage(png);
+}
+
+/// 区域平均亮度（0..255；空区域返回 -1）
+static double regionMeanLuma(const QImage &img, const QRect &r)
+{
+    const QRect rc = r.intersected(img.rect());
+    if (rc.isEmpty())
+        return -1.0;
+    double sum = 0.0;
+    qint64 n = 0;
+    for (int y = rc.top(); y <= rc.bottom(); ++y)
+        for (int x = rc.left(); x <= rc.right(); ++x) {
+            const QRgb c = img.pixel(x, y);
+            sum += 0.299 * qRed(c) + 0.587 * qGreen(c) + 0.114 * qBlue(c);
+            ++n;
+        }
+    return n ? sum / double(n) : -1.0;
+}
+
+/// 同尺寸两区域 PSNR（dB；完全相同 → 99）
+static double regionPsnr(const QImage &a, const QRect &ra,
+                         const QImage &b, const QRect &rb)
+{
+    const int w = qMin(ra.width(), rb.width());
+    const int h = qMin(ra.height(), rb.height());
+    if (w <= 0 || h <= 0)
+        return -1.0;
+    double mse = 0.0;
+    for (int y = 0; y < h; ++y)
+        for (int x = 0; x < w; ++x) {
+            const QRgb ca = a.pixel(ra.x() + x, ra.y() + y);
+            const QRgb cb = b.pixel(rb.x() + x, rb.y() + y);
+            const double dr = qRed(ca) - qRed(cb);
+            const double dg = qGreen(ca) - qGreen(cb);
+            const double db = qBlue(ca) - qBlue(cb);
+            mse += (dr * dr + dg * dg + db * db) / 3.0;
+        }
+    mse /= double(w * h);
+    if (mse <= 1e-9)
+        return 99.0;
+    return 10.0 * std::log10(255.0 * 255.0 / mse);
+}
+
+/// 场景 1：单视频段 + 放大镜取景 + 非恒等画面调节 → 右半走显示链、左半原始像素；
+/// 场景 2：未开放大镜（对照）不受影响；场景 3：旋转 90 确实进管道。
+static void testComposeMagnifierSplit()
+{
+    const QString src = QStringLiteral("build_tmp/caltest/basic.mp4");
+    if (!QFile::exists(src)) {
+        qWarning() << "SKIP magnifier split e2e: no caltest asset";
+        return;
+    }
+    // 源 320x240：取景 120x90（与整幅同 4:3 → 左右内容矩形几何一致，便于逐区比对）
+    const QRect srcRect(100, 75, 120, 90);
+    DisplayAdjust adj;
+    adj.brightness = 25;                    // 非恒等 → 右半必须可量化地更亮
+    const QByteArray lut = adj.buildLut();
+    CHECK(lut.size() == 256, "magnifier: 非恒等调节产出 256 级 LUT");
+
+    auto runExport = [&](const QString &out, bool mag, int rotation) -> bool {
+        SegmentExportEngine::Params pp;
+        SegmentExportEngine::Params::ComposeSeg s;
+        s.sourcePath = src; s.inMs = 0; s.outMs = 2000;
+        pp.segments = {s};
+        pp.outputPath = out;
+        pp.outFps = 5.0;
+        pp.canvas = QSize(640, 480);
+        pp.burnOsd = false;      // 保持画面区纯净（OSD 会压在内容上）
+        if (mag) {
+            pp.magnifierPip = true;
+            pp.magnifierSrcRect = srcRect;
+            pp.magnifierRotation = rotation;
+            pp.magnifierZoom = 2.0;
+            pp.magnifierLut = lut;
+            pp.magnifierSourcePath = src;
+        }
+        QFile::remove(out);
+        SegmentExportEngine eng;
+        QSignalSpy spy(&eng, &SegmentExportEngine::finished);
+        eng.start(pp);
+        if (!spy.wait(90000) || spy.first().at(0).toBool() == false)
+            return false;
+        return QFile::exists(out);
+    };
+
+    const QString magOut = QStringLiteral("build_tmp/caltest/mag_split.mp4");
+    const QString plainOut = QStringLiteral("build_tmp/caltest/mag_split_plain.mp4");
+    const QString rotOut = QStringLiteral("build_tmp/caltest/mag_split_rot90.mp4");
+    CHECK(runExport(magOut, true, 0), "magnifier: 同框导出完成");
+    CHECK(runExport(plainOut, false, 0), "magnifier: 对照导出完成（未开放大镜）");
+    CHECK(runExport(rotOut, true, 90), "magnifier: 旋转 90 同框导出完成");
+
+    const QImage fMag = grabFrameAt(magOut, 0.2);
+    const QImage fPlain = grabFrameAt(plainOut, 0.2);
+    const QImage fRot = grabFrameAt(rotOut, 0.2);
+    CHECK(!fMag.isNull() && !fPlain.isNull() && !fRot.isNull(), "magnifier: 抽帧成功");
+    if (fMag.isNull() || fPlain.isNull() || fRot.isNull())
+        return;
+
+    // 版式与引擎同一公式（canvas 无面板 → videoRect 居中带 pad）
+    QRect vr, cr, sr;
+    SegmentExportEngine::layoutRects(QSize(640, 480), false, false, &vr, &cr, &sr);
+    const int halfW = vr.width() / 2 - 3;
+    const QRect leftPane(vr.x(), vr.y(), halfW, vr.height());
+    const QRect rightPane(vr.x() + halfW + 6, vr.y(), vr.width() - halfW - 6, vr.height());
+    CHECK(leftPane.width() > 0 && rightPane.width() > 0, "magnifier: 左右半矩形有效");
+    // 内容区：两半都是 4:3 等比居中（不是面板全高——避开上下黑边对均值的影响）
+    const int contentH = leftPane.width() * 240 / 320;
+    const int contentY = leftPane.y() + (leftPane.height() - contentH) / 2;
+    const QRect leftContent(leftPane.x(), contentY, leftPane.width(), contentH);
+    const QRect rightContent(rightPane.x(), contentY, rightPane.width(), contentH);
+
+    const double lMag = regionMeanLuma(fMag, leftContent);
+    const double rMag = regionMeanLuma(fMag, rightContent);
+    CHECK(rMag > lMag + 15.0,
+          QStringLiteral("magnifier: 右半走放大镜显示链 LUT（右 %1 vs 左 %2）")
+              .arg(rMag).arg(lMag));
+
+    // 源帧（同刻度）作为两半期望的参照
+    const QImage srcFrame = grabFrameAt(src, 0.2);
+    CHECK(!srcFrame.isNull(), "magnifier: 源帧抽帧成功");
+
+    // 对照（未开放大镜）：右半不得被 LUT 提亮
+    CHECK(regionMeanLuma(fPlain, rightContent) < rMag - 15.0,
+          QStringLiteral("magnifier: 未开放大镜不烧 LUT（对照右半 %1 vs 同框右半 %2）")
+              .arg(regionMeanLuma(fPlain, rightContent)).arg(rMag));
+
+    if (!srcFrame.isNull()) {
+        // 左半 == 源帧原始像素（未过 LUT，取证口径不变；仅编码损耗）
+        const QImage expLeft = srcFrame.scaled(leftPane.size(), Qt::KeepAspectRatio,
+                                               Qt::SmoothTransformation);
+        const QRect expLeftRect(leftPane.x() + (leftPane.width() - expLeft.width()) / 2,
+                                leftPane.y() + (leftPane.height() - expLeft.height()) / 2,
+                                expLeft.width(), expLeft.height());
+        const double psnrLeft = regionPsnr(fMag, expLeftRect, expLeft, expLeft.rect());
+        CHECK(psnrLeft > 20.0,
+              QStringLiteral("magnifier: 左半 == 原始像素（PSNR %1 dB）").arg(psnrLeft));
+
+        // 对照产物 = 满幅原图（旧口径逐位不变，无分屏）
+        const QImage expFull = srcFrame.scaled(vr.size(), Qt::KeepAspectRatio,
+                                               Qt::SmoothTransformation);
+        const QRect expFullRect(vr.x() + (vr.width() - expFull.width()) / 2,
+                                vr.y() + (vr.height() - expFull.height()) / 2,
+                                expFull.width(), expFull.height());
+        const double psnrFull = regionPsnr(fPlain, expFullRect, expFull, expFull.rect());
+        CHECK(psnrFull > 20.0,
+              QStringLiteral("magnifier: 未开放大镜 = 满幅原图（PSNR %1 dB）").arg(psnrFull));
+
+        // 右半内容 == 放大镜显示链（源帧裁剪 → 旋转 → LUT → 等比），容编码损耗
+        QImage expect = applyDisplayLut(srcFrame.copy(srcRect), lut);
+        const QImage expectPane = expect.scaled(rightPane.size(), Qt::KeepAspectRatio,
+                                                Qt::SmoothTransformation);
+        const QRect expRect(rightPane.x() + (rightPane.width() - expectPane.width()) / 2,
+                            rightPane.y() + (rightPane.height() - expectPane.height()) / 2,
+                            expectPane.width(), expectPane.height());
+        const double psnrRight = regionPsnr(fMag, expRect, expectPane, expectPane.rect());
+        CHECK(psnrRight > 20.0,
+              QStringLiteral("magnifier: 右半 == 裁剪+显示链（PSNR %1 dB）").arg(psnrRight));
+        // 错参照（未过 LUT 的裁剪）必须明显更差——防“右半其实照抄左半”假通过
+        const QImage wrong = srcFrame.copy(srcRect).scaled(rightPane.size(),
+                                                           Qt::KeepAspectRatio,
+                                                           Qt::SmoothTransformation);
+        const double psnrWrong = regionPsnr(fMag, expRect, wrong, wrong.rect());
+        CHECK(psnrWrong < psnrRight - 2.0,
+              QStringLiteral("magnifier: 错参照（无 LUT）明显更差（%1 vs %2 dB）")
+                  .arg(psnrWrong).arg(psnrRight));
+        // 旋转 90：同一参照下必须变差（旋转确实进了管道）
+        const double psnrRot = regionPsnr(fRot, expRect, expectPane, expectPane.rect());
+        CHECK(psnrRot < psnrRight - 3.0,
+              QStringLiteral("magnifier: 旋转 90 改变右半（%1 vs %2 dB）")
+                  .arg(psnrRot).arg(psnrRight));
+    }
+    for (const QString &f : {magOut, plainOut, rotOut})
+        QFile::remove(f);
+}
+
+// ---------------------------------------------------------------------------
+// 回归（2026-09-24 真机 4 路宫格“进度 0% 假死”）：源路径过期 + ffmpeg stderr 管道
+// ---------------------------------------------------------------------------
+/// 场景 A：时间线里的机位源文件已被移走（案内路径过期）→ 必须【快速类型化报错】。
+/// 真机事实：过期路径被当 -i 交给 ffmpeg，ffmpeg 的报错与开场信息写进无人读的
+/// stderr 管道（4096B）→ 阻塞在 stderr 写、永不读 stdin（ReadTransferCount=0 /
+/// WriteTransferCount=2366）→ 进度恒 0%，取消也无效。
+static void testComposeStaleSourceFailsFast()
+{
+    const QString src = QStringLiteral("build_tmp/caltest/basic.mp4");
+    if (!QFile::exists(src)) {
+        qWarning() << "SKIP stale-source: no caltest asset";
+        return;
+    }
+    const QString ghostDir = QStringLiteral("build_tmp/caltest/relocated_away_dir");
+    const QString ghost1 = ghostDir + QStringLiteral("/ghost_C11.mp4");
+    const QString ghost2 = ghostDir + QStringLiteral("/ghost_C06.mp4");
+    QFile::remove(ghost1);
+    QFile::remove(ghost2);
+    QDir(ghostDir).removeRecursively();   // 确保不存在（复刻“文件已搬走”）
+
+    auto mkLane = [&](const QString &path, const QString &name) {
+        SyncLaneData l;
+        l.id = name;
+        l.path = path;
+        l.displayName = name;
+        l.temporary = true;
+        l.durationMs = 2000;
+        return l;
+    };
+    SegmentExportEngine::Params::ComposeSeg seg;
+    seg.lanes = {mkLane(src, QStringLiteral("C01")), mkLane(ghost1, QStringLiteral("C11")),
+                 mkLane(src, QStringLiteral("C02")), mkLane(ghost2, QStringLiteral("C06"))};
+    seg.audioLane = 0;
+    seg.inMs = 0;
+    seg.outMs = 1000;
+    SegmentExportEngine::Params pp;
+    pp.segments = {seg};
+    pp.outputPath = QStringLiteral("build_tmp/caltest/stale_source_out.mp4");
+    pp.outFps = 5.0;
+    pp.canvas = QSize(640, 480);
+    pp.burnOsd = false;
+    QFile::remove(pp.outputPath);
+
+    SegmentExportEngine eng;
+    QSignalSpy spy(&eng, &SegmentExportEngine::finished);
+    QElapsedTimer t;
+    t.start();
+    eng.start(pp);
+    const bool got = spy.wait(20000);
+    CHECK(got, "stale-source: 20s 内必须给出结论（不得 0% 假死）");
+    if (!got)
+        return;
+    const QList<QVariant> a = spy.takeFirst();
+    CHECK(a.at(0).toBool() == false, "stale-source: 必须失败而非成功");
+    const QString msg = a.at(1).toString();
+    CHECK(msg.contains(QStringLiteral("源文件不存在")),
+          QStringLiteral("stale-source: 类型化错误文案（实测：%1）").arg(msg));
+    CHECK(msg.contains(QStringLiteral("ghost_C11"))
+              && msg.contains(QStringLiteral("C11")),
+          "stale-source: 报错点名到机位名与文件名（可操作）");
+    CHECK(!QFile::exists(pp.outputPath), "stale-source: 不落半成品");
+    CHECK(t.elapsed() < 20000, "stale-source: 快速失败（不启动 ffmpeg 空耗）");
+}
+
+/// 场景 B：4 路带音轨源（开场 stderr 远超过管道缓冲）必须正常出片。
+/// 断言依赖：合成源做成 1 视频+10 音频流 → 单路开场信息 ~1.1KB，4 路 ≈ 11.5KB » 4096B。
+static void testComposeManyInputsStderrNoDeadlock()
+{
+    const QString dir = QStringLiteral("build_tmp/caltest/many_inputs_lr_regression");
+    QDir().mkpath(dir);
+    const QString base = dir + QStringLiteral("/many_stream_src.mp4");
+    if (!QFile::exists(base)) {
+        QStringList a;
+        a << QStringLiteral("-v") << QStringLiteral("error") << QStringLiteral("-y")
+          << QStringLiteral("-f") << QStringLiteral("lavfi") << QStringLiteral("-i")
+          << QStringLiteral("testsrc2=size=320x240:rate=5:duration=2")
+          << QStringLiteral("-f") << QStringLiteral("lavfi") << QStringLiteral("-i")
+          << QStringLiteral("sine=frequency=440:duration=2")
+          << QStringLiteral("-map") << QStringLiteral("0:v");
+        for (int i = 0; i < 10; ++i)
+            a << QStringLiteral("-map") << QStringLiteral("1:a");
+        a << QStringLiteral("-c:v") << QStringLiteral("libx264")
+          << QStringLiteral("-preset") << QStringLiteral("ultrafast")
+          << QStringLiteral("-pix_fmt") << QStringLiteral("yuv420p")
+          << QStringLiteral("-c:a") << QStringLiteral("aac")
+          << QStringLiteral("-shortest") << base;
+        QProcess sp;
+        sp.start(ToolPaths::findFfmpegPath(), a);
+        if (!sp.waitForFinished(120000) || !QFile::exists(base)) {
+            qWarning() << "SKIP many-inputs: synth fail";
+            return;
+        }
+    }
+    QVector<SegmentExportEngine::Params::ComposeSeg> segs;
+    for (int i = 0; i < 4; ++i) {
+        const QString dst = QStringLiteral("%1/lumenarc_multi_source_input_video_number_%2_%3.mp4")
+                                .arg(dir).arg(i).arg(QString(40, QLatin1Char('p')));
+        if (!QFile::exists(dst) && !QFile::copy(base, dst)) {
+            qWarning() << "SKIP many-inputs: copy fail";
+            return;
+        }
+        SegmentExportEngine::Params::ComposeSeg s;
+        s.sourcePath = dst;
+        s.inMs = 0;
+        s.outMs = 1000;
+        segs << s;
+    }
+    SegmentExportEngine::Params pp;
+    pp.segments = segs;
+    pp.outputPath = QStringLiteral("build_tmp/caltest/many_inputs_out.mp4");
+    pp.outFps = 5.0;
+    pp.canvas = QSize(640, 480);
+    pp.burnOsd = false;
+    QFile::remove(pp.outputPath);
+    QFile::remove(pp.outputPath + QStringLiteral(".ffmpeg.log"));
+
+    SegmentExportEngine eng;
+    QSignalSpy spy(&eng, &SegmentExportEngine::finished);
+    eng.start(pp);
+    const bool got = spy.wait(90000);
+    CHECK(got, "many-inputs: 4 源导出 90s 内完成（stderr 管道不得写满卡死）");
+    if (!got)
+        return;
+    const QList<QVariant> a = spy.takeFirst();
+    CHECK(a.at(0).toBool(),
+          QStringLiteral("many-inputs: 导出成功（实测：%1）").arg(a.at(1).toString()));
+    bool hasAudio = false;
+    const qint64 dur = probeDurationMs(pp.outputPath, &hasAudio);
+    CHECK(qAbs(dur - 4000) <= 700,
+          QStringLiteral("many-inputs: 时长≈4000ms（实测 %1）").arg(dur));
+    CHECK(!QFile::exists(pp.outputPath + QStringLiteral(".ffmpeg.log")),
+          "many-inputs: 成功后不留 stderr 旁车日志");
+    QFile::remove(pp.outputPath);
+}
+
+/// 场景 C：源存在但不是媒体（ffmpeg 必失败）→ 必须报错 + 保留旁车日志（不静默、不挂住）
+/// 回归（2026-09-21 首轮诊断 / 2026-09-24 一并修）：多路宫格导出不得“画面定格”。
+/// 根因：SeqDecoder 拿【容器绝对 PTS】与【流内 0 基 target】比大小——DVR/NVR 流
+/// start_time 几万秒（实测 hiv00835=37533s）→ 首帧就判“已覆盖” → 每路只解 1 帧。
+/// 修法同 run()/runCompose 单源段：seek 与帧 PTS 都减容器起点。
+static double regionMeanAbsDiff(const QImage &a, const QRect &ra,
+                                const QImage &b, const QRect &rb)
+{
+    const int w = qMin(ra.width(), rb.width());
+    const int h = qMin(ra.height(), rb.height());
+    if (w <= 0 || h <= 0)
+        return -1.0;
+    double sum = 0.0;
+    for (int y = 0; y < h; ++y)
+        for (int x = 0; x < w; ++x) {
+            const QRgb ca = a.pixel(ra.x() + x, ra.y() + y);
+            const QRgb cb = b.pixel(rb.x() + x, rb.y() + y);
+            sum += (qAbs(qRed(ca) - qRed(cb)) + qAbs(qGreen(ca) - qGreen(cb))
+                    + qAbs(qBlue(ca) - qBlue(cb))) / 3.0;
+        }
+    return sum / double(w * h);
+}
+
+static void testComposeLanesOffsetPtsNotFrozen()
+{
+    // 造 2s@5fps 素材并人为把输出时间戳推到 90000s（复刻 DVR start_time 异常）
+    const QString dir = QStringLiteral("build_tmp/caltest/offset_pts_regression");
+    QDir().mkpath(dir);
+    struct Case { const char *name; qint64 offsetSec; };
+    const Case cases[2] = {{"offset_pts_src", 90000}, {"normal_pts_src", 0}};
+    const QRect sample = QRect(40, 30, 80, 60);   // 瓦片内部样区（避开覆盖条/OSD）
+    for (const Case &c : cases) {
+        const QString src = QStringLiteral("%1/%2.mp4").arg(dir, QLatin1String(c.name));
+        if (!QFile::exists(src)) {
+            QStringList a;
+            a << QStringLiteral("-v") << QStringLiteral("error") << QStringLiteral("-y")
+              << QStringLiteral("-f") << QStringLiteral("lavfi") << QStringLiteral("-i")
+              << QStringLiteral("testsrc2=size=320x240:rate=5:duration=2")
+              << QStringLiteral("-c:v") << QStringLiteral("libx264")
+              << QStringLiteral("-preset") << QStringLiteral("ultrafast")
+              << QStringLiteral("-pix_fmt") << QStringLiteral("yuv420p");
+            if (c.offsetSec > 0)
+                a << QStringLiteral("-output_ts_offset") << QString::number(c.offsetSec);
+            a << src;
+            QProcess sp;
+            sp.start(ToolPaths::findFfmpegPath(), a);
+            if (!sp.waitForFinished(60000) || !QFile::exists(src)) {
+                qWarning() << "SKIP offset-pts: synth fail" << c.name;
+                return;
+            }
+        }
+        // 双路宫格段（同一素材两路）1s 轴长
+        auto mkLane = [&](const QString &id) {
+            SyncLaneData l;
+            l.id = id;
+            l.path = src;
+            l.displayName = id;
+            l.temporary = true;
+            l.durationMs = 2000;
+            return l;
+        };
+        SegmentExportEngine::Params::ComposeSeg seg;
+        seg.lanes = {mkLane(QStringLiteral("L1")), mkLane(QStringLiteral("L2"))};
+        seg.audioLane = -1;
+        seg.inMs = 0;
+        seg.outMs = 1000;
+        SegmentExportEngine::Params pp;
+        pp.segments = {seg};
+        pp.outputPath = QStringLiteral("build_tmp/caltest/offset_pts_%1_out.mp4")
+                            .arg(QLatin1String(c.name));
+        pp.outFps = 5.0;
+        pp.canvas = QSize(640, 480);
+        pp.burnOsd = false;
+        QFile::remove(pp.outputPath);
+        SegmentExportEngine eng;
+        QSignalSpy spy(&eng, &SegmentExportEngine::finished);
+        eng.start(pp);
+        if (!spy.wait(60000) || spy.first().at(0).toBool() == false) {
+            CHECK(false, QStringLiteral("offset-pts(%1): 宫格导出失败")
+                             .arg(QLatin1String(c.name)));
+            continue;
+        }
+        // 瓦片内部：t=0.2s 与 t=0.8s 必须不同（定格仅差覆盖条/OSD，均不在样区内）
+        const QImage f1 = grabFrameAt(pp.outputPath, 0.2);
+        const QImage f2 = grabFrameAt(pp.outputPath, 0.8);
+        CHECK(!f1.isNull() && !f2.isNull(),
+              QStringLiteral("offset-pts(%1): 抽帧成功").arg(QLatin1String(c.name)));
+        if (!f1.isNull() && !f2.isNull()) {
+            QRect vr, cr, sr;
+            SegmentExportEngine::layoutRects(QSize(640, 480), false, false, &vr, &cr, &sr);
+            const int cellW = vr.width() / 2;
+            const QRect tile1(vr.x() + 2, vr.y() + 2, cellW - 4, vr.height() - 4);
+            const QRect inner = sample.translated(tile1.x() + cellW / 4, tile1.y() + tile1.height() / 3);
+            const double d = regionMeanAbsDiff(f1, inner, f2, inner);
+            CHECK(d > 6.0,
+                  QStringLiteral("offset-pts(%1): 瓦片画面必须随时间变化（实测差值 %2）")
+                      .arg(QLatin1String(c.name)).arg(d, 0, 'f', 2));
+        }
+        QFile::remove(pp.outputPath);
+    }
+}
+
+/// 版面拍板（2026-09-24 真机反馈）：①「时间轴示意」（覆盖条）必须画在画面**最下方**；
+/// ②删掉右上「分析演示材料 · 非原始证据」红字演示角标。
+/// 用纯灰素材（color=gray）做断言：叠加层与源色彩差异容易判定。
+static void testComposeLanesStripAtBottomLayout()
+{
+    const QString dir = QStringLiteral("build_tmp/caltest/strip_bottom_regression");
+    QDir().mkpath(dir);
+    const QString src = dir + QStringLiteral("/gray_src.mp4");
+    if (!QFile::exists(src)) {
+        QProcess sp;
+        sp.start(ToolPaths::findFfmpegPath(),
+                 {QStringLiteral("-v"), QStringLiteral("error"), QStringLiteral("-y"),
+                  QStringLiteral("-f"), QStringLiteral("lavfi"), QStringLiteral("-i"),
+                  QStringLiteral("color=c=gray:s=320x240:rate=5:duration=2"),
+                  QStringLiteral("-c:v"), QStringLiteral("libx264"),
+                  QStringLiteral("-preset"), QStringLiteral("ultrafast"),
+                  QStringLiteral("-pix_fmt"), QStringLiteral("yuv420p"), src});
+        if (!sp.waitForFinished(60000) || !QFile::exists(src)) {
+            qWarning() << "SKIP strip-bottom: synth fail";
+            return;
+        }
+    }
+    auto mkLane = [&](const QString &id) {
+        SyncLaneData l;
+        l.id = id;
+        l.path = src;
+        l.displayName = id;
+        l.temporary = true;
+        l.durationMs = 2000;
+        return l;
+    };
+    SegmentExportEngine::Params::ComposeSeg seg;
+    seg.lanes = {mkLane(QStringLiteral("L1")), mkLane(QStringLiteral("L2"))};
+    seg.audioLane = -1;
+    seg.inMs = 0;
+    seg.outMs = 1000;
+    SegmentExportEngine::Params pp;
+    pp.segments = {seg};
+    pp.outputPath = QStringLiteral("build_tmp/caltest/strip_bottom_out.mp4");
+    pp.outFps = 5.0;
+    pp.canvas = QSize(640, 480);
+    pp.burnOsd = false;
+    QFile::remove(pp.outputPath);
+    SegmentExportEngine eng;
+    QSignalSpy spy(&eng, &SegmentExportEngine::finished);
+    eng.start(pp);
+    if (!spy.wait(60000) || spy.first().at(0).toBool() == false) {
+        CHECK(false, "strip-bottom: 宫格导出失败");
+        return;
+    }
+    // k=2 → wall=400ms → 游标在条带 40% 处
+    const QImage f = grabFrameAt(pp.outputPath, 0.4);
+    CHECK(!f.isNull(), "strip-bottom: 抽帧成功");
+    if (!f.isNull()) {
+        QRect vr, cr, sr;
+        SegmentExportEngine::layoutRects(QSize(640, 480), false, false, &vr, &cr, &sr);
+        const int n = 2;
+        const int stripH = 8 + n * 6 + 9;
+        const QRect gridRect(vr.x(), vr.y(), vr.width(), vr.height() - stripH);
+        const QRect stripRect(vr.x() + 6, gridRect.bottom() + 4, vr.width() - 12, stripH - 6);
+        // ① 最下方：白游标竖线（贯穿条带高度）
+        const int cursorX = stripRect.x() + 6
+            + int(0.4 * (stripRect.width() - 12));
+        int bright = 0;
+        for (int y = stripRect.y() + 2; y <= stripRect.bottom() - 2; ++y) {
+            const QRgb c = f.pixel(qBound(0, cursorX, f.width() - 1), qBound(0, y, f.height() - 1));
+            if (qRed(c) > 235 && qGreen(c) > 235 && qBlue(c) > 235)
+                ++bright;
+        }
+        CHECK(bright >= stripRect.height() - 8,
+              QStringLiteral("strip-bottom: 覆盖条在最下方（白游标列亮像素 %1/%2）")
+                  .arg(bright).arg(stripRect.height() - 4));
+        // ② 瓦片内部（不是黑边）仍是源灰、且未被条带压住
+        // —— 两路宫格：瓦片内容等比居中（上下黑边），取内容矩形中心
+        const int cellW = gridRect.width() / 2;
+        const int cellH = gridRect.height();
+        const QRect tile1(gridRect.x() + 2, gridRect.y() + 2, cellW - 4, cellH - 4);
+        const int contentH = tile1.width() * 240 / 320;
+        const QRect content1(tile1.x(), tile1.y() + (tile1.height() - contentH) / 2,
+                             tile1.width(), contentH);
+        const QColor top = f.pixelColor(content1.center().x(), content1.center().y());
+        CHECK(qAbs(top.red() - 128) < 45 && qAbs(top.green() - 128) < 45
+                  && qAbs(top.blue() - 128) < 45,
+              QStringLiteral("strip-bottom: 瓦片内容无条带叠层（实测 RGB %1,%2,%3）")
+                  .arg(top.red()).arg(top.green()).arg(top.blue()));
+        // ③ 右上角无红字演示角标（源为灰，红色像素=角标特征）
+        int reddish = 0;
+        const QRect topRight(vr.right() - 500, vr.y(), 500, 40);
+        for (int y = topRight.top(); y <= topRight.bottom(); ++y)
+            for (int x = topRight.left(); x <= topRight.right(); ++x) {
+                const QRgb c = f.pixel(qBound(0, x, f.width() - 1), qBound(0, y, f.height() - 1));
+                // v1.18.x：判据必须真判「红」——旧式 qGreen<130&&qBlue<130 会把
+                // 顶部逐路彩条里的橄榄色（实测 176,119,0 的 DataPalette 机位色）
+                // 误计成红字角标（角标已删，此断言本是防它复活）。
+                if (qRed(c) > 170 && qGreen(c) < 90 && qBlue(c) < 90)
+                    ++reddish;
+            }
+        CHECK(reddish == 0,
+              QStringLiteral("strip-bottom: 右上无演示红字角标（红色像素 %1）").arg(reddish));
+    }
+    QFile::remove(pp.outputPath);
+}
+
+static void testEvidenceFfmpegFailureKeepsLog()
+{
+    const QString junk = QStringLiteral("build_tmp/caltest/not_a_media_file.mp4");
+    {
+        QFile f(junk);
+        if (!f.open(QIODevice::WriteOnly)) {
+            qWarning() << "SKIP ffmpeg-fail: cannot write junk";
+            return;
+        }
+        f.write("this is not a media file\n");
+    }
+    SegmentExportEngine::Params pp;
+    SegmentExportEngine::Params::ComposeSeg s;
+    s.sourcePath = junk;
+    s.inMs = 0;
+    s.outMs = 1000;
+    pp.segments = {s};
+    pp.evidenceCopy = true;
+    pp.outputPath = QStringLiteral("build_tmp/caltest/ffmpeg_fail_out.mp4");
+    QFile::remove(pp.outputPath);
+    QFile::remove(pp.outputPath + QStringLiteral(".ffmpeg.log"));
+    SegmentExportEngine eng;
+    QSignalSpy spy(&eng, &SegmentExportEngine::finished);
+    eng.start(pp);
+    const bool got = spy.wait(60000);
+    CHECK(got, "ffmpeg-fail: 必须给出结论（不得挂住）");
+    if (!got)
+        return;
+    const QList<QVariant> a = spy.takeFirst();
+    CHECK(a.at(0).toBool() == false, "ffmpeg-fail: 必须失败而非成功");
+    CHECK(a.at(1).toString().contains(QStringLiteral("直拷失败")),
+          QStringLiteral("ffmpeg-fail: 类型化错误（实测：%1）").arg(a.at(1).toString()));
+    CHECK(QFile::exists(pp.outputPath + QStringLiteral(".ffmpeg.log")),
+          "ffmpeg-fail: 失败保留旁车日志供排查");
+    QFile::remove(pp.outputPath + QStringLiteral(".ffmpeg.log"));
+    QFile::remove(junk);
 }
 
 static void testEvidenceEndToEnd()
@@ -457,6 +1032,96 @@ static void testEvidenceEndToEnd()
     QFile::remove(pp.outputPath + QStringLiteral(".forensic.json"));
 }
 
+/// P2.13（2026-09-28 用户拍板「每个视频自由选窗位」）：宫格窗位映射像素级验证。
+/// 两路纯色源（红/蓝）→ 默认顺序：左格红、右格蓝；seg.laneCell={1,0}：两格互换。
+static void testComposeLaneCellMapping()
+{
+    const QString dir = QStringLiteral("build_tmp/caltest/lanecell");
+    QDir().mkpath(dir);
+    const QString red = dir + QStringLiteral("/red.mp4");
+    const QString blue = dir + QStringLiteral("/blue.mp4");
+    auto mkSolid = [&](const QString &path, const QString &color) {
+        if (QFile::exists(path))
+            return true;
+        QStringList a;
+        a << QStringLiteral("-v") << QStringLiteral("error")
+          << QStringLiteral("-y") << QStringLiteral("-f") << QStringLiteral("lavfi")
+          << QStringLiteral("-i")
+          << QStringLiteral("color=c=%1:size=320x240:rate=5:duration=2").arg(color)
+          << QStringLiteral("-c:v") << QStringLiteral("libx264")
+          << QStringLiteral("-preset") << QStringLiteral("ultrafast")
+          << QStringLiteral("-pix_fmt") << QStringLiteral("yuv420p") << path;
+        QProcess sp;
+        sp.start(ToolPaths::findFfmpegPath(), a);
+        return sp.waitForFinished(120000) && QFile::exists(path);
+    };
+    if (!mkSolid(red, QStringLiteral("red"))
+        || !mkSolid(blue, QStringLiteral("blue"))) {
+        qWarning() << "SKIP lane-cell: synth fail";
+        return;
+    }
+    auto mkLane = [](const QString &id, const QString &p) {
+        SyncLaneData l;
+        l.id = id;
+        l.path = p;
+        l.displayName = id;
+        l.temporary = true;      // 墙钟=流内
+        l.durationMs = 2000;
+        return l;
+    };
+    auto runCase = [&](const QVector<int> &cell, const QString &out) {
+        SegmentExportEngine::Params pp;
+        SegmentExportEngine::Params::ComposeSeg seg;
+        seg.lanes = {mkLane(QStringLiteral("C01"), red),
+                     mkLane(QStringLiteral("C02"), blue)};
+        seg.laneCell = cell;
+        seg.audioLane = -1;
+        seg.inMs = 0;
+        seg.outMs = 2000;
+        pp.segments = {seg};
+        pp.outputPath = out;
+        pp.outFps = 5.0;
+        pp.canvas = QSize(640, 480);
+        pp.burnOsd = false;
+        QFile::remove(out);
+        SegmentExportEngine eng;
+        QSignalSpy spy(&eng, &SegmentExportEngine::finished);
+        eng.start(pp);
+        if (!spy.wait(90000))
+            return QImage();
+        if (!spy.takeFirst().at(0).toBool())
+            return QImage();
+        return grabFrameAt(out, 0.2);
+    };
+    const QImage a = runCase({}, QStringLiteral("build_tmp/caltest/lanecell_base.mp4"));
+    const QImage b = runCase({1, 0},
+                             QStringLiteral("build_tmp/caltest/lanecell_swap.mp4"));
+    if (a.isNull() || b.isNull()) {
+        CHECK(false, "lane-cell: 导出/抽帧失败");
+        return;
+    }
+    auto px = [](const QImage &img, double fx, double fy) {
+        return img.pixelColor(int(img.width() * fx), int(img.height() * fy));
+    };
+    // 宫格上收下条带：取上半部左右两格中心（避开条带与 OSD）
+    const QColor aL = px(a, 0.25, 0.35), aR = px(a, 0.75, 0.35);
+    const QColor bL = px(b, 0.25, 0.35), bR = px(b, 0.75, 0.35);
+    CHECK(aL.red() > 150 && aL.blue() < 100,
+          qPrintable(QStringLiteral("lane-cell: 默认左格=红（实测 %1,%2,%3）")
+                         .arg(aL.red()).arg(aL.green()).arg(aL.blue())));
+    CHECK(aR.blue() > 150 && aR.red() < 100,
+          qPrintable(QStringLiteral("lane-cell: 默认右格=蓝（实测 %1,%2,%3）")
+                         .arg(aR.red()).arg(aR.green()).arg(aR.blue())));
+    CHECK(bL.blue() > 150 && bL.red() < 100,
+          qPrintable(QStringLiteral("lane-cell: laneCell={1,0} 左格应变蓝（实测 %1,%2,%3）")
+                         .arg(bL.red()).arg(bL.green()).arg(bL.blue())));
+    CHECK(bR.red() > 150 && bR.blue() < 100,
+          qPrintable(QStringLiteral("lane-cell: laneCell={1,0} 右格应变红（实测 %1,%2,%3）")
+                         .arg(bR.red()).arg(bR.green()).arg(bR.blue())));
+    QFile::remove(QStringLiteral("build_tmp/caltest/lanecell_base.mp4"));
+    QFile::remove(QStringLiteral("build_tmp/caltest/lanecell_swap.mp4"));
+}
+
 static void testComposeLanesEndToEnd()
 {
     const QString src = QStringLiteral("build_tmp/caltest/basic.mp4");
@@ -484,7 +1149,6 @@ static void testComposeLanesEndToEnd()
     pp.outFps = 5.0;
     pp.canvas = QSize(640, 480);
     pp.burnOsd = false;
-    pp.demoWatermark = true;
     QFile::remove(pp.outputPath);
 
     SegmentExportEngine eng;
@@ -662,7 +1326,6 @@ static void testComposeOverlayEndToEnd()
     pp.outputPath = QStringLiteral("build_tmp/caltest/compose_overlay_e2e.mp4");
     pp.outFps = 5.0;
     pp.canvas = QSize(640, 480);
-    pp.demoWatermark = true;
     pp.vlaPathByPath.insert(src, vla);
     QFile::remove(pp.outputPath);
 
@@ -723,7 +1386,6 @@ static void testComposeRealAssetEndToEnd()
     pp.outFps = 15.0;
     pp.canvas = QSize(1280, 720);
     pp.burnOsd = true;
-    pp.demoWatermark = true;
     pp.caseLabel = QStringLiteral("增城回归");
     QFile::remove(pp.outputPath);
 
@@ -767,7 +1429,8 @@ static void testAudioChainV2()
     CHECK(part.contains(QStringLiteral("atrim=start=0:end=0.750")),
           "V2 静音尾 1500ms/2x=0.75s");
     CHECK(part.contains(QStringLiteral("concat=n=3:v=0:a=1[as0]")), "V2 段内三拼");
-    CHECK(part.contains(QStringLiteral("[as0]concat=n=1:v=0:a=1[aout]")), "V2 段间总拼");
+    CHECK(part.contains(QStringLiteral("[as0]concat=n=1:v=0:a=1,apad[aout]")),
+          "V2 段间总拼（§86 起尾接 apad 补静）");
 }
 
 /// 抽产物某窗口音频 RMS（dB）；静音 → -inf（返回 -120）
@@ -817,7 +1480,6 @@ static void testComposeLanesPartialAudioEndToEnd()
     pp.outputPath = QStringLiteral("build_tmp/caltest/compose_partial_audio.mp4");
     pp.outFps = 5.0;
     pp.canvas = QSize(640, 480);
-    pp.demoWatermark = true;
     QFile::remove(pp.outputPath);
 
     SegmentExportEngine eng;
@@ -874,7 +1536,6 @@ static void testComposeAnnoEndToEnd()
     pp.outputPath = QStringLiteral("build_tmp/caltest/compose_anno_e2e.mp4");
     pp.outFps = 5.0;
     pp.canvas = QSize(640, 480);
-    pp.demoWatermark = false;
     QFile::remove(pp.outputPath);
 
     SEE eng;
@@ -954,8 +1615,15 @@ int main(int argc, char **argv)
     testMultiCamAudioMapping();
     testComposeHelpers();
     testComposeEndToEnd();
+    testComposeMagnifierSplit();
+    testComposeStaleSourceFailsFast();
+    testComposeManyInputsStderrNoDeadlock();
+    testComposeLanesOffsetPtsNotFrozen();
+    testComposeLanesStripAtBottomLayout();
+    testEvidenceFfmpegFailureKeepsLog();
     testEvidenceEndToEnd();
     testComposeLanesEndToEnd();
+    testComposeLaneCellMapping();
     testComposeLanesValidation();
     testComposeOverlay();
     testComposeOverlayEndToEnd();
