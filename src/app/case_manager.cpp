@@ -301,20 +301,34 @@ QStringList CaseManager::recentCases() const
 
 QString CaseManager::defaultRootDir()
 {
-    return QCoreApplication::applicationDirPath() + QStringLiteral("/cases");
+    // v1.18.0：案件默认根目录统一到 C:/code/LumenArc/LumenArc_case
+    // （原为 <程序目录>/cases）。环境变量 LUMENARC_CASE_ROOT 可改这个默认值；
+    // 用户通过「案件根目录设置」显式选定的目录优先于默认值。
+    const QByteArray env = qgetenv("LUMENARC_CASE_ROOT");
+    if (!env.isEmpty())
+        return QDir::fromNativeSeparators(QString::fromLocal8Bit(env));
+    return QStringLiteral("C:/code/LumenArc/LumenArc_case");
 }
 
 QString CaseManager::caseRootDir()
 {
     QSettings s(QStringLiteral("LumenArc"), QStringLiteral("LumenArc"));
-    const QString v = s.value(QStringLiteral("case/rootDir")).toString();
+    QString v = s.value(QStringLiteral("case/rootDir")).toString();
+    // 旧版默认值 <程序目录>/cases 自动升级：清掉显式设置，否则历史配置文件
+    // 会把新建案件继续留在旧位置，新默认根目录永远不生效。
+    const QString legacy = normPath(QCoreApplication::applicationDirPath()
+                                    + QStringLiteral("/cases"));
+    if (!v.isEmpty() && normPath(v) == legacy) {
+        s.remove(QStringLiteral("case/rootDir"));
+        v.clear();
+    }
     return v.isEmpty() ? defaultRootDir() : v;
 }
 
 void CaseManager::setCaseRootDir(const QString &dir)
 {
     QSettings s(QStringLiteral("LumenArc"), QStringLiteral("LumenArc"));
-    if (dir.isEmpty() || dir == defaultRootDir())
+    if (dir.isEmpty() || normPath(dir) == normPath(defaultRootDir()))
         s.remove(QStringLiteral("case/rootDir"));
     else
         s.setValue(QStringLiteral("case/rootDir"), dir);

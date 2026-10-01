@@ -15,13 +15,7 @@
 #include "infrastructure/ianalysis_engine.h"
 #include "infrastructure/ffmpeg_video_engine.h"
 #include "app/calibration_service.h"
-#include "app/report_service.h"
-#include "app/report_docx_builder.h"
-#include "reportpreflightdialog.h"
 #include "sitemapeditordialog.h"
-#include <QProgressDialog>
-#include <QFutureWatcher>
-#include <QtConcurrent/QtConcurrent>
 #include "app/case_manager.h"
 #include "app/case_open_panel.h"
 #include "app/analysis_task_service.h"
@@ -272,74 +266,15 @@ void MainWindow::createMenus()
     // P-28 报告模块：生成分析报告（草稿→案内 reports/）
     m_genReportAction = caseMenu->addAction(
         lang("生成分析报告(&G)...", "&Generate Analysis Report..."), this, [this]() {
-        if (m_caseManager->meta().videos.isEmpty()) {
-            QMessageBox::warning(this, lang("生成分析报告", "Generate Report"),
-                lang("请先打开案件并入案视频。", "Open a case with videos first."));
-            return;
-        }
-        // P-28 批次③：自检 + 补录闸门（❌阻断/⚠️放行；补录落 extraFields）
-        ReportPreflightDialog preflight(m_caseManager, m_sessionMgr->stateManager(), this);
-        if (preflight.exec() != QDialog::Accepted)
-            return;
-        // 终生成：哈希补算走工作线程 + 进度对话框（可取消）
-        QProgressDialog prog(lang("正在生成报告…", "Generating report..."),
-                             lang("取消", "Cancel"), 0, 1000, this);
-        prog.setWindowTitle(lang("生成分析报告", "Generate Report"));
-        prog.setWindowModality(Qt::WindowModal);
-        prog.setMinimumDuration(0);
-        prog.setValue(0);
-        std::atomic<bool> cancel{false};
-        connect(&prog, &QProgressDialog::canceled, this, [&] { cancel = true; });
-        auto cb = [&](const QString &stage, double f) -> bool {
-            QMetaObject::invokeMethod(&prog, [&prog, stage, f] {
-                prog.setLabelText(stage);
-                if (f >= 0.0)
-                    prog.setValue(int(f * 1000));
-            }, Qt::QueuedConnection);
-            return !cancel.load();
-        };
-        CaseManager *cm = m_caseManager;
-        VideoStateManager *vsm = m_sessionMgr->stateManager();
-        QFutureWatcher<ReportData> watcher;
-        QEventLoop loop;
-        connect(&watcher, &QFutureWatcher<ReportData>::finished,
-                &loop, &QEventLoop::quit);
-        watcher.setFuture(QtConcurrent::run([cm, vsm, &cb]() {
-            return ReportService::collect(cm, vsm, /*computeHashes=*/true, cb,
-                                          nullptr);
-        }));
-        loop.exec();
-        prog.reset();
-        if (cancel.load())
-            return;
-        ReportData rd = watcher.result();
-        // 图表光栅（GUI 线程离屏渲染）
-        prog.setLabelText(lang("渲染曲线图…", "Rendering charts..."));
-        prog.setRange(0, 0);
-        prog.show();
-        ReportService::renderChartImages(cm, vsm, rd);
-        prog.reset();
-        const QString dirPath = m_caseManager->caseDir() + QStringLiteral("/reports");
-        QDir().mkpath(dirPath);
-        const QString out = dirPath + QStringLiteral("/火灾视频分析报告_%1.docx")
-            .arg(QDateTime::currentDateTime().toString(QStringLiteral("yyyyMMdd_HHmmss")));
-        const QString err = ReportDocxBuilder::build(rd, out);
-        if (!err.isEmpty()) {
-            QMessageBox::critical(this, lang("生成分析报告", "Generate Report"), err);
-            return;
-        }
-        qInfo() << "report: docx written" << out;
-        QMessageBox box(this);
-        box.setWindowTitle(lang("生成分析报告", "Generate Report"));
-        box.setText(lang("报告已生成：%1", "Report written: %1").arg(out));
-        box.addButton(QMessageBox::Ok);
-        QPushButton *openBtn = box.addButton(lang("打开文件夹", "Open Folder"),
-                                             QMessageBox::ActionRole);
-        box.exec();
-        if (box.clickedButton() == openBtn)
-            QDesktopServices::openUrl(QUrl::fromLocalFile(dirPath));
+        onGenerateReport(false);
     });
     m_genReportAction->setEnabled(false);
+    // P-26 复活：HTML 报告（离线单文件，含时间轴可视化章节）——采集/光栅与 DOCX 共用
+    m_genHtmlReportAction = caseMenu->addAction(
+        lang("导出HTML报告(&H)...", "Export &HTML Report..."), this, [this]() {
+        onGenerateReport(true);
+    });
+    m_genHtmlReportAction->setEnabled(false);
     // P-74 点位图编辑器（报告二(三)节成品图来源）
     m_sitemapAction = caseMenu->addAction(
         lang("编辑监控点位图(&M)...", "Edit Site &Map..."), this, [this]() {

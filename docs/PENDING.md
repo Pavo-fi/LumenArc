@@ -27,7 +27,7 @@ P-20 2GB 尾帧 seek（已通过）· P-21 DVR 字体抽检（已通过）· P-2
 | P-23 | 旋转按钮 ROI 坐标语义 + 实现 | ✅ 已完成（2026-08-16 用户确认） |
 | P-24 | v1.4.0 报告模板格式细节（Q-12） | ✅ 2026-08-23 已随 P-28 详谈拍板（用户模板+章节重排+留白口径） |
 | P-25 | Python 引擎回退退役 | ✅ 2026-08-17 用户拍板：**退役**（v1.8.0 实施，仅引擎壳；Python/cv2/numpy 因 OCR+报告租户保留，见 DEVELOPMENT_PLAN_V1.8_CN.md §5） |
-| P-26 | 报告 HTML 版 | ✅ 已砍（2026-08-16 用户拍板） |
+| P-26 | 报告 HTML 版 | ↩️ **2026-09-30 用户改主意：复活**（口径=离线单文件 HTML 报告，含时间轴可视化章节；设计方案 docs/HTML_TIMELINE_DESIGN_CN.md）→ 以 **P-81** 施工。原 2026-08-16 拍板为「已砍」 |
 | P-27 | 音频无损（alaw→aac 有损整改） | ✅ **已实施+真机通过**（2026-08-16：产物 pcm_s16le 8k mono 128kb/s 无损生效；损坏源文件排查见 §45） |
 
 ## 四、未开工版本（V1_ERA 排期）
@@ -58,6 +58,7 @@ P-20 2GB 尾帧 seek（已通过）· P-21 DVR 字体抽检（已通过）· P-2
 | P-78 | Q5 违规：eventFilter :4180-4351 为 18 键键位路由本体（装在 6 处具体控件）→ KeyGuardFilter 守卫+转发，保留「全局键优先于聚焦控件」语义 | 随 v1.17 阶段 B3 | ☑ 2026-09-07（`01ad822` 实现；eventFilter override 遗漏由阶段 D 的 testSwitchRestore 抓出并于 `0e4e2e5` 修复） |
 | P-79 | MainWindow 上帝单文件复胖（4770 行，v1.9 预警的 UI 壳复胖）→ 7 翻译单元拆分（单一类 API 零变化，public 区零 diff 门槛） | 随 v1.17 阶段 A | ☑ 2026-09-07（`e99c947` 拆分；`0e4e2e5` 扇出瘦身收尾） |
 | P-80 | onSnapshotQuick 纯渲染段 200 行不可单测 → SnapshotComposer 纯组件（输入集含 videoSize/OSD 文件名/预渲染 chartImg/specImg；前置：OverlayWidget 静态渲染函数迁非 Widgets）+ snapshot_test 像素断言 | 随 v1.17 阶段 C | ☑ 2026-09-07（`e30d534`，snapshot_test 36 checks 入 CMake） |
+| P-81 | **报告 HTML 版（P-26 复活，用户 2026-09-30 改主意）**：ReportData → 离线单文件 HTML 报告，含时间轴可视化章节（阶段筛选/刻度跳转/自动播放/灯箱）。新增 `ReportHtmlBuilder`（与 ReportDocxBuilder 平级，同吃 ReportData）+ `domain/timeline_events`（标签+快照 → 事件/阶段，纯逻辑）+ 资源模板；菜单「导出HTML报告」；完成提示不使用模态弹窗（口径同选段导出）。**阶段划分**：默认按间隔启发式，事件表给了阶段名则改走人工种子（不自动猜）；另提供 `lumenarc_html_sample` 命令行（素材目录直出，无案件） | src/app/report_html_builder.*、src/domain/timeline_events.*、src/resources/report_template.html、tests/html_sample_main.cpp | 🔨 2026-09-30 已实施，待真机验收（`html_test` 78 断言入 CMake；方案 docs/HTML_TIMELINE_DESIGN_CN.md） |
 
 ## 六、挂起优化/已知限制（低优先）
 

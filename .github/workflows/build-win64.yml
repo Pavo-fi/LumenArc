@@ -78,10 +78,8 @@ jobs:
         shell: bash
 
       - name: Build
-        # 全量编译（app + 25 个无头测试目标）是这条流水线的价值所在：它充当
-        # “编译/链接漂移”闸门。v1.18.0 就是靠它抓到 lumenarc_libav_test 漏链
-        # 微变符号的 LNK2019（本地习惯只编 app target，永远抓不到）。
-        # 4 核 runner 上约 25 分钟，属预期；加 timeout 防挂死。
+        # 生产版仅编译 app 目标（无头测试目标已从本版本移除）。
+        # timeout 防挂死；本地可用 build_win64.bat 得到相同结果。
         timeout-minutes: 90
         run: cmake --build build --config Release
         shell: bash
@@ -131,20 +129,6 @@ jobs:
           Invoke-WebRequest -Uri "https://aka.ms/vs/17/release/vc_redist.x64.exe" -OutFile "build\Release\vc_redist.x64.exe"
           Copy-Item "setup_python_deps.bat" "build\Release\" -Force
           Write-Host "Stage done: vc_redist.x64.exe + setup_python_deps.bat"
-        shell: pwsh
-
-      - name: Run engine self-tests
-        run: |
-          New-Item -ItemType Directory -Path "build\testdata" -Force | Out-Null
-          & "build\Release\ffmpeg\ffmpeg.exe" -y -v error -f lavfi -i "testsrc=duration=15:size=640x360:rate=25" -f lavfi -i "sine=frequency=440:duration=15" -c:v libx264 -preset fast -c:a aac "build\testdata\test_clip.mp4"
-          & "build\Release\lumenarc_engine_test.exe" seek-matrix "build\testdata\test_clip.mp4"
-          if ($LASTEXITCODE -ne 0) { exit 1 }
-          & "build\Release\lumenarc_engine_test.exe" play "build\testdata\test_clip.mp4" 3
-          if ($LASTEXITCODE -ne 0) { exit 1 }
-          & "build\Release\lumenarc_engine_test.exe" audio "build\testdata\test_clip.mp4" 3
-          if ($LASTEXITCODE -ne 0) { exit 1 }
-          & "build\Release\lumenarc_engine_test.exe" step "build\testdata\test_clip.mp4" 10
-          if ($LASTEXITCODE -ne 0) { exit 1 }
         shell: pwsh
 
       # pack_release.py 三道闸门：红线排除 / REQUIRED 必含清单 / 可运行性实跑

@@ -16,6 +16,7 @@
 #include "app/calibration_service.h"
 #include "app/report_service.h"
 #include "app/report_docx_builder.h"
+#include "app/report_html_builder.h"   // P-26 复活：离线 HTML 报告（含时间轴）
 #include "reportpreflightdialog.h"
 #include "sitemapeditordialog.h"
 #include <QProgressDialog>
@@ -58,6 +59,10 @@
 #include <QMenuBar>
 #include <QToolBar>
 #include <QPushButton>
+#include <QDesktopServices>
+#include <QDir>
+#include <QDateTime>
+#include <QMessageBox>
 #include <QtConcurrent>
 #include <QLabel>
 #include <QProgressBar>
@@ -140,6 +145,7 @@ void MainWindow::enterCaseMode()
     if (m_casePropsAction)
         m_casePropsAction->setEnabled(true);
         m_genReportAction->setEnabled(true);
+        m_genHtmlReportAction->setEnabled(true);
         m_sitemapAction->setEnabled(true);
     if (m_exportCaseAction)
         m_exportCaseAction->setEnabled(true);
@@ -192,6 +198,7 @@ void MainWindow::exitCaseMode()
     if (m_casePropsAction)
         m_casePropsAction->setEnabled(false);
         m_genReportAction->setEnabled(false);
+        m_genHtmlReportAction->setEnabled(false);
         m_sitemapAction->setEnabled(false);
     if (m_exportCaseAction)
         m_exportCaseAction->setEnabled(false);
@@ -365,6 +372,76 @@ void MainWindow::onCaseProperties()
         m_caseDock->refreshTree();
         m_caseStatusBtn->setText(m_caseManager->meta().caseNo);  // 规范§6：emoji 禁令
     }
+}
+
+/// P-28 报告模块 + P-26 复活（HTML）：采集与曲线光栅由两条产物共用，只差最后一步渲染器。
+/// 完成提示走状态栏 + 直接打开产物，不再用模态弹窗——口径见
+/// docs/INVESTIGATION_EXPORT_FROZEN_20260825.md（v1.15.3 完成弹窗卡死，用户拍板弃用）。
+void MainWindow::onGenerateReport(bool asHtml)
+{
+    if (m_caseManager->meta().videos.isEmpty()) {
+        QMessageBox::warning(this, lang("生成分析报告", "Generate Report"),
+            lang("请先打开案件并入案视频。", "Open a case with videos first."));
+        return;
+    }
+    // P-28 批次③：自检 + 补录闸门（❌阻断/⚠️放行；补录落 extraFields）
+    ReportPreflightDialog preflight(m_caseManager, m_sessionMgr->stateManager(), this);
+    if (preflight.exec() != QDialog::Accepted)
+        return;
+    // 终生成：哈希补算走工作线程 + 进度对话框（可取消）
+    QProgressDialog prog(lang("正在生成报告…", "Generating report..."),
+                         lang("取消", "Cancel"), 0, 1000, this);
+    prog.setWindowTitle(lang("生成分析报告", "Generate Report"));
+    prog.setWindowModality(Qt::WindowModal);
+    prog.setMinimumDuration(0);
+    prog.setValue(0);
+    std::atomic<bool> cancel{false};
+    connect(&prog, &QProgressDialog::canceled, this, [&] { cancel = true; });
+    auto cb = [&](const QString &stage, double f) -> bool {
+        QMetaObject::invokeMethod(&prog, [&prog, stage, f] {
+            prog.setLabelText(stage);
+            if (f >= 0.0)
+                prog.setValue(int(f * 1000));
+        }, Qt::QueuedConnection);
+        return !cancel.load();
+    };
+    CaseManager *cm = m_caseManager;
+    VideoStateManager *vsm = m_sessionMgr->stateManager();
+    QFutureWatcher<ReportData> watcher;
+    QEventLoop loop;
+    connect(&watcher, &QFutureWatcher<ReportData>::finished,
+            &loop, &QEventLoop::quit);
+    watcher.setFuture(QtConcurrent::run([cm, vsm, &cb]() {
+        return ReportService::collect(cm, vsm, /*computeHashes=*/true, cb, nullptr);
+    }));
+    loop.exec();
+    prog.reset();
+    if (cancel.load())
+        return;
+    ReportData rd = watcher.result();
+    // 图表光栅（GUI 线程离屏渲染）
+    prog.setLabelText(lang("渲染曲线图…", "Rendering charts..."));
+    prog.setRange(0, 0);
+    prog.show();
+    ReportService::renderChartImages(cm, vsm, rd);
+    prog.reset();
+
+    const QString dirPath = m_caseManager->caseDir() + QStringLiteral("/reports");
+    QDir().mkpath(dirPath);
+    const QString stamp =
+        QDateTime::currentDateTime().toString(QStringLiteral("yyyyMMdd_HHmmss"));
+    const QString written = dirPath
+        + (asHtml ? QStringLiteral("/火灾视频分析报告_%1.html")
+                  : QStringLiteral("/火灾视频分析报告_%1.docx")).arg(stamp);
+    const QString err = asHtml ? ReportHtmlBuilder::build(rd, written)
+                               : ReportDocxBuilder::build(rd, written);
+    if (!err.isEmpty()) {
+        QMessageBox::critical(this, lang("生成分析报告", "Generate Report"), err);
+        return;
+    }
+    qInfo() << "report: written" << written;
+    showOperationStatus(lang("报告已生成：%1", "Report written: %1").arg(written));
+    QDesktopServices::openUrl(QUrl::fromLocalFile(written));
 }
 
 void MainWindow::onCaseRootDir()
