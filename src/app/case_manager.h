@@ -67,9 +67,10 @@ public:
     void removeRecent(const QString &dir);
 
     // ---- 案件根目录（拍板§8-4：独立设置项；默认 <发行包目录>/cases，
-    //      也可用环境变量 LUMENARC_CASE_ROOT 或菜单设置自行指定其它目录）----
+    //      包内不可写时自动退到 我的文档/LumenArc/cases；
+    //      也可用环境变量 LUMENARC_CASE_ROOT 或菜单设置自行指定）----
     static QString caseRootDir();          ///< 当前生效根目录（用户设置值或默认）
-    static QString defaultRootDir();       ///< 默认 <LumenArc 可执行文件目录>/cases（LUMENARC_CASE_ROOT 可改默认；用户设置优先）
+    static QString defaultRootDir();       ///< 默认 <LumenArc 可执行文件目录>/cases，不可写则退到我的文档（LUMENARC_CASE_ROOT 可改默认；用户设置优先）
     static void setCaseRootDir(const QString &dir);
 
     // ---- 案件属性（任务11：名称/调查员/单位/详细地址/备注可改；

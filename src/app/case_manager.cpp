@@ -30,7 +30,9 @@
 #include <QRegularExpression>
 #include <QSaveFile>
 #include <QSettings>
+#include <QStandardPaths>
 #include <QStorageInfo>
+#include <QTemporaryFile>
 #include <QThread>
 
 namespace {
@@ -41,6 +43,36 @@ const char kManifestName[] = "manifest.json";
 QString normPath(const QString &p)
 {
     return QDir::cleanPath(QDir(p).absolutePath());
+}
+
+/// 目录是否可用作案件根目录：目录本身不存在时，看最近的已存在祖先能不能建。
+/// 只看只读属性在 Windows 上不可靠（Program Files 的 ACL 不体现为只读位），
+/// 所以用临时文件真实探一次写权限，用完即删。
+/// 注意：不能用 QDir::cdUp() 往上找 —— 父目录不存在时它会返回 false，
+/// 会把「上级存在的多级新目录」误判成不可写。
+bool dirIsWritable(const QString &dir)
+{
+    QString probeDir = QDir(dir).absolutePath();
+    while (!QFileInfo(probeDir).isDir()) {
+        const QString parent = QFileInfo(probeDir).absolutePath();
+        if (parent.isEmpty() || parent == probeDir)
+            return false;   // 一路到根都不存在
+        probeDir = parent;
+    }
+    QTemporaryFile probe(QDir(probeDir).absoluteFilePath(
+        QStringLiteral(".lumenarc_write_probe_XXXXXX")));
+    probe.setAutoRemove(true);
+    return probe.open();
+}
+
+/// 包内目录不可写时的兜底位置（我的文档/LumenArc/cases）。
+QString documentsFallbackRoot()
+{
+    const QString docs = QStandardPaths::writableLocation(
+        QStandardPaths::DocumentsLocation);
+    if (docs.isEmpty())
+        return QString();
+    return docs + QStringLiteral("/LumenArc/cases");
 }
 
 /// SHA-256 流式计算（1MB 分块，abort 可中断；失败/中止返回 false）
@@ -302,14 +334,29 @@ QStringList CaseManager::recentCases() const
 QString CaseManager::defaultRootDir()
 {
     // v1.18.0：默认案件根目录 = 发行包内的 cases/（LumenArc 可执行文件同目录）。
-    // 便携：整个发行目录（含案件）可整体拷贝 / 移动 / 换盘，不绑定机器固定路径，
-    // 也不会被 build/ 清理弄丢。
+    // 便携：整个发行目录（含案件）可整体拷贝 / 移动 / 换盘，不绑定机器固定路径。
+    // 若包内目录不可写（装在 Program Files / 只读盘等），自动退到
+    // 我的文档/LumenArc/cases，避免「新建案件」必然失败。
     // 想放到别处：菜单「案件 → 案件根目录设置」自行指定（优先级最高），
     // 或环境变量 LUMENARC_CASE_ROOT 改这个默认值。
     const QByteArray env = qgetenv("LUMENARC_CASE_ROOT");
     if (!env.isEmpty())
         return QDir::fromNativeSeparators(QString::fromLocal8Bit(env));
-    return QCoreApplication::applicationDirPath() + QStringLiteral("/cases");
+
+    // 只探测一次（同一进程内 exe 目录与写权限不会变）
+    static const QString resolved = [] {
+        const QString beside = QCoreApplication::applicationDirPath()
+                               + QStringLiteral("/cases");
+        const QString docs = documentsFallbackRoot();
+        if (dirIsWritable(beside))
+            return beside;
+        if (!docs.isEmpty() && dirIsWritable(docs)) {
+            qInfo() << "case: package dir not writable, falling back to" << docs;
+            return docs;
+        }
+        return beside;   // 都不行就仍返回包内路径，由调用方报错
+    }();
+    return resolved;
 }
 
 QString CaseManager::caseRootDir()
