@@ -226,14 +226,21 @@ void MainWindow::createMenus()
 {
     QMenu *fileMenu = menuBar()->addMenu(lang("文件(&F)", "&File"));
     fileMenu->addAction(lang("打开视频(&O)...", "&Open Video..."), this, &MainWindow::onOpenFile, QKeySequence::Open);
-    // v1.3.0 M2 任务7：临时打开（不入案）——有打开案件时与 Ctrl+O 的唯一区别
-    fileMenu->addAction(lang("临时打开视频（不入案）(&T)...", "Open Video &Temporarily (no case)..."), this, &MainWindow::onOpenFileTemporary);
-    // P-57 U-1：独立模式 2 路对比播放（无案件也可用，双临时进槽位）
-    fileMenu->addAction(lang("多机对比播放（2 路）(&M)...", "&Multi-cam Compare Playback (2 lanes)..."),
-                        this, &MainWindow::onMultiCamStandalone);
-    // 监控直播（2026-09-11）：录像机 RTSP 接入 + 辅助线/截图叠加 + 无损录制
+    // v1.18 UI 重组：Ctrl+Shift+O 恒为「临时查看」，与 Ctrl+O（案件模式=入案）语义固定
+    fileMenu->addAction(lang("临时查看视频（不入案）(&T)...", "Open Video &Temporarily (no case)..."),
+                        this, &MainWindow::onOpenFileTemporary,
+                        QKeySequence(QStringLiteral("Ctrl+Shift+O")));
+    fileMenu->addSeparator();
+    // 素材准备与接入
+    fileMenu->addAction(lang("素材转码拼接(&M)...", "&Transcode & Merge..."), this, &MainWindow::openPreprocessWindow, QKeySequence(QStringLiteral("Ctrl+M")));
     fileMenu->addAction(lang("接入监控直播(&L)...", "Live &Monitor (RTSP)..."),
                         this, &MainWindow::onOpenLiveMonitor);
+    fileMenu->addAction(lang("加载图片为叠加(&I)...", "Load Image as &Overlay..."), this, &MainWindow::onLoadOverlayImage);
+    fileMenu->addSeparator();
+    fileMenu->addAction(lang("保存分析结果(&S)...", "&Save Analysis Result..."), this, &MainWindow::onSaveAnalysis, QKeySequence::Save);
+    fileMenu->addAction(lang("加载分析结果(&L)...", "&Load Analysis Result..."), this, &MainWindow::onLoadAnalysis, QKeySequence(QStringLiteral("Ctrl+L")));
+    fileMenu->addSeparator();
+    fileMenu->addAction(lang("退出(&X)", "E&xit"), this, &QWidget::close, QKeySequence::Quit);
 
     // v1.3.0 M2：案件菜单（新建/打开/最近/起始页/属性/根目录设置 +
     // 关闭案件 Ctrl+W = 模式出口二）
@@ -263,65 +270,83 @@ void MainWindow::createMenus()
         lang("案件属性(&P)...", "Case &Properties..."), this,
         &MainWindow::onCaseProperties);
     m_casePropsAction->setEnabled(false);
-    // P-28 报告模块：生成分析报告（草稿→案内 reports/）
-    m_genReportAction = caseMenu->addAction(
-        lang("生成分析报告(&G)...", "&Generate Analysis Report..."), this, [this]() {
-        onGenerateReport(false);
-    });
-    m_genReportAction->setEnabled(false);
-    // P-26 复活：HTML 报告（离线单文件，含时间轴可视化章节）——采集/光栅与 DOCX 共用
-    m_genHtmlReportAction = caseMenu->addAction(
-        lang("导出HTML报告(&H)...", "Export &HTML Report..."), this, [this]() {
-        onGenerateReport(true);
-    });
-    m_genHtmlReportAction->setEnabled(false);
-    // P-74 点位图编辑器（报告二(三)节成品图来源）
-    m_sitemapAction = caseMenu->addAction(
-        lang("编辑监控点位图(&M)...", "Edit Site &Map..."), this, [this]() {
-        SiteMapEditorDialog dlg(m_caseManager, this);
-        dlg.exec();
-    });
-    m_sitemapAction->setEnabled(false);
-    // v1.3.0 M3 任务12：导出移交包
-    m_exportCaseAction = caseMenu->addAction(
-        lang("导出移交包(&E)...", "&Export Handover Package..."), this,
-        &MainWindow::onExportCase);
-    m_exportCaseAction->setEnabled(false);
-    // v1.3.0 M3 任务13：批量重新定位
+    caseMenu->addAction(lang("案件根目录设置(&D)...", "Case &Root Folder..."),
+                        this, &MainWindow::onCaseRootDir);
+    // v1.3.0 M3 任务13：批量重新定位（检材维持）
     m_batchRelocateAction = caseMenu->addAction(
         lang("批量重新定位(&B)...", "&Batch Relocate..."), this,
         &MainWindow::onBatchRelocate);
     m_batchRelocateAction->setEnabled(false);
-    // P-57/P-59：多机同步播放大窗（机位勾选面板引导；案件开着即可进，
-    // 校时状态在面板内逐路标识——不再按校时数置灰，新手也能摸到入口）
-    m_multiCamAction = caseMenu->addAction(
-        lang("多机同步播放(&M)...", "&Multi-camera Synced Playback..."), this,
-        &MainWindow::onMultiCamView);
-    m_multiCamAction->setEnabled(false);
-    // 案件开着即可用（面板内引导空案/未校时场景）→ 菜单弹出时动态置灰
-    connect(caseMenu, &QMenu::aboutToShow, this, [this]() {
-        if (m_multiCamAction)
-            m_multiCamAction->setEnabled(m_caseManager->isOpen());
-    });
-    caseMenu->addAction(lang("案件根目录设置(&D)...", "Case &Root Folder..."),
-                        this, &MainWindow::onCaseRootDir);
     caseMenu->addSeparator();
     m_closeCaseAction = caseMenu->addAction(
         lang("关闭案件(&W)", "&Close Case"), this,
         &MainWindow::closeCaseWithPrompt,
         QKeySequence(QStringLiteral("Ctrl+W")));
     m_closeCaseAction->setEnabled(false);
-    fileMenu->addAction(lang("素材转码拼接(&M)...", "&Transcode & Merge..."), this, &MainWindow::openPreprocessWindow, QKeySequence(QStringLiteral("Ctrl+M")));
-    fileMenu->addAction(lang("加载图片为叠加(&I)...", "Load Image as &Overlay..."), this, &MainWindow::onLoadOverlayImage);
-    fileMenu->addSeparator();
-    fileMenu->addAction(lang("保存分析结果(&S)...", "&Save Analysis Result..."), this, &MainWindow::onSaveAnalysis, QKeySequence::Save);
-    fileMenu->addAction(lang("加载分析结果(&L)...", "&Load Analysis Result..."), this, &MainWindow::onLoadAnalysis, QKeySequence(QStringLiteral("Ctrl+L")));
-    fileMenu->addSeparator();
-    fileMenu->addAction(lang("退出(&X)", "E&xit"), this, &QWidget::close, QKeySequence::Quit);
 
-    QMenu *editMenu = menuBar()->addMenu(lang("编辑(&E)", "&Edit"));
-    editMenu->addAction(lang("清除选区(&R)", "Clear &Regions"), this, &MainWindow::onClearRegions);
-    editMenu->addAction(lang("清除数据(&D)", "Clear &Data"), this, &MainWindow::onClearData);
+    // v1.18 UI 重组：新增「分析」菜单，收拢分析/校时/多机与区域工具（替代原「编辑」空壳）
+    QMenu *analysisMenu = menuBar()->addMenu(lang("分析(&A)", "&Analyze"));
+    // P-57/P-59：多机同步播放大窗（案件开着即可进；面板内逐路标识校时状态）
+    m_multiCamAction = analysisMenu->addAction(
+        lang("多机同步播放(&M)...", "&Multi-camera Synced Playback..."), this,
+        &MainWindow::onMultiCamView);
+    m_multiCamAction->setEnabled(false);
+    // 案件开着即可用（面板内引导空案/未校时场景）→ 菜单弹出时动态置灰
+    connect(analysisMenu, &QMenu::aboutToShow, this, [this]() {
+        if (m_multiCamAction)
+            m_multiCamAction->setEnabled(m_caseManager->isOpen());
+    });
+    // P-57 U-1：独立 2 路对比（无案件也可用）——与上面合并到同一菜单
+    analysisMenu->addAction(lang("多机对比播放（2 路·独立）(&N)...", "Multi-cam &Compare (2 lanes, standalone)..."),
+                            this, &MainWindow::onMultiCamStandalone);
+    analysisMenu->addSeparator();
+    analysisMenu->addAction(lang("亮度分析(&L)", "&Luminance Analysis"), this, &MainWindow::onAnalyze);
+    analysisMenu->addAction(lang("音频分析(&A)", "&Audio Analysis"), this, &MainWindow::onAudioAnalysis);
+    analysisMenu->addAction(lang("微变分析(&D)...", "&Micro-change Analysis..."), this, &MainWindow::onMicroDiff);
+    analysisMenu->addAction(lang("校时(&T)...", "&Time Calibration..."), this, &MainWindow::onSetStartTime);
+    analysisMenu->addSeparator();
+    QMenu *regionMenu = analysisMenu->addMenu(lang("区域模式(&R)", "&Region Mode"));
+    regionMenu->addAction(lang("矩形", "Rectangle"), this, &MainWindow::onRectMode);
+    regionMenu->addAction(lang("多边形", "Polygon"), this, &MainWindow::onPolygonMode);
+    regionMenu->addAction(lang("辅助线", "Guide Line"), this, &MainWindow::onGuideLineMode);
+    analysisMenu->addAction(lang("复制区域(&C)", "&Copy Regions"), this, &MainWindow::onCopyRoi);
+    analysisMenu->addAction(lang("粘贴区域(&V)", "&Paste Regions"), this, &MainWindow::onPasteRoi);
+    analysisMenu->addSeparator();
+    analysisMenu->addAction(lang("清除选区(&E)", "Clear &Regions"), this, &MainWindow::onClearRegions);
+    analysisMenu->addAction(lang("清除数据(&X)", "Clear &Data"), this, &MainWindow::onClearData);
+
+    // v1.18 UI 重组：新增「产出」菜单，集中所有交付物（替代原「导出」单项菜单）
+    QMenu *deliverMenu = menuBar()->addMenu(lang("产出(&P)", "&Deliver"));
+    deliverMenu->addAction(lang("证据快照(&S)", "Evidence &Snapshot"), this, &MainWindow::onSnapshotQuick);
+    deliverMenu->addAction(lang("合成导出工作台(&E)...", "&Compose Export Workbench..."), this, &MainWindow::onExportSegmentClip);
+    deliverMenu->addSeparator();
+    deliverMenu->addAction(lang("导出为 CSV(&C)...", "Export to &CSV..."), this, &MainWindow::onExportCsv);
+    deliverMenu->addSeparator();
+    // P-28 报告模块：生成分析报告（草稿→案内 reports/）
+    m_genReportAction = deliverMenu->addAction(
+        lang("生成分析报告（DOCX）(&G)...", "&Generate Analysis Report (DOCX)..."), this, [this]() {
+        onGenerateReport(false);
+    });
+    m_genReportAction->setEnabled(false);
+    // P-26 复活：HTML 报告（离线单文件，含时间轴可视化章节）——采集/光栅与 DOCX 共用
+    m_genHtmlReportAction = deliverMenu->addAction(
+        lang("导出 HTML 报告(&H)...", "Export &HTML Report..."), this, [this]() {
+        onGenerateReport(true);
+    });
+    m_genHtmlReportAction->setEnabled(false);
+    // P-74 点位图编辑器（报告二(三)节成品图来源）
+    m_sitemapAction = deliverMenu->addAction(
+        lang("编辑监控点位图(&M)...", "Edit Site &Map..."), this, [this]() {
+        SiteMapEditorDialog dlg(m_caseManager, this);
+        dlg.exec();
+    });
+    m_sitemapAction->setEnabled(false);
+    deliverMenu->addSeparator();
+    // v1.3.0 M3 任务12：导出移交包
+    m_exportCaseAction = deliverMenu->addAction(
+        lang("导出移交包(&T)...", "&Export Handover Package..."), this,
+        &MainWindow::onExportCase);
+    m_exportCaseAction->setEnabled(false);
 
     // 视图菜单：副屏全屏展示（多屏主机；拍板：手选屏/纯画面/调节共享/单路/F11）
     QMenu *viewMenu = menuBar()->addMenu(lang("视图(&V)", "&View"));
@@ -352,9 +377,21 @@ void MainWindow::createMenus()
     QAction *fsLast = viewMenu->addAction(lang("副屏全屏（上次屏幕）(&L)", "Fullscreen (last screen)(&L)"),
                                           this, [this]() { toggleFullscreenLastScreen(); });
     fsLast->setShortcut(QKeySequence(QStringLiteral("F11")));
-
-    QMenu *exportMenu = menuBar()->addMenu(lang("导出(&X)", "&Export"));
-    exportMenu->addAction(lang("导出为 CSV(&C)...", "Export to &CSV..."), this, &MainWindow::onExportCsv);
+    // v1.18 UI 重组：查看工具并入「视图」（原仅副屏全屏两项）
+    viewMenu->addSeparator();
+    viewMenu->addAction(lang("画面调节面板(&A)", "&Adjustment Panel"), this, [this]() {
+        if (m_adjustBtn) m_adjustBtn->setChecked(!m_adjustBtn->isChecked());
+    });
+    QMenu *overlayMenu = viewMenu->addMenu(lang("截图叠加(&O)", "Snapshot &Overlay"));
+    overlayMenu->addAction(lang("截取当前帧", "Capture Current Frame"), this, [this]() {
+        if (m_captureBtn) m_captureBtn->click();
+    });
+    overlayMenu->addAction(lang("编辑叠加", "Edit Overlay"), this, [this]() {
+        if (m_editBtn) m_editBtn->click();
+    });
+    overlayMenu->addAction(lang("显示/隐藏叠加", "Show/Hide Overlay"), this, [this]() {
+        if (m_placeBtn) m_placeBtn->setChecked(!m_placeBtn->isChecked());
+    });
 
     // Settings menu
     QMenu *settingsMenu = menuBar()->addMenu(lang("设置(&S)", "&Settings"));
@@ -415,11 +452,9 @@ void MainWindow::createMenus()
             addAdapterAction(ad.name, ad.index, current);
     }
 
-    // Help menu
-    QMenu *helpMenu = menuBar()->addMenu(lang("帮助(&H)", "&Help"));
-
-    // Language submenu
-    QMenu *langMenu = helpMenu->addMenu(lang("语言", "Language"));
+    // v1.18 UI 重组：语言与账号管理归入「设置」（配置类），帮助只留求助类
+    settingsMenu->addSeparator();
+    QMenu *langMenu = settingsMenu->addMenu(lang("语言", "Language"));
     QAction *zhAction = langMenu->addAction("中文");
     QAction *enAction = langMenu->addAction("English");
     if (g_language == LangChinese) zhAction->setChecked(true);
@@ -432,7 +467,17 @@ void MainWindow::createMenus()
         saveLanguage(LangEnglish);
         restartApp();
     });
+    settingsMenu->addAction(lang("账号管理(&A)...", "&Account..."), this, [this]() {
+        AccountDialog dlg(this);
+        dlg.exec();
+        if (dlg.signedOut()) {
+            LoginDialog login(this);
+            if (login.exec() != QDialog::Accepted) close();  // 放弃登录 = 退出
+        }
+    });
 
+    // Help menu
+    QMenu *helpMenu = menuBar()->addMenu(lang("帮助(&H)", "&Help"));
     helpMenu->addSeparator();
     helpMenu->addAction(lang("使用手册", "User Manual"), []() {
         // v1.16.0：文件名去版本号（随包手册永远最新，名不再陈旧）
@@ -445,14 +490,6 @@ void MainWindow::createMenus()
     helpMenu->addAction(lang("意见反馈", "Feedback"), this, [this]() {
         FeedbackDialog dlg(this);
         dlg.exec();
-    });
-    helpMenu->addAction(lang("账号管理", "Account"), this, [this]() {
-        AccountDialog dlg(this);
-        dlg.exec();
-        if (dlg.signedOut()) {
-            LoginDialog login(this);
-            if (login.exec() != QDialog::Accepted) close();  // 放弃登录 = 退出
-        }
     });
 
     helpMenu->addSeparator();
@@ -612,8 +649,12 @@ void MainWindow::createToolBar()
     const QString timeLabelStyle =
         "QLabel { font-family: 'Consolas', monospace; font-size: 13px; color: " + Theme::TextPrimary + "; padding: 0 8px; }";
 
-    QToolBar *toolBar = addToolBar("Main");
+    // v1.18 UI 重组：工具栏拆两条——一级「播放与产出」+ 二级「分析与标注」
+    QToolBar *toolBar = addToolBar(lang("播放与产出", "Playback & Deliver"));
     toolBar->setIconSize(QSize(18, 18));
+    addToolBarBreak(Qt::TopToolBarArea);
+    QToolBar *analysisBar = addToolBar(lang("分析与标注", "Analyze & Annotate"));
+    analysisBar->setIconSize(QSize(18, 18));
 
     // --- Playback group ---
     m_playBtn = new QPushButton(this);
@@ -801,27 +842,17 @@ void MainWindow::createToolBar()
     m_chartPanel->setAutoYRange(true);
 
     // --- Layout ---
+    // --- Layout ---
+    // 一级条（播放与产出）：秒级高频 + 产出主入口 + 素材前处理（用户拍板：保留在一级条）
     toolBar->addWidget(m_playBtn);
     toolBar->addWidget(m_pauseBtn);
     toolBar->addWidget(m_stopBtn);
     toolBar->addWidget(m_speedBtn);
-    toolBar->addSeparator();
-    toolBar->addWidget(m_analyzeBtn);
-    toolBar->addWidget(m_audioAnalysisBtn);  // v0.3: Audio analysis
-    toolBar->addWidget(m_microDiffBtn);      // 2026-09-10: 微变分析
-    toolBar->addWidget(m_setTimeBtn);
-    toolBar->addSeparator();
-    toolBar->addWidget(modeSegment);
-    toolBar->addSeparator();
-    toolBar->addWidget(m_copyRoiBtn);
-    toolBar->addWidget(m_pasteRoiBtn);
-    toolBar->addSeparator();
-    toolBar->addWidget(m_captureBtn);
-    toolBar->addWidget(m_editBtn);
-    toolBar->addWidget(m_placeBtn);
+    m_timeLabel = new QLabel("00:00 / 00:00", this);
+    m_timeLabel->setStyleSheet(timeLabelStyle);
+    toolBar->addWidget(m_timeLabel);
     toolBar->addSeparator();
     toolBar->addWidget(m_snapshotBtn);
-    toolBar->addWidget(m_adjustBtn);
     // P-68 导出选段视频（A/B 选段存在时可用；分段变速+图表语谱同框）
     m_exportClipBtn = new QPushButton(lang("合成导出", "Compose Export"), this);
     m_exportClipBtn->setToolTip(lang("合成导出：多段拼接 + 证据直拷/演示烧录双模式",
@@ -833,11 +864,7 @@ void MainWindow::createToolBar()
     toolBar->addWidget(m_exportClipBtn);
     toolBar->addSeparator();
 
-    m_timeLabel = new QLabel("00:00 / 00:00", this);
-    m_timeLabel->setStyleSheet(timeLabelStyle);
-    toolBar->addWidget(m_timeLabel);
-
-    // v1.2: 素材转码拼接入口（独立任务窗口，显眼入口，UI 重设计 D1）
+    // 素材转码拼接：高频独立任务窗口，固定在右端（2026-10 用户拍板保留一级位置）
     auto *tbSpacer = new QWidget(this);
     tbSpacer->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
     toolBar->addWidget(tbSpacer);
@@ -854,9 +881,26 @@ void MainWindow::createToolBar()
     connect(preprocessBtn, &QPushButton::clicked,
             this, &MainWindow::openPreprocessWindow);
 
+    // 二级条（分析与标注）：一次分析会话内的高频，与播放控制分离
+    analysisBar->addWidget(m_analyzeBtn);
+    analysisBar->addWidget(m_audioAnalysisBtn);
+    analysisBar->addWidget(m_microDiffBtn);
+    analysisBar->addWidget(m_setTimeBtn);
+    analysisBar->addSeparator();
+    analysisBar->addWidget(modeSegment);
+    analysisBar->addSeparator();
+    analysisBar->addWidget(m_copyRoiBtn);
+    analysisBar->addWidget(m_pasteRoiBtn);
+    analysisBar->addSeparator();
+    analysisBar->addWidget(m_captureBtn);
+    analysisBar->addWidget(m_editBtn);
+    analysisBar->addWidget(m_placeBtn);
+    analysisBar->addWidget(m_adjustBtn);
+
     // Prevent toolbar buttons from stealing keyboard focus
-    for (auto *btn : toolBar->findChildren<QPushButton*>()) {
-        btn->setFocusPolicy(Qt::NoFocus);
+    for (QToolBar *bar : {toolBar, analysisBar}) {
+        for (auto *btn : bar->findChildren<QPushButton*>())
+            btn->setFocusPolicy(Qt::NoFocus);
     }
 
     // 播放画面调节面板（2026-08-14）：dock 常驻模式，默认隐藏，
