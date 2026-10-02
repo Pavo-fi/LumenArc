@@ -338,6 +338,7 @@ protected:
     QPushButton *m_placeBtn = nullptr;
     QPushButton *m_snapshotBtn = nullptr;    ///< 证据快照（视频+曲线合成 PNG）
     QPushButton *m_adjustBtn = nullptr;      ///< 画面调节面板开关
+    QLabel *m_modeLabel = nullptr;           ///< v1.18：当前区域模式指示（矩形/多边形/辅助线）
     class PlaybackAdjustPanel *m_adjustPanel = nullptr;
     QPushButton *m_speedBtn = nullptr;
 
@@ -383,6 +384,8 @@ protected:
     bool m_caseDockWasExpanded = false;
     /// 打开素材转码拼接窗口（v1.2 独立任务窗口）
     void openPreprocessWindow();
+    /// v1.18 UI 重组：Ctrl+K 命令面板（从菜单栏实时收集命令，可搜索直达）
+    void showCommandPalette();
     QWidget *m_chartContainer = nullptr;
     QWidget *m_chartContent = nullptr;
     QWidget *m_spectrogramContainer = nullptr;
@@ -400,6 +403,7 @@ protected:
     speedplan::SpeedPlan m_speedPlan;
     class SegmentExportEngine *m_segmentExporter = nullptr;
     QPushButton *m_exportClipBtn = nullptr;
+    QAction *m_composeExportAction = nullptr;  ///< v1.18：合成导出（菜单+工作台溢出共用）
     class ComposeWorkbenchWindow *m_workbench = nullptr;   // 合成导出工作台（v1.16.2 P1.5）
     SpectrogramPanelEnhanced *m_spectrogramEnhanced = nullptr;
 

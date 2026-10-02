@@ -15,6 +15,7 @@
 #include <QDateEdit>
 #include <QDateTime>
 #include <QDialogButtonBox>
+#include <QDir>
 #include <QFileDialog>
 #include <QFormLayout>
 #include <QHBoxLayout>
@@ -26,6 +27,7 @@
 #include <QProgressBar>
 #include <QPushButton>
 #include <QRadioButton>
+#include <QTabWidget>
 #include <QTableWidget>
 #include <QVBoxLayout>
 #include <QFutureWatcher>
@@ -159,55 +161,127 @@ CasePropertiesDialog::CasePropertiesDialog(CaseManager *cm, QWidget *parent)
     : QDialog(parent)
     , m_caseManager(cm)
 {
-    setWindowTitle(lang("案件属性", "Case Properties"));
-    setMinimumWidth(480);
+    setWindowTitle(lang("案件属性与设置", "Case Properties & Settings"));
+    setMinimumWidth(520);
     auto *lay = new QVBoxLayout(this);
+    auto *tabs = new QTabWidget(this);
+    lay->addWidget(tabs);
 
-    const CaseMeta &meta = cm->meta();
-    auto *form = new QFormLayout();
-    auto *caseNo = new QLabel(meta.caseNo, this);
-    caseNo->setStyleSheet(QStringLiteral(
-        "color:%1; font-weight:bold;").arg(Theme::Accent));
-    form->addRow(lang("编号（固定）", "Number (fixed)"), caseNo);
-    form->addRow(lang("案发日期（固定）", "Incident date (fixed)"),
-                 new QLabel(QDateTime::fromMSecsSinceEpoch(meta.incidentTimeMs)
-                                .toString(QStringLiteral("yyyy-MM-dd")), this));
-    form->addRow(lang("案发地点（固定）", "Location (fixed)"),
-                 new QLabel(meta.city + QStringLiteral(" ") + meta.district,
-                            this));
-    form->addRow(lang("创建时间", "Created"),
-                 new QLabel(QDateTime::fromMSecsSinceEpoch(meta.createdMs)
-                                .toString(QStringLiteral("yyyy-MM-dd HH:mm:ss")),
-                            this));
+    // ---- 页签 1：基本信息（未开案时给提示；不再单独占一个菜单项）----
+    if (cm->isOpen()) {
+        const CaseMeta &meta = cm->meta();
+        auto *page = new QWidget(tabs);
+        auto *pl = new QVBoxLayout(page);
+        auto *form = new QFormLayout();
+        auto *caseNo = new QLabel(meta.caseNo, page);
+        caseNo->setStyleSheet(QStringLiteral(
+            "color:%1; font-weight:bold;").arg(Theme::Accent));
+        form->addRow(lang("编号（固定）", "Number (fixed)"), caseNo);
+        form->addRow(lang("案发日期（固定）", "Incident date (fixed)"),
+                     new QLabel(QDateTime::fromMSecsSinceEpoch(meta.incidentTimeMs)
+                                    .toString(QStringLiteral("yyyy-MM-dd")), page));
+        form->addRow(lang("案发地点（固定）", "Location (fixed)"),
+                     new QLabel(meta.city + QStringLiteral(" ") + meta.district, page));
+        form->addRow(lang("创建时间", "Created"),
+                     new QLabel(QDateTime::fromMSecsSinceEpoch(meta.createdMs)
+                                    .toString(QStringLiteral("yyyy-MM-dd HH:mm:ss")), page));
 
-    m_title = new QLineEdit(meta.title, this);
-    m_investigator = new QLineEdit(meta.investigator, this);
-    m_unit = new QLineEdit(meta.unit, this);
-    // 账号系统 v1.1：空值时用登录账号姓名/单位预填（已有值不动）
-    {
-        const Credential cred = CredentialStore::load();
-        if (m_investigator->text().trimmed().isEmpty() && !cred.name.isEmpty())
-            m_investigator->setText(cred.name);
-        if (m_unit->text().trimmed().isEmpty() && !cred.org.isEmpty())
-            m_unit->setText(cred.org);
+        m_title = new QLineEdit(meta.title, page);
+        m_investigator = new QLineEdit(meta.investigator, page);
+        m_unit = new QLineEdit(meta.unit, page);
+        // 账号系统 v1.1：空值时用登录账号姓名/单位预填（已有值不动）
+        {
+            const Credential cred = CredentialStore::load();
+            if (m_investigator->text().trimmed().isEmpty() && !cred.name.isEmpty())
+                m_investigator->setText(cred.name);
+            if (m_unit->text().trimmed().isEmpty() && !cred.org.isEmpty())
+                m_unit->setText(cred.org);
+        }
+        m_locationDetail = new QLineEdit(meta.locationDetail, page);
+        m_description = new QPlainTextEdit(meta.description, page);
+        m_description->setMaximumHeight(72);
+        form->addRow(lang("案件名称 *", "Case title *"), m_title);
+        form->addRow(lang("调查员", "Investigator"), m_investigator);
+        form->addRow(lang("单位", "Unit"), m_unit);
+        form->addRow(lang("详细地址", "Address"), m_locationDetail);
+        form->addRow(lang("备注", "Notes"), m_description);
+        pl->addLayout(form);
+
+        auto *stat = new QLabel(
+            lang("视频 %1 路 · 前处理会话 %2 个 · 报告 %3 份",
+                 "%1 video(s) · %2 preprocess session(s) · %3 report(s)")
+                .arg(meta.videos.size()).arg(meta.preprocessSessions.size())
+                .arg(meta.reports.size()), page);
+        stat->setStyleSheet(QStringLiteral("color:%1;").arg(Theme::TextSecond));
+        pl->addWidget(stat);
+        pl->addStretch(1);
+        tabs->addTab(page, lang("基本信息", "Basic Info"));
+    } else {
+        auto *hint = new QLabel(
+            lang("当前未打开案件。\n\n打开案件后可在此编辑案件名称、调查员、单位、"
+                 "详细地址与备注。",
+                 "No case is open.\n\nOpen a case to edit its title, investigator, "
+                 "unit, address and notes."), tabs);
+        hint->setWordWrap(true);
+        hint->setAlignment(Qt::AlignTop);
+        hint->setStyleSheet(QStringLiteral("color:%1; padding:16px;")
+                                .arg(Theme::TextSecond));
+        tabs->addTab(hint, lang("基本信息", "Basic Info"));
     }
-    m_locationDetail = new QLineEdit(meta.locationDetail, this);
-    m_description = new QPlainTextEdit(meta.description, this);
-    m_description->setMaximumHeight(72);
-    form->addRow(lang("案件名称 *", "Case title *"), m_title);
-    form->addRow(lang("调查员", "Investigator"), m_investigator);
-    form->addRow(lang("单位", "Unit"), m_unit);
-    form->addRow(lang("详细地址", "Address"), m_locationDetail);
-    form->addRow(lang("备注", "Notes"), m_description);
-    lay->addLayout(form);
 
-    auto *stat = new QLabel(
-        lang("视频 %1 路 · 前处理会话 %2 个 · 报告 %3 份",
-             "%1 video(s) · %2 preprocess session(s) · %3 report(s)")
-            .arg(meta.videos.size()).arg(meta.preprocessSessions.size())
-            .arg(meta.reports.size()), this);
-    stat->setStyleSheet(QStringLiteral("color:%1;").arg(Theme::TextSecond));
-    lay->addWidget(stat);
+    // ---- 页签 2：案件根目录（新建案件的默认存放位置；无需打开案件）----
+    {
+        auto *page = new QWidget(tabs);
+        auto *pl = new QVBoxLayout(page);
+        auto *hint = new QLabel(
+            lang("新建案件的默认存放位置。\n"
+                 "默认在发行包内（LumenArc 可执行文件同目录的 cases\\）；该位置不可写时"
+                 "自动退到 我的文档\\LumenArc\\cases。\n"
+                 "也可用环境变量 LUMENARC_CASE_ROOT 改默认值。",
+                 "Default location for new cases.\n"
+                 "Defaults to a cases\\ folder next to LumenArc.exe; if that is not "
+                 "writable it falls back to Documents\\LumenArc\\cases.\n"
+                 "The LUMENARC_CASE_ROOT environment variable can change the default."),
+            page);
+        hint->setWordWrap(true);
+        hint->setStyleSheet(QStringLiteral("color:%1;").arg(Theme::TextSecond));
+        pl->addWidget(hint);
+
+        auto *row = new QHBoxLayout();
+        m_rootDir = new QLineEdit(CaseManager::caseRootDir(), page);
+        auto *browse = new QPushButton(lang("浏览…", "Browse…"), page);
+        auto *reset = new QPushButton(lang("恢复默认", "Use Default"), page);
+        row->addWidget(m_rootDir, 1);
+        row->addWidget(browse);
+        row->addWidget(reset);
+        pl->addLayout(row);
+
+        m_rootDefaultLabel = new QLabel(page);
+        m_rootDefaultLabel->setStyleSheet(
+            QStringLiteral("color:%1; font-size:11px;").arg(Theme::TextMuted));
+        m_rootDefaultLabel->setText(
+            lang("内置默认：%1%2", "Built-in default: %1%2")
+                .arg(CaseManager::defaultRootDir(),
+                     qgetenv("LUMENARC_CASE_ROOT").isEmpty()
+                         ? QString()
+                         : lang("（已被 LUMENARC_CASE_ROOT 覆盖）",
+                                " (overridden by LUMENARC_CASE_ROOT)")));
+        pl->addWidget(m_rootDefaultLabel);
+        pl->addStretch(1);
+        tabs->addTab(page, lang("案件根目录", "Case Root Folder"));
+
+        connect(browse, &QPushButton::clicked, this, [this]() {
+            const QString dir = QFileDialog::getExistingDirectory(
+                this, lang("选择案件根目录（新建案件的默认存放位置）",
+                           "Choose case root folder (default location for new cases)"),
+                m_rootDir->text());
+            if (!dir.isEmpty())
+                m_rootDir->setText(dir);
+        });
+        connect(reset, &QPushButton::clicked, this, [this]() {
+            m_rootDir->setText(CaseManager::defaultRootDir());
+        });
+    }
 
     auto *buttons = new QDialogButtonBox(
         QDialogButtonBox::Save | QDialogButtonBox::Close, this);
@@ -218,18 +292,29 @@ CasePropertiesDialog::CasePropertiesDialog(CaseManager *cm, QWidget *parent)
             this, &QDialog::accept);
     connect(buttons->button(QDialogButtonBox::Save), &QPushButton::clicked,
             this, [this, buttons]() {
-        QString err;
-        if (!m_caseManager->updateCaseInfo(
-                m_title->text(), m_investigator->text(), m_unit->text(),
-                m_locationDetail->text(), m_description->toPlainText(), &err)) {
-            QMessageBox::warning(this, lang("保存失败", "Save failed"), err);
-            return;
+        // 案件根目录：无需开案，随时可改
+        const QString newRoot = m_rootDir ? m_rootDir->text().trimmed() : QString();
+        if (!newRoot.isEmpty()) {
+            const QString cur = QDir::cleanPath(QDir(CaseManager::caseRootDir()).absolutePath());
+            const QString want = QDir::cleanPath(QDir(newRoot).absolutePath());
+            if (cur != want)
+                CaseManager::setCaseRootDir(newRoot);
         }
-        if (m_caseManager->isDirty()) {
-            QString serr;
-            if (!m_caseManager->saveCase(&serr)) {
-                QMessageBox::warning(this, lang("保存失败", "Save failed"), serr);
+        // 案件信息：仅已开案
+        if (m_caseManager->isOpen()) {
+            QString err;
+            if (!m_caseManager->updateCaseInfo(
+                    m_title->text(), m_investigator->text(), m_unit->text(),
+                    m_locationDetail->text(), m_description->toPlainText(), &err)) {
+                QMessageBox::warning(this, lang("保存失败", "Save failed"), err);
                 return;
+            }
+            if (m_caseManager->isDirty()) {
+                QString serr;
+                if (!m_caseManager->saveCase(&serr)) {
+                    QMessageBox::warning(this, lang("保存失败", "Save failed"), serr);
+                    return;
+                }
             }
         }
         buttons->button(QDialogButtonBox::Save)->setEnabled(false);

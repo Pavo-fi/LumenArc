@@ -142,11 +142,9 @@ void MainWindow::enterCaseMode()
     m_caseStatusBtn->setVisible(true);
     if (m_closeCaseAction)
         m_closeCaseAction->setEnabled(true);
-    if (m_casePropsAction)
-        m_casePropsAction->setEnabled(true);
-        m_genReportAction->setEnabled(true);
-        m_genHtmlReportAction->setEnabled(true);
-        m_sitemapAction->setEnabled(true);
+    m_genReportAction->setEnabled(true);
+    m_genHtmlReportAction->setEnabled(true);
+    m_sitemapAction->setEnabled(true);
     if (m_exportCaseAction)
         m_exportCaseAction->setEnabled(true);
     if (m_batchRelocateAction)
@@ -195,11 +193,10 @@ void MainWindow::exitCaseMode()
     m_caseStatusBtn->setVisible(false);
     if (m_closeCaseAction)
         m_closeCaseAction->setEnabled(false);
-    if (m_casePropsAction)
-        m_casePropsAction->setEnabled(false);
-        m_genReportAction->setEnabled(false);
-        m_genHtmlReportAction->setEnabled(false);
-        m_sitemapAction->setEnabled(false);
+    // m_casePropsAction 不再随开/关案置灰：它同时承载"案件根目录"，未开案也可用
+    m_genReportAction->setEnabled(false);
+    m_genHtmlReportAction->setEnabled(false);
+    m_sitemapAction->setEnabled(false);
     if (m_exportCaseAction)
         m_exportCaseAction->setEnabled(false);
     if (m_batchRelocateAction)
@@ -361,10 +358,13 @@ void MainWindow::openCaseFlow(const QString &dir)
 
 void MainWindow::onCaseProperties()
 {
-    if (!m_caseManager->isOpen())
-        return;
+    // v1.18 UI 重组：本对话框同时承载"案件根目录"，未开案也可打开
+    const QString rootBefore = CaseManager::caseRootDir();
     CasePropertiesDialog dlg(m_caseManager, this);
     dlg.exec();
+    if (CaseManager::caseRootDir() != rootBefore)
+        showOperationStatus(lang("案件根目录：%1", "Case root: %1")
+                                .arg(CaseManager::caseRootDir()));
     // 名称可能已改：刷新标题/面板/状态栏
     if (m_caseManager->isOpen()) {
         setWindowTitle(windowTitleWithCase(

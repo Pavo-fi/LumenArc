@@ -74,6 +74,9 @@ private:
     QLineEdit *m_unit = nullptr;
     QLineEdit *m_locationDetail = nullptr;
     QPlainTextEdit *m_description = nullptr;
+    // v1.18 UI 重组：案件根目录并入本对话框（无需开案即可修改）
+    QLineEdit *m_rootDir = nullptr;
+    QLabel *m_rootDefaultLabel = nullptr;
 };
 
 /// 重定位交互流程（CaseDock 右键 / 导出前自检共用）：

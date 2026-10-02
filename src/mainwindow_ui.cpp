@@ -52,6 +52,8 @@
 #include <QSplitter>
 #include <QMenuBar>
 #include <QToolBar>
+#include <QToolButton>
+#include <QShortcut>
 #include <QPushButton>
 #include <QtConcurrent>
 #include <QLabel>
@@ -266,12 +268,10 @@ void MainWindow::createMenus()
     caseMenu->addAction(lang("起始页(&S)...", "&Start Page..."), this,
                         &MainWindow::onShowStartPage);
     caseMenu->addSeparator();
+    // v1.18 UI 重组：案件属性与案件根目录合并为一个对话框（无需开案即可改根目录）
     m_casePropsAction = caseMenu->addAction(
-        lang("案件属性(&P)...", "Case &Properties..."), this,
+        lang("案件属性与设置(&P)...", "Case &Properties && Settings..."), this,
         &MainWindow::onCaseProperties);
-    m_casePropsAction->setEnabled(false);
-    caseMenu->addAction(lang("案件根目录设置(&D)...", "Case &Root Folder..."),
-                        this, &MainWindow::onCaseRootDir);
     // v1.3.0 M3 任务13：批量重新定位（检材维持）
     m_batchRelocateAction = caseMenu->addAction(
         lang("批量重新定位(&B)...", "&Batch Relocate..."), this,
@@ -318,7 +318,10 @@ void MainWindow::createMenus()
     // v1.18 UI 重组：新增「产出」菜单，集中所有交付物（替代原「导出」单项菜单）
     QMenu *deliverMenu = menuBar()->addMenu(lang("产出(&P)", "&Deliver"));
     deliverMenu->addAction(lang("证据快照(&S)", "Evidence &Snapshot"), this, &MainWindow::onSnapshotQuick);
-    deliverMenu->addAction(lang("合成导出工作台(&E)...", "&Compose Export Workbench..."), this, &MainWindow::onExportSegmentClip);
+    m_composeExportAction = deliverMenu->addAction(
+        lang("合成导出工作台(&E)...", "&Compose Export Workbench..."), this,
+        &MainWindow::onExportSegmentClip);
+    m_composeExportAction->setEnabled(false);
     deliverMenu->addSeparator();
     deliverMenu->addAction(lang("导出为 CSV(&C)...", "Export to &CSV..."), this, &MainWindow::onExportCsv);
     deliverMenu->addSeparator();
@@ -881,6 +884,36 @@ void MainWindow::createToolBar()
     connect(preprocessBtn, &QPushButton::clicked,
             this, &MainWindow::openPreprocessWindow);
 
+    // v1.18 UI 重组：工作台 ▾ —— 独立窗口汇总入口（素材转码拼接仍单列在左，此处为快捷方式）
+    auto *workbenchBtn = new QToolButton(this);
+    workbenchBtn->setText(lang("工作台 ▾", "Workspaces ▾"));
+    workbenchBtn->setPopupMode(QToolButton::InstantPopup);
+    workbenchBtn->setToolTip(lang("独立工作窗口（前处理 / 合成导出 / 多机 / 直播 / 点位图）",
+                                  "Independent workspaces"));
+    workbenchBtn->setMinimumHeight(30);
+    workbenchBtn->setFocusPolicy(Qt::NoFocus);
+    workbenchBtn->setStyleSheet(QStringLiteral(
+        "QToolButton { background: %1; color: %2; border: none; border-radius: 6px; "
+        "padding: 4px 10px; font-weight: bold; }"
+        "QToolButton:hover { background: %3; }"
+        "QToolButton::menu-indicator { image: none; }")
+        .arg(Theme::BgCard, Theme::TextPrimary, Theme::BgHover));
+    auto *wbMenu = new QMenu(workbenchBtn);
+    wbMenu->addAction(lang("素材转码拼接…", "&Transcode & Merge…"), this,
+                      &MainWindow::openPreprocessWindow);
+    if (m_composeExportAction)
+        wbMenu->addAction(m_composeExportAction);
+    wbMenu->addSeparator();
+    if (m_multiCamAction)
+        wbMenu->addAction(m_multiCamAction);
+    wbMenu->addAction(lang("接入监控直播…", "Live Monitor (&RTSP)…"), this,
+                      &MainWindow::onOpenLiveMonitor);
+    wbMenu->addSeparator();
+    if (m_sitemapAction)
+        wbMenu->addAction(m_sitemapAction);
+    workbenchBtn->setMenu(wbMenu);
+    toolBar->addWidget(workbenchBtn);
+
     // 二级条（分析与标注）：一次分析会话内的高频，与播放控制分离
     analysisBar->addWidget(m_analyzeBtn);
     analysisBar->addWidget(m_audioAnalysisBtn);
@@ -896,12 +929,22 @@ void MainWindow::createToolBar()
     analysisBar->addWidget(m_editBtn);
     analysisBar->addWidget(m_placeBtn);
     analysisBar->addWidget(m_adjustBtn);
+    // v1.18：模式指示器 —— 明确当前处于哪种区域模式（Esc 会退出什么）
+    analysisBar->addSeparator();
+    m_modeLabel = new QLabel(lang("模式：矩形", "Mode: Rectangle"), this);
+    m_modeLabel->setStyleSheet(QStringLiteral(
+        "QLabel { color:%1; font-size:12px; padding:0 6px; }").arg(Theme::Accent));
+    analysisBar->addWidget(m_modeLabel);
 
     // Prevent toolbar buttons from stealing keyboard focus
     for (QToolBar *bar : {toolBar, analysisBar}) {
         for (auto *btn : bar->findChildren<QPushButton*>())
             btn->setFocusPolicy(Qt::NoFocus);
     }
+
+    // v1.18 UI 重组：Ctrl+K 命令面板（菜单项可搜索直达，新增功能不必再抢菜单槽位）
+    auto *paletteSc = new QShortcut(QKeySequence(QStringLiteral("Ctrl+K")), this);
+    connect(paletteSc, &QShortcut::activated, this, &MainWindow::showCommandPalette);
 
     // 播放画面调节面板（2026-08-14）：dock 常驻模式，默认隐藏，
     // 工具栏「画面调节」按钮调出后一直开着直到手动关闭。
@@ -1575,4 +1618,79 @@ void MainWindow::buildCaseUi(const QString &collapseBtnStyle)
                 m_roiDialog = nullptr;
             });
 
+}
+
+/// v1.18 UI 重组：Ctrl+K 命令面板。
+/// 命令表不单独维护 —— 直接从菜单栏遍历收集，菜单加一项面板自动多一项，
+/// 避免"新功能要同时在两处登记"的漂移。禁用的菜单项在面板里也显示为禁用。
+void MainWindow::showCommandPalette()
+{
+    struct Cmd { QString text; QString group; QAction *action; };
+    QVector<Cmd> cmds;
+    const auto menus = menuBar()->findChildren<QMenu *>(QString(),
+                                                        Qt::FindDirectChildrenOnly);
+    for (QMenu *m : menus) {
+        if (!m || !m->menuAction() || m->menuAction()->isSeparator())
+            continue;
+        const QString group = QString(m->title()).remove(QLatin1Char('&'));
+        for (QAction *a : m->actions()) {
+            if (!a || a->isSeparator() || a->menu())
+                continue;   // 子菜单本身不是命令
+            cmds.append({QString(a->text()).remove(QLatin1Char('&')), group, a});
+        }
+    }
+
+    QDialog dlg(this);
+    dlg.setWindowTitle(lang("命令面板", "Command Palette"));
+    dlg.setMinimumSize(580, 430);
+    auto *v = new QVBoxLayout(&dlg);
+    auto *edit = new QLineEdit(&dlg);
+    edit->setPlaceholderText(lang("输入命令名称…（↑↓ 选择，Enter 执行，Esc 关闭）",
+                                  "Type a command… (↑↓ select, Enter run, Esc close)"));
+    auto *list = new QListWidget(&dlg);
+    list->setAlternatingRowColors(true);
+    v->addWidget(edit);
+    v->addWidget(list, 1);
+
+    auto refresh = [&]() {
+        const QString needle = edit->text().trimmed();
+        list->clear();
+        for (int i = 0; i < cmds.size(); ++i) {
+            const Cmd &c = cmds[i];
+            if (!needle.isEmpty()
+                && !c.text.contains(needle, Qt::CaseInsensitive)
+                && !c.group.contains(needle, Qt::CaseInsensitive))
+                continue;
+            auto *it = new QListWidgetItem(
+                QStringLiteral("%1        · %2").arg(c.text, c.group), list);
+            it->setData(Qt::UserRole, i);
+            if (!c.action->isEnabled()) {
+                it->setForeground(QBrush(QColor(Theme::TextMuted)));
+                it->setFlags(it->flags() & ~Qt::ItemIsEnabled);
+            }
+        }
+        if (list->count() > 0)
+            list->setCurrentRow(0);
+    };
+    connect(edit, &QLineEdit::textChanged, &dlg, [&refresh](const QString &) { refresh(); });
+
+    auto run = [&]() {
+        auto *it = list->currentItem();
+        if (!it || !(it->flags() & Qt::ItemIsEnabled))
+            return;
+        const int idx = it->data(Qt::UserRole).toInt();
+        if (idx < 0 || idx >= cmds.size())
+            return;
+        QAction *a = cmds[idx].action;
+        if (!a || !a->isEnabled())
+            return;
+        dlg.accept();
+        a->trigger();
+    };
+    connect(list, &QListWidget::itemActivated, &dlg, [&run](QListWidgetItem *) { run(); });
+    connect(edit, &QLineEdit::returnPressed, &dlg, [&run]() { run(); });
+
+    refresh();
+    edit->setFocus();
+    dlg.exec();
 }

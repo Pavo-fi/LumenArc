@@ -1991,6 +1991,8 @@ void MainWindow::onRectMode()
     m_rectModeBtn->setChecked(true);
     m_polygonModeBtn->setChecked(false);
     m_guideLineBtn->setChecked(false);
+    if (m_modeLabel)
+        m_modeLabel->setText(lang("模式：矩形", "Mode: Rectangle"));
 }
 
 // v0.5: 多边形模式
@@ -2003,6 +2005,8 @@ void MainWindow::onPolygonMode()
     m_rectModeBtn->setChecked(false);
     m_polygonModeBtn->setChecked(true);
     m_guideLineBtn->setChecked(false);
+    if (m_modeLabel)
+        m_modeLabel->setText(lang("模式：多边形", "Mode: Polygon"));
 }
 
 // v0.5: 辅助线模式
@@ -2015,6 +2019,8 @@ void MainWindow::onGuideLineMode()
     m_rectModeBtn->setChecked(false);
     m_polygonModeBtn->setChecked(false);
     m_guideLineBtn->setChecked(true);
+    if (m_modeLabel)
+        m_modeLabel->setText(lang("模式：辅助线", "Mode: Guide Line"));
 }
 
 // v0.5: 复制ROI

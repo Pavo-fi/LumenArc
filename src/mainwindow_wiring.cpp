@@ -656,9 +656,13 @@ void MainWindow::setupCaseConnections()
     connect(m_caseManager, &CaseManager::caseOpened, this, [this]() {
         if (m_exportClipBtn)
             m_exportClipBtn->setEnabled(true);
+        if (m_composeExportAction)
+            m_composeExportAction->setEnabled(true);
     });
     connect(m_caseManager, &CaseManager::caseClosed, this, [this]() {
         if (m_exportClipBtn && m_sessionMgr->currentVideoPath().isEmpty())
             m_exportClipBtn->setEnabled(false);
+        if (m_composeExportAction && m_sessionMgr->currentVideoPath().isEmpty())
+            m_composeExportAction->setEnabled(false);
     });
 }
