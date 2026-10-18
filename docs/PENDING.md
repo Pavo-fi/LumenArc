@@ -114,11 +114,15 @@ P-20 2GB 尾帧 seek（已通过）· P-21 DVR 字体抽检（已通过）· P-2
 |---|---|---|---|
 | P-82 | **本副本已无法跑全回归**：§103 生产版整理删除了 `tests/` 29 个源文件 + `CMakeLists.txt` 里 27 个 `lumenarc_*_test` 目标 + Qt `Test` 组件 → 19 套无头基线（表头所载）在此**不可复跑**。需定策：① 回 `LumenArc_v1.3.0` 跑回归；② 另存 tests 分支/补丁；③ 重建最小回归集 | HANDOVER §103 | ☐ |
 | P-83 | **构建 / 部署入口未文档化**：`build_tmp/`（`build_target.bat` / `reconfigure.bat` / `tcb_deploy/`）已随 §103 删除，HANDOVER 表头旧命令全部失效；现行入口仅根目录 `build_win64.bat`（Qt 路径写死 `C:\code\Qt\6.8.0\msvc2022_64`，可用 `QT_DIR` 覆盖）；CloudBase 四函数重新部署前需先恢复 `build_tmp/tcb_deploy/`（含 `.auth_secret`） | HANDOVER 表头/§103 | ☐ |
-| P-84 | **发版欠账**：最新 Release 仍是 **v1.18.0（2026-09-16，tag `286e22b`）**；tag 之后已有 **8 个提交未发版**（其中 **6 个未入 `master`**）——`fe424c5` 校时/合成导出功能批 + `419f44f`/`5c0044a`/`75c2a5e`/`7bedf46`/`e5e75c5` 生产版/UI 批。需定版本号、合 `master`、出 Release | 侦察 2026-10-16 | ☐ |
+| P-84 | **发版欠账**：最新 Release 仍是 **v1.18.0（2026-09-16，tag `286e22b`）**；tag 之后已有 **11 个提交未发版**（其中 **9 个未入 `master`**）——`fe424c5` 校时/合成导出功能批 + `419f44f`/`5c0044a`/`75c2a5e`/`7bedf46`/`e5e75c5` 生产版/UI 批 + `6d321dc`/`e483bfd`/`8bcc206` 前端 V2 批。需定版本号、合 `master`、出 Release（另：本地 3 个提交未推送） | 侦察 2026-10-18 | ☐ |
 | P-85 | **UI 工作流重组待真机验收**（`7bedf46`/`e5e75c5`）：① 新顶级菜单「分析」「产出」可达性；② 工具栏拆两条后常用按钮是否变远；③ **Ctrl+K 命令面板**；④ 模式指示器；⑤ 工作台溢出收纳；⑥ 合并案件对话框 | HANDOVER §105 | ☐ |
 | P-86 | **案件根便携化待真机验收**（`5c0044a`/`75c2a5e`）：① 包内 `cases\` 可写 → 新建案件落包内；② 包内不可写（模拟 `C:\Program Files\`）→ 自动退 `我的文档\LumenArc\cases`；③ `LUMENARC_CASE_ROOT` 与「案件→案件根目录设置」优先级高于内置默认 | HANDOVER §104 | ☐ |
 | P-87 | 文档账补记（2026-10-16）：HANDOVER 归档 §94~§100 入 `WORK_HISTORY.md` + 补录 §102~§105 + 表头改正（HEAD/构建/发布状态）+ CHANGELOG/DOCS_MAP/PENDING 同步 | 本批 | ✅ 2026-10-16 |
 | P-88 | **场外资产去向待拍板**（均在 `C:\code\LumenArc\`）：① `_ui_rework/`：本批 UI 重组的**生成脚本**（`apply_menus.py`/`edit1_dialog.py`/`edit2_rest.py` + `menu_tree.txt`）**未入库**；② `_headless_selfcheck/`：删测试后另建的自检小程序（`selfcheck_main.cpp` + `run_readonly_fallback.ps1` + `acl_test.ps1`）；③ `_v118_audit/` **594 MB**（v1.18.0 win64.zip + mac dmg + CI probe）；④ `_clean_version_migration_2026-10-01.md` | 侦察 2026-10-16 | ☐ 需拍板：入库 / 转正式自检 / 清理 |
+
+| P-89 | **前端 V2 剩余项**（HANDOVER §106 已落地部分之外的）：① 接入页**拖放区**（现在只有卡片）；② 交付页**完整性校验**（现在只有产物表）；③ 校时面板**测点表紧凑化**（仍是长表单）；④ 宫格瓦片**拖拽换位**（现为右键「移到窗位 N」）；⑤ 分析页**游标读数**（`ChartPanel` 无 `valueAt()` API，需新增） | HANDOVER §106 | ☐ |
+| P-90 | **多机窗位安排不持久化**：`m_cellOfLane` 仅存于 `MultiCamPlaybackWindow` 实例内，关窗即回默认顺序。若要按案件/机位记住，需入 `case.json` 或 `.vla` | HANDOVER §106 | ☐ |
+| P-91 | **前端 V2 整体真机验收**（§106）：① 六阶段切换与闸门点；② 整备/校时/产出嵌入后的交互（关闭/返回/长任务）；③ 底部三区（降噪自动显隐 / 播放居中）；④ 轨道 gutter 与收起动画；⑤ 检视器数据准确性；⑥ 多机窗位；⑦ 嵌入式窗口的全局快捷键（Space/方向键）| HANDOVER §106 | ☐ |
 
 ---
 
