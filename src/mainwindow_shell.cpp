@@ -17,6 +17,7 @@
 #include "chartpanel.h"
 #include "domain/roi_model.h"
 #include "i18n.h"
+#include "keyguardfilter.h"
 #include "infrastructure/ffmpeg_video_engine.h"
 #include "infrastructure/ivideo_engine.h"
 #include "multicamplaybackwindow.h"
@@ -29,6 +30,8 @@
 #include "ui/workflow_bar.h"
 
 #include <QAbstractAnimation>
+#include <QCheckBox>
+#include <QComboBox>
 #include <QDebug>
 #include <QDir>
 #include <QDockWidget>
@@ -41,16 +44,23 @@
 #include <QGridLayout>
 #include <QHeaderView>
 #include <QLabel>
+#include <QListWidget>
 #include <QLocale>
 #include <QMenuBar>
 #include <QOpenGLWidget>
 #include <QPropertyAnimation>
 #include <QPushButton>
+#include <QRadioButton>
+#include <QSlider>
+#include <QSpinBox>
 #include <QStackedWidget>
 #include <QSplitter>
 #include <QStatusBar>
+#include <QTabBar>
 #include <QTableWidget>
 #include <QToolBar>
+#include <QToolButton>
+#include <QTreeWidget>
 #include <QVBoxLayout>
 #include <QWidget>
 
@@ -348,6 +358,7 @@ void MainWindow::embedWorkspace(ui::Stage s, QWidget *w)
 
     m_workspaceStack->addWidget(page);
     m_stagePages.insert(key, page);
+    installKeyGuardOn(page);   // v2.0：嵌入窗口也走全局快捷键逻辑
     showStage(s);
 }
 
@@ -530,6 +541,31 @@ void MainWindow::refreshDeliverPage()
                      .arg(n)
                      .arg(QLocale().formattedDataSize(total))
                      .arg(root.dirName()));
+}
+
+// ---------------------------------------------------------------------------
+// 全局快捷键守卫：给嵌入窗口/停靠面板批量安装
+// 不装的话 Space/方向键会被 QSlider、按钮、表格吃掉（"快捷键被劫持"）。
+// ---------------------------------------------------------------------------
+void MainWindow::installKeyGuardOn(QWidget *root)
+{
+    if (!root || !m_keyGuard)
+        return;
+
+    root->installEventFilter(m_keyGuard);
+    const QList<QWidget *> kids = root->findChildren<QWidget *>();
+    for (QWidget *w : kids) {
+        if (!w)
+            continue;
+        if (qobject_cast<QSlider *>(w) || qobject_cast<QSpinBox *>(w)
+            || qobject_cast<QDoubleSpinBox *>(w) || qobject_cast<QPushButton *>(w)
+            || qobject_cast<QToolButton *>(w) || qobject_cast<QComboBox *>(w)
+            || qobject_cast<QTableWidget *>(w) || qobject_cast<QListWidget *>(w)
+            || qobject_cast<QTreeWidget *>(w) || qobject_cast<QTabBar *>(w)
+            || qobject_cast<QCheckBox *>(w) || qobject_cast<QRadioButton *>(w)) {
+            w->installEventFilter(m_keyGuard);
+        }
+    }
 }
 
 void MainWindow::animateSplitterSizes(const QList<int> &target)
@@ -759,6 +795,7 @@ void MainWindow::dockWorkspace(ui::Stage s, QWidget *w)
     dk->setMinimumWidth(380);
     dk->setMaximumWidth(560);   // 压缩：别把视频挤太窄
     dk->show();
+    installKeyGuardOn(w);       // v2.0：停靠的校时面板也走全局快捷键
 
     // 视频必须停在可见页
     if (m_analyzePage)

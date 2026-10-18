@@ -199,6 +199,8 @@ private:
     void showGridWorkspace();
     /// 检视器刷新（500ms 拉取当前上下文）
     void refreshInspector();
+    /// 给嵌入窗口（或停靠面板）装全局快捷键守卫
+    void installKeyGuardOn(QWidget *root);
     /// 分割器尺寸动画（折叠/展开轨道时平滑过渡）
     void animateSplitterSizes(const QList<int> &target);
     /// 交付页：标题 + 紧凑动作行 + 产物表（扫案件目录）

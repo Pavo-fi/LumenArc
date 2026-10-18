@@ -18,6 +18,8 @@
 #include <QGridLayout>
 #include <QHBoxLayout>
 #include <QLabel>
+#include <QMenu>
+#include <QCursor>
 #include <QPushButton>
 #include <QScrollArea>
 #include <QSlider>
@@ -662,6 +664,13 @@ void MultiCamPlaybackWindow::rebuildTiles()
 
     const int n = qMax(2, m_svc->laneCount());
     const int cols = (n <= 2) ? n : 2;
+
+    // v2.0 窗位映射：保持用户安排；路数变化时补齐为恒等
+    while (m_cellOfLane.size() < n)
+        m_cellOfLane.append(m_cellOfLane.size());
+    if (m_cellOfLane.size() > n)
+        m_cellOfLane.resize(n);
+
     for (int i = 0; i < n; ++i) {
         auto *tile = new CamTileWidget(this);
         tile->setOsdVisible(m_osdOn);
@@ -690,7 +699,32 @@ void MultiCamPlaybackWindow::rebuildTiles()
         // 帧通道：引擎在 loadLanes 时已创建（加载中亦可接，frameReady 异步到）
         tile->setEngine(m_svc->engineAt(i));
         m_tiles.append(tile);
-        m_grid->addWidget(tile, i / cols, i % cols);
+        const int cell = m_cellOfLane.value(i, i);
+        m_grid->addWidget(tile, cell / cols, cell % cols);
+
+        // v2.0：右键换窗位（不占用左键——左键仍用于缩放/平移/切听）
+        tile->setContextMenuPolicy(Qt::CustomContextMenu);
+        connect(tile, &QWidget::customContextMenuRequested, this,
+                [this, i](const QPoint &) {
+                    QMenu menu(this);
+                    auto *title = menu.addAction(
+                        lang(QStringLiteral("窗位安排"), QStringLiteral("Cell layout")));
+                    title->setEnabled(false);
+                    for (int c = 0; c < m_cellOfLane.size(); ++c) {
+                        auto *a = menu.addAction(
+                            lang(QStringLiteral("移到窗位 %1").arg(c + 1),
+                                 QStringLiteral("Move to cell %1").arg(c + 1)));
+                        a->setCheckable(true);
+                        a->setChecked(m_cellOfLane.value(i, i) == c);
+                        connect(a, &QAction::triggered, this,
+                                [this, i, c]() { moveLaneToCell(i, c); });
+                    }
+                    menu.addSeparator();
+                    menu.addAction(lang(QStringLiteral("恢复默认顺序"),
+                                        QStringLiteral("Reset order")),
+                                   this, [this]() { resetCellOrder(); });
+                    menu.exec(QCursor::pos());
+                });
     }
     // v1.12.8：逐瓦片调节参数表与路数对齐（保留旧值，新路补默认）
     while (m_tileAdjusts.size() < n) {
@@ -701,6 +735,41 @@ void MultiCamPlaybackWindow::rebuildTiles()
     if (m_selectedTile < 0 && n > 0)
         selectTile(0);
     updateTilesOsd();
+}
+
+// ---------------------------------------------------------------------------
+// v2.0 窗位自由安排
+// ---------------------------------------------------------------------------
+int MultiCamPlaybackWindow::cellOfLane(int lane) const
+{
+    return m_cellOfLane.value(lane, lane);
+}
+
+void MultiCamPlaybackWindow::moveLaneToCell(int lane, int cell)
+{
+    if (lane < 0 || lane >= m_cellOfLane.size())
+        return;
+    if (cell < 0 || cell >= m_cellOfLane.size())
+        return;
+    const int from = m_cellOfLane[lane];
+    if (from == cell)
+        return;
+    // 交换：占用目标格的那一路挪到原格，保证映射始终是排列
+    for (int i = 0; i < m_cellOfLane.size(); ++i) {
+        if (i != lane && m_cellOfLane[i] == cell) {
+            m_cellOfLane[i] = from;
+            break;
+        }
+    }
+    m_cellOfLane[lane] = cell;
+    rebuildTiles();
+}
+
+void MultiCamPlaybackWindow::resetCellOrder()
+{
+    for (int i = 0; i < m_cellOfLane.size(); ++i)
+        m_cellOfLane[i] = i;
+    rebuildTiles();
 }
 
 QVector<CamLane> MultiCamPlaybackWindow::currentCamLanes() const

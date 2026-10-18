@@ -117,8 +117,7 @@ private:
     void buildPickerPage();
     void refreshInventory();        ///< 重读案件清单+重建勾选行（默认勾已校时≤4）
     void updatePickerValidation();  ///< 勾选校验 + 模式预览 + 引导文案
-    void rebuildTiles();
-    void rebuildTimelineArea();
+    void rebuildTiles();    void rebuildTimelineArea();
     void refreshModeControls();
     void updateTilesOsd();
     void applyAdjustToTiles();   ///< 画面调节按存储参数下发各瓦片（v1.12.8 逐瓦片）
@@ -201,6 +200,12 @@ private:
     QVector<int> m_tileRotations;
     int m_selectedTile = -1;                      ///< 画面调节作用对象（点击选中）
     void selectTile(int idx);
+
+    // ── v2.0 窗位自由安排：lane 序号 → 格子序号（默认恒等）──
+    QVector<int> m_cellOfLane;
+    int  cellOfLane(int lane) const;
+    void moveLaneToCell(int lane, int cell);
+    void resetCellOrder();
     QPushButton *m_alignBtn = nullptr;
     QPushButton *m_alignOkBtn = nullptr;
     QPushButton *m_alignCancelBtn = nullptr;
