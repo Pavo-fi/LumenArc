@@ -136,9 +136,8 @@ void MainWindow::onExportSegmentClip()
     } else {
         m_workbench->refreshContext(m_sessionMgr->currentVideoPath(), fps);
     }
-    m_workbench->show();
-    m_workbench->raise();
-    m_workbench->activateWindow();
+    // v2.0 方案 B：嵌入为「产出」工作区（不再弹窗）
+    embedWorkspace(ui::Stage::Produce, m_workbench);
 }
 
 

@@ -774,11 +774,13 @@ void MultiCamPlaybackWindow::rebuildTimelineArea()
                         }
                 });
         lay->addWidget(m_mergedBar);
+        // v2.0 压缩：长图例改短句 + 完整说明进 tooltip（文字太多会让人畏难）
         m_hintLabel->setText(
-            lang("块 = 该机位墙钟覆盖 · 红 = ≥2 机位重叠 · 灰纹 = 缺口 · "
-                 "拖游标同步走带 · 双击块/瓦片回单路分析",
-                 "Block = wall-clock coverage · red = overlap · hatch = gap · "
-                 "drag cursor to scrub · double-click to open lane"));
+            lang("覆盖 = 块 · 红 = 重叠 · 灰纹 = 缺口",
+                 "Block = coverage · Red = overlap · Hatch = gap"));
+        m_hintLabel->setToolTip(
+            lang("拖游标可同步走带；双击块或瓦片回到单路分析",
+                 "Drag the cursor to scrub; double-click a block or tile to open one lane"));
     } else {
         // 模式B：每路一条带时间进度条（无分析面板）
         const int n = qMax(2, m_svc->laneCount());

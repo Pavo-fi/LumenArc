@@ -191,6 +191,14 @@ int main(int argc, char *argv[])
     window.showMaximized();
     CrashHandler::setStage(QStringLiteral("mainwindow-shown"));
 
+    // v2.0 QA：前端骨架自检（`--selfcheck-shell`）。跑到这里说明主窗与骨架已就绪。
+    // 正常启动不带该参数，不影响用户路径。
+    if (app.arguments().contains(QStringLiteral("--selfcheck-shell"))) {
+        const int fails = window.runShellSelfCheck();
+        qInfo().noquote() << QStringLiteral("SELFCHECK_RESULT fails=%1").arg(fails);
+        return fails == 0 ? 0 : 1;
+    }
+
     // 账号闸（v1.1 拍板：主窗先出，登录窗模态盖在上面；取消 = 退出）
     {
         const Credential cred = CredentialStore::load();

@@ -15,6 +15,8 @@
 #include "domain/speed_plan.h"
 #include "infrastructure/segment_export_engine.h"   // 合成导出工作台信号携带 Params
 #include <QPointer>
+#include <QHash>
+#include <QStringList>
 #include "domain/analysis_snapshot.h"
 #include "domain/timeline_model.h"
 #include "domain/time_calibration.h"
@@ -23,6 +25,7 @@
 #include "app/video_session_manager.h"
 #include "app/playback_settings.h"
 #include "videostatemanager.h"
+#include "ui/app_state.h"          // v2.0 前端骨架：六阶段 + 派生闸门（按值用于槽签名）
 
 class TimeSettingsDialog;
 class MultiCamPlaybackWindow;
@@ -48,11 +51,21 @@ class MicroDiffDialog;
 class LiveMonitorWindow;
 class QLabel;
 class QSplitter;
+class QStackedWidget;
 class QDockWidget;
 class QProgressBar;
 class QSlider;
 class VideoListPanel;
 class SpectrogramPanelEnhanced;
+
+// v2.0 前端骨架（定义在 src/ui/ 与 mainwindow_shell.cpp）
+namespace ui {
+class CommandRegistry;
+class WorkflowBar;
+class TaskBar;
+class InspectorPanel;
+class ChevronButton;
+} // namespace ui
 
 /** @brief 主窗口，协调所有子组件：视频播放/图表/放大镜/截图叠加/分析引擎 */
 class MainWindow : public QMainWindow
@@ -70,10 +83,26 @@ public:
     qint64 abPointA() const;
     qint64 abPointB() const;
 
+    // ── v2.0 前端骨架（P0，mainwindow_shell.cpp）──────────────────────
+    /// 应用状态：前端唯一真相。业务侧用 setVideoCount()/setUncalibratedCount()
+    /// 等推送事实；视图只读 + 订阅 changed()（禁止各窗口自存一份）。
+    ui::AppState *appState() const { return m_appState; }
+    /// 命令注册表（菜单栏实时收集；命令面板/快捷键表共用）
+    ui::CommandRegistry *commandRegistry() const { return m_commands; }
+    /// 统一任务带（OCR/校时/转码/渲染/导出 共用一个队列）
+    ui::TaskBar *taskBar() const { return m_taskBar; }
+
+    /// v2.0 QA：前端骨架自检（返回失败项数）。
+    /// 只在 `--selfcheck-shell` 启动参数下调用；正常启动不执行。
+    int runShellSelfCheck();
+
     // v1.8.0 P1a：AnalysisPhase 硬编码两阶段枚举已删（PENDING P-32 勾销）——
     // 分析流程状态由 AnalysisTaskService 状态机持有（R7/R8），MainWindow 仅响应任务信号
 
 private slots:
+    /// v2.0 前端骨架：工作流条阶段切换（先做状态+反馈，管线按阶段逐个挂接）
+    void onWorkflowStage(ui::Stage s);
+
     /// @brief 打开视频文件主流程（P-31 起入 slots 区：QMetaObject 测试通道）
     void openVideoFile(const QString &path);
     /// @brief 打开文件对话框并加载视频
@@ -146,6 +175,36 @@ private slots:
     void onPasteRoiToAll();
 
 private:
+    /// v2.0 前端骨架装配（工作流条/任务带/命令注册表）——定义于 mainwindow_shell.cpp
+    void setupShell();
+
+    // ── v2.0 方案 B：中央工作区（QStackedWidget，一个阶段一个页）──
+    /// 把一个现成窗口（QDialog/QMainWindow）嵌为某阶段的工作区页
+    void embedWorkspace(ui::Stage s, QWidget *w);
+    /// 切到某阶段：页不存在时触发对应入口（入口内部会 embedWorkspace 回来）
+    void showStage(ui::Stage s);
+    /// 卡片页：标题 + 卡片（命令匹配词 + 一行提示）+ 可选最近案件
+    QWidget *buildActionPage(const QString &title, const QStringList &commandTitles,
+                             const QStringList &hints, bool withRecentCases,
+                             QWidget *parent);
+    /// 把窗口停靠到侧边（校时用：视频必须保持可见，否则无法框选时间戳）
+    void dockWorkspace(ui::Stage s, QWidget *w);
+    /// 阶段铬件：工具栏 / 停靠面板按阶段显隐
+    void applyStageChrome(ui::Stage s);
+    QList<QDockWidget *> stageDocks() const;
+    /// 视图 chips（单路 / 宫格 / 全屏）
+    QWidget *buildViewChips(QWidget *parent);
+    void syncViewChips(int active);
+    /// 宫格工作区（多机窗嵌入页）成为当前页
+    void showGridWorkspace();
+    /// 检视器刷新（500ms 拉取当前上下文）
+    void refreshInspector();
+    /// 分割器尺寸动画（折叠/展开轨道时平滑过渡）
+    void animateSplitterSizes(const QList<int> &target);
+    /// 交付页：标题 + 紧凑动作行 + 产物表（扫案件目录）
+    QWidget *buildDeliverPage(QWidget *parent);
+    void refreshDeliverPage();
+
     void createMenus();
     void createToolBar();
     void setupConnections();
@@ -312,6 +371,25 @@ protected:
     QSplitter *m_splitter = nullptr;
     QSplitter *m_topRow = nullptr;      ///< v1.13.1 顶行 [视频|放大镜] 水平分割
     QList<int> m_topRowSavedSizes;      ///< 用户拖过的左右比例（关放大镜时保存）
+
+    // ── v2.0 前端骨架（mainwindow_shell.cpp）──
+    ui::AppState        *m_appState = nullptr;     ///< 前端唯一真相
+    ui::CommandRegistry *m_commands = nullptr;     ///< 命令注册表
+    ui::WorkflowBar     *m_workflowBar = nullptr;  ///< 六阶段工作流条
+    ui::TaskBar         *m_taskBar = nullptr;      ///< 统一任务带
+
+    // ── v2.0 方案 B：中央工作区 ──
+    QStackedWidget      *m_workspaceStack = nullptr;  ///< 阶段页容器
+    QHash<int, QWidget *> m_stagePages;              ///< Stage -> 页面
+    QWidget             *m_analyzePage = nullptr;    ///< 分析页 = 原中央部件
+    QList<QPushButton *>  m_viewChips;               ///< 视图 chips（单路/宫格/全屏）
+    ui::InspectorPanel   *m_inspector = nullptr;     ///< 检视器（当前上下文）
+    QDockWidget          *m_inspectorDock = nullptr; ///< 检视器停靠窗
+    QWidget              *m_noiseBar = nullptr;      ///< 底部左侧降噪控件容器（有音频才显）
+    class QTableWidget   *m_deliverTable = nullptr;  ///< 交付页产物表
+    class QLabel         *m_deliverSummary = nullptr;///< 交付页汇总行
+    bool                   m_docksStashed = false;   ///< 停靠面板是否已被暂存隐藏
+    QHash<QDockWidget *, bool> m_dockStash;          ///< 暂存的可见性
     QLabel *m_timeLabel = nullptr;
 
     QPushButton *m_playBtn = nullptr;
@@ -362,8 +440,8 @@ protected:
     QLabel *m_noiseReductionValueLabel = nullptr;
     QPushButton *m_nrApplyBtn = nullptr;
     QPushButton *m_toggleVideoListBtn = nullptr;
-    QPushButton *m_chartCollapseBtn = nullptr;
-    QPushButton *m_spectrogramCollapseBtn = nullptr;
+    ui::ChevronButton *m_chartCollapseBtn = nullptr;
+    ui::ChevronButton *m_spectrogramCollapseBtn = nullptr;
     QPushButton *m_videoListCollapseBtn = nullptr;
 
     // v0.5: 多边形ROI和辅助线

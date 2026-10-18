@@ -123,14 +123,19 @@
 
 void MainWindow::openPreprocessWindow()
 {
+    // v2.0 方案 B：已建过整备工作区 → 直接切回，
+    // 不重新建窗（否则旧页被销毁，旧窗口会留下悬垂子控件指针）
+    if (m_stagePages.contains(int(ui::Stage::Prepare))) {
+        showStage(ui::Stage::Prepare);
+        return;
+    }
     auto *w = new PreprocessWindow(m_analysisEngine, this);
     // v1.3.0 M2 任务8：案件模式注入（有打开案件时成果默认导入案件）
     w->setCaseManager(m_caseManager);
     connect(w, &PreprocessWindow::openOutputRequested,
             this, &MainWindow::openVideoFile);
-    w->show();
-    w->raise();
-    w->activateWindow();
+    // v2.0 方案 B：嵌入为「整备」工作区（不再弹窗）
+    embedWorkspace(ui::Stage::Prepare, w);
 }
 
 /**
@@ -801,8 +806,8 @@ void MainWindow::onSetStartTime()
     // 已开窗口：置顶返回（此前无 return 照样新建 → 双窗共存，框选确认只
     // 推进最后打开的窗口，先开的永远卡在「框选完了不抵达下一步」）
     if (m_calibrationDialog) {
-        m_calibrationDialog->raise();
-        m_calibrationDialog->activateWindow();
+        // v2.0 方案 B：已在「校时」工作区 → 直接切回去
+        showStage(ui::Stage::Align);
         return;
     }
     const qint64 curPos = m_videoEngine ? m_videoEngine->position() : 0;
@@ -894,9 +899,8 @@ void MainWindow::onSetStartTime()
                 if (m_caseDock)
                     m_caseDock->refreshTree();
             });
-    dlg->show();
-    dlg->raise();
-    dlg->activateWindow();
+    // v2.0 方案 B：校时需要视频可见（框选时间戳）→ 停靠到右侧，不换页
+    dockWorkspace(ui::Stage::Align, dlg);
 }
 
 // P-98（2026-09-28 实测教训）：秒级精细对齐是 **2~4 分钟的长任务**。用户在它跑完前
@@ -1992,7 +1996,7 @@ void MainWindow::onRectMode()
     m_polygonModeBtn->setChecked(false);
     m_guideLineBtn->setChecked(false);
     if (m_modeLabel)
-        m_modeLabel->setText(lang("模式：矩形", "Mode: Rectangle"));
+        m_modeLabel->setText(lang("矩形", "Rectangle"));
 }
 
 // v0.5: 多边形模式
@@ -2006,7 +2010,7 @@ void MainWindow::onPolygonMode()
     m_polygonModeBtn->setChecked(true);
     m_guideLineBtn->setChecked(false);
     if (m_modeLabel)
-        m_modeLabel->setText(lang("模式：多边形", "Mode: Polygon"));
+        m_modeLabel->setText(lang("多边形", "Polygon"));
 }
 
 // v0.5: 辅助线模式
@@ -2020,7 +2024,7 @@ void MainWindow::onGuideLineMode()
     m_polygonModeBtn->setChecked(false);
     m_guideLineBtn->setChecked(true);
     if (m_modeLabel)
-        m_modeLabel->setText(lang("模式：辅助线", "Mode: Guide Line"));
+        m_modeLabel->setText(lang("辅助线", "Guide"));
 }
 
 // v0.5: 复制ROI

@@ -19,6 +19,7 @@
 #include "app/report_html_builder.h"   // P-26 复活：离线 HTML 报告（含时间轴）
 #include "reportpreflightdialog.h"
 #include "sitemapeditordialog.h"
+#include <QStackedWidget>
 #include <QProgressDialog>
 #include <QFutureWatcher>
 #include <QtConcurrent/QtConcurrent>
@@ -488,9 +489,8 @@ void MainWindow::onMultiCamView()
 {
     if (!m_caseManager->isOpen())
         return;
-    if (m_multiCamWin) {          // 单例：已开则置顶
-        m_multiCamWin->raise();
-        m_multiCamWin->activateWindow();
+    if (m_multiCamWin) {          // 单例：已建 → 切回宫格工作区页（v2.0 嵌入）
+        showGridWorkspace();
         return;
     }
     // 主窗正在播则先暂停（避免双路音频/资源竞争）
@@ -543,8 +543,13 @@ void MainWindow::onMultiCamView()
         win->applyPlaybackDenoise(s.value("playbackDenoise", false).toBool(),
                                   m_playbackSettings->noiseReductionStrength());
     }
-    win->setAttribute(Qt::WA_DeleteOnClose);
-    win->showMaximized();   // v1.16.0 拍板：多机窗默认最大化（多路铺屏）
+    // v2.0 方案 B：宫格**嵌为工作区页**（不再弹独立窗）
+    win->setAttribute(Qt::WA_DeleteOnClose, false);
+    win->setWindowFlags(Qt::Widget);
+    win->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
+    if (m_workspaceStack)
+        m_workspaceStack->addWidget(win);
+    showGridWorkspace();
 }
 
 void MainWindow::onMultiCamStandalone()

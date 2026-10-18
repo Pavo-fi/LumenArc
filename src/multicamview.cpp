@@ -22,13 +22,12 @@
 namespace {
 constexpr int kLabelW = 168;    // 左侧机位标签列宽
 constexpr int kMarginR = 12;
-constexpr int kLaneH = 34;      // 机位行高
-constexpr int kLaneGap = 8;
-constexpr int kTopMargin = 26;   // 顶部留位：游标时刻气泡高 18+2（v1.16.0
-                                 // 热修：原为 8，气泡画在 y=-12 全被裁掉，
-                                 // 「播放时间轴整体下移」= 内容区整体下移让气泡可见）
-constexpr int kTickLabelH = 20; // 底部刻度文字区
-constexpr int kBandLabelH = 16; // 带标签区（缺口/重叠时长）
+// v2.0 压缩：底部各区域整体收窄，把高度让给画面（用户实测：两侧空太多）
+constexpr int kLaneH = 28;      // 机位行高（原 34）
+constexpr int kLaneGap = 4;     // 行间距（原 8）
+constexpr int kTopMargin = 22;  // 顶部留位：游标时刻气泡高 18+2（原 26）
+constexpr int kTickLabelH = 14; // 底部刻度文字区（原 20）
+constexpr int kBandLabelH = 12; // 带标签区（缺口/重叠时长，原 16）
 } // namespace
 
 // ---------------------------------------------------------------------------
@@ -47,7 +46,7 @@ void MultiCamViewWidget::setLanes(const QVector<CamLane> &lanes,
     m_lanes = lanes;
     m_tolMs = toleranceMs;
     setMinimumHeight(kTopMargin + int(lanes.size()) * (kLaneH + kLaneGap)
-                     + kBandLabelH + kTickLabelH + 14);   // 底部留白 14
+                     + kBandLabelH + kTickLabelH + 6);   // 底部留白（原 14）
     rebuildLayout();
     update();
 }

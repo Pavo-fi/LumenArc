@@ -160,7 +160,37 @@ void install()
 
 bool previousSessionCrashed()
 {
-    return !g_lockPath.isEmpty() && QFileInfo::exists(g_lockPath);
+    if (g_lockPath.isEmpty() || !QFileInfo::exists(g_lockPath))
+        return false;
+
+    // v2.0：区分「真崩溃」与「被强杀」。
+    // 旧逻辑只看锁文件存不存在 → 任务管理器结束/断电/杀进程 也会弹
+    // 「上次异常退出」，用户每次启动都被吓一次。
+    // 现在要求：该会话必须真的产生过 dump 才算崩溃。
+    QFile f(g_lockPath);
+    if (!f.open(QIODevice::ReadOnly | QIODevice::Text))
+        return false;
+    const QString txt = QString::fromUtf8(f.readAll());
+    f.close();
+
+    QDateTime started;
+    const QStringList lines = txt.split(QLatin1Char('\n'));
+    for (const QString &line : lines) {
+        if (line.startsWith(QStringLiteral("started="))) {
+            started = QDateTime::fromString(line.mid(8).trimmed(), Qt::ISODate);
+            break;
+        }
+    }
+    if (!started.isValid())
+        return true;   // 旧格式/不认识 → 保守报警
+
+    const QFileInfoList dumps = QDir(g_dir).entryInfoList(
+        QStringList{ QStringLiteral("*.dmp") }, QDir::Files, QDir::Time);
+    for (const QFileInfo &d : dumps) {
+        if (d.lastModified() >= started.addSecs(-5))
+            return true;   // 该会话确有 dump = 真崩溃
+    }
+    return false;          // 有锁无 dump = 被强杀/断电，不吓用户
 }
 
 QString previousSessionInfo()

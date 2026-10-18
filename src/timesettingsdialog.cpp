@@ -364,13 +364,14 @@ void TimeSettingsDialog::buildUi()
                                         "Step 2 · Align to real time (optional)"), this);
     auto *gt = new QVBoxLayout(grpTruth);
     auto *truthExplain = new QLabel(lang(
-        "第 1 步对的是「视频进度 ↔ 画面时间」，这一步对「画面时间 ↔ 真实北京时间」\n"
-        "（如录像机从未对时）。推荐拍照校时：屏幕与手机标准时间同框拍入，框选两处自动算偏差。",
-        "Step 1 maps playback↔on-screen time; this step maps on-screen↔real time "
-        "(e.g. the recorder was never synced). Recommended: photograph the screen "
-        "together with a standard clock and box both."), this);
+        "对到真实北京时间 · 推荐屏幕与标准时钟同框拍照",
+        "Map to real time · recommended: photograph the screen with a clock"), this);
     truthExplain->setWordWrap(true);
-    truthExplain->setStyleSheet(QStringLiteral("color:%1;").arg(Theme::TextSecond));
+    truthExplain->setStyleSheet(QStringLiteral("color:%1;").arg(Theme::TextMuted));
+    truthExplain->setToolTip(lang(
+        "第 1 步对的是「视频进度 ↔ 画面时间」，这一步对「画面时间 ↔ 真实北京时间」"
+        "（如录像机从未对时）。屏幕与手机标准时间同框拍入，框选两处自动算偏差。",
+        "Step 1 maps playback to on-screen time; this step maps on-screen to real time."));
     gt->addWidget(truthExplain);
 
     // 方式一：校时图片框选 OCR（v1.12.7 用户反馈：按钮不够显眼 →
@@ -524,18 +525,15 @@ QWidget *TimeSettingsDialog::buildUsageBanner()
     auto *lay = new QVBoxLayout(banner);
     lay->setContentsMargins(12, 8, 12, 8);
     lay->setSpacing(4);
-    auto *title = new QLabel(lang("用法", "Usage"), banner);
-    title->setStyleSheet(QStringLiteral("font-weight:bold;"));
-    lay->addWidget(title);
+    // v2.0 压缩：原「用法」标题 + 两行白话 → 一行短句 + tooltip
     auto *desc = new QLabel(
-        lang("点 GO 自动识别画面时间并应用；识别不出就用下面的手动录入。\n"
-             "画面时间与真实时间有整体偏差时，用第 2 步对真实时间。",
-             "Press GO to auto-read and apply the on-screen time; if it fails, "
-             "use manual entry below.\n"
-             "Use Step 2 if the on-screen clock differs from real time."),
+        lang("自动校时读画面时间；有整体偏差再用第 2 步",
+             "Auto-read on-screen time; use Step 2 for a constant offset"),
         banner);
     desc->setWordWrap(true);
     desc->setStyleSheet(QStringLiteral("color:%1;").arg(Theme::TextSecond));
+    desc->setToolTip(lang("识别不出时可手动录入画面时间",
+                          "If OCR fails, enter the on-screen time manually"));
     lay->addWidget(desc);
     return banner;
 }

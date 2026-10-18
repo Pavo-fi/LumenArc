@@ -47,6 +47,7 @@
 #include "logindialog.h"
 #include "infrastructure/credential_store.h"
 #include "theme.h"
+#include "ui/chevron_button.h"
 
 #include <QListWidget>
 #include <QSplitter>
@@ -212,6 +213,10 @@ MainWindow::MainWindow(QWidget *parent)
         if (CaseOpenPanel::showStartupPanel())
             onShowStartPage();
     });
+
+    // v2.0 前端骨架（P0）：工作流条 + 任务带 + 命令注册表。
+    // 必须放构造体最后——此刻中央部件与菜单栏已全部建好。
+    setupShell();
 }
 
 MainWindow::~MainWindow()
@@ -654,9 +659,11 @@ void MainWindow::createToolBar()
 
     // v1.18 UI 重组：工具栏拆两条——一级「播放与产出」+ 二级「分析与标注」
     QToolBar *toolBar = addToolBar(lang("播放与产出", "Playback & Deliver"));
+    toolBar->setObjectName(QStringLiteral("playbackToolBar"));   // v2.0：按阶段显隐
     toolBar->setIconSize(QSize(18, 18));
     addToolBarBreak(Qt::TopToolBarArea);
     QToolBar *analysisBar = addToolBar(lang("分析与标注", "Analyze & Annotate"));
+    analysisBar->setObjectName(QStringLiteral("analysisToolBar"));   // v2.0：按阶段显隐
     analysisBar->setIconSize(QSize(18, 18));
 
     // --- Playback group ---
@@ -691,7 +698,7 @@ void MainWindow::createToolBar()
     m_speedBtn->setEnabled(false);
 
     // --- Analyze group ---
-    m_analyzeBtn = new QPushButton(lang("亮度分析", "Luminance"), this);
+    m_analyzeBtn = new QPushButton(lang("亮度", "Luminance"), this);
     m_analyzeBtn->setToolTip(lang("分析当前视频的亮度（无需播放）", "Analyze current video luminance (no playback needed)"));
     m_analyzeBtn->setFixedHeight(32);
     m_analyzeBtn->setStyleSheet(primaryBtnStyle);
@@ -708,14 +715,14 @@ void MainWindow::createToolBar()
         "QPushButton:hover { background: rgba(240, 180, 41, 25); }"
         "QPushButton:pressed { background: rgba(240, 180, 41, 45); }"
         "QPushButton:disabled { background: transparent; color: " + Theme::TextMuted + "; border-color: " + Theme::Border + "; }";
-    m_audioAnalysisBtn = new QPushButton(lang("音频分析", "Audio"), this);
+    m_audioAnalysisBtn = new QPushButton(lang("音频", "Audio"), this);
     m_audioAnalysisBtn->setToolTip(lang("独立分析音频（频谱图+音量）", "Analyze audio only (spectrogram + volume)"));
     m_audioAnalysisBtn->setFixedHeight(32);
     m_audioAnalysisBtn->setStyleSheet(audioBtnStyle);
     m_audioAnalysisBtn->setEnabled(false);
 
     // 微变分析（2026-09-10）：显示链彩色增强，非模态面板
-    m_microDiffBtn = new QPushButton(lang("微变分析", "Micro-change"), this);
+    m_microDiffBtn = new QPushButton(lang("微变", "Micro"), this);
     m_microDiffBtn->setToolTip(lang("微变分析：把肉眼不可见的早期烟气/辉光变成彩色云团"
                                     "（需先圈定 ROI 并采集“起火前干净段”作为基准）",
                                     "Micro-change analysis: reveal invisible early smoke as a "
@@ -724,7 +731,7 @@ void MainWindow::createToolBar()
     m_microDiffBtn->setStyleSheet(audioBtnStyle);
     m_microDiffBtn->setEnabled(false);
 
-    m_setTimeBtn = new QPushButton(lang("校时…", "Calibrate…"), this);
+    m_setTimeBtn = new QPushButton(lang("校时", "Calibrate"), this);
     m_setTimeBtn->setToolTip(lang("视频校时：自动识别/手动/北京时间校验",
                                   "Time calibration: auto OCR / manual / Beijing-time check"));
     m_setTimeBtn->setFixedHeight(32);
@@ -831,12 +838,12 @@ void MainWindow::createToolBar()
     modeLayout->addWidget(m_polygonModeBtn);
     modeLayout->addWidget(m_guideLineBtn);
 
-    m_copyRoiBtn = new QPushButton(lang("复制ROI", "Copy ROI"), this);
+    m_copyRoiBtn = new QPushButton(lang("复制", "Copy"), this);
     m_copyRoiBtn->setToolTip(lang("复制ROI区域 (Ctrl+Shift+C)", "Copy ROI (Ctrl+Shift+C)"));
     m_copyRoiBtn->setFixedHeight(32);
     m_copyRoiBtn->setStyleSheet(btnBase);
 
-    m_pasteRoiBtn = new QPushButton(lang("粘贴ROI", "Paste ROI"), this);
+    m_pasteRoiBtn = new QPushButton(lang("粘贴", "Paste"), this);
     m_pasteRoiBtn->setToolTip(lang("粘贴ROI区域 (Ctrl+Shift+V)", "Paste ROI (Ctrl+Shift+V)"));
     m_pasteRoiBtn->setFixedHeight(32);
     m_pasteRoiBtn->setStyleSheet(btnBase);
@@ -857,7 +864,7 @@ void MainWindow::createToolBar()
     toolBar->addSeparator();
     toolBar->addWidget(m_snapshotBtn);
     // P-68 导出选段视频（A/B 选段存在时可用；分段变速+图表语谱同框）
-    m_exportClipBtn = new QPushButton(lang("合成导出", "Compose Export"), this);
+    m_exportClipBtn = new QPushButton(lang("合成", "Compose"), this);
     m_exportClipBtn->setToolTip(lang("合成导出：多段拼接 + 证据直拷/演示烧录双模式",
                                      "Compose export: multi-segment + evidence/demo modes"));
     m_exportClipBtn->setFixedHeight(32);
@@ -871,7 +878,7 @@ void MainWindow::createToolBar()
     auto *tbSpacer = new QWidget(this);
     tbSpacer->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
     toolBar->addWidget(tbSpacer);
-    auto *preprocessBtn = new QPushButton(lang("素材转码拼接", "Transcode & Merge"), this);
+    auto *preprocessBtn = new QPushButton(lang("转码拼接", "Transcode"), this);
     preprocessBtn->setToolTip(lang("多段监控录像智能排序、无损拼接与统一格式",
                                    "Sort, losslessly merge and normalize surveillance clips"));
     preprocessBtn->setMinimumHeight(30);
@@ -931,10 +938,24 @@ void MainWindow::createToolBar()
     analysisBar->addWidget(m_adjustBtn);
     // v1.18：模式指示器 —— 明确当前处于哪种区域模式（Esc 会退出什么）
     analysisBar->addSeparator();
-    m_modeLabel = new QLabel(lang("模式：矩形", "Mode: Rectangle"), this);
+    m_modeLabel = new QLabel(lang("矩形", "Rectangle"), this);
+    m_modeLabel->setToolTip(lang("按 Esc 退出当前模式", "Press Esc to exit the mode"));
     m_modeLabel->setStyleSheet(QStringLiteral(
         "QLabel { color:%1; font-size:12px; padding:0 6px; }").arg(Theme::Accent));
     analysisBar->addWidget(m_modeLabel);
+
+    // ── v2.0 压缩：以下入口已由阶段条或左下常驻面板覆盖，工具栏不再重复─
+    //    转码拼接→②整备 · 合成→⑤产出 · 校时→③校时 · 工作台▾→全部被阶段条覆盖
+    //    画面调节→左下常驻面板 · 模式标签→对应按钮高亮已表达
+    for (QWidget *w : { static_cast<QWidget *>(preprocessBtn),
+                        static_cast<QWidget *>(workbenchBtn),
+                        static_cast<QWidget *>(m_exportClipBtn),
+                        static_cast<QWidget *>(m_setTimeBtn),
+                        static_cast<QWidget *>(m_adjustBtn),
+                        static_cast<QWidget *>(m_modeLabel) }) {
+        if (w)
+            w->setVisible(false);
+    }
 
     // Prevent toolbar buttons from stealing keyboard focus
     for (QToolBar *bar : {toolBar, analysisBar}) {
@@ -955,7 +976,8 @@ void MainWindow::createToolBar()
             || qobject_cast<QDoubleSpinBox *>(w) || qobject_cast<QPushButton *>(w))
             w->installEventFilter(m_keyGuard);
     }
-    addDockWidget(Qt::RightDockWidgetArea, m_adjustPanel);
+    // v2.0 方案 B：画面调节面板放**左下**（原来在右侧，挤压视频宽度）
+    addDockWidget(Qt::LeftDockWidgetArea, m_adjustPanel);
     m_adjustPanel->hide();
 }
 
@@ -967,34 +989,46 @@ void MainWindow::buildCentralLayout(const QString &titleBarStyle,
                                     const QString &collapseBtnStyle,
                                     const QString &titleLabelStyle)
 {
-    // --- Chart container with title bar ---
+    // --- Chart container：左 gutter（轨道名）+ 右图形（v2.0 轨道栈样式）---
     m_chartContainer = new QWidget(m_splitter);
-    auto *chartContainerLayout = new QVBoxLayout(m_chartContainer);
+    auto *chartContainerLayout = new QHBoxLayout(m_chartContainer);
     chartContainerLayout->setContentsMargins(0, 0, 0, 0);
     chartContainerLayout->setSpacing(0);
 
     auto *chartTitleBar = new QWidget(m_chartContainer);
-    chartTitleBar->setFixedHeight(28);
+    chartTitleBar->setFixedWidth(56);   // v2.0：控件已搬到底部，左列只剩「箭头+色点+名称」→图形变长
     chartTitleBar->setStyleSheet(titleBarStyle);
-    auto *chartTitleLayout = new QHBoxLayout(chartTitleBar);
-    chartTitleLayout->setContentsMargins(4, 0, 4, 0);
+    auto *chartGutter = new QVBoxLayout(chartTitleBar);
+    chartGutter->setContentsMargins(6, 4, 6, 4);
+    chartGutter->setSpacing(2);
 
-    m_chartCollapseBtn = new QPushButton(QString::fromUtf8("\xe2\x96\xbc"), chartTitleBar); // ▼
-    m_chartCollapseBtn->setFixedSize(22, 22);
-    m_chartCollapseBtn->setStyleSheet(collapseBtnStyle);
-    m_chartCollapseBtn->setToolTip(lang("收起量化分析", "Collapse quantitative analysis"));
-    m_chartCollapseBtn->setFocusPolicy(Qt::NoFocus);
+    auto *chartHeadRow = new QHBoxLayout();
+    chartHeadRow->setSpacing(4);
 
-    auto *chartTitleLabel = new QLabel(lang("量化分析", "Quantitative Analysis"), chartTitleBar);
+    m_chartCollapseBtn = new ui::ChevronButton(chartTitleBar);
+    m_chartCollapseBtn->setToolTip(lang("收起 / 展开", "Collapse / Expand"));
+
+    // v2.0 轨道头：色点 + 短名（原「量化分析」看不出里面是什么）
+    auto *chartDot = new QLabel(QStringLiteral("\u25CF"), chartTitleBar);
+    chartDot->setStyleSheet(
+        QStringLiteral("QLabel{color:%1;font-size:10px;background:transparent;}")
+            .arg(Theme::DataPalette.isEmpty() ? Theme::Accent
+                                              : Theme::DataPalette[0].name()));
+    auto *chartTitleLabel = new QLabel(lang("亮度\n音量", "Luma\nAudio"), chartTitleBar);
     chartTitleLabel->setStyleSheet(titleLabelStyle);
+    chartTitleLabel->setWordWrap(true);
+    chartTitleLabel->setToolTip(lang("亮度 · 音量", "Luma · Audio"));
 
-    chartTitleLayout->addWidget(m_chartCollapseBtn);
-    chartTitleLayout->addWidget(chartTitleLabel);
-    chartTitleLayout->addStretch();
+    chartHeadRow->addWidget(m_chartCollapseBtn);
+    chartHeadRow->addWidget(chartDot);
+    chartHeadRow->addStretch();
+    chartGutter->addLayout(chartHeadRow);
+    chartGutter->addWidget(chartTitleLabel);
+    chartGutter->addStretch();
 
     m_chartContent = new QWidget(m_chartContainer);
     auto *chartContentLayout = new QVBoxLayout(m_chartContent);
-    chartContentLayout->setContentsMargins(0, 2, 0, 0);
+    chartContentLayout->setContentsMargins(0, 0, 0, 0);
     chartContentLayout->addWidget(m_chartPanel);
 
     chartContainerLayout->addWidget(chartTitleBar);
@@ -1005,85 +1039,99 @@ void MainWindow::buildCentralLayout(const QString &titleBarStyle,
 
     // --- Spectrogram container with title bar ---
     m_spectrogramContainer = new QWidget(m_splitter);
-    auto *specContainerLayout = new QVBoxLayout(m_spectrogramContainer);
+    auto *specContainerLayout = new QHBoxLayout(m_spectrogramContainer);
     specContainerLayout->setContentsMargins(0, 0, 0, 0);
     specContainerLayout->setSpacing(0);
 
+    // 左 gutter（v2.0：原全宽标题条 → 左列；滑块竖排收进左列，顶行不再挤控件）
     auto *specTitleBar = new QWidget(m_spectrogramContainer);
-    specTitleBar->setFixedHeight(28);
+    specTitleBar->setFixedWidth(56);    // v2.0：降噪控件已搬到底部，与图表左列对齐
     specTitleBar->setStyleSheet(titleBarStyle);
-    auto *specTitleLayout = new QHBoxLayout(specTitleBar);
-    specTitleLayout->setContentsMargins(4, 0, 4, 0);
+    auto *specGutter = new QVBoxLayout(specTitleBar);
+    specGutter->setContentsMargins(6, 4, 6, 4);
+    specGutter->setSpacing(3);
 
-    m_spectrogramCollapseBtn = new QPushButton(QString::fromUtf8("\xe2\x96\xbc"), specTitleBar); // ▼
-    m_spectrogramCollapseBtn->setFixedSize(22, 22);
-    m_spectrogramCollapseBtn->setStyleSheet(collapseBtnStyle);
-    m_spectrogramCollapseBtn->setToolTip(lang("收起语谱图", "Collapse spectrogram"));
-    m_spectrogramCollapseBtn->setFocusPolicy(Qt::NoFocus);
+    auto *specHeadRow = new QHBoxLayout();
+    specHeadRow->setSpacing(4);
 
-    auto *specTitleLabel = new QLabel(lang("语谱图", "Spectrogram"), specTitleBar);
+    m_spectrogramCollapseBtn = new ui::ChevronButton(specTitleBar);
+    m_spectrogramCollapseBtn->setToolTip(lang("收起 / 展开", "Collapse / Expand"));
+
+    auto *specDot = new QLabel(QStringLiteral("\u25CF"), specTitleBar);
+    specDot->setStyleSheet(
+        QStringLiteral("QLabel{color:%1;font-size:10px;background:transparent;}")
+            .arg(Theme::DataPalette.size() > 4 ? Theme::DataPalette[4].name()
+                                               : Theme::Accent));
+    auto *specTitleLabel = new QLabel(lang("语谱", "Spectrum"), specTitleBar);
     specTitleLabel->setStyleSheet(titleLabelStyle);
 
-    specTitleLayout->addWidget(m_spectrogramCollapseBtn);
-    specTitleLayout->addWidget(specTitleLabel);
-    specTitleLayout->addSpacing(12);
+    specHeadRow->addWidget(m_spectrogramCollapseBtn);
+    specHeadRow->addWidget(specDot);
+    specHeadRow->addStretch();
+    specGutter->addLayout(specHeadRow);
+    specTitleLabel->setToolTip(lang("语谱图", "Spectrogram"));
+    specGutter->addWidget(specTitleLabel);
 
-    m_noiseFloorLabel = new QLabel(lang("底噪:", "Noise:"), specTitleBar);
-    m_noiseFloorLabel->setStyleSheet("QLabel { color: " + Theme::TextSecond + "; font-size: 11px; }");
-    specTitleLayout->addWidget(m_noiseFloorLabel);
+    // 底噪行
+    auto *nfRow = new QHBoxLayout();
+    nfRow->setSpacing(4);
+    m_noiseFloorLabel = new QLabel(lang("底噪", "Noise"), specTitleBar);
+    m_noiseFloorLabel->setStyleSheet("QLabel { color: " + Theme::TextSecond + "; font-size: 10px; }");
 
     m_noiseFloorSlider = new QSlider(Qt::Horizontal, specTitleBar);
     m_noiseFloorSlider->setRange(-100, 0);  // -10.0 to 0.0 dB (x10)
     m_noiseFloorSlider->setValue(-55);       // default -5.5 dB
-    m_noiseFloorSlider->setFixedWidth(100);
-    m_noiseFloorSlider->setToolTip(lang("底噪阈值: -5.5 dB", "Noise floor threshold: -5.5 dB"));
+    m_noiseFloorSlider->setToolTip(lang("底噪阈值", "Noise floor"));
     m_noiseFloorSlider->setStyleSheet(
         "QSlider::groove:horizontal { background: " + Theme::Border + "; height: 4px; border-radius: 2px; }"
-        "QSlider::handle:horizontal { background: " + Theme::Info + "; width: 14px; height: 14px; margin: -5px 0; border-radius: 7px; }"
+        "QSlider::handle:horizontal { background: " + Theme::Info + "; width: 12px; height: 12px; margin: -4px 0; border-radius: 6px; }"
         "QSlider::sub-page:horizontal { background: " + Theme::Info + "; border-radius: 2px; }"
     );
-    specTitleLayout->addWidget(m_noiseFloorSlider);
-
     m_noiseFloorValueLabel = new QLabel("-5.5", specTitleBar);
-    m_noiseFloorValueLabel->setStyleSheet("QLabel { color: " + Theme::Info + "; font-size: 11px; font-family: Consolas; min-width: 30px; }");
-    specTitleLayout->addWidget(m_noiseFloorValueLabel);
+    m_noiseFloorValueLabel->setStyleSheet("QLabel { color: " + Theme::Info + "; font-size: 10px; font-family: Consolas; min-width: 26px; }");
 
-    // Noise reduction slider
-    m_noiseReductionLabel = new QLabel(lang("降噪:", "NR:"), specTitleBar);
-    m_noiseReductionLabel->setStyleSheet("QLabel { color: " + Theme::TextSecond + "; font-size: 11px; }");
-    specTitleLayout->addWidget(m_noiseReductionLabel);
+    nfRow->addWidget(m_noiseFloorLabel);
+    nfRow->addWidget(m_noiseFloorSlider, 1);
+    nfRow->addWidget(m_noiseFloorValueLabel);
+    specGutter->addLayout(nfRow);
+
+    // 降噪行
+    auto *nrRow = new QHBoxLayout();
+    nrRow->setSpacing(4);
+    m_noiseReductionLabel = new QLabel(lang("降噪", "NR"), specTitleBar);
+    m_noiseReductionLabel->setStyleSheet("QLabel { color: " + Theme::TextSecond + "; font-size: 10px; }");
 
     m_noiseReductionSlider = new QSlider(Qt::Horizontal, specTitleBar);
     m_noiseReductionSlider->setRange(0, 50);  // 0.0 to 5.0 (x10)
     m_noiseReductionSlider->setValue(0);       // default off
-    m_noiseReductionSlider->setFixedWidth(80);
     m_noiseReductionSlider->setToolTip(lang("降噪强度（需重新分析）", "Noise reduction (re-analysis needed)"));
     m_noiseReductionSlider->setStyleSheet(
         "QSlider::groove:horizontal { background: " + Theme::Border + "; height: 4px; border-radius: 2px; }"
-        "QSlider::handle:horizontal { background: " + Theme::Accent + "; width: 14px; height: 14px; margin: -5px 0; border-radius: 7px; }"
+        "QSlider::handle:horizontal { background: " + Theme::Accent + "; width: 12px; height: 12px; margin: -4px 0; border-radius: 6px; }"
         "QSlider::sub-page:horizontal { background: " + Theme::Accent + "; border-radius: 2px; }"
     );
-    specTitleLayout->addWidget(m_noiseReductionSlider);
-
     m_noiseReductionValueLabel = new QLabel("0.0", specTitleBar);
-    m_noiseReductionValueLabel->setStyleSheet("QLabel { color: " + Theme::Accent + "; font-size: 11px; font-family: Consolas; min-width: 24px; }");
-    specTitleLayout->addWidget(m_noiseReductionValueLabel);
+    m_noiseReductionValueLabel->setStyleSheet("QLabel { color: " + Theme::Accent + "; font-size: 10px; font-family: Consolas; min-width: 26px; }");
+
+    nrRow->addWidget(m_noiseReductionLabel);
+    nrRow->addWidget(m_noiseReductionSlider, 1);
+    nrRow->addWidget(m_noiseReductionValueLabel);
+    specGutter->addLayout(nrRow);
 
     // 安装事件过滤器，使全局快捷键（方向键、空格等）不被 Slider 拦截
     m_noiseFloorSlider->installEventFilter(m_keyGuard);
     m_noiseReductionSlider->installEventFilter(m_keyGuard);
 
-    m_nrApplyBtn = new QPushButton(lang("应用", "Apply"), specTitleBar);
-    m_nrApplyBtn->setFixedSize(40, 22);
+    m_nrApplyBtn = new QPushButton(lang("应用降噪", "Apply"), specTitleBar);
+    m_nrApplyBtn->setFixedHeight(20);
     m_nrApplyBtn->setFocusPolicy(Qt::NoFocus);
     m_nrApplyBtn->setStyleSheet(
-        "QPushButton { background: transparent; color: " + Theme::Accent + "; border: 1px solid " + Theme::Accent + "; border-radius: 11px; font-size: 10px; }"
+        "QPushButton { background: transparent; color: " + Theme::Accent + "; border: 1px solid " + Theme::Accent + "; border-radius: 10px; font-size: 10px; }"
         "QPushButton:hover { background: " + Theme::Accent + "; color: " + Theme::AccentOnDark + "; }"
         "QPushButton:disabled { color: " + Theme::TextMuted + "; border-color: " + Theme::Border + "; background: transparent; }"
     );
-    specTitleLayout->addWidget(m_nrApplyBtn);
-
-    specTitleLayout->addStretch();
+    specGutter->addWidget(m_nrApplyBtn);
+    specGutter->addStretch();
 
     m_spectrogramContent = new QWidget(m_spectrogramContainer);
     auto *specContentLayout = new QVBoxLayout(m_spectrogramContent);
@@ -1105,7 +1153,7 @@ void MainWindow::buildCentralLayout(const QString &titleBarStyle,
     // splash 的 processEvents 提前触发（窗口未 show 高度无效），真机被跳过。
 
     // Chart collapse/expand with splitter size control
-    connect(m_chartCollapseBtn, &QPushButton::clicked, this, [this]() {
+    connect(m_chartCollapseBtn, &ui::ChevronButton::clicked, this, [this]() {
         QList<int> sizes = m_splitter->sizes();
         if (sizes.size() < 3) return;
 
@@ -1115,8 +1163,7 @@ void MainWindow::buildCentralLayout(const QString &titleBarStyle,
             int freed = sizes[1] - 24;
             sizes[0] += freed;
             sizes[1] = 24;
-            m_chartCollapseBtn->setText(QString::fromUtf8("\xe2\x96\xb2")); // ▲
-            m_chartCollapseBtn->setToolTip(lang("展开量化分析", "Expand quantitative analysis"));
+            m_chartCollapseBtn->setExpanded(false);
             m_chartContent->setVisible(false);
             m_chartContent->setMinimumSize(0, 0);
             m_chartContent->setMaximumSize(0, 0);
@@ -1130,18 +1177,17 @@ void MainWindow::buildCentralLayout(const QString &titleBarStyle,
                 sizes[2] = 24;
                 sizes[0] += diff;
             }
-            m_chartCollapseBtn->setText(QString::fromUtf8("\xe2\x96\xbc")); // ▼
-            m_chartCollapseBtn->setToolTip(lang("收起量化分析", "Collapse quantitative analysis"));
+            m_chartCollapseBtn->setExpanded(true);
             m_chartContent->setVisible(true);
             m_chartContent->setMinimumSize(0, 0);
             m_chartContent->setMaximumSize(QWIDGETSIZE_MAX, QWIDGETSIZE_MAX);
             m_chartContainer->setMinimumHeight(0);
         }
-        m_splitter->setSizes(sizes);
+        animateSplitterSizes(sizes);
     });
 
     // Spectrogram collapse/expand with splitter size control
-    connect(m_spectrogramCollapseBtn, &QPushButton::clicked, this, [this]() {
+    connect(m_spectrogramCollapseBtn, &ui::ChevronButton::clicked, this, [this]() {
         QList<int> sizes = m_splitter->sizes();
         if (sizes.size() < 3) return;
 
@@ -1158,8 +1204,7 @@ void MainWindow::buildCentralLayout(const QString &titleBarStyle,
                 sizes[1] += freed - freed / 2;
             }
             sizes[2] = 24;
-            m_spectrogramCollapseBtn->setText(QString::fromUtf8("\xe2\x96\xb2")); // ▲
-            m_spectrogramCollapseBtn->setToolTip(lang("展开语谱图", "Expand spectrogram"));
+            m_spectrogramCollapseBtn->setExpanded(false);
             m_spectrogramContent->setVisible(false);
             m_spectrogramContent->setMinimumSize(0, 0);
             m_spectrogramContent->setMaximumSize(0, 0);
@@ -1173,14 +1218,13 @@ void MainWindow::buildCentralLayout(const QString &titleBarStyle,
                 sizes[1] = 24;
                 sizes[0] += diff;
             }
-            m_spectrogramCollapseBtn->setText(QString::fromUtf8("\xe2\x96\xbc")); // ▼
-            m_spectrogramCollapseBtn->setToolTip(lang("收起语谱图", "Collapse spectrogram"));
+            m_spectrogramCollapseBtn->setExpanded(true);
             m_spectrogramContent->setVisible(true);
             m_spectrogramContent->setMinimumSize(0, 0);
             m_spectrogramContent->setMaximumSize(QWIDGETSIZE_MAX, QWIDGETSIZE_MAX);
             m_spectrogramContainer->setMinimumHeight(0);
         }
-        m_splitter->setSizes(sizes);
+        animateSplitterSizes(sizes);
     });
 
 }

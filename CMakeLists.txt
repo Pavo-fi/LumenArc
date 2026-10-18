@@ -80,6 +80,13 @@ set(SOURCES
     src/mainwindow_magnifier.cpp   # v1.17.0 P-79：放大镜群
     src/mainwindow_snapshot.cpp    # v1.17.0 P-79：证据快照
     src/mainwindow_export.cpp      # v1.17.0 P-79：导出三入口
+    src/mainwindow_shell.cpp       # v2.0 前端骨架：工作流条/任务带/命令注册表装配
+    src/ui/app_state.cpp           # v2.0 前端骨架：应用状态（六阶段 + 派生闸门）
+    src/ui/command_registry.cpp    # v2.0 前端骨架：命令注册表（菜单栏实时收集）
+    src/ui/workflow_bar.cpp        # v2.0 前端骨架：工作流条（自绘 + 滑块动画）
+    src/ui/task_bar.cpp            # v2.0 前端骨架：统一任务带
+    src/ui/inspector_panel.cpp     # v2.0 前端骨架：检视器（当前上下文）
+    src/ui/chevron_button.cpp      # v2.0 前端骨架：自绘折叠按钮（带动画）
     src/videowidget.cpp
     src/chartpanel.cpp
     src/magnifierwidget.cpp
@@ -194,6 +201,12 @@ endif()
 
 set(HEADERS
     src/mainwindow.h
+    src/ui/app_state.h
+    src/ui/command_registry.h
+    src/ui/workflow_bar.h
+    src/ui/task_bar.h
+    src/ui/inspector_panel.h
+    src/ui/chevron_button.h
     src/videowidget.h
     src/domain/task_registry.h
     src/app/analysis_task_service.h
