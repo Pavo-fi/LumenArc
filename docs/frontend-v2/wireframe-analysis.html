@@ -1,0 +1,414 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>LumenArc 前端 V2 · 分析工作区（放大镜 + 多轨交叉比对）</title>
+<style>
+  :root{
+    --base:#16181D; --raised:#1E2128; --overlay:#252932;
+    --hover:#2E333D; --pressed:#1A1D24; --border:#333947;
+    --t1:#EDE8DF; --t2:#9AA0AB; --tmuted:#5C6270;
+    --accent:#F0B429; --accent-h:#FFC94D; --accent-p:#D99E14;
+    --danger:#E5484D; --info:#3E9BD8; --success:#4CAF50;
+    --dp1:#56B4E9; --dp2:#E69F00; --dp3:#009E73;
+    --dp4:#D55E00; --dp5:#CC79A7; --dp6:#F0E442;
+    --gutter:158px;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{height:100%}
+  body{background:var(--base);color:var(--t1);
+    font-family:"Microsoft YaHei UI","Microsoft YaHei","Segoe UI",sans-serif;
+    font-size:13px;line-height:1.45;overflow:hidden}
+  .app{height:100vh;display:grid;grid-template-rows:52px 1fr 44px}
+
+  /* 工作流条 */
+  .wfbar{display:flex;align-items:center;gap:8px;padding:0 12px;
+    background:var(--raised);border-bottom:1px solid var(--border)}
+  .brand{display:flex;align-items:center;gap:8px;padding-right:12px;margin-right:4px;
+    border-right:1px solid var(--border);height:26px}
+  .mark{width:18px;height:18px;border-radius:5px;
+    background:linear-gradient(135deg,var(--accent),var(--accent-p))}
+  .name{font-weight:600;letter-spacing:.3px}
+  .steps{display:flex;align-items:center;gap:2px;flex:1}
+  .step{display:flex;align-items:center;gap:6px;height:30px;padding:0 12px;
+    border-radius:6px;color:var(--t2);cursor:pointer;border:2px solid transparent}
+  .step:hover{background:var(--hover)}
+  .step.on{background:var(--overlay);color:var(--t1);border-color:var(--accent)}
+  .step .n{font-size:11px;color:var(--tmuted)}
+  .step.on .n{color:var(--accent)}
+  .dot{width:7px;height:7px;border-radius:50%;background:var(--tmuted)}
+  .dot.ok{background:var(--success)} .dot.warn{background:var(--accent)}
+  .kbd{height:28px;padding:0 10px;display:flex;align-items:center;gap:6px;
+    background:var(--overlay);border:1px solid var(--border);border-radius:6px;
+    color:var(--t2);font-size:12px}
+  .iconbtn{width:30px;height:30px;display:grid;place-items:center;border-radius:6px;
+    background:transparent;border:0;color:var(--t2);cursor:pointer}
+
+  /* 主体 */
+  .body{display:grid;grid-template-columns:240px 1fr;min-height:0}
+  .rail{background:var(--raised);border-right:1px solid var(--border);
+    overflow:auto;padding:12px 8px}
+  .sec-label{padding:8px;color:var(--tmuted);font-size:11px;letter-spacing:.6px;
+    text-transform:uppercase}
+  .node{display:flex;align-items:center;gap:8px;height:30px;padding:0 8px;
+    border-radius:6px;color:var(--t2);cursor:pointer}
+  .node:hover{background:var(--hover);color:var(--t1)}
+  .node.on{background:var(--overlay);color:var(--t1)}
+  .node .g{width:14px;text-align:center;color:var(--tmuted);font-size:11px}
+  .node.on .g{color:var(--accent)}
+  .node .meta{margin-left:auto;font-size:11px;color:var(--tmuted)}
+  .node.sub{padding-left:26px}
+  .swatch{width:9px;height:9px;border-radius:2px;display:inline-block;flex:0 0 auto}
+
+  /* 工作区 */
+  .workspace{display:grid;grid-template-columns:1fr 330px;min-height:0}
+  .stage{display:flex;flex-direction:column;gap:10px;padding:12px;min-width:0;min-height:0}
+  .stage-head{display:flex;align-items:flex-end;justify-content:space-between;gap:12px;flex:0 0 auto}
+  .stage-head h2{font-size:18px;font-weight:600}
+  .stage-head p{color:var(--t2);font-size:12px;margin-top:2px}
+  .chips{display:flex;gap:4px;background:var(--raised);
+    padding:3px;border-radius:7px;border:1px solid var(--border)}
+  .chip{height:26px;padding:0 11px;border-radius:5px;border:0;background:transparent;
+    color:var(--t2);font:inherit;font-size:12px;cursor:pointer;display:flex;align-items:center;gap:5px}
+  .chip:hover{background:var(--hover);color:var(--t1)}
+  .chip.on{background:var(--accent);color:var(--base);font-weight:600}
+
+  /* 视频 / 放大镜并列 */
+  .split{display:flex;gap:0;height:clamp(200px,34vh,330px);flex:0 0 auto}
+  .pane{position:relative;flex:1;border-radius:8px;overflow:hidden;
+    border:1px solid var(--border);
+    background:radial-gradient(90% 70% at 50% 40%,#232833 0%,#171A21 70%,#12141A 100%)}
+  .pane .grid{position:absolute;inset:0;opacity:.20;
+    background-image:linear-gradient(var(--border) 1px,transparent 1px),
+      linear-gradient(90deg,var(--border) 1px,transparent 1px);
+    background-size:56px 56px}
+  .handle{width:8px;flex:0 0 8px;display:grid;place-items:center;cursor:col-resize}
+  .handle i{width:3px;height:36px;border-radius:2px;background:var(--border)}
+  .handle:hover i{background:var(--accent)}
+  .osd{position:absolute;left:12px;top:10px;font-family:Consolas,monospace;font-size:12px;
+    color:#EDE8DF;text-shadow:0 1px 2px #000;letter-spacing:.4px;opacity:.92}
+  .tagbadge{position:absolute;right:10px;top:10px;height:24px;padding:0 8px;
+    display:flex;align-items:center;gap:5px;border-radius:5px;
+    background:rgba(37,41,50,.88);border:1px solid var(--border);font-size:11px;color:var(--t2)}
+  .tagbadge b{color:var(--accent);font-weight:600}
+  .roi{position:absolute;border:1.5px solid var(--accent);background:rgba(240,180,41,.07)}
+  .roi span{position:absolute;top:-17px;left:-1px;font-size:10px;color:var(--accent);
+    background:rgba(22,24,29,.82);padding:0 4px;border-radius:3px;white-space:nowrap}
+  .roi.clone{border-style:dashed;opacity:.9}
+  .lens{position:absolute;border:1px dashed var(--accent);background:rgba(240,180,41,.10)}
+  .lens::after{content:"取景";position:absolute;right:0;bottom:-16px;font-size:10px;color:var(--accent)}
+  .camname{position:absolute;left:12px;bottom:10px;font-size:11px;color:var(--t2);
+    background:rgba(22,24,29,.72);padding:2px 8px;border-radius:4px}
+
+  /* 轨道栈 */
+  .stack{flex:1;min-height:0;display:flex;flex-direction:column;
+    background:var(--overlay);border:1px solid var(--border);border-radius:8px;overflow:hidden}
+  .stack-head{display:flex;align-items:center;gap:8px;padding:6px 10px;
+    background:var(--raised);border-bottom:1px solid var(--border);font-size:11px;color:var(--tmuted)}
+  .stack-head .sp{flex:1}
+  .lk{display:flex;align-items:center;gap:4px;color:var(--success)}
+  .tracks{flex:1;min-height:0;overflow:auto;display:flex;flex-direction:column}
+  .track{display:grid;grid-template-columns:var(--gutter) 1fr;border-bottom:1px solid rgba(51,57,71,.55)}
+  .track:last-of-type{border-bottom:0}
+  .track.h1{min-height:64px} .track.h2{min-height:92px} .track.h3{min-height:56px}
+  .gutter{display:flex;flex-direction:column;justify-content:center;gap:2px;
+    padding:4px 8px;border-right:1px solid rgba(51,57,71,.55);background:rgba(30,33,40,.55)}
+  .gutter .t{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--t1)}
+  .gutter .t .eye{color:var(--tmuted);font-size:10px;margin-left:auto;cursor:pointer}
+  .gutter .u{font-size:10px;color:var(--tmuted);padding-left:15px}
+  .gutter .lg{display:flex;flex-wrap:wrap;gap:6px;padding-left:15px;margin-top:2px}
+  .gutter .lg span{display:flex;align-items:center;gap:3px;font-size:10px;color:var(--t2)}
+  .plot{position:relative;overflow:hidden;background:rgba(22,24,29,.35)}
+  .plot svg{display:block;width:100%;height:100%}
+  .cur{position:absolute;top:0;bottom:0;width:1px;background:var(--accent);pointer-events:none}
+  .cur::before{content:"";position:absolute;top:0;left:-3px;width:7px;height:7px;
+    border-radius:50%;background:var(--accent)}
+  .cur em{position:absolute;top:3px;left:5px;font-size:9px;font-style:normal;
+    color:var(--accent);font-variant-numeric:tabular-nums;white-space:nowrap}
+  .pin{position:absolute;top:0;bottom:0;width:1px;background:var(--dp5);opacity:.65;pointer-events:none}
+  .pin.b{background:var(--dp3)} .pin.c{background:var(--info)}
+  .pin::after{content:"";position:absolute;top:0;left:-3px;width:7px;height:7px;
+    background:inherit;border-radius:1px;transform:rotate(45deg)}
+  .timeaxis{display:grid;grid-template-columns:var(--gutter) 1fr;
+    border-top:1px solid var(--border);background:var(--raised);font-size:10px;
+    color:var(--tmuted);font-variant-numeric:tabular-nums}
+  .timeaxis .lbl{padding:4px 8px;border-right:1px solid rgba(51,57,71,.55)}
+  .timeaxis .ticks{display:flex;justify-content:space-between;padding:4px 6px}
+
+  /* 检视器 */
+  .inspector{background:var(--raised);border-left:1px solid var(--border);
+    display:flex;flex-direction:column;overflow:auto}
+  .insp-head{padding:12px;border-bottom:1px solid var(--border)}
+  .insp-title{font-size:15px;font-weight:600}
+  .insp-sub{color:var(--t2);font-size:12px;margin-top:2px}
+  .insp-sec{padding:12px;border-bottom:1px solid var(--border)}
+  .insp-sec h4{font-size:11px;color:var(--tmuted);letter-spacing:.6px;
+    text-transform:uppercase;font-weight:500;margin-bottom:8px}
+  .kv{display:flex;justify-content:space-between;gap:8px;padding:4px 0;color:var(--t2);font-size:12px}
+  .kv b{color:var(--t1);font-weight:500}
+  .tog{display:flex;align-items:center;justify-content:space-between;padding:5px 0;
+    color:var(--t2);font-size:12px}
+  .sw{width:28px;height:16px;border-radius:9px;background:var(--pressed);position:relative;flex:0 0 auto}
+  .sw.on{background:var(--accent)}
+  .sw i{position:absolute;top:2px;left:2px;width:12px;height:12px;border-radius:50%;
+    background:var(--t2);transition:.15s}
+  .sw.on i{left:14px;background:var(--base)}
+  .insp-actions{margin-top:auto;padding:12px;display:flex;flex-direction:column;gap:8px}
+  .btn{height:32px;padding:0 14px;border-radius:6px;border:2px solid transparent;
+    background:var(--overlay);color:var(--t1);font:inherit;cursor:pointer}
+  .btn:hover{background:var(--hover)}
+  .btn.primary{background:var(--accent);color:var(--base);font-weight:600}
+  .btn.ghost{background:transparent;border-color:var(--border);color:var(--t2)}
+
+  /* 任务带 */
+  .taskbar{display:flex;align-items:center;gap:12px;padding:0 12px;
+    background:var(--raised);border-top:1px solid var(--border);font-size:12px}
+  .task{display:flex;align-items:center;gap:10px}
+  .bar{width:180px;height:5px;border-radius:3px;background:var(--pressed);overflow:hidden}
+  .bar i{display:block;height:100%;background:var(--accent);border-radius:3px}
+  .right{margin-left:auto;display:flex;align-items:center;gap:12px;color:var(--tmuted)}
+  .badge{height:20px;min-width:20px;padding:0 6px;border-radius:10px;
+    background:var(--overlay);color:var(--t2);display:grid;place-items:center;font-size:11px}
+  .note{position:fixed;right:12px;bottom:52px;font-size:10px;color:var(--tmuted);
+    background:rgba(30,33,40,.9);border:1px solid var(--border);padding:3px 8px;border-radius:4px}
+  ::-webkit-scrollbar{width:10px;height:10px}
+  ::-webkit-scrollbar-thumb{background:var(--border);border-radius:5px}
+  ::-webkit-scrollbar-track{background:transparent}
+</style>
+</head>
+<body>
+<div class="app">
+
+  <header class="wfbar">
+    <div class="brand"><div class="mark"></div><div class="name">LumenArc</div></div>
+    <nav class="steps">
+      <div class="step"><span class="n">①</span>接入<span class="dot ok"></span></div>
+      <div class="step"><span class="n">②</span>整备<span class="dot ok"></span></div>
+      <div class="step"><span class="n">③</span>校时<span class="dot ok"></span></div>
+      <div class="step on"><span class="n">④</span>分析<span class="dot warn"></span></div>
+      <div class="step"><span class="n">⑤</span>产出<span class="dot"></span></div>
+      <div class="step"><span class="n">⑥</span>交付<span class="dot"></span></div>
+    </nav>
+    <div class="kbd">⌘K&nbsp; 命令 / 跳转</div>
+    <button class="iconbtn">⚙</button>
+  </header>
+
+  <main class="body">
+    <aside class="rail">
+      <div class="sec-label">对比素材</div>
+      <div class="node"><span class="g">☑</span><span class="swatch" style="background:var(--dp1)"></span>V14 平台导出<span class="meta">45:41</span></div>
+      <div class="node on"><span class="g">☑</span><span class="swatch" style="background:var(--dp2)"></span>P01 大门<span class="meta">1:02:11</span></div>
+      <div class="node"><span class="g">☐</span><span class="swatch" style="background:var(--dp3)"></span>C11 电房旁<span class="meta">36:20</span></div>
+      <div class="node"><span class="g">☐</span><span class="swatch" style="background:var(--dp4)"></span>C06 D10<span class="meta">58:04</span></div>
+
+      <div class="sec-label">分析通道</div>
+      <div class="node on"><span class="g">◉</span>亮度（2 ROI）</div>
+      <div class="node on"><span class="g">◉</span>音量</div>
+      <div class="node on"><span class="g">◉</span>语谱图</div>
+      <div class="node on"><span class="g">◉</span>微变变化率</div>
+
+      <div class="sec-label">事件</div>
+      <div class="node"><span class="g" style="color:var(--dp5)">◆</span>标签 起火点</div>
+      <div class="node"><span class="g" style="color:var(--dp3)">◆</span>快照 15:27:41</div>
+      <div class="node"><span class="g" style="color:var(--info)">◆</span>校时锚点 ×3</div>
+    </aside>
+
+    <section class="workspace">
+      <div class="stage">
+        <div class="stage-head">
+          <div>
+            <h2>分析</h2>
+            <p>同一段素材、多个通道、同一条时间轴 —— 交叉比对靠"对齐"，不靠来回切页。</p>
+          </div>
+          <div class="chips">
+            <button class="chip">单路</button>
+            <button class="chip on">并列放大</button>
+            <button class="chip">宫格</button>
+            <button class="chip">全屏</button>
+          </div>
+        </div>
+
+        <!-- 视频 | 放大镜 -->
+        <div class="split">
+          <div class="pane">
+            <div class="grid"></div>
+            <div class="osd">2026-09-20 15:27:41</div>
+            <div class="tagbadge"><b>1×</b> 原图</div>
+            <div class="roi" style="left:33%;top:28%;width:16%;height:10%"><span>ROI 1</span></div>
+            <div class="lens" style="left:33%;top:28%;width:16%;height:10%"></div>
+            <div class="camname">V14 · 1920×1080 · HEVC</div>
+          </div>
+          <div class="handle"><i></i></div>
+          <div class="pane">
+            <div class="grid" style="background-size:14px 14px"></div>
+            <div class="osd" style="font-size:14px">15:27:41</div>
+            <div class="tagbadge"><b>4.0×</b> 放大 · 同步显示链</div>
+            <div class="roi clone" style="left:30%;top:32%;width:44%;height:30%"><span>ROI 1（可在此直接拖拽调整）</span></div>
+            <div class="camname">取景跟随光标 · 滚轮缩放 · 中键平移</div>
+          </div>
+        </div>
+
+        <!-- 轨道栈 -->
+        <div class="stack">
+          <div class="stack-head">
+            <span>轨道栈</span>
+            <span class="sp"></span>
+            <span class="lk">⇄ 游标联动</span>
+            <span class="lk">⇔ 缩放联动</span>
+            <span style="color:var(--t2)">共享时间基准：画面时间（已校时）</span>
+          </div>
+
+          <div class="tracks">
+            <!-- 亮度 -->
+            <div class="track h2">
+              <div class="gutter">
+                <div class="t"><span class="swatch" style="background:var(--dp1)"></span>亮度<span class="eye">◉</span></div>
+                <div class="u">平均亮度 0–255</div>
+                <div class="lg">
+                  <span><span class="swatch" style="background:var(--dp1)"></span>ROI1</span>
+                  <span><span class="swatch" style="background:var(--dp2)"></span>ROI2</span>
+                  <span style="color:var(--tmuted)">虚线 = 参照 V14</span>
+                </div>
+              </div>
+              <div class="plot">
+                <svg viewBox="0 0 900 92" preserveAspectRatio="none">
+                  <line x1="0" y1="24" x2="900" y2="24" stroke="#333947" opacity=".5"/>
+                  <line x1="0" y1="48" x2="900" y2="48" stroke="#333947" opacity=".5"/>
+                  <line x1="0" y1="72" x2="900" y2="72" stroke="#333947" opacity=".5"/>
+                  <polyline points="0,70 60,66 120,72 180,62 240,56 300,48 360,52 420,40 480,36 540,44 600,30 660,24 720,30 780,20 840,16 900,22"
+                    fill="none" stroke="#56B4E9" stroke-width="1.6"/>
+                  <polyline points="0,78 60,76 120,80 180,74 240,70 300,66 360,69 420,60 480,58 540,64 600,54 660,48 720,52 780,44 840,40 900,46"
+                    fill="none" stroke="#E69F00" stroke-width="1.6"/>
+                  <polyline points="0,74 60,72 120,76 180,70 240,66 300,60 360,63 420,54 480,50 540,57 600,46 660,41 720,46 780,36 840,33 900,39"
+                    fill="none" stroke="#56B4E9" stroke-width="1" stroke-dasharray="4 4" opacity=".55"/>
+                </svg>
+                <i class="cur" style="left:48%"><em>15:27:41</em></i>
+                <i class="pin b" style="left:52%"></i>
+                <i class="pin c" style="left:12%"></i>
+              </div>
+            </div>
+
+            <!-- 音量 -->
+            <div class="track h1">
+              <div class="gutter">
+                <div class="t"><span class="swatch" style="background:var(--dp3)"></span>音量<span class="eye">◉</span></div>
+                <div class="u">dBFS −60 – 0</div>
+                <div class="lg"><span><span class="swatch" style="background:var(--dp3)"></span>主音轨</span></div>
+              </div>
+              <div class="plot">
+                <svg viewBox="0 0 900 64" preserveAspectRatio="none">
+                  <line x1="0" y1="16" x2="900" y2="16" stroke="#333947" opacity=".5"/>
+                  <line x1="0" y1="32" x2="900" y2="32" stroke="#333947" opacity=".5"/>
+                  <line x1="0" y1="48" x2="900" y2="48" stroke="#333947" opacity=".5"/>
+                  <polyline points="0,50 60,48 120,52 180,46 240,44 300,38 360,40 420,30 480,22 540,34 600,18 660,26 720,20 780,28 840,24 900,30"
+                    fill="none" stroke="#009E73" stroke-width="1.5"/>
+                </svg>
+                <i class="cur" style="left:48%"></i>
+                <i class="pin b" style="left:52%"></i>
+                <i class="pin c" style="left:12%"></i>
+              </div>
+            </div>
+
+            <!-- 语谱图 -->
+            <div class="track h2">
+              <div class="gutter">
+                <div class="t"><span class="swatch" style="background:var(--dp5)"></span>语谱图<span class="eye">◉</span></div>
+                <div class="u">频率 50 Hz – 8 kHz</div>
+                <div class="lg"><span>色阶：Thermal（固定）</span></div>
+              </div>
+              <div class="plot">
+                <div style="position:absolute;inset:0;background:
+                  repeating-linear-gradient(90deg, rgba(86,180,233,.10) 0 3px, transparent 3px 7px),
+                  linear-gradient(180deg, rgba(240,180,41,.30), rgba(213,94,0,.16) 45%, rgba(0,158,115,.10) 100%)"></div>
+                <div style="position:absolute;left:52%;top:0;bottom:0;width:2px;background:rgba(240,180,41,.28)"></div>
+                <i class="cur" style="left:48%"></i>
+                <i class="pin b" style="left:52%"></i>
+                <i class="pin c" style="left:12%"></i>
+              </div>
+            </div>
+
+            <!-- 微变 -->
+            <div class="track h1">
+              <div class="gutter">
+                <div class="t"><span class="swatch" style="background:var(--dp4)"></span>微变变化率<span class="eye">◉</span></div>
+                <div class="u">blkMax / medD</div>
+                <div class="lg">
+                  <span><span class="swatch" style="background:var(--dp4)"></span>blkMax</span>
+                  <span style="color:var(--tmuted)">μ+3σ 虚线</span>
+                </div>
+              </div>
+              <div class="plot">
+                <svg viewBox="0 0 900 56" preserveAspectRatio="none">
+                  <line x1="0" y1="18" x2="900" y2="18" stroke="#333947" stroke-dasharray="5 4" opacity=".8"/>
+                  <polyline points="0,44 90,43 180,45 270,42 360,40 450,41 520,30 560,14 610,22 700,26 800,30 900,33"
+                    fill="none" stroke="#D55E00" stroke-width="1.6"/>
+                </svg>
+                <i class="cur" style="left:48%"></i>
+                <i class="pin b" style="left:52%"></i>
+                <i class="pin c" style="left:12%"></i>
+              </div>
+            </div>
+          </div>
+
+          <div class="timeaxis">
+            <div class="lbl">画面时间</div>
+            <div class="ticks"><span>15:00</span><span>15:10</span><span>15:20</span><span>15:30</span><span>15:40</span><span>15:52</span></div>
+          </div>
+        </div>
+      </div>
+
+      <aside class="inspector">
+        <div class="insp-head"><div class="insp-title">游标读数</div><div class="insp-sub">15:27:41 · 四个通道同一时刻</div></div>
+
+        <div class="insp-sec"><h4>该时刻</h4>
+          <div class="kv"><span><span class="swatch" style="background:var(--dp1)"></span> 亮度 ROI1</span><b>128.4</b></div>
+          <div class="kv"><span><span class="swatch" style="background:var(--dp2)"></span> 亮度 ROI2</span><b>96.2</b></div>
+          <div class="kv"><span><span class="swatch" style="background:var(--dp3)"></span> 音量</span><b>−18.3 dB</b></div>
+          <div class="kv"><span><span class="swatch" style="background:var(--dp4)"></span> 微变 blkMax</span><b>31.1</b></div>
+          <div class="kv"><span>参照 V14（虚线）</span><b>112.7</b></div>
+        </div>
+
+        <div class="insp-sec"><h4>视图</h4>
+          <div class="kv"><span>模式</span><b>并列放大镜</b></div>
+          <div class="kv"><span>倍率</span><b>4.0×</b></div>
+          <div class="kv"><span>跟随</span><b>光标</b></div>
+          <div class="kv"><span>显示链</span><b>旋转 0° · LUT 启用</b></div>
+          <div class="tog"><span>导出时烧录放大画面</span><span class="sw on"><i></i></span></div>
+        </div>
+
+        <div class="insp-sec"><h4>联动</h4>
+          <div class="tog"><span>游标贯穿所有轨道</span><span class="sw on"><i></i></span></div>
+          <div class="tog"><span>缩放 / 平移联动</span><span class="sw on"><i></i></span></div>
+          <div class="tog"><span>事件标记贯穿</span><span class="sw on"><i></i></span></div>
+          <div class="tog"><span>吸附到事件点</span><span class="sw"><i></i></span></div>
+        </div>
+
+        <div class="insp-sec"><h4>轨道</h4>
+          <div class="kv"><span>亮度</span><b>92 px</b></div>
+          <div class="kv"><span>音量</span><b>64 px</b></div>
+          <div class="kv"><span>语谱图</span><b>92 px</b></div>
+          <div class="kv"><span>微变变化率</span><b>56 px</b></div>
+        </div>
+
+        <div class="insp-actions">
+          <button class="btn primary">把此 4 通道写入快照</button>
+          <button class="btn ghost">在报告中插入此视图</button>
+        </div>
+      </aside>
+    </section>
+  </main>
+
+  <footer class="taskbar">
+    <div class="task">
+      <span class="second" style="color:var(--t2)">微变变化率 · ROI1/ROI2</span>
+      <div class="bar"><i style="width:42%"></i></div>
+      <span style="color:var(--t2)">42%</span>
+      <span style="color:var(--tmuted)">1:12 / 2:50</span>
+    </div>
+    <div class="right"><span>另有 1 个任务</span><span class="badge">1</span><span>▾</span></div>
+  </footer>
+</div>
+<div class="note">设计稿 · 分析工作区 · 配色取自 src/theme.h</div>
+</body>
+</html>

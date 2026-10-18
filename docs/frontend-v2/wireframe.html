@@ -1,0 +1,565 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>LumenArc 前端 V2 · 界面框架设计稿</title>
+<style>
+  /* ── 令牌：严格取自 src/theme.h，未新增任何色值 ───────────────── */
+  :root{
+    --base:#16181D; --raised:#1E2128; --overlay:#252932;
+    --hover:#2E333D; --pressed:#1A1D24; --border:#333947;
+    --t1:#EDE8DF; --t2:#9AA0AB; --tmuted:#5C6270;
+    --accent:#F0B429; --accent-h:#FFC94D; --accent-p:#D99E14;
+    --danger:#E5484D; --info:#3E9BD8; --success:#4CAF50;
+    --dp1:#56B4E9; --dp2:#E69F00; --dp3:#009E73;
+    --dp4:#D55E00; --dp5:#CC79A7; --dp6:#F0E442;
+    --s1:4px; --s2:8px; --s3:12px; --s4:16px; --s5:24px;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{height:100%}
+  body{
+    background:var(--base); color:var(--t1);
+    font-family:"Microsoft YaHei UI","Microsoft YaHei","Segoe UI",sans-serif;
+    font-size:13px; line-height:1.45; overflow:hidden;
+  }
+  .app{height:100vh;display:grid;grid-template-rows:52px 1fr 44px}
+
+  /* ── 工作流条 ─────────────────────────────────────────────── */
+  .wfbar{
+    display:flex;align-items:center;gap:var(--s2);
+    padding:0 var(--s3);background:var(--raised);
+    border-bottom:1px solid var(--border);
+  }
+  .brand{display:flex;align-items:center;gap:8px;padding-right:var(--s3);margin-right:var(--s2);
+    border-right:1px solid var(--border);height:26px}
+  .brand .mark{width:18px;height:18px;border-radius:5px;
+    background:linear-gradient(135deg,var(--accent),var(--accent-p))}
+  .brand .name{font-weight:600;letter-spacing:.3px}
+  .steps{display:flex;align-items:center;gap:2px;flex:1}
+  .step{
+    display:flex;align-items:center;gap:6px;height:30px;padding:0 12px;
+    border-radius:6px;color:var(--t2);cursor:pointer;user-select:none;
+    border:2px solid transparent;
+  }
+  .step:hover{background:var(--hover)}
+  .step[aria-current="true"]{background:var(--overlay);color:var(--t1);border-color:var(--accent)}
+  .step .n{font-size:11px;color:var(--tmuted);font-variant-numeric:tabular-nums}
+  .step[aria-current="true"] .n{color:var(--accent)}
+  .dot{width:7px;height:7px;border-radius:50%;background:var(--tmuted)}
+  .dot.ok{background:var(--success)} .dot.warn{background:var(--accent)} .dot.bad{background:var(--danger)}
+  .wf-right{display:flex;align-items:center;gap:var(--s2)}
+  .kbd{
+    display:flex;align-items:center;gap:6px;height:28px;padding:0 10px;
+    background:var(--overlay);border:1px solid var(--border);border-radius:6px;
+    color:var(--t2);font-size:12px;cursor:pointer;
+  }
+  .kbd b{color:var(--t1);font-weight:500}
+  .iconbtn{width:30px;height:30px;display:grid;place-items:center;border-radius:6px;
+    background:transparent;border:0;color:var(--t2);cursor:pointer;font-size:14px}
+  .iconbtn:hover{background:var(--hover);color:var(--t1)}
+
+  /* ── 主体 ─────────────────────────────────────────────────── */
+  .body{display:grid;grid-template-columns:260px 1fr;min-height:0}
+
+  /* 上下文栏 */
+  .rail{background:var(--raised);border-right:1px solid var(--border);
+    display:flex;flex-direction:column;min-height:0}
+  .rail-head{display:flex;align-items:center;justify-content:space-between;
+    padding:var(--s3) var(--s3) var(--s2);color:var(--tmuted);font-size:11px;
+    letter-spacing:.6px;text-transform:uppercase}
+  .rail-body{overflow:auto;padding:0 var(--s2) var(--s3)}
+  .tree{margin-bottom:var(--s4)}
+  .node{display:flex;align-items:center;gap:8px;height:30px;padding:0 8px;border-radius:6px;
+    color:var(--t2);cursor:pointer}
+  .node:hover{background:var(--hover);color:var(--t1)}
+  .node.active{background:var(--overlay);color:var(--t1)}
+  .node .glyph{width:14px;text-align:center;color:var(--tmuted);font-size:11px}
+  .node.active .glyph{color:var(--accent)}
+  .node .meta{margin-left:auto;font-size:11px;color:var(--tmuted)}
+  .node.sub{padding-left:26px}
+  .sec-label{padding:var(--s2) 8px var(--s1);color:var(--tmuted);font-size:11px;
+    letter-spacing:.6px;text-transform:uppercase}
+
+  /* 工作区 */
+  .workspaces{position:relative;min-height:0}
+  .workspace{position:absolute;inset:0;display:none;grid-template-columns:1fr 340px;min-height:0}
+  .workspace.on{display:grid}
+  .stage{display:flex;flex-direction:column;gap:var(--s3);padding:var(--s3);
+    min-width:0;min-height:0;overflow:auto}
+
+  /* 检视器 */
+  .inspector{background:var(--raised);border-left:1px solid var(--border);
+    display:flex;flex-direction:column;min-height:0;overflow:auto}
+  .insp-head{padding:var(--s3);border-bottom:1px solid var(--border)}
+  .insp-title{font-size:15px;font-weight:600}
+  .insp-sub{color:var(--t2);font-size:12px;margin-top:2px}
+  .insp-sec{padding:var(--s3);border-bottom:1px solid var(--border)}
+  .insp-sec h4{font-size:11px;color:var(--tmuted);letter-spacing:.6px;
+    text-transform:uppercase;font-weight:500;margin-bottom:var(--s2)}
+  .kv{display:flex;justify-content:space-between;gap:var(--s2);padding:5px 0;
+    color:var(--t2);font-size:12px}
+  .kv b{color:var(--t1);font-weight:500}
+  .insp-actions{margin-top:auto;padding:var(--s3);display:flex;flex-direction:column;gap:var(--s2)}
+
+  /* 通用件 */
+  .btn{height:32px;padding:0 14px;border-radius:6px;border:2px solid transparent;
+    background:var(--overlay);color:var(--t1);font:inherit;cursor:pointer}
+  .btn:hover{background:var(--hover)}
+  .btn.primary{background:var(--accent);color:var(--base);font-weight:600}
+  .btn.primary:hover{background:var(--accent-h)}
+  .btn.ghost{background:transparent;border-color:var(--border);color:var(--t2)}
+  .btn.ghost:hover{background:var(--hover);color:var(--t1)}
+  .btn:disabled{background:var(--pressed);color:var(--tmuted);cursor:not-allowed}
+  .row{display:flex;align-items:center;gap:var(--s2)}
+  .stage-head{display:flex;align-items:flex-end;justify-content:space-between;gap:var(--s3)}
+  .stage-head h2{font-size:19px;font-weight:600;letter-spacing:.2px}
+  .stage-head p{color:var(--t2);font-size:12px;margin-top:2px}
+  .panel{background:var(--overlay);border-radius:8px;border:1px solid var(--border)}
+  .panel.flat{border:0;background:var(--raised)}
+  .muted{color:var(--tmuted)}
+  .second{color:var(--t2)}
+  .tag{display:inline-flex;align-items:center;gap:5px;height:20px;padding:0 7px;
+    border-radius:4px;background:var(--raised);color:var(--t2);font-size:11px}
+  .tag.ok{color:var(--success)} .tag.warn{color:var(--accent)} .tag.bad{color:var(--danger)}
+  .tag.info{color:var(--info)}
+
+  /* 视频舞台 */
+  .video{position:relative;flex:1;min-height:240px;border-radius:8px;overflow:hidden;
+    background:
+      radial-gradient(90% 70% at 50% 38%, #232833 0%, #171A21 70%, #12141A 100%);
+    border:1px solid var(--border)}
+  .video .grid{position:absolute;inset:0;opacity:.22;
+    background-image:linear-gradient(var(--border) 1px,transparent 1px),
+      linear-gradient(90deg,var(--border) 1px,transparent 1px);
+    background-size:64px 64px}
+  .osd{position:absolute;left:14px;top:12px;font-family:Consolas,monospace;
+    font-size:12px;color:#EDE8DF;text-shadow:0 1px 2px #000;letter-spacing:.4px;opacity:.9}
+  .camname{position:absolute;left:14px;bottom:12px;font-size:12px;color:var(--t2);
+    background:rgba(22,24,29,.72);padding:2px 8px;border-radius:4px}
+  .roi{position:absolute;border:1.5px solid var(--accent);background:rgba(240,180,41,.08)}
+  .roi span{position:absolute;top:-18px;left:-1px;font-size:10px;color:var(--accent);
+    background:rgba(22,24,29,.8);padding:0 4px;border-radius:3px;white-space:nowrap}
+  .video-tools{position:absolute;top:10px;right:10px;display:flex;gap:4px}
+  .tool{height:26px;padding:0 9px;border-radius:5px;background:rgba(37,41,50,.86);
+    border:1px solid var(--border);color:var(--t2);font-size:11px;display:flex;
+    align-items:center;gap:5px;cursor:pointer}
+  .tool.on{background:var(--accent);color:var(--base);border-color:var(--accent);font-weight:600}
+  .tool.on .esc{opacity:.72}
+
+  /* 时间轴 */
+  .timeline{height:96px;padding:10px 12px 0;flex:0 0 auto}
+  .tl-track{position:relative;height:34px;margin-top:6px;border-radius:5px;background:var(--raised)}
+  .tl-seg{position:absolute;top:0;bottom:0;border-radius:4px}
+  .tl-cursor{position:absolute;top:-6px;bottom:-6px;width:1px;background:var(--accent)}
+  .tl-cursor::before{content:"";position:absolute;top:-4px;left:-4px;width:9px;height:9px;
+    border-radius:50%;background:var(--accent)}
+  .tl-ticks{display:flex;justify-content:space-between;color:var(--tmuted);
+    font-size:10px;font-variant-numeric:tabular-nums;padding:4px 2px}
+
+  /* 曲线 */
+  .chart{height:150px;position:relative;flex:0 0 auto;padding:8px 12px 4px}
+  svg{display:block;width:100%;height:100%}
+  .tabs{display:flex;gap:4px;margin-bottom:var(--s2)}
+  .tab{height:26px;padding:0 11px;border-radius:5px;background:transparent;border:0;
+    color:var(--t2);font:inherit;font-size:12px;cursor:pointer}
+  .tab:hover{background:var(--hover)}
+  .tab.on{background:var(--overlay);color:var(--t1);box-shadow:inset 0 0 0 1px var(--border)}
+
+  /* 接入卡片 */
+  .cards{display:grid;grid-template-columns:repeat(3,1fr);gap:var(--s3)}
+  .card{background:var(--overlay);border:1px solid var(--border);border-radius:10px;
+    padding:var(--s4);cursor:pointer;transition:.15s}
+  .card:hover{border-color:var(--accent);background:var(--hover)}
+  .card .ico{font-size:20px;margin-bottom:var(--s3);color:var(--accent)}
+  .card h3{font-size:14px;font-weight:600}
+  .card p{color:var(--t2);font-size:12px;margin-top:4px}
+  .drop{border:1px dashed var(--border);border-radius:10px;height:132px;display:grid;
+    place-items:center;color:var(--tmuted);font-size:12px;background:transparent}
+
+  /* 表格 */
+  table{width:100%;border-collapse:collapse;font-size:12px}
+  th{text-align:left;color:var(--tmuted);font-weight:500;padding:7px 10px;
+    border-bottom:1px solid var(--border);font-size:11px;letter-spacing:.3px}
+  td{padding:8px 10px;border-bottom:1px solid rgba(51,57,71,.5);color:var(--t2)}
+  tr:hover td{background:var(--raised)}
+  td b{color:var(--t1);font-weight:500}
+  .rowbad td{background:rgba(229,72,77,.07)}
+  .rowbad td:first-child{box-shadow:inset 2px 0 0 var(--danger)}
+
+  /* 产出工作台 */
+  .workbench{flex:1;display:grid;grid-template-columns:200px 1fr;gap:var(--s3);min-height:0}
+  .wb-list{background:var(--raised);border-radius:8px;padding:var(--s2);overflow:auto}
+  .clips{height:76px;display:flex;gap:6px;align-items:center;padding:0 12px;
+    background:var(--overlay);border-radius:8px;overflow-x:auto}
+  .clip{height:44px;min-width:96px;border-radius:6px;background:var(--raised);
+    border-left:3px solid var(--dp1);display:flex;flex-direction:column;justify-content:center;
+    padding:0 10px;font-size:11px;color:var(--t2)}
+  .clip b{color:var(--t1);font-weight:500}
+  .clip.c2{border-left-color:var(--dp2)} .clip.c3{border-left-color:var(--dp3)}
+
+  /* 任务带 */
+  .taskbar{display:flex;align-items:center;gap:var(--s3);padding:0 var(--s3);
+    background:var(--raised);border-top:1px solid var(--border);font-size:12px}
+  .task{display:flex;align-items:center;gap:10px;min-width:340px}
+  .spinner{width:12px;height:12px;border-radius:50%;border:2px solid var(--border);
+    border-top-color:var(--accent);animation:spin 1s linear infinite}
+  @keyframes spin{to{transform:rotate(360deg)}}
+  .bar{width:190px;height:5px;border-radius:3px;background:var(--pressed);overflow:hidden}
+  .bar i{display:block;height:100%;background:var(--accent);border-radius:3px}
+  .task .pct{color:var(--t2);font-variant-numeric:tabular-nums}
+  .task .cancel{margin-left:auto;color:var(--tmuted);cursor:pointer}
+  .task .cancel:hover{color:var(--danger)}
+  .taskbar .right{margin-left:auto;display:flex;align-items:center;gap:var(--s3);color:var(--tmuted)}
+  .badge{height:20px;min-width:20px;padding:0 6px;border-radius:10px;background:var(--overlay);
+    color:var(--t2);display:grid;place-items:center;font-size:11px}
+
+  /* 滚动条 */
+  ::-webkit-scrollbar{width:10px;height:10px}
+  ::-webkit-scrollbar-thumb{background:var(--border);border-radius:5px}
+  ::-webkit-scrollbar-thumb:hover{background:var(--tmuted)}
+  ::-webkit-scrollbar-track{background:transparent}
+
+  .note{position:fixed;right:12px;bottom:52px;font-size:10px;color:var(--tmuted);
+    background:rgba(30,33,40,.9);border:1px solid var(--border);padding:3px 8px;border-radius:4px}
+</style>
+</head>
+<body>
+<div class="app">
+
+  <!-- ══ 工作流条 ═══════════════════════════════════════════════ -->
+  <header class="wfbar">
+    <div class="brand"><div class="mark"></div><div class="name">LumenArc</div></div>
+    <nav class="steps" id="steps">
+      <div class="step" data-ws="ingest"><span class="n">①</span>接入<span class="dot ok"></span></div>
+      <div class="step" data-ws="prepare"><span class="n">②</span>整备<span class="dot warn"></span></div>
+      <div class="step" data-ws="align"><span class="n">③</span>校时<span class="dot"></span></div>
+      <div class="step" data-ws="analyze"><span class="n">④</span>分析<span class="dot"></span></div>
+      <div class="step" data-ws="produce"><span class="n">⑤</span>产出<span class="dot"></span></div>
+      <div class="step" data-ws="deliver"><span class="n">⑥</span>交付<span class="dot"></span></div>
+    </nav>
+    <div class="wf-right">
+      <div class="kbd">⌘K&nbsp; 命令 / 跳转</div>
+      <button class="iconbtn" title="设置">⚙</button>
+    </div>
+  </header>
+
+  <main class="body">
+
+    <!-- ══ 上下文栏 ═══════════════════════════════════════════ -->
+    <aside class="rail">
+      <div class="rail-head"><span>案件</span><span>⌄</span></div>
+      <div class="rail-body">
+        <div class="tree">
+          <div class="node active"><span class="glyph">◆</span>20260920 佛山顺德<span class="meta">5</span></div>
+          <div class="node sub"><span class="glyph">▸</span>P01 大门<span class="meta">2</span></div>
+          <div class="node sub active"><span class="glyph">▸</span>C11 电房旁<span class="meta">1</span></div>
+          <div class="node sub"><span class="glyph">▸</span>C06 D10<span class="meta">1</span></div>
+          <div class="node sub"><span class="glyph">▸</span>V14 平台导出<span class="meta">1</span></div>
+          <div class="node"><span class="glyph">◇</span>20260819 广州越秀<span class="meta">3</span></div>
+          <div class="node"><span class="glyph">◇</span>20260722 广州增城<span class="meta">2</span></div>
+        </div>
+
+        <div class="sec-label">当前素材</div>
+        <div class="node active"><span class="glyph">▶</span>V14.mp4<span class="meta">45:41</span></div>
+        <div class="node"><span class="glyph">▶</span>hiv00835.mp4<span class="meta">1:02:11</span></div>
+
+        <div class="sec-label">案件资产</div>
+        <div class="node"><span class="glyph">▤</span>点位图<span class="meta">1</span></div>
+        <div class="node"><span class="glyph">▤</span>报告<span class="meta">2</span></div>
+        <div class="node"><span class="glyph">▤</span>移交包<span class="meta">—</span></div>
+      </div>
+    </aside>
+
+    <!-- ══ 工作区 ═════════════════════════════════════════════ -->
+    <section class="workspaces">
+
+      <!-- ① 接入 -->
+      <div class="workspace on" data-ws="ingest">
+        <div class="stage">
+          <div class="stage-head">
+            <div><h2>接入</h2><p>把素材弄进来。案件内还是临时看，决定后面所有阶段的行为。</p></div>
+            <div class="row"><button class="btn ghost">起始页</button><button class="btn primary">新建案件</button></div>
+          </div>
+          <div class="cards">
+            <div class="card"><div class="ico">▣</div><h3>打开文件</h3><p>入案分析，全流程可追溯</p></div>
+            <div class="card"><div class="ico">◱</div><h3>临时查看</h3><p>不入案，只做播放与标注</p></div>
+            <div class="card"><div class="ico">◉</div><h3>接入直播</h3><p>RTSP 直连，可无损录像</p></div>
+          </div>
+          <div class="drop">拖放视频 / 文件夹到此处</div>
+          <div class="panel flat" style="padding:12px 14px">
+            <div class="sec-label" style="padding:0 0 6px">最近案件</div>
+            <div class="node"><span class="glyph">◆</span>20260920 佛山顺德<span class="meta">今天 15:52</span></div>
+            <div class="node"><span class="glyph">◆</span>20260819 广州越秀<span class="meta">09-21</span></div>
+          </div>
+        </div>
+        <aside class="inspector">
+          <div class="insp-head"><div class="insp-title">20260920 佛山顺德</div><div class="insp-sub">5 机位 · 12 个素材 · 86 GB</div></div>
+          <div class="insp-sec"><h4>案件</h4>
+            <div class="kv"><span>编号</span><b>SD-0920-A</b></div>
+            <div class="kv"><span>主办</span><b>—</b></div>
+            <div class="kv"><span>校时可信度</span><b style="color:var(--accent)">1 路存疑</b></div>
+            <div class="kv"><span>未保存</span><b>无</b></div>
+          </div>
+          <div class="insp-sec"><h4>下一步</h4>
+            <div class="second" style="font-size:12px">V14 是平台导出件（1.139×），建议先校时再分析。</div>
+          </div>
+          <div class="insp-actions"><button class="btn primary">进入整备 →</button></div>
+        </aside>
+      </div>
+
+      <!-- ② 整备 -->
+      <div class="workspace" data-ws="prepare">
+        <div class="stage">
+          <div class="stage-head">
+            <div><h2>整备</h2><p>素材对不对、顺序对不对。有冲突先修，再往下走。</p></div>
+            <div class="row"><button class="btn ghost">批量重定位</button><button class="btn primary">GO</button></div>
+          </div>
+          <div class="panel" style="overflow:hidden">
+            <table>
+              <thead><tr><th style="width:44px">#</th><th>文件</th><th>画面时间</th><th>时长</th><th>状态</th></tr></thead>
+              <tbody>
+                <tr><td>01</td><td><b>ch07_183247.mp4</b></td><td>2026-07-26 18:32:47</td><td>12:03</td><td><span class="tag ok">✓ 可信</span></td></tr>
+                <tr><td>02</td><td><b>ch07_183511.mp4</b></td><td>2026-07-26 18:35:11</td><td>12:01</td><td><span class="tag ok">✓ 可信</span></td></tr>
+                <tr class="rowbad"><td>03</td><td><b>ch07_183710.mp4</b></td><td>2026-07-26 18:37:10</td><td>11:58</td><td><span class="tag bad">重叠 2:14</span></td></tr>
+                <tr><td>04</td><td><b>ch07_184902.mp4</b></td><td>2026-07-26 18:49:02</td><td>12:00</td><td><span class="tag ok">✓ 可信</span></td></tr>
+                <tr class="rowbad"><td>05</td><td><b>ch08_190102.mp4</b></td><td>2026-07-26 19:01:02</td><td>0:07</td><td><span class="tag warn">⚠ 时长为 0 疑损坏</span></td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+        <aside class="inspector">
+          <div class="insp-head"><div class="insp-title">3 个待处理</div><div class="insp-sub">修完即可 GO</div></div>
+          <div class="insp-sec"><h4>问题卡</h4>
+            <div class="kv"><span>重叠</span><b style="color:var(--accent)">2:14</b></div>
+            <div class="kv"><span>缺段</span><b>18:47:13 – 18:49:02</b></div>
+            <div class="kv"><span>疑似损坏</span><b style="color:var(--danger)">1</b></div>
+          </div>
+          <div class="insp-sec"><h4>处置</h4>
+            <div class="second" style="font-size:12px">重叠默认修剪并留痕；损坏文件剔除后重跑。</div>
+          </div>
+          <div class="insp-actions">
+            <button class="btn primary">一键处置并 GO</button>
+            <button class="btn ghost">直接拼接（有护栏）</button>
+          </div>
+        </aside>
+      </div>
+
+      <!-- ③ 校时 -->
+      <div class="workspace" data-ws="align">
+        <div class="stage">
+          <div class="stage-head">
+            <div><h2>校时</h2><p>让画面时间和真实时间对上。改即生效，没有"落库"这一步。</p></div>
+            <div class="row">
+              <span class="tag warn">画面 ≈ 1.139× 播放进度</span>
+              <button class="btn primary">自动校时</button>
+            </div>
+          </div>
+          <div class="video">
+            <div class="grid"></div>
+            <div class="osd">2026-09-20 15:27:41  星期日</div>
+            <div class="roi" style="left:34%;top:26%;width:15%;height:9%"><span>OCR 区域</span></div>
+            <div class="video-tools">
+              <div class="tool on">矩形 <span class="esc">Esc</span></div>
+              <div class="tool">多边形</div>
+              <div class="tool">辅助线</div>
+            </div>
+            <div class="camname">V14 · 1920×1080 · HEVC · 45:41</div>
+          </div>
+          <div class="timeline panel flat">
+            <div class="row" style="justify-content:space-between"><span class="second" style="font-size:12px">对齐预览</span><span class="muted" style="font-size:11px">真实刻度</span></div>
+            <div class="tl-track">
+              <div class="tl-seg" style="left:0;width:23%;background:rgba(86,180,233,.22)"></div>
+              <div class="tl-seg" style="left:24%;width:31%;background:rgba(230,159,0,.20)"></div>
+              <div class="tl-seg" style="left:56%;width:18%;background:rgba(0,158,115,.20)"></div>
+              <div class="tl-cursor" style="left:38%"></div>
+            </div>
+            <div class="tl-ticks"><span>15:00</span><span>15:15</span><span>15:30</span><span>15:45</span><span>15:52</span></div>
+          </div>
+        </div>
+        <aside class="inspector">
+          <div class="insp-head"><div class="insp-title">校时结果</div><div class="insp-sub">2800 个秒级锚点 · 残差 0.9s</div></div>
+          <div class="insp-sec"><h4>测点</h4>
+            <div class="kv"><span>15:00:13</span><b>conf 0.95</b></div>
+            <div class="kv"><span>15:33:54</span><b style="color:var(--accent)">⚠ 已修正</b></div>
+            <div class="kv"><span>15:52:13</span><b>conf 0.95</b></div>
+          </div>
+          <div class="insp-sec"><h4>拟合</h4>
+            <div class="kv"><span>倍率</span><b>1.1390×</b></div>
+            <div class="kv"><span>模式</span><b>秒级表</b></div>
+            <div class="kv"><span>跳过画面秒</span><b>287</b></div>
+            <div class="kv"><span>北京时间</span><b>慢 13 分 59 秒</b></div>
+          </div>
+          <div class="insp-actions">
+            <button class="btn primary">采用此结果</button>
+            <button class="btn ghost">时间重建（40–60 分钟）</button>
+          </div>
+        </aside>
+      </div>
+
+      <!-- ④ 分析 -->
+      <div class="workspace" data-ws="analyze">
+        <div class="stage">
+          <div class="stage-head">
+            <div><h2>分析</h2><p>同一段素材，换不同的看法。多机对比就是把这个舞台切格。</p></div>
+            <div class="row">
+              <button class="btn ghost">亮度</button>
+              <button class="btn ghost">音频</button>
+              <button class="btn ghost">微变</button>
+            </div>
+          </div>
+          <div class="video" style="min-height:200px">
+            <div class="grid"></div>
+            <div class="osd">2026-09-20 15:27:41</div>
+            <div class="roi" style="left:38%;top:30%;width:20%;height:14%"><span>ROI 1 亮度</span></div>
+            <div class="camname">V14 · 亮度分析 · 35 969 点 × 2 行</div>
+          </div>
+          <div class="panel flat" style="padding:10px 12px">
+            <div class="tabs">
+              <button class="tab on">亮度曲线</button>
+              <button class="tab">音量曲线</button>
+              <button class="tab">语谱图</button>
+              <button class="tab">微变云图</button>
+            </div>
+            <div class="chart">
+              <svg viewBox="0 0 900 120" preserveAspectRatio="none">
+                <line x1="0" y1="30" x2="900" y2="30" stroke="#333947" stroke-width="1" opacity=".55"/>
+                <line x1="0" y1="60" x2="900" y2="60" stroke="#333947" stroke-width="1" opacity=".55"/>
+                <line x1="0" y1="90" x2="900" y2="90" stroke="#333947" stroke-width="1" opacity=".55"/>
+                <polyline points="0,78 60,74 120,80 180,70 240,66 300,58 360,62 420,48 480,44 540,52 600,38 660,30 720,36 780,26 840,22 900,28"
+                  fill="none" stroke="#56B4E9" stroke-width="1.5"/>
+                <polyline points="0,88 60,86 120,90 180,84 240,80 300,76 360,79 420,70 480,68 540,74 600,64 660,58 720,62 780,54 840,50 900,56"
+                  fill="none" stroke="#E69F00" stroke-width="1.5"/>
+                <line x1="560" y1="0" x2="560" y2="120" stroke="#F0B429" stroke-width="1"/>
+              </svg>
+            </div>
+          </div>
+        </div>
+        <aside class="inspector">
+          <div class="insp-head"><div class="insp-title">分析参数</div><div class="insp-sub">选中 ROI 1</div></div>
+          <div class="insp-sec"><h4>ROI</h4>
+            <div class="kv"><span>ROI 1</span><b style="color:var(--dp1)">亮度 · 矩形</b></div>
+            <div class="kv"><span>ROI 2</span><b style="color:var(--dp2)">亮度 · 多边形</b></div>
+            <div class="kv"><span>坐标</span><b>961, 54, 227×209</b></div>
+          </div>
+          <div class="insp-sec"><h4>参数</h4>
+            <div class="kv"><span>时间基准</span><b>画面时间</b></div>
+            <div class="kv"><span>采样</span><b>逐帧</b></div>
+            <div class="kv"><span>显示链</span><b>不影响证据</b></div>
+          </div>
+          <div class="insp-actions"><button class="btn primary">开始分析</button></div>
+        </aside>
+      </div>
+
+      <!-- ⑤ 产出 -->
+      <div class="workspace" data-ws="produce">
+        <div class="stage">
+          <div class="stage-head">
+            <div><h2>产出</h2><p>把分析变成可交付的东西。所见即所得。</p></div>
+            <div class="row"><button class="btn ghost">证据快照</button><button class="btn primary">开始导出</button></div>
+          </div>
+          <div class="workbench">
+            <div class="wb-list">
+              <div class="sec-label" style="padding-top:0">素材</div>
+              <div class="node"><span class="glyph">☑</span>P01 大门</div>
+              <div class="node active"><span class="glyph">☑</span>C11 电房旁</div>
+              <div class="node"><span class="glyph">☑</span>C06 D10</div>
+              <div class="node"><span class="glyph">☐</span>V14</div>
+              <div class="sec-label">前处理产物</div>
+              <div class="node"><span class="glyph">☐</span>LAMerged_87_21</div>
+            </div>
+            <div class="video" style="min-height:220px">
+              <div class="grid"></div>
+              <div class="osd">2026-09-20 15:27:41</div>
+              <div class="camname">宫格预览 · 2 路 · 窗位可拖拽互换</div>
+            </div>
+          </div>
+          <div class="clips">
+            <div class="clip"><b>段 1</b><span>15:00:13 · 1×</span></div>
+            <div class="clip c2"><b>段 2</b><span>15:02:40 · 2×</span></div>
+            <div class="clip c3"><b>段 3</b><span>15:07:11 · 1×</span></div>
+            <div class="clip"><b>+</b><span>添加片段</span></div>
+          </div>
+        </div>
+        <aside class="inspector">
+          <div class="insp-head"><div class="insp-title">段 2</div><div class="insp-sub">C11 电房旁 · 15:02:40 – 15:05:12</div></div>
+          <div class="insp-sec"><h4>片段</h4>
+            <div class="kv"><span>倍速</span><b>2×</b></div>
+            <div class="kv"><span>窗位</span><b>1</b></div>
+            <div class="kv"><span>音轨</span><b>主听路</b></div>
+          </div>
+          <div class="insp-sec"><h4>输出</h4>
+            <div class="kv"><span>编码</span><b>H.264 · 1080p</b></div>
+            <div class="kv"><span>预计</span><b>4 分 12 秒</b></div>
+          </div>
+          <div class="insp-actions"><button class="btn primary">导出本段</button></div>
+        </aside>
+      </div>
+
+      <!-- ⑥ 交付 -->
+      <div class="workspace" data-ws="deliver">
+        <div class="stage">
+          <div class="stage-head">
+            <div><h2>交付</h2><p>能不能交出去，用校验结果回答，不靠感觉。</p></div>
+            <div class="row"><button class="btn primary">导出移交包</button></div>
+          </div>
+          <div class="panel" style="overflow:hidden">
+            <table>
+              <thead><tr><th>产物</th><th>类型</th><th>大小</th><th>状态</th></tr></thead>
+              <tbody>
+                <tr><td><b>快照_15-27-41.png</b></td><td>证据快照</td><td>1.2 MB</td><td><span class="tag ok">✓ 哈希已登记</span></td></tr>
+                <tr><td><b>LACompose_0920.mp4</b></td><td>合成导出</td><td>412 MB</td><td><span class="tag ok">✓ 时长校验通过</span></td></tr>
+                <tr><td><b>亮度曲线.csv</b></td><td>数据</td><td>86 KB</td><td><span class="tag ok">✓</span></td></tr>
+                <tr><td><b>分析报告.docx</b></td><td>报告</td><td>2.4 MB</td><td><span class="tag warn">⚠ 待补签署页</span></td></tr>
+                <tr><td><b>点位图.png</b></td><td>图件</td><td>3.1 MB</td><td><span class="tag ok">✓</span></td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+        <aside class="inspector">
+          <div class="insp-head"><div class="insp-title">完整性</div><div class="insp-sub">5 项产物 · 4 通过 · 1 待补</div></div>
+          <div class="insp-sec"><h4>校验</h4>
+            <div class="kv"><span>源哈希</span><b style="color:var(--success)">✓</b></div>
+            <div class="kv"><span>产物齐全</span><b style="color:var(--success)">✓</b></div>
+            <div class="kv"><span>校时可信</span><b style="color:var(--accent)">1 路存疑</b></div>
+            <div class="kv"><span>签署页</span><b style="color:var(--accent)">待补</b></div>
+          </div>
+          <div class="insp-sec"><h4>包内容</h4>
+            <div class="second" style="font-size:12px">完整包 428 MB / 轻量包 12 MB（不含源视频）</div>
+          </div>
+          <div class="insp-actions"><button class="btn primary">生成移交包</button><button class="btn ghost">只看清单</button></div>
+        </aside>
+      </div>
+
+    </section>
+  </main>
+
+  <!-- ══ 任务带 ═════════════════════════════════════════════════ -->
+  <footer class="taskbar">
+    <div class="task">
+      <div class="spinner"></div>
+      <span class="second">校时 · 秒级精细对齐</span>
+      <div class="bar"><i style="width:68%"></i></div>
+      <span class="pct">68%</span>
+      <span class="muted">2:41 / 4:00</span>
+      <span class="cancel">取消</span>
+    </div>
+    <div class="right"><span>另有 2 个任务</span><span class="badge">2</span><span>▾</span></div>
+  </footer>
+</div>
+
+<div class="note">设计稿 · 框架评审用 · 配色取自 src/theme.h</div>
+
+<script>
+  const steps = [...document.querySelectorAll('.step')];
+  const ws = [...document.querySelectorAll('.workspace')];
+  steps.forEach(s => s.addEventListener('click', () => {
+    steps.forEach(x => x.setAttribute('aria-current', x === s ? 'true' : 'false'));
+    ws.forEach(w => w.classList.toggle('on', w.dataset.ws === s.dataset.ws));
+  }));
+  steps[2].setAttribute('aria-current', 'true'); // 默认展示校时
+  steps[0].removeAttribute('aria-current');
+  ws.forEach(w => w.classList.toggle('on', w.dataset.ws === 'align'));
+</script>
+</body>
+</html>
