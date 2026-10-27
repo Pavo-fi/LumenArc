@@ -201,6 +201,9 @@ private:
     void refreshInspector();
     /// 给嵌入窗口（或停靠面板）装全局快捷键守卫
     void installKeyGuardOn(QWidget *root);
+
+    /// v2.1：案件列表展开/收起的**唯一入口**（细条按钮、占位条、放大镜恢复都走它）
+    void setCaseListExpanded(bool on);
     /// 分割器尺寸动画（折叠/展开轨道时平滑过渡）
     void animateSplitterSizes(const QList<int> &target);
     /// 交付页：标题 + 紧凑动作行 + 产物表（扫案件目录）

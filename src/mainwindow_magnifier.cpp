@@ -253,20 +253,8 @@ void MainWindow::removeMagnifier()
     // 恢复案件面板（v1.13.1：与视频列表同语义——占位条还亮着说明用户
     // 没主动展开过，按进入前状态恢复）
     if (m_casePlaceholder && m_casePlaceholder->isVisible()) {
-        m_casePlaceholder->setVisible(false);
-        if (m_caseDock) {
-            m_caseDock->setVisible(true);
-            if (m_caseDockWasExpanded) {
-                if (m_caseListContent)
-                    m_caseListContent->setVisible(true);
-                if (m_caseCollapseBtn)
-                    m_caseCollapseBtn->setText(QString::fromUtf8("◀"));
-                resizeDocks({m_caseDock}, {250}, Qt::Horizontal);
-            } else {
-                // 进入放大镜前用户本就手动收起——恢复为 24px 细条
-                resizeDocks({m_caseDock}, {24}, Qt::Horizontal);
-            }
-        }
+        // v2.1：统一入口（进入前展开/收起都原样恢复）
+        setCaseListExpanded(m_caseDockWasExpanded);
     }
     // Restore video list panel state
     if (m_videoListPlaceholder->isVisible()) {

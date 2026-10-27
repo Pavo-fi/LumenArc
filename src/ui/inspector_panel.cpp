@@ -87,7 +87,7 @@ InspectorPanel::InspectorPanel(QWidget *parent)
     {
         const QString css = QStringLiteral(
             "QPushButton{background:%1;color:%2;border:1px solid %3;border-radius:4px;"
-            "font-size:11px;padding:4px 0;text-align:left;padding-left:10px;}"
+            "font-size:12px;padding:5px 0;}"
             "QPushButton:hover{border-color:%4;}"
             "QPushButton:checked{color:%5;border-color:%5;}")
             .arg(Theme::BgCard, Theme::TextSecond, Theme::Border,
@@ -113,9 +113,9 @@ InspectorPanel::InspectorPanel(QWidget *parent)
 QLabel *InspectorPanel::addSection(QVBoxLayout *lay, const QString &title)
 {
     auto *l = new QLabel(title, this);
-    l->setStyleSheet(QStringLiteral("color:%1;font-size:10px;letter-spacing:.6px;"
-                                    "background:transparent;padding-top:8px;")
-                         .arg(Theme::TextMuted));
+    l->setStyleSheet(QStringLiteral("color:%1;font-size:11px;letter-spacing:.8px;"
+                                    "font-weight:600;background:transparent;padding-top:10px;")
+                         .arg(Theme::TextSecond));
     lay->addWidget(l);
     return l;
 }
@@ -128,10 +128,11 @@ QLabel *InspectorPanel::addRow(QVBoxLayout *lay, const QString &key)
     h->setSpacing(6);
 
     auto *k = new QLabel(key, row);
-    k->setStyleSheet(QStringLiteral("color:%1;font-size:11px;background:transparent;")
+    k->setStyleSheet(QStringLiteral("color:%1;font-size:12px;background:transparent;")
                          .arg(Theme::TextSecond));
     auto *v = new QLabel(QStringLiteral("—"), row);
-    v->setStyleSheet(QStringLiteral("color:%1;font-size:11px;background:transparent;")
+    v->setStyleSheet(QStringLiteral("color:%1;font-size:12px;font-weight:600;"
+                                    "background:transparent;")
                          .arg(Theme::TextPrimary));
     v->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
 
@@ -159,8 +160,9 @@ void InspectorPanel::setCalibration(const QString &state, bool ok)
     if (!m_cal)
         return;
     m_cal->setText(state);
-    m_cal->setStyleSheet(QStringLiteral("color:%1;font-size:11px;background:transparent;")
-                             .arg(ok ? Theme::Success : Theme::TextMuted));
+    m_cal->setStyleSheet(QStringLiteral("color:%1;font-size:12px;font-weight:600;"
+                                        "background:transparent;")
+                             .arg(ok ? Theme::Success : Theme::TextSecond));
 }
 
 void InspectorPanel::setCursor(qint64 ms)
@@ -180,7 +182,7 @@ QGridLayout *InspectorPanel::makeChipGrid(const QList<QWidget *> &widgets, bool 
     // 紧凑 chip 样式：宽度交给网格拉伸，字号降一号，高度可控
     const QString chip = QStringLiteral(
         "QPushButton{background:%1;color:%2;border:1px solid %3;border-radius:4px;"
-        "font-size:11px;padding:4px 0;min-width:0;}"
+        "font-size:12px;padding:4px 0;min-width:0;}"
         "QPushButton:hover{border-color:%4;color:%5;}"
         "QPushButton:pressed{background:%6;}"
         "QPushButton:checked{background:%4;color:%7;border-color:%4;font-weight:600;}"
@@ -189,7 +191,7 @@ QGridLayout *InspectorPanel::makeChipGrid(const QList<QWidget *> &widgets, bool 
              Theme::TextPrimary, Theme::BgPressed, Theme::AccentOnDark, Theme::TextMuted);
     const QString chipPrimary = QStringLiteral(
         "QPushButton{background:%1;color:%2;border:1px solid %1;border-radius:4px;"
-        "font-size:11px;font-weight:600;padding:4px 0;min-width:0;}"
+        "font-size:12px;font-weight:600;padding:4px 0;min-width:0;}"
         "QPushButton:hover{background:%3;}"
         "QPushButton:pressed{background:%4;}"
         "QPushButton:disabled{background:%5;color:%6;border-color:%5;}")
@@ -232,8 +234,8 @@ void InspectorPanel::addToolGroup(const QString &label, const QList<QWidget *> &
     // 分组小标签（比分区标题小一号，不抢眼）
     if (!label.isEmpty()) {
         auto *sub = new QLabel(label, this);
-        sub->setStyleSheet(QStringLiteral("color:%1;font-size:10px;background:transparent;")
-                               .arg(Theme::TextMuted));
+        sub->setStyleSheet(QStringLiteral("color:%1;font-size:11px;background:transparent;")
+                               .arg(Theme::TextSecond));
         m_toolLay->addWidget(sub);
     }
     m_toolLay->addLayout(makeChipGrid(widgets, primary));

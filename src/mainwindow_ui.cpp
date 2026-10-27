@@ -1486,8 +1486,7 @@ void MainWindow::buildCaseUi(const QString &collapseBtnStyle)
         "QDockWidget::title { padding: 0px; margin: 0px; border: 0px; }");
     auto *casePhContent = new QWidget();
     casePhContent->setFixedWidth(28);
-    casePhContent->setStyleSheet("background: " + Theme::BgPanel
-        + "; border-right: 1px solid " + Theme::Border + ";");
+    casePhContent->setStyleSheet("background: transparent;");   // v2.1：去掉左侧色块
     auto *casePhLay = new QVBoxLayout(casePhContent);
     casePhLay->setContentsMargins(2, 4, 2, 4);
     casePhLay->setSpacing(4);
@@ -1515,14 +1514,7 @@ void MainWindow::buildCaseUi(const QString &collapseBtnStyle)
     resizeDocks({m_casePlaceholder}, {24}, Qt::Horizontal);
     m_casePlaceholder->setVisible(false);
     connect(casePhExpandBtn, &QPushButton::clicked, this, [this]() {
-        m_casePlaceholder->setVisible(false);
-        m_caseDock->setVisible(true);
-        m_caseDockWasExpanded = true;
-        if (m_caseListContent)
-            m_caseListContent->setVisible(true);
-        if (m_caseCollapseBtn)
-            m_caseCollapseBtn->setText(QString::fromUtf8("◀"));
-        resizeDocks({m_caseDock}, {250}, Qt::Horizontal);
+        setCaseListExpanded(true);   // v2.1：唯一入口
     });
 
 
@@ -1549,8 +1541,7 @@ void MainWindow::buildCaseUi(const QString &collapseBtnStyle)
         caseWrapLay->setSpacing(0);
         auto *caseStrip = new QWidget(caseWrap);
         caseStrip->setFixedWidth(28);
-        caseStrip->setStyleSheet("background: " + Theme::BgPanel
-            + "; border-right: 1px solid " + Theme::Border + ";");
+        caseStrip->setStyleSheet("background: transparent;");   // v2.1：去掉左侧色块
         auto *stripLay = new QVBoxLayout(caseStrip);
         stripLay->setContentsMargins(2, 4, 2, 4);
         stripLay->setSpacing(4);
@@ -1578,15 +1569,8 @@ void MainWindow::buildCaseUi(const QString &collapseBtnStyle)
         m_caseDock->setWidget(caseWrap);
         m_caseListContent = caseInner;
         connect(m_caseCollapseBtn, &QPushButton::clicked, this, [this]() {
-            const bool vis = m_caseListContent->isVisible();
-            m_caseListContent->setVisible(!vis);
-            m_caseCollapseBtn->setText(vis
-                ? QString::fromUtf8("▶")
-                : QString::fromUtf8("◀"));
-            m_caseCollapseBtn->setToolTip(vis
-                ? lang("展开案件列表", "Expand case list")
-                : lang("收起案件列表", "Collapse case list"));
-            resizeDocks({m_caseDock}, {vis ? 24 : 250}, Qt::Horizontal);
+            // v2.1：唯一入口（原来文本/可见/宽度三处各改一次，容易走偏）
+            setCaseListExpanded(!(m_caseListContent && m_caseListContent->isVisible()));
         });
     }
     connect(m_caseDock, &CaseDock::openVideoRequested,

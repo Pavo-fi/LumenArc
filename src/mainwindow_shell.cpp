@@ -1000,6 +1000,32 @@ int MainWindow::runShellSelfCheck()
         check(!bar.isZoomed(), QStringLiteral("反向滚到底回到全览（夹紧不越界）"));
     }
 
+    // 4f. 案件列表显隐（用户 2026-10-27：交互有问题 → 统一入口后自测）
+    if (m_caseDock && m_caseListContent) {
+        setCaseListExpanded(true);
+        pump(); wait(120);
+        check(m_caseListContent->isVisible(), QStringLiteral("案件列表：展开后内容可见"));
+        check(m_caseCollapseBtn
+                  && m_caseCollapseBtn->text() == QString::fromUtf8("â"),
+              QStringLiteral("案件列表：展开时按钮为 ◀"));
+
+        setCaseListExpanded(false);
+        pump(); wait(120);
+        check(!m_caseListContent->isVisible(), QStringLiteral("案件列表：收起后内容隐藏"));
+        check(m_caseCollapseBtn
+                  && m_caseCollapseBtn->text() == QString::fromUtf8("â¶"),
+              QStringLiteral("案件列表：收起时按钮为 ▶"));
+
+        setCaseListExpanded(true);
+        pump(); wait(120);
+        check(m_caseListContent->isVisible(), QStringLiteral("案件列表：再次展开恢复可见"));
+        check(!m_casePlaceholder->isVisible(),
+              QStringLiteral("案件列表：展开后占位细条已撤（不留双条）"));
+
+        m_caseDock->setVisible(false);   // 收尾：不干扰后续「停靠全隐藏」检查
+        pump(); wait(80);
+    }
+
     // 5. 整备：创建 + 嵌入
     showStage(ui::Stage::Prepare);
     pump();

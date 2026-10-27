@@ -130,6 +130,25 @@ QString MainWindow::windowTitleWithCase(const QString &base) const
     return t + buildStamp();   // 构建时间戳常驻标题栏
 }
 
+void MainWindow::setCaseListExpanded(bool on)
+{
+    if (!m_caseDock)
+        return;
+    m_caseDockWasExpanded = on;
+    if (m_caseListContent)
+        m_caseListContent->setVisible(on);
+    if (m_caseCollapseBtn) {
+        m_caseCollapseBtn->setText(on ? QString::fromUtf8("â")    // ◀
+                                      : QString::fromUtf8("â¶"));   // ▶
+        m_caseCollapseBtn->setToolTip(on ? lang("收起案件列表", "Collapse case list")
+                                         : lang("展开案件列表", "Expand case list"));
+    }
+    if (m_casePlaceholder)
+        m_casePlaceholder->setVisible(false);
+    m_caseDock->setVisible(true);
+    resizeDocks({m_caseDock}, {on ? 250 : 28}, Qt::Horizontal);
+}
+
 void MainWindow::enterCaseMode()
 {
     // CaseDock 替代视频列表（仅案件模式，拍板§8-6）
@@ -138,6 +157,17 @@ void MainWindow::enterCaseMode()
     m_caseDock->setVisible(true);
     m_caseDock->refreshTree();
     resizeDocks({m_caseDock}, {250}, Qt::Horizontal);
+
+    // v2.1：案件区加长——检视器下方本就有大片空位，把纵向比例往案件面板倾斜
+    QTimer::singleShot(0, this, [this]() {
+        if (!m_caseDock || !m_inspectorDock)
+            return;
+        const int total = m_caseDock->height() + m_inspectorDock->height();
+        if (total <= 400)
+            return;
+        const int top = int(total * 0.62);
+        resizeDocks({m_caseDock, m_inspectorDock}, {top, total - top}, Qt::Vertical);
+    });
     m_caseStatusBtn->setText(
         m_caseManager->meta().caseNo);  // 规范§6：emoji 禁令（原 📁 前缀已删）
     m_caseStatusBtn->setVisible(true);
