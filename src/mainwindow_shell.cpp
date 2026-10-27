@@ -213,6 +213,13 @@ void MainWindow::setupShell()
     // v2.2：检视器自己管滚动（上半事实可滚，下半工具固定）——
     // 这里直接放面板本体，不要再套一层 QScrollArea。
     m_inspectorDock->setWidget(m_inspector);
+    // v2.3：与案件坞同一个一级标题样式；去掉 ✕（左侧栏由顶栏开关统一管）
+    m_inspectorDock->setFeatures(QDockWidget::DockWidgetMovable);
+    m_inspectorDock->setStyleSheet(QStringLiteral(
+            "QDockWidget{font-size:11px;font-weight:600;color:%1;}"
+            "QDockWidget::title{background:%2;padding:5px 8px;"
+            "border-bottom:1px solid %3;text-align:left;}")
+            .arg(Theme::TextPrimary, Theme::BgPanel, Theme::Border));
     m_inspectorDock->setAllowedAreas(Qt::LeftDockWidgetArea | Qt::RightDockWidgetArea);
     addDockWidget(Qt::LeftDockWidgetArea, m_inspectorDock);
     m_inspectorDock->setMinimumWidth(200);
@@ -1105,6 +1112,40 @@ int MainWindow::runShellSelfCheck()
 
         m_caseDock->setVisible(false);   // 收尾：不干扰后续「停靠全隐藏」检查
         pump(); wait(80);
+    }
+
+    // 4g. 轨道收起/展开互不牵连（用户 2026-10-27：
+    //     「两条都收起时先开语谱，亮度栏会自动打开且内容空白」）
+    if (m_splitter && m_splitter->count() == 3 && m_chartCollapseBtn
+        && m_spectrogramCollapseBtn) {
+        // 归位：都展开
+        if (m_chartCollapsed) m_chartCollapseBtn->click();
+        if (m_specCollapsed)  m_spectrogramCollapseBtn->click();
+        pump(); wait(300);
+
+        m_chartCollapseBtn->click();          // 收亮度
+        pump(); wait(300);
+        m_spectrogramCollapseBtn->click();    // 收语谱
+        pump(); wait(300);
+        check(m_chartCollapsed && m_specCollapsed,
+              QStringLiteral("轨道：两条都已收起"));
+
+        m_spectrogramCollapseBtn->click();    // 只开语谱
+        pump(); wait(400);
+        const QList<int> s = m_splitter->sizes();
+        check(!m_specCollapsed && m_chartCollapsed,
+              QStringLiteral("轨道：先开语谱时亮度仍保持收起（不被强行拉开）"));
+        check(!m_chartContent->isVisible(),
+              QStringLiteral("轨道：亮度内容仍隐藏（不会出现空白轨）"));
+        check(s.size() == 3 && s[1] <= 60,
+              QStringLiteral("轨道：亮度栏高度仍是收起态 %1px")
+                  .arg(s.value(1)));
+
+        // 复位
+        m_spectrogramCollapseBtn->click();
+        pump(); wait(250);
+        m_chartCollapseBtn->click();
+        pump(); wait(250);
     }
 
     // 5. 整备：创建 + 嵌入

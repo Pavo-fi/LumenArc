@@ -156,21 +156,52 @@ void MainWindow::createMagnifier()
     m_topRow->addWidget(m_magnifier);   // 内嵌顶行右半（v1.13.1）
     m_topRow->setStretchFactor(1, 1);
     m_magnifier->show();
-    // 左右等大并列：首次均分；用户拖过分割条则以关放大镜时保存的比例恢复
-    if (m_topRowSavedSizes.size() == 2 && m_topRowSavedSizes[0] > 0
-        && m_topRowSavedSizes[1] > 0) {
-        m_topRow->setSizes(m_topRowSavedSizes);
-    } else {
+    // v2.3：左右比例改成「布局落定后再分 + 动画到位」。
+    // 原来 addWidget 之后立刻 setSizes，此时 splitter 宽度还是旧值，
+    // 用户看到的就是「缩放不正确 / 一开就先跳一下」。
+    m_topRow->setStretchFactor(0, 1);
+    m_topRow->setStretchFactor(1, 1);
+    QTimer::singleShot(0, this, [this]() {
+        if (!m_magnifier || !m_topRow)
+            return;
         const int w = m_topRow->width();
-        if (w > 0)
-            m_topRow->setSizes({w / 2, w - w / 2});
-    }
+        if (w <= 0)
+            return;
+        QList<int> target;
+        if (m_topRowSavedSizes.size() == 2 && m_topRowSavedSizes[0] > 0
+            && m_topRowSavedSizes[1] > 0)
+            target = m_topRowSavedSizes;
+        else
+            target = {w / 2, w - w / 2};
+
+        const QList<int> from = m_topRow->sizes();
+        if (from.size() != 2 || from == target) {
+            m_topRow->setSizes(target);
+            return;
+        }
+        auto *anim = new QVariantAnimation(this);
+        anim->setDuration(180);
+        anim->setEasingCurve(QEasingCurve::OutCubic);
+        anim->setStartValue(0.0);
+        anim->setEndValue(1.0);
+        connect(anim, &QVariantAnimation::valueChanged, this,
+                [this, from, target](const QVariant &v) {
+                    const double t = v.toDouble();
+                    QList<int> cur;
+                    for (int i = 0; i < target.size(); ++i)
+                        cur << int(from[i] + (target[i] - from[i]) * t);
+                    m_topRow->setSizes(cur);
+                });
+        anim->start(QAbstractAnimation::DeleteWhenStopped);
+    });
 
     // Auto-layout: 收起左侧列表（案件模式收案件面板，否则收视频列表，
     // v1.13.1 用户反馈①：案件列表此前不折叠）并显示占位细条
-    m_videoListWasExpanded = m_videoListContent->isVisible();
+    m_videoListWasExpanded = m_videoListContent && m_videoListContent->isVisible();
     const bool caseMode = m_caseDock && m_caseDock->isVisible();
-    if (caseMode) {
+    if (m_leftColumnHidden) {
+        // v2.3：左侧栏本来就是整体收起的 → 放大镜不要再动它（否则关掉后乱恢复）
+    } else if (caseMode) {
         // v1.13.1：记录真实手动状态（用户本已收起的，关闭放大镜后仍保持收起）
         m_caseDockWasExpanded = m_caseListContent
             ? m_caseListContent->isVisible() : true;

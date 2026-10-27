@@ -482,6 +482,12 @@ protected:
     QList<int> m_splitterSizes;
     bool m_initialSplitApplied = false;  ///< v1.13.1 首次 resizeEvent 落地纵向比例
     QList<int> m_chartSavedSizes;
+    // v2.3：轨道收起用**显式状态位**（原来靠 minimumHeight()==24 猜，
+    // 而收起时设的是 28 → 条件永不成立 → 展开一条会连带把另一条拉出来且内容空白）
+    bool m_chartCollapsed = false;
+    bool m_specCollapsed  = false;
+    int  m_chartPrefH = 230;   ///< 亮度/音量 展开时偏好的高度
+    int  m_specPrefH  = 230;   ///< 语谱 展开时偏好的高度
     QList<int> m_spectrogramSavedSizes;
     QRect m_pinnedRect;
     SnapshotFusionData m_snapshotFusion;

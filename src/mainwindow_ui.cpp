@@ -1194,80 +1194,72 @@ void MainWindow::buildCentralLayout(const QString &titleBarStyle,
     // （见 m_initialSplitApplied）——ctor 里 singleShot(0) 会被 main.cpp
     // splash 的 processEvents 提前触发（窗口未 show 高度无效），真机被跳过。
 
-    // Chart collapse/expand with splitter size control
-    connect(m_chartCollapseBtn, &ui::ChevronButton::clicked, this, [this]() {
-        QList<int> sizes = m_splitter->sizes();
-        if (sizes.size() < 3) return;
+    // v2.3：两条轨道的收起/展开统一算尺寸
+    // 原来靠 m_chartContainer->minimumHeight() == 24 判断对轨是否收起，
+    // 但收起时设的是 28 —— 条件永远不成立，于是「先开语谱」会把已经收起的
+    // 亮度栏按历史高度一起拉出来，而它的内容还是隐藏的 → 空白轨。
+    constexpr int kTrackCollapsedH = 28;
 
-        if (sizes[1] > 30) {
-            // Collapse: save chart sizes, shrink chart to title bar
-            m_chartSavedSizes = sizes;
-            int freed = sizes[1] - 24;
-            sizes[0] += freed;
-            sizes[1] = 24;
-            m_chartCollapseBtn->setExpanded(false);
-            m_chartContent->setVisible(false);
-            m_chartContent->setMinimumSize(0, 0);
-            m_chartContent->setMaximumSize(0, 0);
-            m_chartContainer->setMinimumHeight(28);
-        } else {
-            // Expand: restore saved sizes
-            sizes = m_chartSavedSizes;
-            // If spectrogram is collapsed, keep it at 24px
-            if (m_spectrogramContainer->minimumHeight() == 24) {
-                int diff = sizes[2] - 24;
-                sizes[2] = 24;
-                sizes[0] += diff;
+    auto applyTrackState = [this]() {
+        if (!m_splitter || m_splitter->count() != 3)
+            return;
+        const QList<int> cur = m_splitter->sizes();
+        const int total = cur[0] + cur[1] + cur[2];
+
+        int chartH = m_chartCollapsed ? kTrackCollapsedH : qMax(120, m_chartPrefH);
+        int specH  = m_specCollapsed  ? kTrackCollapsedH : qMax(120, m_specPrefH);
+
+        // 画面至少留 160；不够就按比例压两条展开中的轨道（不低于 90）
+        int videoH = total - chartH - specH;
+        if (videoH < 160) {
+            const int need = 160 - videoH;
+            const int chartRoom = m_chartCollapsed ? 0 : qMax(0, chartH - 90);
+            const int specRoom  = m_specCollapsed  ? 0 : qMax(0, specH - 90);
+            const int room = chartRoom + specRoom;
+            if (room > 0) {
+                const int cut = qMin(need, room);
+                if (chartRoom > 0)
+                    chartH -= cut * chartRoom / room;
+                if (specRoom > 0)
+                    specH -= cut * specRoom / room;
             }
-            m_chartCollapseBtn->setExpanded(true);
-            m_chartContent->setVisible(true);
-            m_chartContent->setMinimumSize(0, 0);
-            m_chartContent->setMaximumSize(QWIDGETSIZE_MAX, QWIDGETSIZE_MAX);
-            m_chartContainer->setMinimumHeight(0);
+            videoH = qMax(60, total - chartH - specH);
         }
-        animateSplitterSizes(sizes);
-    });
+        animateSplitterSizes({videoH, chartH, specH});
+    };
 
-    // Spectrogram collapse/expand with splitter size control
-    connect(m_spectrogramCollapseBtn, &ui::ChevronButton::clicked, this, [this]() {
-        QList<int> sizes = m_splitter->sizes();
-        if (sizes.size() < 3) return;
+    auto setTrackCollapsed = [this, applyTrackState](bool chart) {
+        bool &flag = chart ? m_chartCollapsed : m_specCollapsed;
+        QWidget *content = chart ? m_chartContent : m_spectrogramContent;
+        QWidget *container = chart ? m_chartContainer : m_spectrogramContainer;
+        ui::ChevronButton *btn = chart ? m_chartCollapseBtn : m_spectrogramCollapseBtn;
 
-        if (sizes[2] > 30) {
-            // Collapse: save spectrogram sizes, shrink to title bar
-            m_spectrogramSavedSizes = sizes;
-            int freed = sizes[2] - 24;
-            if (sizes[1] <= 30) {
-                // Chart already collapsed: all freed space goes to video
-                sizes[0] += freed;
-            } else {
-                // Chart expanded: split evenly
-                sizes[0] += freed / 2;
-                sizes[1] += freed - freed / 2;
-            }
-            sizes[2] = 24;
-            m_spectrogramCollapseBtn->setExpanded(false);
-            m_spectrogramContent->setVisible(false);
-            m_spectrogramContent->setMinimumSize(0, 0);
-            m_spectrogramContent->setMaximumSize(0, 0);
-            m_spectrogramContainer->setMinimumHeight(28);
-        } else {
-            // Expand: restore saved sizes
-            sizes = m_spectrogramSavedSizes;
-            // If chart is collapsed, keep it at 24px
-            if (m_chartContainer->minimumHeight() == 24) {
-                int diff = sizes[1] - 24;
-                sizes[1] = 24;
-                sizes[0] += diff;
-            }
-            m_spectrogramCollapseBtn->setExpanded(true);
-            m_spectrogramContent->setVisible(true);
-            m_spectrogramContent->setMinimumSize(0, 0);
-            m_spectrogramContent->setMaximumSize(QWIDGETSIZE_MAX, QWIDGETSIZE_MAX);
-            m_spectrogramContainer->setMinimumHeight(0);
+        // 收起前记下当前真实高度，展开时回到这个高度（而不是写死的同一档）
+        if (!flag) {
+            const QList<int> s = m_splitter->sizes();
+            const int idx = chart ? 1 : 2;
+            if (s.size() == 3 && s[idx] > 60)
+                (chart ? m_chartPrefH : m_specPrefH) = s[idx];
         }
-        animateSplitterSizes(sizes);
-    });
+        flag = !flag;
+        if (btn)
+            btn->setExpanded(!flag);
+        if (content) {
+            content->setVisible(!flag);
+            content->setMinimumSize(0, 0);
+            content->setMaximumSize(flag ? QSize(0, 0)
+                                         : QSize(QWIDGETSIZE_MAX, QWIDGETSIZE_MAX));
+        }
+        if (container)
+            container->setMinimumHeight(flag ? kTrackCollapsedH : 0);
+        applyTrackState();
+    };
+
+    connect(m_chartCollapseBtn, &ui::ChevronButton::clicked, this,
+            [setTrackCollapsed]() { setTrackCollapsed(true); });
+    connect(m_spectrogramCollapseBtn, &ui::ChevronButton::clicked, this,
+            [setTrackCollapsed]() { setTrackCollapsed(false); });
+
 
     // v2.1 交互：双击任一条轨道分隔条 → 亮度/音量 与 语谱 高度均分
     {
@@ -1526,6 +1518,12 @@ void MainWindow::buildCaseUi(const QString &collapseBtnStyle)
         if (qobject_cast<QTreeWidget *>(w) || qobject_cast<QPushButton *>(w))
             w->installEventFilter(m_keyGuard);
     }
+    // v2.3：一级标题（案件 / 检视器）字体与边框完全一致
+    m_caseDock->setStyleSheet(QStringLiteral(
+            "QDockWidget{font-size:11px;font-weight:600;color:%1;}"
+            "QDockWidget::title{background:%2;padding:5px 8px;"
+            "border-bottom:1px solid %3;text-align:left;}")
+            .arg(Theme::TextPrimary, Theme::BgPanel, Theme::Border));
     addDockWidget(Qt::LeftDockWidgetArea, m_caseDock);
     resizeDocks({m_caseDock}, {250}, Qt::Horizontal);
     // v2.2：案件区高度下限——检视器内容变多后会把案件树挤到只剩几行
