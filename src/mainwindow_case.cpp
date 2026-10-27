@@ -138,8 +138,8 @@ void MainWindow::setCaseListExpanded(bool on)
     if (m_caseListContent)
         m_caseListContent->setVisible(on);
     if (m_caseCollapseBtn) {
-        m_caseCollapseBtn->setText(on ? QString::fromUtf8("â")    // ◀
-                                      : QString::fromUtf8("â¶"));   // ▶
+        m_caseCollapseBtn->setText(on ? QString(QChar(0x25C0))    // ◀
+                                      : QString(QChar(0x25B6)));  // ▶
         m_caseCollapseBtn->setToolTip(on ? lang("收起案件列表", "Collapse case list")
                                          : lang("展开案件列表", "Expand case list"));
     }

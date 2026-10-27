@@ -93,6 +93,24 @@ void MainWindow::setupShell()
         wfToolBar->setContentsMargins(0, 0, 0, 0);
         wfToolBar->addWidget(m_workflowBar);
 
+        // v2.2：整列「左侧栏」开关（案件 + 检视器 + 占位条一起收）
+        m_leftToggleBtn = new QToolButton(wfToolBar);
+        m_leftToggleBtn->setText(lang(QStringLiteral("◀ 左侧栏"),
+                                      QStringLiteral("◀ Side")));
+        m_leftToggleBtn->setCheckable(true);
+        m_leftToggleBtn->setFocusPolicy(Qt::NoFocus);
+        m_leftToggleBtn->setToolTip(lang(
+            QStringLiteral("收起 / 展开整个左侧栏（案件 + 检视器）"),
+            QStringLiteral("Collapse / expand the whole left column")));
+        m_leftToggleBtn->setStyleSheet(QStringLiteral(
+            "QToolButton{background:transparent;color:%1;border:1px solid %2;"
+            "border-radius:5px;padding:2px 10px;font-size:11px;}"
+            "QToolButton:hover{color:%3;border-color:%3;}")
+            .arg(Theme::TextSecond, Theme::Border, Theme::Accent));
+        connect(m_leftToggleBtn, &QToolButton::clicked,
+                this, &MainWindow::toggleLeftColumn);
+        wfToolBar->addWidget(m_leftToggleBtn);
+
         const QList<QToolBar *> existing = findChildren<QToolBar *>();
         if (!existing.isEmpty()) {
             insertToolBar(existing.first(), wfToolBar);
@@ -371,6 +389,39 @@ void MainWindow::embedWorkspace(ui::Stage s, QWidget *w)
     m_stagePages.insert(key, page);
     installKeyGuardOn(page);   // v2.0：嵌入窗口也走全局快捷键逻辑
     showStage(s);
+}
+
+void MainWindow::toggleLeftColumn()
+{
+    QList<QDockWidget *> left;
+    for (QDockWidget *d : findChildren<QDockWidget *>()) {
+        if (d && dockWidgetArea(d) == Qt::LeftDockWidgetArea)
+            left << d;
+    }
+    if (left.isEmpty())
+        return;
+
+    if (!m_leftColumnHidden) {
+        m_leftDockStash.clear();
+        for (QDockWidget *d : left)
+            m_leftDockStash.insert(d, d->isVisible());
+        for (QDockWidget *d : left)
+            d->hide();
+        m_leftColumnHidden = true;
+    } else {
+        for (QDockWidget *d : left) {
+            if (m_leftDockStash.value(d, false))
+                d->show();
+        }
+        m_leftColumnHidden = false;
+    }
+
+    if (m_leftToggleBtn) {
+        m_leftToggleBtn->setText(m_leftColumnHidden
+            ? lang(QStringLiteral("▶ 左侧栏"), QStringLiteral("▶ Side"))
+            : lang(QStringLiteral("◀ 左侧栏"), QStringLiteral("◀ Side")));
+        m_leftToggleBtn->setChecked(m_leftColumnHidden);
+    }
 }
 
 void MainWindow::showStage(ui::Stage s)
@@ -775,6 +826,13 @@ void MainWindow::applyStageChrome(ui::Stage s)
     // 停靠面板：整备 / 产出 是满幅工作面，接入是入口页 → 暂存并隐藏；离开时原样恢复
     const bool wantDocks = (s == ui::Stage::Analyze || s == ui::Stage::Align
                             || s == ui::Stage::Deliver);
+    // v2.2：左侧栏整体收起时，阶段切换不得把它放出来
+    if (m_leftColumnHidden) {
+        for (QDockWidget *d : findChildren<QDockWidget *>())
+            if (d && dockWidgetArea(d) == Qt::LeftDockWidgetArea)
+                d->hide();
+    }
+
     if (!wantDocks) {
         if (!m_docksStashed) {
             m_dockStash.clear();
@@ -1002,6 +1060,22 @@ int MainWindow::runShellSelfCheck()
                          Qt::NoModifier, Qt::NoScrollPhase, false);
         QApplication::sendEvent(&bar, &back);
         check(!bar.isZoomed(), QStringLiteral("反向滚到底回到全览（夹紧不越界）"));
+    }
+
+    // 4e-2. 左侧栏整体收起/展开（用户：统称为左侧栏）
+    if (m_leftToggleBtn && m_inspectorDock) {
+        showStage(ui::Stage::Analyze); pump(); wait(150);
+        const bool before = m_inspectorDock->isVisible();
+        toggleLeftColumn();
+        pump(); wait(150);
+        check(!m_inspectorDock->isVisible(),
+              QStringLiteral("左侧栏：一键收起（检视器已隐藏）"));
+        check(m_leftToggleBtn->text().at(0) == QChar(0x25B6),
+              QStringLiteral("左侧栏：收起后按钮变 ▶"));
+        toggleLeftColumn();
+        pump(); wait(150);
+        check(m_inspectorDock->isVisible() == before,
+              QStringLiteral("左侧栏：再点恢复原可见状态"));
     }
 
     // 4f. 案件列表显隐（用户 2026-10-27：交互有问题 → 统一入口后自测）

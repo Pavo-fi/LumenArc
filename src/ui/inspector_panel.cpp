@@ -57,7 +57,7 @@ InspectorPanel::InspectorPanel(QWidget *parent)
     auto *factsScroll = new QScrollArea(this);
     factsScroll->setWidgetResizable(true);
     factsScroll->setFrameShape(QFrame::NoFrame);
-    factsScroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    factsScroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAsNeeded);   // 极端长串也能完整看到
     auto *facts = new QWidget(factsScroll);
     auto *lay = new QVBoxLayout(facts);
     lay->setContentsMargins(12, 10, 12, 10);
@@ -89,29 +89,29 @@ InspectorPanel::InspectorPanel(QWidget *parent)
     // ---- 下半：工具（固定，不随滚动）----
     auto *toolsHost = new QWidget(this);
     auto *tlay = new QVBoxLayout(toolsHost);
-    tlay->setContentsMargins(10, 6, 10, 8);
-    tlay->setSpacing(4);
+    tlay->setContentsMargins(12, 8, 12, 12);
+    tlay->setSpacing(6);
 
     // 工具：容器留空，由 MainWindow 把「分析与标注」整行的真控件收进来
     // —— 同一批指针，不重建，所以启用态/勾选态与工具栏时代完全一致。
-    addSection(tlay, lang(QStringLiteral("工具"), QStringLiteral("Tool")), 4);
+    addSection(tlay, lang(QStringLiteral("工具"), QStringLiteral("Tool")), 6);
     m_toolLay = new QVBoxLayout();
     m_toolLay->setContentsMargins(0, 0, 0, 0);
-    m_toolLay->setSpacing(4);
+    m_toolLay->setSpacing(6);
     tlay->addLayout(m_toolLay);
 
     // 截图叠加：这一栏只是标题（本身不是开关），下面是 截取 / 编辑 / 放置
-    addSection(tlay, lang(QStringLiteral("截图叠加"), QStringLiteral("Overlay")), 8);
+    addSection(tlay, lang(QStringLiteral("截图叠加"), QStringLiteral("Overlay")), 10);
     m_captureLay = new QVBoxLayout();
     m_captureLay->setContentsMargins(0, 0, 0, 0);
-    m_captureLay->setSpacing(3);
+    m_captureLay->setSpacing(4);
     tlay->addLayout(m_captureLay);
 
     // 显示栏：快照/画面调节 由 MainWindow 追加（自动排在放大镜之前）
-    addSection(tlay, lang(QStringLiteral("显示"), QStringLiteral("Display")), 8);
+    addSection(tlay, lang(QStringLiteral("显示"), QStringLiteral("Display")), 10);
     m_displayLay = new QVBoxLayout();
     m_displayLay->setContentsMargins(0, 0, 0, 0);
-    m_displayLay->setSpacing(3);
+    m_displayLay->setSpacing(4);
     tlay->addLayout(m_displayLay);
     {
         const QString css = QStringLiteral(
@@ -152,27 +152,34 @@ QLabel *InspectorPanel::addSection(QVBoxLayout *lay, const QString &title, int t
 
 QLabel *InspectorPanel::addRow(QVBoxLayout *lay, const QString &key)
 {
+    // v2.2：键在上、值在下，**都左对齐**。
+    // 值独占整行宽度 + 自动换行 + 宽度策略 Ignored（不反向撑宽面板），
+    // 这样任何 DPI / 面板宽度下都不会被裁掉（用户：无论是否缩放都要完整显示）。
     auto *row = new QWidget(this);
-    auto *h = new QGridLayout(row);
-    h->setContentsMargins(0, 0, 0, 0);
-    h->setSpacing(6);
+    auto *col = new QVBoxLayout(row);
+    col->setContentsMargins(0, 0, 0, 0);
+    col->setSpacing(1);
 
     auto *k = new QLabel(key, row);
-    // L2 行键：中性灰、常规字重
-    k->setStyleSheet(QStringLiteral("color:%1;font-size:11px;background:transparent;")
-                         .arg(Theme::TextSecond));
-    auto *v = new QLabel(QStringLiteral("—"), row);
-    // L3 行值：最亮、最大、半粗 —— 真正要读的那一层
-    v->setStyleSheet(QStringLiteral("color:%1;font-size:13px;font-weight:600;"
+    k->setStyleSheet(QStringLiteral("color:%1;font-size:10px;letter-spacing:.4px;"
                                     "background:transparent;")
-                         .arg(Theme::TextPrimary));
-    v->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+                         .arg(Theme::TextMuted));
+    k->setAlignment(Qt::AlignLeft);
 
-    h->addWidget(k, 0, 0);
-    h->addWidget(v, 0, 1);
-    h->setColumnStretch(1, 1);
+    auto *val = new QLabel(QStringLiteral("—"), row);
+    val->setStyleSheet(QStringLiteral("color:%1;font-size:13px;font-weight:600;"
+                                      "background:transparent;")
+                           .arg(Theme::TextPrimary));
+    val->setAlignment(Qt::AlignLeft | Qt::AlignVCenter);
+    val->setWordWrap(true);
+    val->setTextInteractionFlags(Qt::TextSelectableByMouse);   // 可复制文件名
+    val->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
+    val->setMinimumWidth(0);
+
+    col->addWidget(k);
+    col->addWidget(val);
     lay->addWidget(row);
-    return v;
+    return val;
 }
 
 void InspectorPanel::setSource(const QString &name, int w, int h, double fps, qint64 durationMs)
@@ -214,7 +221,7 @@ QGridLayout *InspectorPanel::makeChipGrid(const QList<QWidget *> &widgets, bool 
     // 紧凑 chip 样式：宽度交给网格拉伸，字号降一号，高度可控
     const QString chip = QStringLiteral(
         "QPushButton{background:%1;color:%2;border:1px solid %3;border-radius:4px;"
-        "font-size:11px;padding:2px 0;min-width:0;}"
+        "font-size:11px;padding:3px 0;min-width:0;}"
         "QPushButton:hover{border-color:%4;color:%5;}"
         "QPushButton:pressed{background:%6;}"
         "QPushButton:checked{background:%4;color:%7;border-color:%4;font-weight:600;}"
@@ -223,7 +230,7 @@ QGridLayout *InspectorPanel::makeChipGrid(const QList<QWidget *> &widgets, bool 
              Theme::TextPrimary, Theme::BgPressed, Theme::AccentOnDark, Theme::TextMuted);
     const QString chipPrimary = QStringLiteral(
         "QPushButton{background:%1;color:%2;border:1px solid %1;border-radius:4px;"
-        "font-size:11px;font-weight:600;padding:2px 0;min-width:0;}"
+        "font-size:11px;font-weight:600;padding:3px 0;min-width:0;}"
         "QPushButton:hover{background:%3;}"
         "QPushButton:pressed{background:%4;}"
         "QPushButton:disabled{background:%5;color:%6;border-color:%5;}")
@@ -234,7 +241,7 @@ QGridLayout *InspectorPanel::makeChipGrid(const QList<QWidget *> &widgets, bool 
     const int cols = (widgets.size() >= 3) ? 3 : 2;
     auto *grid = new QGridLayout();
     grid->setContentsMargins(0, 0, 0, 0);
-    grid->setSpacing(2);
+    grid->setSpacing(3);
 
     for (int i = 0; i < widgets.size(); ++i) {
         QWidget *w = widgets.at(i);
@@ -244,8 +251,8 @@ QGridLayout *InspectorPanel::makeChipGrid(const QList<QWidget *> &widgets, bool 
         w->setCursor(Qt::PointingHandCursor);
         w->setFocusPolicy(Qt::NoFocus);         // 不抢全局快捷键
         w->setStyleSheet((primary && i == 0) ? chipPrimary : chip);
-        w->setMinimumHeight(20);
-        w->setMaximumHeight(24);
+        w->setMinimumHeight(22);
+        w->setMaximumHeight(26);
         const int row = i / cols;
         const int col = i % cols;
         const int span = (cols > 1 && i == widgets.size() - 1 && col == 0) ? cols : 1;

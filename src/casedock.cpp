@@ -57,8 +57,8 @@ CaseDock::CaseDock(CaseManager *cm, QWidget *parent)
 {
     setObjectName(QStringLiteral("caseDock"));
     setWindowTitle(lang("案件", "Case"));
-    setFeatures(QDockWidget::DockWidgetClosable
-                | QDockWidget::DockWidgetMovable);
+    // v2.2：去掉标题栏 ✕（用户要求；关闭案件走「案件」菜单）
+    setFeatures(QDockWidget::DockWidgetMovable);
     setAllowedAreas(Qt::LeftDockWidgetArea | Qt::RightDockWidgetArea);
 
     auto *host = new QWidget(this);
@@ -66,29 +66,38 @@ CaseDock::CaseDock(CaseManager *cm, QWidget *parent)
     lay->setContentsMargins(6, 6, 6, 6);
     lay->setSpacing(4);
 
+    // v2.2：第一行 = 案件名 + 刷新（用户要求「刷新移到第一行」）
+    auto *headRow = new QHBoxLayout();
+    headRow->setContentsMargins(0, 0, 0, 0);
+    headRow->setSpacing(6);
+
     m_titleLabel = new QLabel(host);
     m_titleLabel->setStyleSheet(QStringLiteral(
         "font-weight:bold; color:%1;").arg(Theme::TextPrimary));
     m_titleLabel->setWordWrap(true);
-    lay->addWidget(m_titleLabel);
+    headRow->addWidget(m_titleLabel, 1);
+
+    auto *btnRefresh = new QPushButton(lang("刷新", "Refresh"), host);
+    btnRefresh->setToolTip(lang("重新扫描案件目录文件状态", "Re-scan case files"));
+    btnRefresh->setFixedHeight(20);
+    btnRefresh->setFocusPolicy(Qt::NoFocus);
+    btnRefresh->setStyleSheet(QStringLiteral(
+        "QPushButton{background:transparent;color:%1;border:1px solid %2;"
+        "border-radius:4px;padding:0 8px;font-size:11px;}"
+        "QPushButton:hover{color:%3;border-color:%3;}")
+        .arg(Theme::TextSecond, Theme::Border, Theme::Accent));
+    headRow->addWidget(btnRefresh, 0, Qt::AlignTop);
+    lay->addLayout(headRow);
 
     // 操作行：删除选中视频 + 手动刷新（2026-08 人工反馈：误入视频需显式
     // 删除入口；外部删除文件后需刷新反映）
-    auto *btnRow = new QHBoxLayout();
-    btnRow->setContentsMargins(0, 0, 0, 0);
     // 规范§6：emoji 禁令——按钮纯文字，图标与文字不并用
     m_btnDelete = new QPushButton(lang("删除选中", "Delete selected"), host);
     m_btnDelete->setEnabled(false);
     // 规范§7.4：ToolTip 一行 ≤25 字，细节进确认对话框
     m_btnDelete->setToolTip(lang("删除选中视频（不可恢复）",
                                  "Delete selected video (irreversible)"));
-    auto *btnRefresh = new QPushButton(lang("刷新", "Refresh"), host);
-    btnRefresh->setToolTip(lang("重新扫描案件目录文件状态",
-                                "Re-scan case files"));
-    btnRow->addWidget(m_btnDelete);
-    btnRow->addStretch(1);
-    btnRow->addWidget(btnRefresh);
-    lay->addLayout(btnRow);
+    lay->addWidget(m_btnDelete);
 
     m_tree = new QTreeWidget(host);
     m_tree->setHeaderHidden(true);
@@ -409,10 +418,9 @@ void CaseDock::refreshTree()
     // v1.7.1 闪退修复：树全量重建 → 旧高亮指针必然悬空，先置空；
     // 重建完成后按保存的路径重新应用高亮
     m_currentHighlight = nullptr;
-    m_titleLabel->setText(QStringLiteral("%1\n%2")   // 规范§6：去emoji
-        .arg(m_caseManager->meta().caseNo + QStringLiteral("-")
-             + m_caseManager->meta().title,
-             m_caseManager->caseDir()));
+    // v2.2：只显示案件名（路径太占地方，用户要求删掉）
+    m_titleLabel->setText(m_caseManager->meta().caseNo + QStringLiteral("-")
+                          + m_caseManager->meta().title);
     setWindowTitle(lang("案件：%1", "Case: %1")
                        .arg(m_caseManager->meta().caseNo));
     m_tree->clear();

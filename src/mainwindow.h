@@ -204,6 +204,9 @@ private:
 
     /// v2.1：案件列表展开/收起的**唯一入口**（细条按钮、占位条、放大镜恢复都走它）
     void setCaseListExpanded(bool on);
+
+    /// v2.2：整列「左侧栏」（案件 + 检视器 + 各占位条）一键收起/展开
+    void toggleLeftColumn();
     /// 分割器尺寸动画（折叠/展开轨道时平滑过渡）
     void animateSplitterSizes(const QList<int> &target);
     /// 交付页：标题 + 紧凑动作行 + 产物表（扫案件目录）
@@ -354,6 +357,9 @@ protected:
     QAction *m_exportCaseAction = nullptr;   ///< 菜单「导出移交包」(M3)
     QAction *m_batchRelocateAction = nullptr; ///< 菜单「批量重新定位」(M3)
     QAction *m_multiCamAction = nullptr;      ///< 菜单「多机同步播放」(M3/P-57)
+    QToolButton         *m_leftToggleBtn = nullptr;   ///< 顶栏「左侧栏」开关
+    bool                 m_leftColumnHidden = false;
+    QHash<QDockWidget *, bool> m_leftDockStash;       ///< 收起前各左侧坞的可见性
     QPointer<MultiCamPlaybackWindow> m_multiCamWin;  ///< 非模态多机播放窗口（P-57）
     QPointer<LiveMonitorWindow> m_liveMonitorWin;    ///< 非模态监控直播窗口（RTSP 接入）
     TimeCalibration m_calibration;   // 当前视频校时 SSOT（.vla v8 持久化）
