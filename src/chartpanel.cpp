@@ -1787,8 +1787,10 @@ void ChartPanel::updateCursorPosition()
         qreal labelX = x;
         qreal labelY = plotArea.top() - totalH - 10;
 
-        // Clamp to plot area bounds
-        labelX = qBound(plotArea.left(), labelX, plotArea.right() - maxW);
+        // Clamp to plot area bounds（v2.1：左界让出轨道徽标，读数不压徽标）
+        const qreal leftBound = plotArea.left() + m_readoutReserved;
+        const qreal rightBound = qMax(leftBound, plotArea.right() - maxW);
+        labelX = qBound(leftBound, labelX, rightBound);
         labelY = qMax(labelY, plotArea.top() - totalH - 14);
 
         m_cursorTimeLabel->setPos(labelX, labelY);

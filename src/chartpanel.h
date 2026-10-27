@@ -55,6 +55,9 @@ public:
     TimeCalibration calibration() const { return m_calibration; }
     bool isDraggingCursor() const { return m_draggingCursor; }
     QRectF plotArea() const;
+
+    /// v2.1：左上角被轨道徽标占用后，游标读数从这里起步（默认 0 = 与图左沿对齐）
+    void setCursorReadoutReserved(qreal w) { m_readoutReserved = qMax(0.0, w); }
     QValueAxis *axisX() const { return m_axisX; }
     /// P-31 T5（R3 收口）：外部轴范围设置入口（替代穿透 axisX()->setRange）
     void setXAxisRange(qreal min, qreal max);
@@ -204,6 +207,7 @@ private:
 
     QGraphicsLineItem *m_cursorLine = nullptr;
     QGraphicsRectItem *m_cursorTimeBg = nullptr;
+    qreal m_readoutReserved = 0.0;   ///< 左上角避让宽度（轨道徽标）
     QGraphicsSimpleTextItem *m_cursorTimeLabel = nullptr;
     QGraphicsSimpleTextItem *m_cursorDataLabel = nullptr;
     bool m_draggingCursor = false;

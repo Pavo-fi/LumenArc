@@ -1016,12 +1016,12 @@ void MainWindow::buildCentralLayout(const QString &titleBarStyle,
     chartBadge->setObjectName(QStringLiteral("trackBadge"));
     chartBadge->setAttribute(Qt::WA_StyledBackground, true);
     chartBadge->setStyleSheet(QStringLiteral(
-        "QWidget#trackBadge{background:rgba(22,24,29,170);border:1px solid %1;"
+        "QWidget#trackBadge{background:rgba(22,24,29,96);border:1px solid %1;"
         "border-radius:7px;}"
-        "QWidget#trackBadge:hover{background:rgba(22,24,29,238);border-color:%2;}")
+        "QWidget#trackBadge:hover{background:rgba(22,24,29,232);border-color:%2;}")
         .arg(Theme::Border, Theme::Accent));
     auto *chartGutter = new QHBoxLayout(chartBadge);
-    chartGutter->setContentsMargins(4, 2, 9, 2);
+    chartGutter->setContentsMargins(3, 1, 8, 1);
     chartGutter->setSpacing(4);
 
     m_chartCollapseBtn = new ui::ChevronButton(chartBadge);
@@ -1041,10 +1041,14 @@ void MainWindow::buildCentralLayout(const QString &titleBarStyle,
     chartGutter->addWidget(chartDot);
     chartGutter->addWidget(chartTitleLabel);
 
+    // 游标读数左界让出徽标宽度（否则两者在左上角叠成一坨灰块）
+    if (m_chartPanel)
+        m_chartPanel->setCursorReadoutReserved(qMax(140, chartBadge->sizeHint().width() + 14));
+
     // 徽标外框：左上偏移 40px，避开 y 轴刻度文字
     auto *chartBadgeHolder = new QWidget(m_chartContainer);
     auto *chartHolderLay = new QVBoxLayout(chartBadgeHolder);
-    chartHolderLay->setContentsMargins(40, 5, 0, 0);
+    chartHolderLay->setContentsMargins(3, 2, 0, 0);
     chartHolderLay->setSpacing(0);
     chartHolderLay->addWidget(chartBadge);
     chartHolderLay->addStretch();
@@ -1076,12 +1080,12 @@ void MainWindow::buildCentralLayout(const QString &titleBarStyle,
     specBadge->setObjectName(QStringLiteral("trackBadge"));
     specBadge->setAttribute(Qt::WA_StyledBackground, true);
     specBadge->setStyleSheet(QStringLiteral(
-        "QWidget#trackBadge{background:rgba(22,24,29,170);border:1px solid %1;"
+        "QWidget#trackBadge{background:rgba(22,24,29,96);border:1px solid %1;"
         "border-radius:7px;}"
-        "QWidget#trackBadge:hover{background:rgba(22,24,29,238);border-color:%2;}")
+        "QWidget#trackBadge:hover{background:rgba(22,24,29,232);border-color:%2;}")
         .arg(Theme::Border, Theme::Accent));
     auto *specHeadRow = new QHBoxLayout(specBadge);
-    specHeadRow->setContentsMargins(4, 2, 9, 2);
+    specHeadRow->setContentsMargins(3, 1, 8, 1);
     specHeadRow->setSpacing(4);
 
     m_spectrogramCollapseBtn = new ui::ChevronButton(specBadge);
@@ -1169,7 +1173,7 @@ void MainWindow::buildCentralLayout(const QString &titleBarStyle,
 
     auto *specBadgeHolder = new QWidget(m_spectrogramContainer);
     auto *specHolderLay = new QVBoxLayout(specBadgeHolder);
-    specHolderLay->setContentsMargins(40, 5, 0, 0);
+    specHolderLay->setContentsMargins(3, 2, 0, 0);
     specHolderLay->setSpacing(0);
     specHolderLay->addWidget(specBadge);
     specHolderLay->addStretch();
