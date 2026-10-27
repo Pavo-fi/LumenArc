@@ -12,6 +12,8 @@
 #include <QList>
 #include <QString>
 
+class QScrollArea;
+
 class QLabel;
 class QPushButton;
 class QVBoxLayout;
@@ -47,7 +49,7 @@ signals:
     void magnifierToggled(bool on);
 
 private:
-    QLabel *addSection(QVBoxLayout *lay, const QString &title);
+    QLabel *addSection(QVBoxLayout *lay, const QString &title, int topPad = 12);
     QLabel *addRow(QVBoxLayout *lay, const QString &key);
 
     QLabel *m_name = nullptr;

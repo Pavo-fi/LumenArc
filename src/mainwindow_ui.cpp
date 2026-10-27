@@ -1532,49 +1532,9 @@ void MainWindow::buildCaseUi(const QString &collapseBtnStyle)
     m_caseDock->setMinimumHeight(380);
     m_caseDock->setVisible(false);   // 仅案件模式可见（替代视频列表）
 
-    // v1.13.1（用户实测反馈）：案件列表常驻手动折叠条（与视频列表同款
-    // ◀/▶ 细条）——此前只能随放大镜开关联动收放，平时无控件，案件模式
-    // 演示无法收起。放大镜自动折叠（占位细条）逻辑不受影响。
-    {
-        QWidget *caseInner = m_caseDock->widget();
-        auto *caseWrap = new QWidget;
-        auto *caseWrapLay = new QHBoxLayout(caseWrap);
-        caseWrapLay->setContentsMargins(0, 0, 0, 0);
-        caseWrapLay->setSpacing(0);
-        auto *caseStrip = new QWidget(caseWrap);
-        caseStrip->setFixedWidth(28);
-        caseStrip->setStyleSheet("background: transparent;");   // v2.1：去掉左侧色块
-        auto *stripLay = new QVBoxLayout(caseStrip);
-        stripLay->setContentsMargins(2, 4, 2, 4);
-        stripLay->setSpacing(4);
-        m_caseCollapseBtn = new QPushButton(
-            QString::fromUtf8("◀"), caseStrip);
-        m_caseCollapseBtn->setFixedSize(22, 22);
-        m_caseCollapseBtn->setStyleSheet(collapseBtnStyle);
-        m_caseCollapseBtn->setToolTip(lang("收起案件列表", "Collapse case list"));
-        m_caseCollapseBtn->setFocusPolicy(Qt::NoFocus);
-        stripLay->addWidget(m_caseCollapseBtn);
-        stripLay->addStretch();
-        {
-            const QString vertText = lang("案件列表", "Case");
-            for (const QChar &ch : vertText) {
-                auto *chLabel = new QLabel(QString(ch), caseStrip);
-                chLabel->setStyleSheet("color: " + Theme::TextSecond
-                    + "; font-size: 11px; background: transparent;");
-                chLabel->setAlignment(Qt::AlignCenter);
-                stripLay->addWidget(chLabel);
-            }
-        }
-        stripLay->addStretch();
-        caseWrapLay->addWidget(caseStrip);
-        caseWrapLay->addWidget(caseInner, 1);
-        m_caseDock->setWidget(caseWrap);
-        m_caseListContent = caseInner;
-        connect(m_caseCollapseBtn, &QPushButton::clicked, this, [this]() {
-            // v2.1：唯一入口（原来文本/可见/宽度三处各改一次，容易走偏）
-            setCaseListExpanded(!(m_caseListContent && m_caseListContent->isVisible()));
-        });
-    }
+    // v2.2：去掉案件坞内的左右竖条（用户：不要左右折叠了，
+    // 只要纵向滚动的案件内容即可）。占位细条仍保留给放大镜自动折叠用。
+    m_caseListContent = m_caseDock->widget();
     connect(m_caseDock, &CaseDock::openVideoRequested,
             this, &MainWindow::openVideoFile);
     connect(m_caseDock, &CaseDock::closeCaseRequested,

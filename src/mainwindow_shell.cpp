@@ -192,14 +192,9 @@ void MainWindow::setupShell()
     m_inspector = new ui::InspectorPanel(this);
     m_inspectorDock = new QDockWidget(lang(QStringLiteral("检视器"), QStringLiteral("Inspector")), this);
     m_inspectorDock->setObjectName(QStringLiteral("inspectorDock"));
-    // v2.2：检视器内容多、sizeHint 高 → 会把上方案件坞挤扁（用户：案件被遮盖）。
-    // 装进滚动区后高度不再由内容撑开，交给停靠区协商；内容超出时可滚动。
-    auto *inspScroll = new QScrollArea(m_inspectorDock);
-    inspScroll->setWidgetResizable(true);
-    inspScroll->setFrameShape(QFrame::NoFrame);
-    inspScroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
-    inspScroll->setWidget(m_inspector);
-    m_inspectorDock->setWidget(inspScroll);
+    // v2.2：检视器自己管滚动（上半事实可滚，下半工具固定）——
+    // 这里直接放面板本体，不要再套一层 QScrollArea。
+    m_inspectorDock->setWidget(m_inspector);
     m_inspectorDock->setAllowedAreas(Qt::LeftDockWidgetArea | Qt::RightDockWidgetArea);
     addDockWidget(Qt::LeftDockWidgetArea, m_inspectorDock);
     m_inspectorDock->setMinimumWidth(200);
@@ -1014,16 +1009,10 @@ int MainWindow::runShellSelfCheck()
         setCaseListExpanded(true);
         pump(); wait(120);
         check(m_caseListContent->isVisible(), QStringLiteral("案件列表：展开后内容可见"));
-        check(m_caseCollapseBtn
-                  && m_caseCollapseBtn->text() == QString::fromUtf8("â"),
-              QStringLiteral("案件列表：展开时按钮为 ◀"));
 
         setCaseListExpanded(false);
         pump(); wait(120);
         check(!m_caseListContent->isVisible(), QStringLiteral("案件列表：收起后内容隐藏"));
-        check(m_caseCollapseBtn
-                  && m_caseCollapseBtn->text() == QString::fromUtf8("â¶"),
-              QStringLiteral("案件列表：收起时按钮为 ▶"));
 
         setCaseListExpanded(true);
         pump(); wait(120);

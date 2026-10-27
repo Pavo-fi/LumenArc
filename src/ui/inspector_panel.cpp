@@ -10,6 +10,8 @@
 #include <QGridLayout>
 #include <QLabel>
 #include <QPushButton>
+#include <QScrollArea>
+#include <QFrame>
 #include <QVBoxLayout>
 
 namespace ui {
@@ -46,7 +48,18 @@ InspectorPanel::InspectorPanel(QWidget *parent)
     : QWidget(parent)
 {
     setObjectName(QStringLiteral("inspectorPanel"));
-    auto *lay = new QVBoxLayout(this);
+    auto *outer = new QVBoxLayout(this);
+    outer->setContentsMargins(0, 0, 0, 0);
+    outer->setSpacing(0);
+
+    // ---- 上半：事实（可滚动）----
+    // v2.2：工具栏与检视器分开 —— 事实随内容滚，工具常驻底部不跟着滚走
+    auto *factsScroll = new QScrollArea(this);
+    factsScroll->setWidgetResizable(true);
+    factsScroll->setFrameShape(QFrame::NoFrame);
+    factsScroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    auto *facts = new QWidget(factsScroll);
+    auto *lay = new QVBoxLayout(facts);
     lay->setContentsMargins(12, 10, 12, 10);
     lay->setSpacing(5);
 
@@ -62,32 +75,48 @@ InspectorPanel::InspectorPanel(QWidget *parent)
 
     addSection(lay, lang(QStringLiteral("区域"), QStringLiteral("Regions")));
     m_roi = addRow(lay, lang(QStringLiteral("ROI"), QStringLiteral("ROI")));
+    lay->addStretch(1);
+    factsScroll->setWidget(facts);
+    outer->addWidget(factsScroll, 1);
+
+    // ---- 分隔线 ----
+    auto *sep = new QFrame(this);
+    sep->setFrameShape(QFrame::HLine);
+    sep->setFixedHeight(1);
+    sep->setStyleSheet(QStringLiteral("background:%1;border:0;").arg(Theme::Border));
+    outer->addWidget(sep, 0);
+
+    // ---- 下半：工具（固定，不随滚动）----
+    auto *toolsHost = new QWidget(this);
+    auto *tlay = new QVBoxLayout(toolsHost);
+    tlay->setContentsMargins(10, 6, 10, 8);
+    tlay->setSpacing(4);
 
     // 工具：容器留空，由 MainWindow 把「分析与标注」整行的真控件收进来
     // —— 同一批指针，不重建，所以启用态/勾选态与工具栏时代完全一致。
-    addSection(lay, lang(QStringLiteral("工具"), QStringLiteral("Tool")));
+    addSection(tlay, lang(QStringLiteral("工具"), QStringLiteral("Tool")), 4);
     m_toolLay = new QVBoxLayout();
     m_toolLay->setContentsMargins(0, 0, 0, 0);
-    m_toolLay->setSpacing(6);
-    lay->addLayout(m_toolLay);
+    m_toolLay->setSpacing(4);
+    tlay->addLayout(m_toolLay);
 
     // 截图叠加：这一栏只是标题（本身不是开关），下面是 截取 / 编辑 / 放置
-    addSection(lay, lang(QStringLiteral("截图叠加"), QStringLiteral("Overlay")));
+    addSection(tlay, lang(QStringLiteral("截图叠加"), QStringLiteral("Overlay")), 8);
     m_captureLay = new QVBoxLayout();
     m_captureLay->setContentsMargins(0, 0, 0, 0);
-    m_captureLay->setSpacing(4);
-    lay->addLayout(m_captureLay);
+    m_captureLay->setSpacing(3);
+    tlay->addLayout(m_captureLay);
 
     // 显示栏：快照/画面调节 由 MainWindow 追加（自动排在放大镜之前）
-    addSection(lay, lang(QStringLiteral("显示"), QStringLiteral("Display")));
+    addSection(tlay, lang(QStringLiteral("显示"), QStringLiteral("Display")), 8);
     m_displayLay = new QVBoxLayout();
     m_displayLay->setContentsMargins(0, 0, 0, 0);
-    m_displayLay->setSpacing(4);
-    lay->addLayout(m_displayLay);
+    m_displayLay->setSpacing(3);
+    tlay->addLayout(m_displayLay);
     {
         const QString css = QStringLiteral(
             "QPushButton{background:%1;color:%2;border:1px solid %3;border-radius:4px;"
-            "font-size:12px;padding:5px 0;}"
+            "font-size:11px;padding:3px 0;}"
             "QPushButton:hover{border-color:%4;}"
             "QPushButton:checked{color:%5;border-color:%5;}")
             .arg(Theme::BgCard, Theme::TextSecond, Theme::Border,
@@ -100,8 +129,7 @@ InspectorPanel::InspectorPanel(QWidget *parent)
         m_displayLay->addWidget(m_magBtn);
         connect(m_magBtn, &QPushButton::toggled, this, &InspectorPanel::magnifierToggled);
     }
-
-    lay->addStretch(1);
+    outer->addWidget(toolsHost, 0);
 
     // 初始空态
     setSource(QString(), 0, 0, 0.0, 0);
@@ -110,13 +138,14 @@ InspectorPanel::InspectorPanel(QWidget *parent)
     setRoi(0, 0);
 }
 
-QLabel *InspectorPanel::addSection(QVBoxLayout *lay, const QString &title)
+QLabel *InspectorPanel::addSection(QVBoxLayout *lay, const QString &title, int topPad)
 {
     auto *l = new QLabel(title, this);
     // L1 分区标题：小、暗、宽字距 + 粗体 —— 只做结构，不与数值抢视线
     l->setStyleSheet(QStringLiteral("color:%1;font-size:10px;letter-spacing:1.4px;"
-                                    "font-weight:700;background:transparent;padding-top:12px;")
-                         .arg(Theme::TextMuted));
+                                    "font-weight:700;background:transparent;"
+                                    "padding-top:%2px;")
+                         .arg(Theme::TextMuted).arg(topPad));
     lay->addWidget(l);
     return l;
 }
@@ -185,7 +214,7 @@ QGridLayout *InspectorPanel::makeChipGrid(const QList<QWidget *> &widgets, bool 
     // 紧凑 chip 样式：宽度交给网格拉伸，字号降一号，高度可控
     const QString chip = QStringLiteral(
         "QPushButton{background:%1;color:%2;border:1px solid %3;border-radius:4px;"
-        "font-size:12px;padding:4px 0;min-width:0;}"
+        "font-size:11px;padding:2px 0;min-width:0;}"
         "QPushButton:hover{border-color:%4;color:%5;}"
         "QPushButton:pressed{background:%6;}"
         "QPushButton:checked{background:%4;color:%7;border-color:%4;font-weight:600;}"
@@ -194,7 +223,7 @@ QGridLayout *InspectorPanel::makeChipGrid(const QList<QWidget *> &widgets, bool 
              Theme::TextPrimary, Theme::BgPressed, Theme::AccentOnDark, Theme::TextMuted);
     const QString chipPrimary = QStringLiteral(
         "QPushButton{background:%1;color:%2;border:1px solid %1;border-radius:4px;"
-        "font-size:12px;font-weight:600;padding:4px 0;min-width:0;}"
+        "font-size:11px;font-weight:600;padding:2px 0;min-width:0;}"
         "QPushButton:hover{background:%3;}"
         "QPushButton:pressed{background:%4;}"
         "QPushButton:disabled{background:%5;color:%6;border-color:%5;}")
@@ -202,10 +231,10 @@ QGridLayout *InspectorPanel::makeChipGrid(const QList<QWidget *> &widgets, bool 
              Theme::AccentPress, Theme::BgPressed, Theme::TextMuted);
 
     // 3 个控件就排一行（模式三连），其余一律两列
-    const int cols = (widgets.size() == 3) ? 3 : 2;
+    const int cols = (widgets.size() >= 3) ? 3 : 2;
     auto *grid = new QGridLayout();
     grid->setContentsMargins(0, 0, 0, 0);
-    grid->setSpacing(3);
+    grid->setSpacing(2);
 
     for (int i = 0; i < widgets.size(); ++i) {
         QWidget *w = widgets.at(i);
@@ -215,8 +244,8 @@ QGridLayout *InspectorPanel::makeChipGrid(const QList<QWidget *> &widgets, bool 
         w->setCursor(Qt::PointingHandCursor);
         w->setFocusPolicy(Qt::NoFocus);         // 不抢全局快捷键
         w->setStyleSheet((primary && i == 0) ? chipPrimary : chip);
-        w->setMinimumHeight(24);
-        w->setMaximumHeight(30);
+        w->setMinimumHeight(20);
+        w->setMaximumHeight(24);
         const int row = i / cols;
         const int col = i % cols;
         const int span = (cols > 1 && i == widgets.size() - 1 && col == 0) ? cols : 1;
