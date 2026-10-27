@@ -31,12 +31,15 @@ public:
     void setCalibration(const QString &state, bool ok);
     void setCursor(qint64 ms);
     void setRoi(int rects, int polys);
-    void setTool(int tool);          ///< 0 选择 / 1 矩形 / 2 多边形 / 3 辅助线
     void setMagnifier(bool on);
     void setOverlay(bool on);
 
+    /// v2.0：把主窗口「分析与标注」整行的真控件收进「工具」区。
+    /// 传进来的 widget 由本面板接管布局（reparent），启用态/勾选态与原来完全一致。
+    void addToolGroup(const QString &label, const QList<QWidget *> &widgets,
+                      bool primary = false);
+
 signals:
-    void toolRequested(int tool);
     void magnifierToggled(bool on);
     void overlayToggled(bool on);
 
@@ -51,7 +54,7 @@ private:
     QLabel *m_cal = nullptr;
     QLabel *m_cursor = nullptr;
     QLabel *m_roi = nullptr;
-    QList<QPushButton *> m_toolBtns;
+    QVBoxLayout *m_toolLay = nullptr;   ///< 「工具」区容器（依次追加分组）
     QPushButton *m_magBtn = nullptr;
     QPushButton *m_ovlBtn = nullptr;
 };

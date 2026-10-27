@@ -63,36 +63,13 @@ InspectorPanel::InspectorPanel(QWidget *parent)
     addSection(lay, lang(QStringLiteral("区域"), QStringLiteral("Regions")));
     m_roi = addRow(lay, lang(QStringLiteral("ROI"), QStringLiteral("ROI")));
 
-    // 工具（与原型一致的 chip 行）
+    // 工具：容器留空，由 MainWindow 把「分析与标注」整行的真控件收进来
+    // —— 同一批指针，不重建，所以启用态/勾选态与工具栏时代完全一致。
     addSection(lay, lang(QStringLiteral("工具"), QStringLiteral("Tool")));
-    {
-        auto *row = new QGridLayout();
-        row->setSpacing(3);
-        const char *zh[] = { "选择", "矩形", "多边形", "辅助线" };
-        const char *en[] = { "Select", "Rect", "Polygon", "Guide" };
-        const QString css = QStringLiteral(
-            "QPushButton{background:%1;color:%2;border:1px solid %3;border-radius:4px;"
-            "font-size:11px;padding:3px 0;}"
-            "QPushButton:hover{border-color:%4;color:%5;}"
-            "QPushButton:checked{background:%4;color:%6;border-color:%4;font-weight:600;}")
-            .arg(Theme::BgCard, Theme::TextSecond, Theme::Border,
-                 Theme::Accent, Theme::TextPrimary, Theme::BgApp);
-        for (int i = 0; i < 4; ++i) {
-            auto *b = new QPushButton(lang(QString::fromUtf8(zh[i]),
-                                           QString::fromUtf8(en[i])), this);
-            b->setCheckable(true);
-            b->setCursor(Qt::PointingHandCursor);
-            b->setFocusPolicy(Qt::NoFocus);
-            b->setStyleSheet(css);
-            row->addWidget(b, 0, i);
-            m_toolBtns.append(b);
-            connect(b, &QPushButton::clicked, this, [this, i]() {
-                setTool(i);
-                emit toolRequested(i);
-            });
-        }
-        lay->addLayout(row);
-    }
+    m_toolLay = new QVBoxLayout();
+    m_toolLay->setContentsMargins(0, 0, 0, 0);
+    m_toolLay->setSpacing(6);
+    lay->addLayout(m_toolLay);
 
     // 显示开关
     addSection(lay, lang(QStringLiteral("显示"), QStringLiteral("Display")));
@@ -124,7 +101,6 @@ InspectorPanel::InspectorPanel(QWidget *parent)
     setCalibration(lang(QStringLiteral("未校时"), QStringLiteral("None")), false);
     setCursor(0);
     setRoi(0, 0);
-    setTool(0);
 }
 
 QLabel *InspectorPanel::addSection(QVBoxLayout *lay, const QString &title)
@@ -192,10 +168,65 @@ void InspectorPanel::setRoi(int rects, int polys)
         m_roi->setText(QStringLiteral("%1 / %2").arg(rects).arg(polys));
 }
 
-void InspectorPanel::setTool(int tool)
+void InspectorPanel::addToolGroup(const QString &label, const QList<QWidget *> &widgets,
+                                  bool primary)
 {
-    for (int i = 0; i < m_toolBtns.size(); ++i)
-        m_toolBtns[i]->setChecked(i == tool);
+    if (!m_toolLay || widgets.isEmpty())
+        return;
+
+    // 分组小标签（比分区标题小一号，不抢眼）
+    if (!label.isEmpty()) {
+        auto *sub = new QLabel(label, this);
+        sub->setStyleSheet(QStringLiteral("color:%1;font-size:10px;background:transparent;")
+                               .arg(Theme::TextMuted));
+        m_toolLay->addWidget(sub);
+    }
+
+    // 紧凑 chip 样式：宽度交给网格拉伸，字号降一号，高度可控
+    const QString chip = QStringLiteral(
+        "QPushButton{background:%1;color:%2;border:1px solid %3;border-radius:4px;"
+        "font-size:11px;padding:4px 0;min-width:0;}"
+        "QPushButton:hover{border-color:%4;color:%5;}"
+        "QPushButton:pressed{background:%6;}"
+        "QPushButton:checked{background:%4;color:%7;border-color:%4;font-weight:600;}"
+        "QPushButton:disabled{color:%8;border-color:%1;}")
+        .arg(Theme::BgCard, Theme::TextSecond, Theme::Border, Theme::Accent,
+             Theme::TextPrimary, Theme::BgPressed, Theme::AccentOnDark, Theme::TextMuted);
+    const QString chipPrimary = QStringLiteral(
+        "QPushButton{background:%1;color:%2;border:1px solid %1;border-radius:4px;"
+        "font-size:11px;font-weight:600;padding:4px 0;min-width:0;}"
+        "QPushButton:hover{background:%3;}"
+        "QPushButton:pressed{background:%4;}"
+        "QPushButton:disabled{background:%5;color:%8;border-color:%5;}")
+        .arg(Theme::Accent, Theme::AccentOnDark, Theme::AccentHover,
+             Theme::AccentPress, Theme::BgPressed, QString(), QString(), Theme::TextMuted);
+
+    // 3 个控件就排一行（模式三连），其余一律两列
+    const int cols = (widgets.size() == 3) ? 3 : 2;
+    auto *grid = new QGridLayout();
+    grid->setContentsMargins(0, 0, 0, 0);
+    grid->setSpacing(3);
+
+    for (int i = 0; i < widgets.size(); ++i) {
+        QWidget *w = widgets.at(i);
+        if (!w)
+            continue;
+        w->setParent(this);                     // 从工具栏接管
+        w->setCursor(Qt::PointingHandCursor);
+        w->setFocusPolicy(Qt::NoFocus);         // 不抢全局快捷键
+        w->setStyleSheet((primary && i == 0) ? chipPrimary : chip);
+        w->setMinimumHeight(24);
+        w->setMaximumHeight(30);
+        const int row = i / cols;
+        const int col = i % cols;
+        const int span = (cols > 1 && i == widgets.size() - 1 && col == 0) ? cols : 1;
+        grid->addWidget(w, row, col, 1, span);
+        w->show();                          // setParent 会隐藏，必须显式 show
+    }
+    for (int c = 0; c < cols; ++c)
+        grid->setColumnStretch(c, 1);
+    m_toolLay->addLayout(grid);
+
 }
 
 void InspectorPanel::setMagnifier(bool on)

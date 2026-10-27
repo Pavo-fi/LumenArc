@@ -277,13 +277,15 @@ void MainWindow::admitVideoToCase(const QString &path, bool interactive)
 void MainWindow::resizeEvent(QResizeEvent *event)
 {
     QMainWindow::resizeEvent(event);
-    // v1.13.1：首次有效尺寸落地纵向初始比例（视频55/图表21/语谱15，
-    // 对齐 v1.7.0 观感拍板）；只执行一次，之后用户拖分割条/窗口缩放自理
+    // v2.1：首次有效尺寸落地纵向初始比例 —— 视频 55%，余下 45% 由
+    // 亮度/音量 与 语谱 **等高均分**（各 22.5%），两轨职责对等。
+    // 只执行一次，之后用户拖分割条/窗口缩放自理（双击分隔条可复位均分）。
     if (!m_initialSplitApplied && m_splitter && m_splitter->height() > 200) {
         m_initialSplitApplied = true;
         const int h = m_splitter->height();
-        m_splitter->setSizes({int(h * 0.55), int(h * 0.21),
-                              int(h * 0.15)});
+        const int videoH = int(h * 0.55);
+        const int rest = h - videoH;
+        m_splitter->setSizes({videoH, rest / 2, rest - rest / 2});
     }
     if (m_caseOpenPanel && m_caseOpenPanel->isVisible())
         centerCaseOpenPanel();

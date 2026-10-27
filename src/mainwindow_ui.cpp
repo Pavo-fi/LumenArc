@@ -921,47 +921,28 @@ void MainWindow::createToolBar()
     workbenchBtn->setMenu(wbMenu);
     toolBar->addWidget(workbenchBtn);
 
-    // 二级条（分析与标注）：一次分析会话内的高频，与播放控制分离
-    analysisBar->addWidget(m_analyzeBtn);
-    analysisBar->addWidget(m_audioAnalysisBtn);
-    analysisBar->addWidget(m_microDiffBtn);
-    analysisBar->addWidget(m_setTimeBtn);
-    analysisBar->addSeparator();
-    analysisBar->addWidget(modeSegment);
-    analysisBar->addSeparator();
-    analysisBar->addWidget(m_copyRoiBtn);
-    analysisBar->addWidget(m_pasteRoiBtn);
-    analysisBar->addSeparator();
-    analysisBar->addWidget(m_captureBtn);
-    analysisBar->addWidget(m_editBtn);
-    analysisBar->addWidget(m_placeBtn);
-    analysisBar->addWidget(m_adjustBtn);
-    // v1.18：模式指示器 —— 明确当前处于哪种区域模式（Esc 会退出什么）
-    analysisBar->addSeparator();
-    m_modeLabel = new QLabel(lang("矩形", "Rectangle"), this);
-    m_modeLabel->setToolTip(lang("按 Esc 退出当前模式", "Press Esc to exit the mode"));
-    m_modeLabel->setStyleSheet(QStringLiteral(
-        "QLabel { color:%1; font-size:12px; padding:0 6px; }").arg(Theme::Accent));
-    analysisBar->addWidget(m_modeLabel);
+    // v2.1：分析工具栏**整行取消** —— 亮度/音频/微变/校时、区域模式、复制粘贴、
+    // 快照/截取/编辑/放置/画面调节，全部由 setupShell() 收进检视器「工具」区。
+    // 同一批指针 reparent，启用态/勾选态自动跟随，零重复逻辑。
 
     // ── v2.0 压缩：以下入口已由阶段条或左下常驻面板覆盖，工具栏不再重复─
     //    转码拼接→②整备 · 合成→⑤产出 · 校时→③校时 · 工作台▾→全部被阶段条覆盖
     //    画面调节→左下常驻面板 · 模式标签→对应按钮高亮已表达
     for (QWidget *w : { static_cast<QWidget *>(preprocessBtn),
                         static_cast<QWidget *>(workbenchBtn),
-                        static_cast<QWidget *>(m_exportClipBtn),
-                        static_cast<QWidget *>(m_setTimeBtn),
-                        static_cast<QWidget *>(m_adjustBtn),
-                        static_cast<QWidget *>(m_modeLabel) }) {
+                        static_cast<QWidget *>(m_exportClipBtn) }) {
         if (w)
             w->setVisible(false);
     }
 
     // Prevent toolbar buttons from stealing keyboard focus
-    for (QToolBar *bar : {toolBar, analysisBar}) {
-        for (auto *btn : bar->findChildren<QPushButton*>())
-            btn->setFocusPolicy(Qt::NoFocus);
-    }
+    for (auto *btn : toolBar->findChildren<QPushButton*>())
+        btn->setFocusPolicy(Qt::NoFocus);
+
+    // v2.1：分析工具栏空壳撤掉（按钮是 MainWindow 成员，已被 reparent 到检视器）
+    removeToolBar(analysisBar);
+    analysisBar->hide();
+    analysisBar->deleteLater();
 
     // v1.18 UI 重组：Ctrl+K 命令面板（菜单项可搜索直达，新增功能不必再抢菜单槽位）
     auto *paletteSc = new QShortcut(QKeySequence(QStringLiteral("Ctrl+K")), this);
@@ -985,92 +966,140 @@ void MainWindow::createToolBar()
 
 /// @brief 中央区：[视频|放大镜] 顶行 + 量化分析容器 + 语谱图容器（含折叠钮/底噪滑杆/降噪滑杆/应用钮）
 /// v1.17.0 P-79：自构造函数逐字抽取（共享样式串经参数传入）
+namespace {
+
+/// 双击轨道分隔条 → 两条轨道恢复等高（v2.1 交互：高度均分可随时复位）
+class TrackBalanceFilter : public QObject
+{
+public:
+    explicit TrackBalanceFilter(QSplitter *sp)
+        : QObject(sp), m_sp(sp) {}
+
+protected:
+    bool eventFilter(QObject *o, QEvent *e) override
+    {
+        if (e->type() == QEvent::MouseButtonDblClick && m_sp && m_sp->count() >= 3) {
+            QList<int> s = m_sp->sizes();
+            const int total = s[1] + s[2];
+            s[1] = total / 2;
+            s[2] = total - total / 2;
+            m_sp->setSizes(s);
+            return true;
+        }
+        return QObject::eventFilter(o, e);
+    }
+
+private:
+    QSplitter *m_sp = nullptr;
+};
+
+} // namespace
+
 void MainWindow::buildCentralLayout(const QString &titleBarStyle,
                                     const QString &collapseBtnStyle,
                                     const QString &titleLabelStyle)
 {
-    // --- Chart container：左 gutter（轨道名）+ 右图形（v2.0 轨道栈样式）---
+    // --- 轨道 1：亮度 / 音量 ---
+    // v2.1：取消左侧 56px 名称列 → 悬浮徽标叠在图形左上角，时间轴从 x=0 拉满。
     m_chartContainer = new QWidget(m_splitter);
-    auto *chartContainerLayout = new QHBoxLayout(m_chartContainer);
-    chartContainerLayout->setContentsMargins(0, 0, 0, 0);
-    chartContainerLayout->setSpacing(0);
-
-    auto *chartTitleBar = new QWidget(m_chartContainer);
-    chartTitleBar->setFixedWidth(56);   // v2.0：控件已搬到底部，左列只剩「箭头+色点+名称」→图形变长
-    chartTitleBar->setStyleSheet(titleBarStyle);
-    auto *chartGutter = new QVBoxLayout(chartTitleBar);
-    chartGutter->setContentsMargins(6, 4, 6, 4);
-    chartGutter->setSpacing(2);
-
-    auto *chartHeadRow = new QHBoxLayout();
-    chartHeadRow->setSpacing(4);
-
-    m_chartCollapseBtn = new ui::ChevronButton(chartTitleBar);
-    m_chartCollapseBtn->setToolTip(lang("收起 / 展开", "Collapse / Expand"));
-
-    // v2.0 轨道头：色点 + 短名（原「量化分析」看不出里面是什么）
-    auto *chartDot = new QLabel(QStringLiteral("\u25CF"), chartTitleBar);
-    chartDot->setStyleSheet(
-        QStringLiteral("QLabel{color:%1;font-size:10px;background:transparent;}")
-            .arg(Theme::DataPalette.isEmpty() ? Theme::Accent
-                                              : Theme::DataPalette[0].name()));
-    auto *chartTitleLabel = new QLabel(lang("亮度\n音量", "Luma\nAudio"), chartTitleBar);
-    chartTitleLabel->setStyleSheet(titleLabelStyle);
-    chartTitleLabel->setWordWrap(true);
-    chartTitleLabel->setToolTip(lang("亮度 · 音量", "Luma · Audio"));
-
-    chartHeadRow->addWidget(m_chartCollapseBtn);
-    chartHeadRow->addWidget(chartDot);
-    chartHeadRow->addStretch();
-    chartGutter->addLayout(chartHeadRow);
-    chartGutter->addWidget(chartTitleLabel);
-    chartGutter->addStretch();
+    auto *chartStack = new QGridLayout(m_chartContainer);
+    chartStack->setContentsMargins(0, 0, 0, 0);
+    chartStack->setSpacing(0);
 
     m_chartContent = new QWidget(m_chartContainer);
     auto *chartContentLayout = new QVBoxLayout(m_chartContent);
     chartContentLayout->setContentsMargins(0, 0, 0, 0);
     chartContentLayout->addWidget(m_chartPanel);
 
-    chartContainerLayout->addWidget(chartTitleBar);
-    chartContainerLayout->addWidget(m_chartContent, 1);
+    // 悬浮徽标：▾ 收起 + 色点 + 名称（半透明，不抢图形）
+    auto *chartBadge = new QWidget(m_chartContainer);
+    chartBadge->setObjectName(QStringLiteral("trackBadge"));
+    chartBadge->setAttribute(Qt::WA_StyledBackground, true);
+    chartBadge->setStyleSheet(QStringLiteral(
+        "QWidget#trackBadge{background:rgba(22,24,29,170);border:1px solid %1;"
+        "border-radius:7px;}"
+        "QWidget#trackBadge:hover{background:rgba(22,24,29,238);border-color:%2;}")
+        .arg(Theme::Border, Theme::Accent));
+    auto *chartGutter = new QHBoxLayout(chartBadge);
+    chartGutter->setContentsMargins(4, 2, 9, 2);
+    chartGutter->setSpacing(4);
+
+    m_chartCollapseBtn = new ui::ChevronButton(chartBadge);
+    m_chartCollapseBtn->setToolTip(lang("收起 / 展开（双击分隔条可复位均分）",
+                                        "Collapse / Expand (double-click the handle to balance)"));
+
+    auto *chartDot = new QLabel(QStringLiteral("\u25CF"), chartBadge);
+    chartDot->setStyleSheet(
+        QStringLiteral("QLabel{color:%1;font-size:10px;background:transparent;}")
+            .arg(Theme::DataPalette.isEmpty() ? Theme::Accent
+                                              : Theme::DataPalette[0].name()));
+    auto *chartTitleLabel = new QLabel(lang("亮度 · 音量", "Luma · Audio"), chartBadge);
+    chartTitleLabel->setStyleSheet(titleLabelStyle);
+    chartTitleLabel->setToolTip(lang("亮度 · 音量", "Luma · Audio"));
+
+    chartGutter->addWidget(m_chartCollapseBtn);
+    chartGutter->addWidget(chartDot);
+    chartGutter->addWidget(chartTitleLabel);
+
+    // 徽标外框：左上偏移 40px，避开 y 轴刻度文字
+    auto *chartBadgeHolder = new QWidget(m_chartContainer);
+    auto *chartHolderLay = new QVBoxLayout(chartBadgeHolder);
+    chartHolderLay->setContentsMargins(40, 5, 0, 0);
+    chartHolderLay->setSpacing(0);
+    chartHolderLay->addWidget(chartBadge);
+    chartHolderLay->addStretch();
+
+    // 同一格里叠放：图形铺满，徽标浮在左上
+    chartStack->addWidget(m_chartContent, 0, 0);
+    chartStack->addWidget(chartBadgeHolder, 0, 0, Qt::AlignLeft | Qt::AlignTop);
+    chartStack->setRowStretch(0, 1);
+    chartStack->setColumnStretch(0, 1);
 
     m_splitter->addWidget(m_chartContainer);
-    m_splitter->setStretchFactor(1, 21);  // ~21%
+    m_splitter->setStretchFactor(1, 1);   // v2.1：与语谱等分
 
-    // --- Spectrogram container with title bar ---
+    // --- 轨道 2：语谱（同样取消左列，图标悬浮）---
     m_spectrogramContainer = new QWidget(m_splitter);
-    auto *specContainerLayout = new QHBoxLayout(m_spectrogramContainer);
-    specContainerLayout->setContentsMargins(0, 0, 0, 0);
-    specContainerLayout->setSpacing(0);
+    auto *specStack = new QGridLayout(m_spectrogramContainer);
+    specStack->setContentsMargins(0, 0, 0, 0);
+    specStack->setSpacing(0);
 
-    // 左 gutter（v2.0：原全宽标题条 → 左列；滑块竖排收进左列，顶行不再挤控件）
+    // 隐藏壳：仅暂存「底噪/降噪/应用」控件，setupShell() 会把它们搬到底部任务带
     auto *specTitleBar = new QWidget(m_spectrogramContainer);
-    specTitleBar->setFixedWidth(56);    // v2.0：降噪控件已搬到底部，与图表左列对齐
-    specTitleBar->setStyleSheet(titleBarStyle);
+    specTitleBar->hide();
     auto *specGutter = new QVBoxLayout(specTitleBar);
     specGutter->setContentsMargins(6, 4, 6, 4);
     specGutter->setSpacing(3);
 
-    auto *specHeadRow = new QHBoxLayout();
+    // 悬浮徽标：▾ + 色点 + 语谱
+    auto *specBadge = new QWidget(m_spectrogramContainer);
+    specBadge->setObjectName(QStringLiteral("trackBadge"));
+    specBadge->setAttribute(Qt::WA_StyledBackground, true);
+    specBadge->setStyleSheet(QStringLiteral(
+        "QWidget#trackBadge{background:rgba(22,24,29,170);border:1px solid %1;"
+        "border-radius:7px;}"
+        "QWidget#trackBadge:hover{background:rgba(22,24,29,238);border-color:%2;}")
+        .arg(Theme::Border, Theme::Accent));
+    auto *specHeadRow = new QHBoxLayout(specBadge);
+    specHeadRow->setContentsMargins(4, 2, 9, 2);
     specHeadRow->setSpacing(4);
 
-    m_spectrogramCollapseBtn = new ui::ChevronButton(specTitleBar);
-    m_spectrogramCollapseBtn->setToolTip(lang("收起 / 展开", "Collapse / Expand"));
+    m_spectrogramCollapseBtn = new ui::ChevronButton(specBadge);
+    m_spectrogramCollapseBtn->setToolTip(lang("收起 / 展开（双击分隔条可复位均分）",
+                                              "Collapse / Expand (double-click the handle to balance)"));
 
-    auto *specDot = new QLabel(QStringLiteral("\u25CF"), specTitleBar);
+    auto *specDot = new QLabel(QStringLiteral("\u25CF"), specBadge);
     specDot->setStyleSheet(
         QStringLiteral("QLabel{color:%1;font-size:10px;background:transparent;}")
             .arg(Theme::DataPalette.size() > 4 ? Theme::DataPalette[4].name()
                                                : Theme::Accent));
-    auto *specTitleLabel = new QLabel(lang("语谱", "Spectrum"), specTitleBar);
+    auto *specTitleLabel = new QLabel(lang("语谱", "Spectrum"), specBadge);
     specTitleLabel->setStyleSheet(titleLabelStyle);
+    specTitleLabel->setToolTip(lang("语谱图", "Spectrogram"));
 
     specHeadRow->addWidget(m_spectrogramCollapseBtn);
     specHeadRow->addWidget(specDot);
-    specHeadRow->addStretch();
-    specGutter->addLayout(specHeadRow);
-    specTitleLabel->setToolTip(lang("语谱图", "Spectrogram"));
-    specGutter->addWidget(specTitleLabel);
+    specHeadRow->addWidget(specTitleLabel);
 
     // 底噪行
     auto *nfRow = new QHBoxLayout();
@@ -1138,16 +1167,25 @@ void MainWindow::buildCentralLayout(const QString &titleBarStyle,
     specContentLayout->setContentsMargins(0, 0, 0, 0);
     specContentLayout->addWidget(m_spectrogramEnhanced);
 
-    specContainerLayout->addWidget(specTitleBar);
-    specContainerLayout->addWidget(m_spectrogramContent, 1);
+    auto *specBadgeHolder = new QWidget(m_spectrogramContainer);
+    auto *specHolderLay = new QVBoxLayout(specBadgeHolder);
+    specHolderLay->setContentsMargins(40, 5, 0, 0);
+    specHolderLay->setSpacing(0);
+    specHolderLay->addWidget(specBadge);
+    specHolderLay->addStretch();
+
+    specStack->addWidget(m_spectrogramContent, 0, 0);
+    specStack->addWidget(specBadgeHolder, 0, 0, Qt::AlignLeft | Qt::AlignTop);
+    specStack->setRowStretch(0, 1);
+    specStack->setColumnStretch(0, 1);
 
     m_splitter->addWidget(m_spectrogramContainer);
-    m_splitter->setStretchFactor(2, 15);  // ~15%
+    m_splitter->setStretchFactor(2, 1);   // v2.1：与亮度/音量等分
 
-    // Store original splitter sizes for collapse/expand
-    m_splitterSizes = {550, 230, 160};
-    m_chartSavedSizes = {550, 230, 160};
-    m_spectrogramSavedSizes = {550, 230, 160};
+    // Store original splitter sizes for collapse/expand（v2.1：两条轨道等高）
+    m_splitterSizes = {550, 230, 230};
+    m_chartSavedSizes = {550, 230, 230};
+    m_spectrogramSavedSizes = {550, 230, 230};
     // v1.13.1：初始纵向比例落地改在 resizeEvent 首次有效尺寸时执行
     // （见 m_initialSplitApplied）——ctor 里 singleShot(0) 会被 main.cpp
     // splash 的 processEvents 提前触发（窗口未 show 高度无效），真机被跳过。
@@ -1226,6 +1264,15 @@ void MainWindow::buildCentralLayout(const QString &titleBarStyle,
         }
         animateSplitterSizes(sizes);
     });
+
+    // v2.1 交互：双击任一条轨道分隔条 → 亮度/音量 与 语谱 高度均分
+    {
+        auto *bal = new TrackBalanceFilter(m_splitter);
+        for (int i = 1; i < m_splitter->count(); ++i) {
+            if (QSplitterHandle *h = m_splitter->handle(i))
+                h->installEventFilter(bal);
+        }
+    }
 
 }
 

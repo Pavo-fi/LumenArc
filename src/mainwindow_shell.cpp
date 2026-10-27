@@ -25,6 +25,7 @@
 #include "theme.h"
 #include "ui/app_state.h"
 #include "ui/command_registry.h"
+#include "ui/chevron_button.h"
 #include "ui/inspector_panel.h"
 #include "ui/task_bar.h"
 #include "ui/workflow_bar.h"
@@ -176,12 +177,6 @@ void MainWindow::setupShell()
     m_taskBar->setCenterWidgets({ m_playBtn, m_pauseBtn, m_stopBtn,
                                   m_speedBtn, m_timeLabel });
 
-    // v2.0：快照并进「分析与标注」工具栏（不再占底部右侧）
-    if (auto *anBar = findChild<QToolBar *>(QStringLiteral("analysisToolBar"))) {
-        anBar->addSeparator();
-        anBar->addWidget(m_snapshotBtn);
-    }
-
     // 顶部「播放与产出」工具栏：**不删只藏**。
     // 它的子控件里有成员指针（m_exportClipBtn），删除会留下悬垂指针，
     // 之后 wiring 里的 setEnabled() 就是一次 AV（闪退）。
@@ -200,12 +195,26 @@ void MainWindow::setupShell()
     m_inspectorDock->setMinimumWidth(200);
     m_inspectorDock->setMaximumWidth(320);
 
-    // 工具 / 显示请求 → 复用现有入口
-    connect(m_inspector, &ui::InspectorPanel::toolRequested, this, [this](int t) {
-        if (t == 1)      onRectMode();
-        else if (t == 2) onPolygonMode();
-        else if (t == 3) onGuideLineMode();
-    });
+    // v2.1：把「分析与标注」整行的**真控件**收进检视器「工具」区。
+    // 同一批指针 reparent → 启用态/勾选态自动跟随，不重建、不重复连线。
+    if (m_inspector) {
+        m_inspector->addToolGroup(lang(QStringLiteral("分析"), QStringLiteral("Analyze")),
+                                  QList<QWidget *>{ m_analyzeBtn, m_audioAnalysisBtn,
+                                                    m_microDiffBtn, m_setTimeBtn }, true);
+        m_inspector->addToolGroup(lang(QStringLiteral("区域"), QStringLiteral("Region")),
+                                  QList<QWidget *>{ m_rectModeBtn, m_polygonModeBtn,
+                                                    m_guideLineBtn });
+        m_inspector->addToolGroup(lang(QStringLiteral("标注"), QStringLiteral("Mark")),
+                                  QList<QWidget *>{ m_copyRoiBtn, m_pasteRoiBtn });
+        m_inspector->addToolGroup(lang(QStringLiteral("取证"), QStringLiteral("Evidence")),
+                                  QList<QWidget *>{ m_snapshotBtn, m_captureBtn, m_editBtn,
+                                                    m_placeBtn, m_adjustBtn });
+        // 这两个原先因「阶段条已覆盖」被隐藏，现在在检视器里有位置了
+        if (m_setTimeBtn) m_setTimeBtn->setVisible(true);
+        if (m_adjustBtn)  m_adjustBtn->setVisible(true);
+    }
+
+    // 显示请求 → 复用现有入口
     connect(m_inspector, &ui::InspectorPanel::magnifierToggled, this, [this](bool on) {
         if (on) createMagnifier();
         else    removeMagnifier();
@@ -748,10 +757,7 @@ QList<QDockWidget *> MainWindow::stageDocks() const
 
 void MainWindow::applyStageChrome(ui::Stage s)
 {
-    // 工具栏：只有「在视频上干活」的阶段用得上（分析 / 校时）
-    const bool videoStage = (s == ui::Stage::Analyze || s == ui::Stage::Align);
-    if (auto *tb = findChild<QToolBar *>(QStringLiteral("analysisToolBar")))
-        tb->setVisible(videoStage);
+    // v2.1：分析工具栏已整行取消（工具收进检视器，随检视器显隐）
 
     // 停靠面板：整备 / 产出 是满幅工作面，接入是入口页 → 暂存并隐藏；离开时原样恢复
     const bool wantDocks = (s == ui::Stage::Analyze || s == ui::Stage::Align
@@ -896,19 +902,39 @@ int MainWindow::runShellSelfCheck()
     check(m_workspaceStack->count() == pageCountBefore,
           QStringLiteral("反复切换后页数稳定（%1）").arg(m_workspaceStack->count()));
 
-    // 4b. 阶段铬件：工具栏随阶段显隐 + 播放控制已搬到底部
+    // 4b. 阶段铬件：分析工具栏已整行取消（工具收进检视器）；播放控制已搬到底部
     auto *anBar = findChild<QToolBar *>(QStringLiteral("analysisToolBar"));
-    check(anBar != nullptr, QStringLiteral("分析工具栏已具名可寻"));
+    check(anBar == nullptr || !anBar->isVisible(),
+          QStringLiteral("分析工具栏已整行取消（控件收进检视器）"));
     check(findChild<QToolBar *>(QStringLiteral("playbackToolBar")) == nullptr
               || !findChild<QToolBar *>(QStringLiteral("playbackToolBar"))->isVisible(),
           QStringLiteral("播放工具栏已隐藏（控件搬到底部，保留对象防悬垂）"));
 
+    // 4c. 两条轨道等高 + 悬浮徽标在屏（v2.1 轴拉满）
+    if (m_splitter && m_splitter->count() == 3) {
+        const QList<int> sz = m_splitter->sizes();
+        check(qAbs(sz[1] - sz[2]) <= 6,
+              QStringLiteral("两条轨道等高（亮度 %1 / 语谱 %2）").arg(sz[1]).arg(sz[2]));
+    }
+    check(m_chartCollapseBtn && m_chartCollapseBtn->isVisible(),
+          QStringLiteral("亮度/音量 悬浮徽标在屏"));
+    check(m_spectrogramCollapseBtn && m_spectrogramCollapseBtn->isVisible(),
+          QStringLiteral("语谱 悬浮徽标在屏"));
+
     showStage(ui::Stage::Analyze); pump(); wait(200);
-    check(anBar && anBar->isVisible(), QStringLiteral("分析阶段：分析工具栏可见"));
+    check(m_inspectorDock && m_inspectorDock->isVisible(),
+          QStringLiteral("分析阶段：检视器可见"));
+    check(m_analyzeBtn && m_analyzeBtn->isVisible(),
+          QStringLiteral("检视器-工具：亮度按钮在屏"));
+    check(m_rectModeBtn && m_rectModeBtn->isVisible(),
+          QStringLiteral("检视器-工具：区域模式按钮在屏"));
+    check(m_snapshotBtn && m_snapshotBtn->isVisible(),
+          QStringLiteral("检视器-工具：快照按钮在屏"));
     check(m_taskBar && m_taskBar->isVisible(), QStringLiteral("任务带可见（含播放控制）"));
 
     showStage(ui::Stage::Prepare); pump(); wait(200);
-    check(anBar && !anBar->isVisible(), QStringLiteral("整备阶段：分析工具栏已隐藏"));
+    check(!m_inspectorDock || !m_inspectorDock->isVisible(),
+          QStringLiteral("整备阶段：检视器隐藏（工具随之收起）"));
 
     int visibleDocks = 0;
     for (QDockWidget *d : stageDocks())
@@ -918,7 +944,8 @@ int MainWindow::runShellSelfCheck()
           QStringLiteral("整备阶段：停靠面板全隐藏（实存 %1）").arg(visibleDocks));
 
     showStage(ui::Stage::Analyze); pump(); wait(200);
-    check(anBar && anBar->isVisible(), QStringLiteral("回分析阶段：工具栏恢复显示"));
+    check(m_inspectorDock && m_inspectorDock->isVisible(),
+          QStringLiteral("回分析阶段：检视器恢复显示"));
 
     // 5. 整备：创建 + 嵌入
     showStage(ui::Stage::Prepare);
