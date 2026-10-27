@@ -25,6 +25,7 @@
 #include "theme.h"
 #include "ui/app_state.h"
 #include "ui/command_registry.h"
+#include "multicamview.h"
 #include "ui/chevron_button.h"
 #include "ui/inspector_panel.h"
 #include "ui/task_bar.h"
@@ -60,6 +61,7 @@
 #include <QTabBar>
 #include <QTableWidget>
 #include <QToolBar>
+#include <QWheelEvent>
 #include <QToolButton>
 #include <QTreeWidget>
 #include <QVBoxLayout>
@@ -206,9 +208,10 @@ void MainWindow::setupShell()
                                                     m_guideLineBtn });
         m_inspector->addToolGroup(lang(QStringLiteral("标注"), QStringLiteral("Mark")),
                                   QList<QWidget *>{ m_copyRoiBtn, m_pasteRoiBtn });
-        m_inspector->addToolGroup(lang(QStringLiteral("取证"), QStringLiteral("Evidence")),
-                                  QList<QWidget *>{ m_snapshotBtn, m_captureBtn, m_editBtn,
-                                                    m_placeBtn, m_adjustBtn });
+        // 截图叠加：独立一栏，栏标题不可点，下面三件套
+        m_inspector->setCaptureWidgets(QList<QWidget *>{ m_captureBtn, m_editBtn, m_placeBtn });
+        // 显示：快照 / 画面调节 归到显示（自动排在放大镜之前）
+        m_inspector->setDisplayWidgets(QList<QWidget *>{ m_snapshotBtn, m_adjustBtn });
         // 这两个原先因「阶段条已覆盖」被隐藏，现在在检视器里有位置了
         if (m_setTimeBtn) m_setTimeBtn->setVisible(true);
         if (m_adjustBtn)  m_adjustBtn->setVisible(true);
@@ -219,11 +222,6 @@ void MainWindow::setupShell()
         if (on) createMagnifier();
         else    removeMagnifier();
         refreshInspector();
-    });
-    connect(m_inspector, &ui::InspectorPanel::overlayToggled, this, [this](bool) {
-        if (m_commands)
-            m_commands->triggerByTitle(lang(QStringLiteral("显示/隐藏叠加"),
-                                            QStringLiteral("Overlay")));
     });
 
     // 500ms 刷新（游标 / 素材 / 校时 / ROI）
@@ -685,6 +683,9 @@ void MainWindow::showGridWorkspace()
 {
     if (!m_multiCamWin || !m_workspaceStack)
         return;
+    // v2.1：进宫格也算离开③校时 → 右侧校时坞自动收起（宫格不走 showStage）
+    if (auto *dk = findChild<QDockWidget *>(QStringLiteral("calibrationDock")))
+        dk->hide();
     m_workspaceStack->setCurrentWidget(m_multiCamWin.data());
     if (m_appState)
         m_appState->setStage(ui::Stage::Analyze);   // 宫格是分析阶段的取景方式
@@ -965,6 +966,39 @@ int MainWindow::runShellSelfCheck()
           QStringLiteral("回分析阶段：检视器恢复显示"));
     removeDockWidget(fakeCalibDock);
     fakeCalibDock->deleteLater();
+
+    // 4e. 宫格时间轴滚轮缩放（用户 2026-10-27 报告「宫格时间轴不支持放大缩小」）
+    {
+        MultiCamViewWidget bar;
+        bar.resize(900, 140);
+        QVector<CamLane> lanes;
+        CamLane lane;
+        lane.videoId = QStringLiteral("C01");
+        lane.fileName = QStringLiteral("c01.mp4");
+        lane.wallStartMs = 0;
+        lane.wallEndMs = 3600000;      // 1 小时
+        lane.streamDurationMs = 3600000;
+        lanes.append(lane);
+        bar.setLanes(lanes);
+
+        const qint64 full = bar.fullSpanMs();
+        check(!bar.isZoomed(), QStringLiteral("宫格时间轴初始为全览"));
+
+        QWheelEvent wheel(QPointF(600, 60), bar.mapToGlobal(QPointF(600, 60)),
+                          QPoint(0, 0), QPoint(0, 120), Qt::NoButton,
+                          Qt::NoModifier, Qt::NoScrollPhase, false);
+        QApplication::sendEvent(&bar, &wheel);
+        check(bar.isZoomed(), QStringLiteral("宫格时间轴可滚轮放大"));
+        check(bar.viewSpanMs() < full,
+              QStringLiteral("放大了可视窗（%1 → %2 ms）")
+                  .arg(full).arg(bar.viewSpanMs()));
+
+        QWheelEvent back(QPointF(600, 60), bar.mapToGlobal(QPointF(600, 60)),
+                         QPoint(0, 0), QPoint(0, -120 * 40), Qt::NoButton,
+                         Qt::NoModifier, Qt::NoScrollPhase, false);
+        QApplication::sendEvent(&bar, &back);
+        check(!bar.isZoomed(), QStringLiteral("反向滚到底回到全览（夹紧不越界）"));
+    }
 
     // 5. 整备：创建 + 嵌入
     showStage(ui::Stage::Prepare);

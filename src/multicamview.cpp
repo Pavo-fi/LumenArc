@@ -28,6 +28,7 @@ constexpr int kLaneGap = 4;     // 行间距（原 8）
 constexpr int kTopMargin = 22;  // 顶部留位：游标时刻气泡高 18+2（原 26）
 constexpr int kTickLabelH = 14; // 底部刻度文字区（原 20）
 constexpr int kBandLabelH = 12; // 带标签区（缺口/重叠时长，原 16）
+constexpr qint64 kMinZoomMs = 10000;   // 最小可视窗 10s（滚轮最大放大）
 } // namespace
 
 // ---------------------------------------------------------------------------
@@ -47,6 +48,8 @@ void MultiCamViewWidget::setLanes(const QVector<CamLane> &lanes,
     m_tolMs = toleranceMs;
     setMinimumHeight(kTopMargin + int(lanes.size()) * (kLaneH + kLaneGap)
                      + kBandLabelH + kTickLabelH + 6);   // 底部留白（原 14）
+    m_viewSpan = 0;        // v2.1：换机位/重载 → 回到全览
+    m_viewT0 = 0;
     rebuildLayout();
     update();
 }
@@ -89,12 +92,25 @@ void MultiCamViewWidget::rebuildLayout()
     if (availW < 40 || m_lanes.isEmpty())
         return;
 
-    qint64 t0 = std::numeric_limits<qint64>::max(), t1 = 0;
+    qint64 fullT0 = std::numeric_limits<qint64>::max(), fullT1 = 0;
     for (const auto &l : m_lanes) {
-        t0 = qMin(t0, l.wallStartMs);
-        t1 = qMax(t1, l.wallEndMs);
+        fullT0 = qMin(fullT0, l.wallStartMs);
+        fullT1 = qMax(fullT1, l.wallEndMs);
     }
-    const qint64 span = qMax<qint64>(t1 - t0, 1);
+    const qint64 fullSpan = qMax<qint64>(fullT1 - fullT0, 1);
+    m_fullT0 = fullT0;
+    m_fullT1 = fullT1;
+
+    // v2.1：可视窗口（0 或越界 → 全览；夹到 [10s, 全量] 且不越界）
+    if (m_viewSpan <= 0 || m_viewSpan > fullSpan) {
+        m_viewSpan = fullSpan;
+        m_viewT0 = fullT0;
+    }
+    m_viewSpan = qBound<qint64>(qMin<qint64>(kMinZoomMs, fullSpan), m_viewSpan, fullSpan);
+    m_viewT0 = qBound<qint64>(fullT0, m_viewT0, fullT0 + fullSpan - m_viewSpan);
+
+    const qint64 t0 = m_viewT0;
+    const qint64 span = m_viewSpan;
     const double msPerPx = double(span) / double(availW);
     m_layoutT0 = t0;                // P-57：xToWall 反解用
     m_layoutMsPerPx = msPerPx;
@@ -185,7 +201,7 @@ void MultiCamViewWidget::rebuildLayout()
     }
     const qint64 first = (t0 / step) * step;
     bool firstLabel = true;
-    for (qint64 t = first; t <= t1; t += step) {
+    for (qint64 t = first; t <= t0 + span; t += step) {
         const int x = kLabelW + int((t - t0) / msPerPx);
         const QDateTime dt = QDateTime::fromMSecsSinceEpoch(t, Qt::LocalTime);
         const QString fmt = step >= 86400000
@@ -196,6 +212,48 @@ void MultiCamViewWidget::rebuildLayout()
         m_tickLabels.append({x, dt.toString(fmt)});
         firstLabel = false;
     }
+}
+
+// v2.1：时间轴缩放/平移（宫格里滚轮不再只滚页面）
+//   滚轮          = 以鼠标处时刻为中心缩放（10s ~ 全览）
+//   Shift + 滚轮  = 左右平移
+void MultiCamViewWidget::wheelEvent(QWheelEvent *event)
+{
+    if (m_lanes.isEmpty()) {
+        event->ignore();
+        return;
+    }
+    const int delta = event->angleDelta().y();
+    if (delta == 0) {
+        event->ignore();
+        return;
+    }
+
+    const qint64 fullSpan = qMax<qint64>(m_fullT1 - m_fullT0, 1);
+    const qint64 minSpan = qMin<qint64>(kMinZoomMs, fullSpan);
+
+    if (event->modifiers() & Qt::ShiftModifier) {
+        const qint64 step = qMax<qint64>(m_viewSpan / 6, 1000);
+        m_viewT0 += (delta > 0 ? -step : step);
+    } else {
+        const int x = int(event->position().x());
+        const int plotW = qMax(1, width() - kLabelW - kMarginR);
+        const double rx = qBound(0.0, double(x - kLabelW) / double(plotW), 1.0);
+        const qint64 anchorMs = xToWall(x);
+        const double factor = (delta > 0) ? 0.75 : (4.0 / 3.0);
+        qint64 newSpan = qint64(double(m_viewSpan) * factor);
+        newSpan = qBound(minSpan, newSpan, fullSpan);
+        m_viewT0 = anchorMs - qint64(double(newSpan) * rx);
+        m_viewSpan = newSpan;
+    }
+
+    m_viewSpan = qBound(minSpan, m_viewSpan, fullSpan);
+    m_viewT0 = qBound<qint64>(m_fullT0, m_viewT0,
+                              m_fullT0 + fullSpan - m_viewSpan);
+
+    rebuildLayout();
+    update();
+    event->accept();
 }
 
 void MultiCamViewWidget::paintEvent(QPaintEvent *)
@@ -214,6 +272,7 @@ void MultiCamViewWidget::paintEvent(QPaintEvent *)
     }
 
     // 覆盖率竖带（先画带后画块，块保持可读）
+    int lastLabelRight = -100000;   // v2.1：标签防重叠（相邻太近就跳过，不留糊字）
     for (const auto &b : m_bands) {
         p.setPen(Qt::NoPen);
         if (b.overlap) {
@@ -228,8 +287,15 @@ void MultiCamViewWidget::paintEvent(QPaintEvent *)
         f.setPixelSize(10);
         p.setFont(f);
         p.setPen(b.overlap ? QColor(Theme::Danger) : textSec);
-        const QRect lr(b.rect.left() - 60, b.rect.bottom() + 2, 120, kBandLabelH);
-        p.drawText(lr, Qt::AlignHCenter | Qt::AlignTop, b.label);
+        const QFontMetrics fm(p.font());
+        const int tw = fm.horizontalAdvance(b.label) + 8;
+        const int cx = b.rect.center().x();
+        const int left = cx - tw / 2;
+        if (left > lastLabelRight + 6) {          // 与上一条标签不打架才画
+            p.drawText(QRect(left, b.rect.bottom() + 2, tw, kBandLabelH),
+                       Qt::AlignHCenter | Qt::AlignTop, b.label);
+            lastLabelRight = left + tw;
+        }
     }
 
     // 机位行标签列（块在下一步按条目画——合并轨一行多块）
@@ -259,6 +325,7 @@ void MultiCamViewWidget::paintEvent(QPaintEvent *)
     }
 
     // 机位块（P-69：合并轨逐段多色——同色调按段号明暗交替；被压重叠区斜纹+⚠）
+    int lastWarnX = -1000;   // v2.1：⚠ 也防重叠（密集被压区不再糊成一排红点）
     for (const auto &br : m_rects) {
         const QRect r = br.rect;
         QColor fill = Theme::DataPalette[br.row % Theme::DataPalette.size()];
@@ -272,13 +339,16 @@ void MultiCamViewWidget::paintEvent(QPaintEvent *)
         for (const QRect &ov : br.overlapClips) {
             p.setBrush(QBrush(QColor(Theme::TextMuted), Qt::BDiagPattern));
             p.drawRect(ov);
-            p.setPen(QColor(Theme::Danger));
-            QFont wf = p.font();
-            wf.setPixelSize(12);
-            wf.setBold(true);
-            p.setFont(wf);
-            p.drawText(QRect(ov.left(), ov.top(), 16, ov.height()),
-                       Qt::AlignLeft | Qt::AlignVCenter, QStringLiteral("⚠"));
+            if (ov.left() > lastWarnX + 14) {
+                p.setPen(QColor(Theme::Danger));
+                QFont wf = p.font();
+                wf.setPixelSize(12);
+                wf.setBold(true);
+                p.setFont(wf);
+                p.drawText(QRect(ov.left(), ov.top(), 16, ov.height()),
+                           Qt::AlignLeft | Qt::AlignVCenter, QStringLiteral("⚠"));
+                lastWarnX = ov.left();
+            }
             p.setPen(Qt::NoPen);
         }
 

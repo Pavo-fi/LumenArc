@@ -71,8 +71,19 @@ InspectorPanel::InspectorPanel(QWidget *parent)
     m_toolLay->setSpacing(6);
     lay->addLayout(m_toolLay);
 
-    // 显示开关
+    // 截图叠加：这一栏只是标题（本身不是开关），下面是 截取 / 编辑 / 放置
+    addSection(lay, lang(QStringLiteral("截图叠加"), QStringLiteral("Overlay")));
+    m_captureLay = new QVBoxLayout();
+    m_captureLay->setContentsMargins(0, 0, 0, 0);
+    m_captureLay->setSpacing(4);
+    lay->addLayout(m_captureLay);
+
+    // 显示栏：快照/画面调节 由 MainWindow 追加（自动排在放大镜之前）
     addSection(lay, lang(QStringLiteral("显示"), QStringLiteral("Display")));
+    m_displayLay = new QVBoxLayout();
+    m_displayLay->setContentsMargins(0, 0, 0, 0);
+    m_displayLay->setSpacing(4);
+    lay->addLayout(m_displayLay);
     {
         const QString css = QStringLiteral(
             "QPushButton{background:%1;color:%2;border:1px solid %3;border-radius:4px;"
@@ -82,16 +93,12 @@ InspectorPanel::InspectorPanel(QWidget *parent)
             .arg(Theme::BgCard, Theme::TextSecond, Theme::Border,
                  Theme::Accent, Theme::Accent);
         m_magBtn = new QPushButton(lang(QStringLiteral("放大镜"), QStringLiteral("Magnifier")), this);
-        m_ovlBtn = new QPushButton(lang(QStringLiteral("截图叠加"), QStringLiteral("Overlay")), this);
-        for (QPushButton *b : { m_magBtn, m_ovlBtn }) {
-            b->setCheckable(true);
-            b->setCursor(Qt::PointingHandCursor);
-            b->setFocusPolicy(Qt::NoFocus);
-            b->setStyleSheet(css);
-            lay->addWidget(b);
-        }
+        m_magBtn->setCheckable(true);
+        m_magBtn->setCursor(Qt::PointingHandCursor);
+        m_magBtn->setFocusPolicy(Qt::NoFocus);
+        m_magBtn->setStyleSheet(css);
+        m_displayLay->addWidget(m_magBtn);
         connect(m_magBtn, &QPushButton::toggled, this, &InspectorPanel::magnifierToggled);
-        connect(m_ovlBtn, &QPushButton::toggled, this, &InspectorPanel::overlayToggled);
     }
 
     lay->addStretch(1);
@@ -168,20 +175,8 @@ void InspectorPanel::setRoi(int rects, int polys)
         m_roi->setText(QStringLiteral("%1 / %2").arg(rects).arg(polys));
 }
 
-void InspectorPanel::addToolGroup(const QString &label, const QList<QWidget *> &widgets,
-                                  bool primary)
+QGridLayout *InspectorPanel::makeChipGrid(const QList<QWidget *> &widgets, bool primary)
 {
-    if (!m_toolLay || widgets.isEmpty())
-        return;
-
-    // 分组小标签（比分区标题小一号，不抢眼）
-    if (!label.isEmpty()) {
-        auto *sub = new QLabel(label, this);
-        sub->setStyleSheet(QStringLiteral("color:%1;font-size:10px;background:transparent;")
-                               .arg(Theme::TextMuted));
-        m_toolLay->addWidget(sub);
-    }
-
     // 紧凑 chip 样式：宽度交给网格拉伸，字号降一号，高度可控
     const QString chip = QStringLiteral(
         "QPushButton{background:%1;color:%2;border:1px solid %3;border-radius:4px;"
@@ -197,9 +192,9 @@ void InspectorPanel::addToolGroup(const QString &label, const QList<QWidget *> &
         "font-size:11px;font-weight:600;padding:4px 0;min-width:0;}"
         "QPushButton:hover{background:%3;}"
         "QPushButton:pressed{background:%4;}"
-        "QPushButton:disabled{background:%5;color:%8;border-color:%5;}")
+        "QPushButton:disabled{background:%5;color:%6;border-color:%5;}")
         .arg(Theme::Accent, Theme::AccentOnDark, Theme::AccentHover,
-             Theme::AccentPress, Theme::BgPressed, QString(), QString(), Theme::TextMuted);
+             Theme::AccentPress, Theme::BgPressed, Theme::TextMuted);
 
     // 3 个控件就排一行（模式三连），其余一律两列
     const int cols = (widgets.size() == 3) ? 3 : 2;
@@ -211,7 +206,7 @@ void InspectorPanel::addToolGroup(const QString &label, const QList<QWidget *> &
         QWidget *w = widgets.at(i);
         if (!w)
             continue;
-        w->setParent(this);                     // 从工具栏接管
+        w->setParent(this);                     // 从工具栏/隐藏壳接管
         w->setCursor(Qt::PointingHandCursor);
         w->setFocusPolicy(Qt::NoFocus);         // 不抢全局快捷键
         w->setStyleSheet((primary && i == 0) ? chipPrimary : chip);
@@ -221,12 +216,41 @@ void InspectorPanel::addToolGroup(const QString &label, const QList<QWidget *> &
         const int col = i % cols;
         const int span = (cols > 1 && i == widgets.size() - 1 && col == 0) ? cols : 1;
         grid->addWidget(w, row, col, 1, span);
-        w->show();                          // setParent 会隐藏，必须显式 show
+        w->show();                              // setParent 会隐藏，必须显式 show
     }
     for (int c = 0; c < cols; ++c)
         grid->setColumnStretch(c, 1);
-    m_toolLay->addLayout(grid);
+    return grid;
+}
 
+void InspectorPanel::addToolGroup(const QString &label, const QList<QWidget *> &widgets,
+                                  bool primary)
+{
+    if (!m_toolLay || widgets.isEmpty())
+        return;
+
+    // 分组小标签（比分区标题小一号，不抢眼）
+    if (!label.isEmpty()) {
+        auto *sub = new QLabel(label, this);
+        sub->setStyleSheet(QStringLiteral("color:%1;font-size:10px;background:transparent;")
+                               .arg(Theme::TextMuted));
+        m_toolLay->addWidget(sub);
+    }
+    m_toolLay->addLayout(makeChipGrid(widgets, primary));
+}
+
+void InspectorPanel::setCaptureWidgets(const QList<QWidget *> &widgets)
+{
+    if (!m_captureLay || widgets.isEmpty())
+        return;
+    m_captureLay->addLayout(makeChipGrid(widgets, false));
+}
+
+void InspectorPanel::setDisplayWidgets(const QList<QWidget *> &widgets)
+{
+    if (!m_displayLay || widgets.isEmpty())
+        return;
+    m_displayLay->insertLayout(0, makeChipGrid(widgets, false));   // 排在放大镜之前
 }
 
 void InspectorPanel::setMagnifier(bool on)
@@ -235,14 +259,6 @@ void InspectorPanel::setMagnifier(bool on)
         return;
     QSignalBlocker b(m_magBtn);
     m_magBtn->setChecked(on);
-}
-
-void InspectorPanel::setOverlay(bool on)
-{
-    if (!m_ovlBtn)
-        return;
-    QSignalBlocker b(m_ovlBtn);
-    m_ovlBtn->setChecked(on);
 }
 
 } // namespace ui

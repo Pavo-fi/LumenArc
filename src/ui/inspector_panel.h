@@ -15,6 +15,7 @@
 class QLabel;
 class QPushButton;
 class QVBoxLayout;
+class QGridLayout;
 
 namespace ui {
 
@@ -32,16 +33,18 @@ public:
     void setCursor(qint64 ms);
     void setRoi(int rects, int polys);
     void setMagnifier(bool on);
-    void setOverlay(bool on);
 
     /// v2.0：把主窗口「分析与标注」整行的真控件收进「工具」区。
     /// 传进来的 widget 由本面板接管布局（reparent），启用态/勾选态与原来完全一致。
     void addToolGroup(const QString &label, const QList<QWidget *> &widgets,
                       bool primary = false);
+    /// 「截图叠加」栏：截取/编辑/放置（栏标题本身不可点）
+    void setCaptureWidgets(const QList<QWidget *> &widgets);
+    /// 「显示」栏：快照/画面调节（自动排在放大镜之前）
+    void setDisplayWidgets(const QList<QWidget *> &widgets);
 
 signals:
     void magnifierToggled(bool on);
-    void overlayToggled(bool on);
 
 private:
     QLabel *addSection(QVBoxLayout *lay, const QString &title);
@@ -54,9 +57,12 @@ private:
     QLabel *m_cal = nullptr;
     QLabel *m_cursor = nullptr;
     QLabel *m_roi = nullptr;
-    QVBoxLayout *m_toolLay = nullptr;   ///< 「工具」区容器（依次追加分组）
+    QVBoxLayout *m_toolLay = nullptr;      ///< 「工具」区容器（依次追加分组）
+    QVBoxLayout *m_captureLay = nullptr;   ///< 「截图叠加」栏
+    QVBoxLayout *m_displayLay = nullptr;   ///< 「显示」栏
     QPushButton *m_magBtn = nullptr;
-    QPushButton *m_ovlBtn = nullptr;
+
+    QGridLayout *makeChipGrid(const QList<QWidget *> &widgets, bool primary);
 };
 
 } // namespace ui

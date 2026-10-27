@@ -23,6 +23,8 @@
 #include <QWidget>
 #include "app/cam_timeline.h"
 
+class QWheelEvent;
+
 /// 多机时间线条控件：一机位一行，块位=墙钟、宽∝时长 + 共享游标
 class MultiCamViewWidget : public QWidget
 {
@@ -44,6 +46,11 @@ public:
 
     QSize sizeHint() const override { return {720, 220}; }
 
+    /// v2.1：当前可视窗长度（ms）；== 全量 = 未缩放
+    qint64 viewSpanMs() const { return m_viewSpan; }
+    qint64 fullSpanMs() const { return qMax<qint64>(m_fullT1 - m_fullT0, 1); }
+    bool   isZoomed()   const { return m_viewSpan > 0 && m_viewSpan < fullSpanMs(); }
+
 signals:
     void laneActivated(const QString &videoId);   ///< 双击块（回单路分析）
     void scrubPreview(qint64 wallMs);   ///< 游标拖动中（实时追逐，高频）
@@ -56,6 +63,7 @@ protected:
     void mouseMoveEvent(QMouseEvent *event) override;
     void mouseReleaseEvent(QMouseEvent *event) override;
     bool event(QEvent *event) override;           // ToolTip 命中
+    void wheelEvent(QWheelEvent *event) override;  // v2.1：滚轮缩放 / Shift 平移
     void resizeEvent(QResizeEvent *event) override;
 
 private:
@@ -88,4 +96,9 @@ private:
     bool m_scrubbing = false;
     qint64 m_layoutT0 = 0;      // rebuildLayout 记录的轴域（xToWall 用）
     double m_layoutMsPerPx = 1.0;
+
+    // v2.1：可视窗口（缩放/平移）。m_viewSpan==0 → 全览
+    qint64 m_fullT0 = 0, m_fullT1 = 0;   ///< 数据全量范围（夹紧用）
+    qint64 m_viewT0 = 0;
+    qint64 m_viewSpan = 0;
 };
