@@ -73,7 +73,7 @@ CaseDock::CaseDock(CaseManager *cm, QWidget *parent)
     tlay->setContentsMargins(8, 0, 4, 0);
     tlay->setSpacing(6);
 
-    m_titleLabel = new QLabel(titleBar);
+    m_titleLabel = new QLabel(lang("案件", "Case"), titleBar);   // 空态也不留空白标题
     m_titleLabel->setStyleSheet(QStringLiteral(
         "font-size:11px;font-weight:600;color:%1;background:transparent;")
         .arg(Theme::TextPrimary));

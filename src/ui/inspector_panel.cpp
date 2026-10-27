@@ -61,8 +61,8 @@ InspectorPanel::InspectorPanel(QWidget *parent)
     factsScroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAsNeeded);   // 极端长串也能完整看到
     auto *facts = new QWidget(factsScroll);
     auto *lay = new QVBoxLayout(facts);
-    lay->setContentsMargins(10, 6, 8, 6);
-    lay->setSpacing(3);
+    lay->setContentsMargins(10, 4, 8, 8);
+    lay->setSpacing(5);
 
     addSection(lay, lang(QStringLiteral("素材"), QStringLiteral("Source")));
     m_name = addRow(lay, lang(QStringLiteral("名称"), QStringLiteral("Name")));
@@ -71,11 +71,11 @@ InspectorPanel::InspectorPanel(QWidget *parent)
     m_dur = addRow(lay, lang(QStringLiteral("时长"), QStringLiteral("Length")));
 
     addSection(lay, lang(QStringLiteral("时间基准"), QStringLiteral("Time base")));
-    m_cal = addRow(lay, lang(QStringLiteral("校时"), QStringLiteral("Calibration")));
-    m_cursor = addRow(lay, lang(QStringLiteral("游标"), QStringLiteral("Cursor")));
+    m_cal = addRow(lay, lang(QStringLiteral("校时"), QStringLiteral("Calibration")), true);
+    m_cursor = addRow(lay, lang(QStringLiteral("游标"), QStringLiteral("Cursor")), true);
 
     addSection(lay, lang(QStringLiteral("区域"), QStringLiteral("Regions")));
-    m_roi = addRow(lay, lang(QStringLiteral("ROI"), QStringLiteral("ROI")));
+    m_roi = addRow(lay, lang(QStringLiteral("ROI"), QStringLiteral("ROI")), true);
     lay->addStretch(1);
     factsScroll->setWidget(facts);
     outer->addWidget(factsScroll, 1);
@@ -90,12 +90,12 @@ InspectorPanel::InspectorPanel(QWidget *parent)
     // ---- 下半：工具（固定，不随滚动）----
     auto *toolsHost = new QWidget(this);
     auto *tlay = new QVBoxLayout(toolsHost);
-    tlay->setContentsMargins(10, 4, 8, 8);
-    tlay->setSpacing(5);
+    tlay->setContentsMargins(10, 6, 8, 8);
+    tlay->setSpacing(3);
 
     // 工具：容器留空，由 MainWindow 把「分析与标注」整行的真控件收进来
     // —— 同一批指针，不重建，所以启用态/勾选态与工具栏时代完全一致。
-    addSection(tlay, lang(QStringLiteral("工具"), QStringLiteral("Tool")), 4);
+    addSectionL1(tlay, lang(QStringLiteral("工具"), QStringLiteral("Tool")));
     m_toolLay = new QVBoxLayout();
     m_toolLay->setContentsMargins(0, 0, 0, 0);
     m_toolLay->setSpacing(5);
@@ -139,14 +139,31 @@ InspectorPanel::InspectorPanel(QWidget *parent)
     setRoi(0, 0);
 }
 
+void InspectorPanel::setMagnifierOn(bool on)
+{
+    if (m_magBtn)
+        m_magBtn->setChecked(on);
+}
+
 QLabel *InspectorPanel::addSection(QVBoxLayout *lay, const QString &title, int topPad)
 {
     auto *l = new QLabel(title, this);
-    // L1 分区标题：小、暗、宽字距 + 粗体 —— 只做结构，不与数值抢视线
-    l->setStyleSheet(QStringLiteral("color:%1;font-size:11px;letter-spacing:.8px;"
+    // L2 分区标题：小、暗、宽字距 —— 只做结构，不与数值抢视线
+    l->setStyleSheet(QStringLiteral("color:%1;font-size:10px;letter-spacing:.8px;"
                                     "font-weight:600;background:transparent;"
                                     "padding-top:%2px;")
                          .arg(Theme::TextMuted).arg(topPad));
+    lay->addWidget(l);
+    return l;
+}
+
+QLabel *InspectorPanel::addSectionL1(QVBoxLayout *lay, const QString &title)
+{
+    // L1 一级标题：「检视器 / 工具 / 案件」同一套字号字重 —— 用户要求完全一致
+    auto *l = new QLabel(title, this);
+    l->setStyleSheet(QStringLiteral("color:%1;font-size:11px;font-weight:600;"
+                                    "background:transparent;")
+                         .arg(Theme::TextPrimary));
     lay->addWidget(l);
     return l;
 }
@@ -155,27 +172,59 @@ void InspectorPanel::setRowText(QLabel *l, const QString &value, const QString &
 {
     if (!l)
         return;
-    const QString key = l->property("k").toString();
-    l->setText(QStringLiteral(
-        "<span style='color:%1;font-size:10px;'>%2</span>"
-        "<span style='color:%3;font-size:12px;font-weight:600;'>&nbsp;&nbsp;%4</span>")
-        .arg(Theme::TextMuted, key.toHtmlEscaped(), color, value.toHtmlEscaped()));
+    if (l->property("inline").toBool()) {
+        // 短读数（校时/游标/ROI）：键小灰 + 值同行，省一整行高度
+        const QString key = l->property("k").toString();
+        l->setText(QStringLiteral(
+            "<span style='color:%1;font-size:10px;'>%2</span>"
+            "<span style='color:%3;font-size:12px;font-weight:600;'>&nbsp;&nbsp;%4</span>")
+            .arg(Theme::TextMuted, key.toHtmlEscaped(), color, value.toHtmlEscaped()));
+    } else {
+        // 主读数（名称/分辨率/帧率/时长）：键做行首说明，值独占一行、最大最亮
+        l->setStyleSheet(QStringLiteral("color:%1;font-size:13px;font-weight:600;"
+                                        "background:transparent;")
+                             .arg(color));
+        l->setText(value);
+    }
 }
 
-QLabel *InspectorPanel::addRow(QVBoxLayout *lay, const QString &key)
+QLabel *InspectorPanel::addRow(QVBoxLayout *lay, const QString &key, bool inlineRow)
 {
-    // v2.3：一行 = 一个富文本标签（键内联 + 值）。
-    // 单控件 + setWordWrap → 高度由它自己算，值再长也会换行，绝不会被裁；
-    // 也就不会再出现「名称 merged_2026… 」被切掉半截的情况。
-    auto *row = new QLabel(this);
-    row->setTextFormat(Qt::RichText);
-    row->setWordWrap(true);
-    row->setTextInteractionFlags(Qt::TextSelectableByMouse);
-    row->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Minimum);
-    row->setProperty("k", key);
-    setRowText(row, QStringLiteral("—"), Theme::TextPrimary);
-    lay->addWidget(row);
-    return row;
+    if (inlineRow) {
+        auto *row = new QLabel(this);
+        row->setTextFormat(Qt::RichText);
+        row->setWordWrap(true);
+        row->setTextInteractionFlags(Qt::TextSelectableByMouse);
+        row->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Minimum);
+        row->setObjectName(QStringLiteral("inspInline"));
+        row->setProperty("k", key);
+        row->setProperty("inline", true);
+        setRowText(row, QStringLiteral("—"), Theme::TextPrimary);
+        lay->addWidget(row);
+        return row;
+    }
+
+    // caption 式：上面一行小字说明，下面一行大字数值。
+    // 值 setWordWrap + 独占整行宽 → 再长的文件名也是换行，绝不裁切。
+    auto *host = new QWidget(this);
+    auto *v = new QVBoxLayout(host);
+    v->setContentsMargins(0, 0, 0, 0);
+    v->setSpacing(1);
+    auto *k = new QLabel(key, host);
+    k->setStyleSheet(QStringLiteral("color:%1;font-size:10px;background:transparent;")
+                         .arg(Theme::TextMuted));
+    v->addWidget(k);
+    auto *val = new QLabel(host);
+    val->setWordWrap(true);
+    val->setTextFormat(Qt::PlainText);
+    val->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    val->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Minimum);
+    val->setObjectName(QStringLiteral("inspVal"));
+    val->setProperty("k", key);
+    val->setProperty("inline", false);
+    v->addWidget(val);
+    lay->addWidget(host);
+    return val;
 }
 
 void InspectorPanel::setSource(const QString &name, int w, int h, double fps, qint64 durationMs)

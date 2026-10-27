@@ -213,10 +213,24 @@ void MainWindow::setupShell()
     // v2.2：检视器自己管滚动（上半事实可滚，下半工具固定）——
     // 这里直接放面板本体，不要再套一层 QScrollArea。
     m_inspectorDock->setWidget(m_inspector);
-    // v2.3：整个侧边栏只保留**一个**标题标签（在案件坞上）——检视器不再单列标题
-    m_inspectorDock->setFeatures(QDockWidget::NoDockWidgetFeatures);
-    m_inspectorDock->setTitleBarWidget(new QWidget());
-    m_inspectorDock->titleBarWidget()->setFixedHeight(0);
+    // v2.4：「检视器」一级标题回来 —— 与「案件：XXX」同一套字号/字重/边框
+    m_inspectorDock->setFeatures(QDockWidget::DockWidgetMovable);
+    {
+        auto *tb = new QWidget(m_inspectorDock);
+        tb->setFixedHeight(26);
+        tb->setStyleSheet(QStringLiteral(
+            "QWidget{background:%1;border-bottom:1px solid %2;}")
+            .arg(Theme::BgPanel, Theme::Border));
+        auto *tl = new QHBoxLayout(tb);
+        tl->setContentsMargins(8, 0, 4, 0);
+        tl->setSpacing(6);
+        auto *lb = new QLabel(lang("检视器", "Inspector"), tb);
+        lb->setStyleSheet(QStringLiteral(
+            "font-size:11px;font-weight:600;color:%1;background:transparent;")
+            .arg(Theme::TextPrimary));
+        tl->addWidget(lb, 1);
+        m_inspectorDock->setTitleBarWidget(tb);
+    }
     m_inspectorDock->setStyleSheet(QStringLiteral(
             "QDockWidget{font-size:11px;font-weight:600;color:%1;}"
             "QDockWidget::title{background:%2;padding:5px 8px;"
@@ -1158,6 +1172,86 @@ int MainWindow::runShellSelfCheck()
         pump(); wait(250);
         m_chartCollapseBtn->click();
         pump(); wait(250);
+    }
+
+    // 4h. 检视器：每条主读数都必须完整显示（高度不得小于折行所需高度）
+    {
+        const QList<QLabel *> vals =
+            m_inspector->findChildren<QLabel *>(QStringLiteral("inspVal"));
+        bool allFit = !vals.isEmpty();
+        int bad = 0;
+        for (QLabel *v : vals) {
+            const int need = v->heightForWidth(v->width());
+            if (need > v->height() + 1) {
+                allFit = false;
+                ++bad;
+            }
+        }
+        check(allFit, QStringLiteral("检视器：%1 条主读数全部完整显示（被裁 %2 条）")
+                           .arg(vals.size()).arg(bad));
+        check(vals.size() == 4,
+              QStringLiteral("检视器：主读数行数 4（名称/分辨率/帧率/时长），实际 %1")
+                  .arg(vals.size()));
+        // 行宽必须吃满整个检视器，不能被压成窄条
+        bool wide = true;
+        const int dockW = m_caseDock ? m_caseDock->width() : 0;
+        for (QLabel *v : vals)
+            if (dockW > 0 && v->width() < dockW / 3)
+                wide = false;
+        check(wide, QStringLiteral("检视器：主读数行宽吃满（不被压窄）"));
+    }
+
+    // 4h2. 两个一级标题必须存在且字重一致（案件：XXX / 检视器）
+    {
+        auto titleText = [](QDockWidget *d) {
+            QString t;
+            if (QWidget *tb = d ? d->titleBarWidget() : nullptr)
+                for (QLabel *l : tb->findChildren<QLabel *>())
+                    t += l->text();
+            return t;
+        };
+        auto titlePx = [](QDockWidget *d) {
+            int px = 0;
+            if (QWidget *tb = d ? d->titleBarWidget() : nullptr)
+                for (QLabel *l : tb->findChildren<QLabel *>())
+                    px = l->font().pixelSize() > 0 ? l->font().pixelSize()
+                                                   : l->font().pointSize();
+            return px;
+        };
+        const QString caseT = titleText(m_caseDock);
+        const QString inspT = titleText(m_inspectorDock);
+        check(caseT.contains(QStringLiteral("案件")) && !inspT.isEmpty(),
+              QStringLiteral("一级标题：「%1」/「%2」都在").arg(caseT, inspT));
+        check(m_inspectorDock->titleBarWidget()
+                  && m_inspectorDock->titleBarWidget()->height() >= 24,
+              QStringLiteral("一级标题：检视器标题栏有高度（未被压成 0）"));
+        check(titlePx(m_caseDock) == titlePx(m_inspectorDock),
+              QStringLiteral("一级标题：字号一致（%1 / %2）")
+                  .arg(titlePx(m_caseDock)).arg(titlePx(m_inspectorDock)));
+    }
+
+    // 4i. 放大镜：只分视频区，绝不动左侧栏（用户要求）
+    {
+        const bool caseVis = m_caseDock->isVisible();
+        const int caseW = m_caseDock->width();
+        const bool insVis = m_inspectorDock->isVisible();
+        const int insW = m_inspectorDock->width();
+        m_inspector->setMagnifierOn(true);
+        QCoreApplication::processEvents();
+        check(m_magnifier != nullptr, QStringLiteral("放大镜：已创建并嵌入"));
+        check(m_caseDock->isVisible() == caseVis,
+              QStringLiteral("放大镜：案件坞可见性不变"));
+        check(qAbs(m_caseDock->width() - caseW) <= 2,
+              QStringLiteral("放大镜：案件坞宽度不变（%1 → %2）")
+                  .arg(caseW).arg(m_caseDock->width()));
+        check(m_inspectorDock->isVisible() == insVis
+                  && qAbs(m_inspectorDock->width() - insW) <= 2,
+              QStringLiteral("放大镜：检视器同样不受影响"));
+        check(m_casePlaceholder == nullptr || !m_casePlaceholder->isVisible(),
+              QStringLiteral("放大镜：不弹占位细条"));
+        m_inspector->setMagnifierOn(false);
+        QCoreApplication::processEvents();
+        check(m_magnifier == nullptr, QStringLiteral("放大镜：关闭后已移除"));
     }
 
     // 5. 整备：创建 + 嵌入

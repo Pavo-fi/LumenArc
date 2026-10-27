@@ -195,24 +195,8 @@ void MainWindow::createMagnifier()
         anim->start(QAbstractAnimation::DeleteWhenStopped);
     });
 
-    // Auto-layout: 收起左侧列表（案件模式收案件面板，否则收视频列表，
-    // v1.13.1 用户反馈①：案件列表此前不折叠）并显示占位细条
-    m_videoListWasExpanded = m_videoListContent && m_videoListContent->isVisible();
-    const bool caseMode = m_caseDock && m_caseDock->isVisible();
-    if (m_leftColumnHidden) {
-        // v2.3：左侧栏本来就是整体收起的 → 放大镜不要再动它（否则关掉后乱恢复）
-    } else if (caseMode) {
-        // v1.13.1：记录真实手动状态（用户本已收起的，关闭放大镜后仍保持收起）
-        m_caseDockWasExpanded = m_caseListContent
-            ? m_caseListContent->isVisible() : true;
-        m_caseDock->setVisible(false);
-        m_casePlaceholder->setVisible(true);
-        resizeDocks({m_casePlaceholder}, {24}, Qt::Horizontal);
-    } else if (m_videoListWasExpanded || m_videoListPanel->isVisible()) {
-        m_videoListPanel->setVisible(false);
-        m_videoListPlaceholder->setVisible(true);
-        resizeDocks({m_videoListPlaceholder}, {24}, Qt::Horizontal);
-    }
+    // v2.4：放大镜**不再动左侧栏**（用户要求：开启放大镜后左侧栏保持原样）。
+    // 只是把视频区分成左右两半，左原始 + 右放大。
 
     // Sync snapshot overlay if currently active
     if (m_snapshotOverlay && m_snapshotOverlay->hasSnapshot() && m_snapshotOverlay->isOverlayActive()) {
@@ -281,25 +265,7 @@ void MainWindow::removeMagnifier()
     if (!m_magnifier)
         return;
 
-    // 恢复案件面板（v1.13.1：与视频列表同语义——占位条还亮着说明用户
-    // 没主动展开过，按进入前状态恢复）
-    if (!m_leftColumnHidden && m_casePlaceholder && m_casePlaceholder->isVisible()) {
-        // v2.1：统一入口（进入前展开/收起都原样恢复）
-        setCaseListExpanded(m_caseDockWasExpanded);
-    }
-    // Restore video list panel state
-    if (m_videoListPlaceholder->isVisible()) {
-        // User didn't expand video list while magnifier was open
-        m_videoListPlaceholder->setVisible(false);
-        if (m_videoListWasExpanded) {
-            m_videoListPanel->setVisible(true);
-            m_videoListContent->setVisible(true);
-            m_videoListCollapseBtn->setText(QString::fromUtf8("\xe2\x97\x80")); // ◀
-            m_videoListCollapseBtn->setToolTip(lang("收起视频列表", "Collapse video list"));
-            resizeDocks({m_videoListPanel}, {250}, Qt::Horizontal);
-        }
-    }
-    // else: user expanded video list while magnifier was open, keep it as is
+    // v2.4：左侧栏未被动过 → 无需恢复
 
     m_videoWidget->overlay()->setMagnifierRect(QRect(), 0.0);   // 标识框随放大镜关闭消失
     m_topRowSavedSizes = m_topRow->sizes();   // 保存用户调过的左右比例
