@@ -65,6 +65,8 @@ private:
     QPushButton *m_magBtn = nullptr;
 
     QGridLayout *makeChipGrid(const QList<QWidget *> &widgets, bool primary);
+    /// 行渲染：键（小灰）+ 值（大亮）内联在一行富文本里 —— 值自然换行，永远不被裁
+    void setRowText(QLabel *l, const QString &value, const QString &color);
 };
 
 } // namespace ui

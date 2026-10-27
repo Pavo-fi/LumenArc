@@ -45,8 +45,10 @@ public:
 signals:
     /// 双击视频/前处理输出 → MainWindow openVideoFile
     void openVideoRequested(const QString &path);
-    /// 标题栏 ✕ / 树内「关闭案件」→ MainWindow 关闭流程（dirty 提示）
+    /// 树内「关闭案件」→ MainWindow 关闭流程（dirty 提示）
     void closeCaseRequested();
+    /// v2.3：标题行「◀」→ MainWindow 整列收起/展开左侧栏
+    void collapseSidebarRequested();
 
 protected:
     void closeEvent(QCloseEvent *event) override;
@@ -93,7 +95,6 @@ private:
     CaseManager *m_caseManager = nullptr;   // 不持有（SSOT 在 MainWindow）
     QTreeWidget *m_tree = nullptr;
     QLabel *m_titleLabel = nullptr;
-    QPushButton *m_btnDelete = nullptr;     // 删除选中视频（2026-08）
     QTimer *m_watchTimer = nullptr;         // 外部变更轮询（2026-08）
     QSet<QString> m_snapshot;               // 案内引用文件存在性快照
 };

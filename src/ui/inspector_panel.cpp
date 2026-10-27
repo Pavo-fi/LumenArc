@@ -151,69 +151,61 @@ QLabel *InspectorPanel::addSection(QVBoxLayout *lay, const QString &title, int t
     return l;
 }
 
+void InspectorPanel::setRowText(QLabel *l, const QString &value, const QString &color)
+{
+    if (!l)
+        return;
+    const QString key = l->property("k").toString();
+    l->setText(QStringLiteral(
+        "<span style='color:%1;font-size:10px;'>%2</span>"
+        "<span style='color:%3;font-size:12px;font-weight:600;'>&nbsp;&nbsp;%4</span>")
+        .arg(Theme::TextMuted, key.toHtmlEscaped(), color, value.toHtmlEscaped()));
+}
+
 QLabel *InspectorPanel::addRow(QVBoxLayout *lay, const QString &key)
 {
-    // v2.3：单行紧凑 —— 键（固定窄列）+ 值（左对齐、可换行），
-    // 目标是初始状态就把全部信息显示完，不用拖不用滚。
-    auto *row = new QWidget(this);
-    auto *h = new QHBoxLayout(row);
-    h->setContentsMargins(0, 0, 0, 0);
-    h->setSpacing(8);
-
-    auto *k = new QLabel(key, row);
-    k->setStyleSheet(QStringLiteral("color:%1;font-size:10px;background:transparent;")
-                         .arg(Theme::TextMuted));
-    k->setFixedWidth(46);
-    k->setAlignment(Qt::AlignLeft | Qt::AlignTop);
-
-    auto *val = new QLabel(QStringLiteral("—"), row);
-    val->setStyleSheet(QStringLiteral("color:%1;font-size:12px;font-weight:600;"
-                                      "background:transparent;")
-                           .arg(Theme::TextPrimary));
-    val->setAlignment(Qt::AlignLeft | Qt::AlignTop);
-    val->setWordWrap(true);
-    val->setTextInteractionFlags(Qt::TextSelectableByMouse);   // 可复制文件名
-    val->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
-    val->setMinimumWidth(0);
-
-    h->addWidget(k, 0, Qt::AlignTop);
-    h->addWidget(val, 1, Qt::AlignTop);
+    // v2.3：一行 = 一个富文本标签（键内联 + 值）。
+    // 单控件 + setWordWrap → 高度由它自己算，值再长也会换行，绝不会被裁；
+    // 也就不会再出现「名称 merged_2026… 」被切掉半截的情况。
+    auto *row = new QLabel(this);
+    row->setTextFormat(Qt::RichText);
+    row->setWordWrap(true);
+    row->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    row->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Minimum);
+    row->setProperty("k", key);
+    setRowText(row, QStringLiteral("—"), Theme::TextPrimary);
     lay->addWidget(row);
-    return val;
+    return row;
 }
 
 void InspectorPanel::setSource(const QString &name, int w, int h, double fps, qint64 durationMs)
 {
-    if (m_name) m_name->setText(name.isEmpty()
-                                    ? lang(QStringLiteral("未打开"), QStringLiteral("None"))
-                                    : name);
-    if (m_size) m_size->setText(w > 0 && h > 0 ? QStringLiteral("%1×%2").arg(w).arg(h)
-                                               : QStringLiteral("—"));
-    if (m_fps)  m_fps->setText(fps > 0.0 ? QStringLiteral("%1").arg(fps, 0, 'f', 2)
-                                         : QStringLiteral("—"));
-    if (m_dur)  m_dur->setText(fmtLen(durationMs));
+    setRowText(m_name, name.isEmpty()
+                   ? lang(QStringLiteral("未打开"), QStringLiteral("None")) : name,
+               Theme::TextPrimary);
+    setRowText(m_size, w > 0 && h > 0 ? QStringLiteral("%1×%2").arg(w).arg(h)
+                                      : QStringLiteral("—"), Theme::TextPrimary);
+    setRowText(m_fps, fps > 0.0 ? QStringLiteral("%1").arg(fps, 0, 'f', 2)
+                                : QStringLiteral("—"), Theme::TextPrimary);
+    setRowText(m_dur, fmtLen(durationMs), Theme::TextPrimary);
 }
 
 void InspectorPanel::setCalibration(const QString &state, bool ok)
 {
     if (!m_cal)
         return;
-    m_cal->setText(state);
-    m_cal->setStyleSheet(QStringLiteral("color:%1;font-size:13px;font-weight:600;"
-                                        "background:transparent;")
-                             .arg(ok ? Theme::Success : Theme::TextSecond));
+    setRowText(m_cal, state, ok ? Theme::Success : Theme::TextSecond);
 }
 
 void InspectorPanel::setCursor(qint64 ms)
 {
-    if (m_cursor)
-        m_cursor->setText(fmtMs(ms));
+    setRowText(m_cursor, fmtMs(ms), Theme::TextPrimary);
 }
 
 void InspectorPanel::setRoi(int rects, int polys)
 {
-    if (m_roi)
-        m_roi->setText(QStringLiteral("%1 / %2").arg(rects).arg(polys));
+    setRowText(m_roi, QStringLiteral("%1 / %2").arg(rects).arg(polys),
+               Theme::TextPrimary);
 }
 
 QGridLayout *InspectorPanel::makeChipGrid(const QList<QWidget *> &widgets, bool primary)

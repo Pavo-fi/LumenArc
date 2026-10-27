@@ -1506,7 +1506,11 @@ void MainWindow::buildCaseUi(const QString &collapseBtnStyle)
     resizeDocks({m_casePlaceholder}, {24}, Qt::Horizontal);
     m_casePlaceholder->setVisible(false);
     connect(casePhExpandBtn, &QPushButton::clicked, this, [this]() {
-        setCaseListExpanded(true);   // v2.1：唯一入口
+        if (m_leftColumnHidden) {   // v2.3：侧边栏整体收起 → 整列还原
+            toggleLeftColumn();
+            return;
+        }
+        setCaseListExpanded(true);
     });
 
 
@@ -1537,6 +1541,9 @@ void MainWindow::buildCaseUi(const QString &collapseBtnStyle)
             this, &MainWindow::openVideoFile);
     connect(m_caseDock, &CaseDock::closeCaseRequested,
             this, &MainWindow::closeCaseWithPrompt);
+    // v2.3：侧边栏标题行的 ◀ → 整列收起（含检视器）
+    connect(m_caseDock, &CaseDock::collapseSidebarRequested,
+            this, &MainWindow::toggleLeftColumn);
     // 案件打开面板（Blender 式页面内居中，2026-08 人工反馈：不弹窗）
     m_caseOpenPanel = new CaseOpenPanel(m_caseManager, this);
     m_caseOpenPanel->hide();

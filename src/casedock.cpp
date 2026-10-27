@@ -31,6 +31,7 @@
 #include <QMessageBox>
 #include <QProcess>
 #include <QPushButton>
+#include <QToolButton>
 #include <QTimer>
 #include <QTreeWidget>
 #include <QTreeWidgetItemIterator>
@@ -61,43 +62,53 @@ CaseDock::CaseDock(CaseManager *cm, QWidget *parent)
     setFeatures(QDockWidget::DockWidgetMovable);
     setAllowedAreas(Qt::LeftDockWidgetArea | Qt::RightDockWidgetArea);
 
+    // v2.3：整个侧边栏只有**一个**标题标签（案件：XXX + 刷新图标 + 收起箭头），
+    // 内容区直接从树开始 —— 用户要求「案件：XXX 下面那一行不要」。
+    auto *titleBar = new QWidget(this);
+    titleBar->setFixedHeight(26);
+    titleBar->setStyleSheet(QStringLiteral(
+        "QWidget{background:%1;border-bottom:1px solid %2;}")
+        .arg(Theme::BgPanel, Theme::Border));
+    auto *tlay = new QHBoxLayout(titleBar);
+    tlay->setContentsMargins(8, 0, 4, 0);
+    tlay->setSpacing(6);
+
+    m_titleLabel = new QLabel(titleBar);
+    m_titleLabel->setStyleSheet(QStringLiteral(
+        "font-size:11px;font-weight:600;color:%1;background:transparent;")
+        .arg(Theme::TextPrimary));
+    tlay->addWidget(m_titleLabel, 1);
+
+    const QString iconBtn = QStringLiteral(
+        "QToolButton{background:transparent;color:%1;border:0;border-radius:4px;"
+        "font-size:13px;padding:0 5px;}"
+        "QToolButton:hover{color:%2;background:%3;}")
+        .arg(Theme::TextSecond, Theme::Accent, Theme::BgHover);
+
+    auto *btnRefresh = new QToolButton(titleBar);
+    btnRefresh->setText(QString::fromUtf8("↻"));          // ↻
+    btnRefresh->setToolTip(lang("重新扫描案件目录文件状态", "Re-scan case files"));
+    btnRefresh->setFixedSize(22, 20);
+    btnRefresh->setFocusPolicy(Qt::NoFocus);
+    btnRefresh->setStyleSheet(iconBtn);
+    tlay->addWidget(btnRefresh, 0);
+
+    auto *btnCollapse = new QToolButton(titleBar);
+    btnCollapse->setText(QString(QChar(0x25C0)));               // ◀
+    btnCollapse->setToolTip(lang("收起整个左侧栏", "Collapse the whole left column"));
+    btnCollapse->setFixedSize(22, 20);
+    btnCollapse->setFocusPolicy(Qt::NoFocus);
+    btnCollapse->setStyleSheet(iconBtn);
+    tlay->addWidget(btnCollapse, 0);
+    connect(btnCollapse, &QToolButton::clicked, this,
+            &CaseDock::collapseSidebarRequested);
+    setTitleBarWidget(titleBar);
+
     auto *host = new QWidget(this);
     auto *lay = new QVBoxLayout(host);
-    lay->setContentsMargins(6, 6, 6, 6);
+    lay->setContentsMargins(6, 4, 6, 6);
     lay->setSpacing(4);
 
-    // v2.2：第一行 = 案件名 + 刷新（用户要求「刷新移到第一行」）
-    auto *headRow = new QHBoxLayout();
-    headRow->setContentsMargins(0, 0, 0, 0);
-    headRow->setSpacing(6);
-
-    m_titleLabel = new QLabel(host);
-    m_titleLabel->setStyleSheet(QStringLiteral(
-        "font-weight:bold; color:%1;").arg(Theme::TextPrimary));
-    m_titleLabel->setWordWrap(true);
-    headRow->addWidget(m_titleLabel, 1);
-
-    auto *btnRefresh = new QPushButton(lang("刷新", "Refresh"), host);
-    btnRefresh->setToolTip(lang("重新扫描案件目录文件状态", "Re-scan case files"));
-    btnRefresh->setFixedHeight(20);
-    btnRefresh->setFocusPolicy(Qt::NoFocus);
-    btnRefresh->setStyleSheet(QStringLiteral(
-        "QPushButton{background:transparent;color:%1;border:1px solid %2;"
-        "border-radius:4px;padding:0 8px;font-size:11px;}"
-        "QPushButton:hover{color:%3;border-color:%3;}")
-        .arg(Theme::TextSecond, Theme::Border, Theme::Accent));
-    headRow->addWidget(btnRefresh, 0, Qt::AlignTop);
-    lay->addLayout(headRow);
-
-    // 操作行：删除选中视频 + 手动刷新（2026-08 人工反馈：误入视频需显式
-    // 删除入口；外部删除文件后需刷新反映）
-    // 规范§6：emoji 禁令——按钮纯文字，图标与文字不并用
-    m_btnDelete = new QPushButton(lang("删除选中", "Delete selected"), host);
-    m_btnDelete->setEnabled(false);
-    // 规范§7.4：ToolTip 一行 ≤25 字，细节进确认对话框
-    m_btnDelete->setToolTip(lang("删除选中视频（不可恢复）",
-                                 "Delete selected video (irreversible)"));
-    lay->addWidget(m_btnDelete);
 
     m_tree = new QTreeWidget(host);
     m_tree->setHeaderHidden(true);
@@ -125,12 +136,8 @@ CaseDock::CaseDock(CaseManager *cm, QWidget *parent)
             this, &CaseDock::onContextMenu);
     connect(m_tree, &QTreeWidget::itemSelectionChanged,
             this, &CaseDock::onSelectionChanged);
-    connect(m_btnDelete, &QPushButton::clicked, this, [this]() {
-        auto *it = m_tree->currentItem();
-        if (it && it->data(0, kRoleKind).toString() == QLatin1String("video"))
-            deleteVideoFile(it->data(0, kRoleId).toString());
-    });
-    connect(btnRefresh, &QPushButton::clicked, this, [this]() {
+    // v2.3：「删除选中」按钮已移除（用户要求）——用树内右键「删除」
+    connect(btnRefresh, &QToolButton::clicked, this, [this]() {
         refreshTree();
         m_snapshot = buildSnapshot();
     });
@@ -418,9 +425,9 @@ void CaseDock::refreshTree()
     // v1.7.1 闪退修复：树全量重建 → 旧高亮指针必然悬空，先置空；
     // 重建完成后按保存的路径重新应用高亮
     m_currentHighlight = nullptr;
-    // v2.2：只显示案件名（路径太占地方，用户要求删掉）
-    m_titleLabel->setText(m_caseManager->meta().caseNo + QStringLiteral("-")
-                          + m_caseManager->meta().title);
+    // v2.3：侧边栏唯一标签 = 案件：XXX
+    m_titleLabel->setText(lang("案件：%1", "Case: %1")
+                              .arg(m_caseManager->meta().caseNo));
     setWindowTitle(lang("案件：%1", "Case: %1")
                        .arg(m_caseManager->meta().caseNo));
     m_tree->clear();
@@ -643,8 +650,7 @@ void CaseDock::onSelectionChanged()
     const auto *it = m_tree->currentItem();
     const bool video = it
         && it->data(0, kRoleKind).toString() == QLatin1String("video");
-    if (m_btnDelete)
-        m_btnDelete->setEnabled(video);
+    // v2.3：「删除选中」按钮已移除（用户要求），用树内右键删除
 }
 
 void CaseDock::onContextMenu(const QPoint &pos)

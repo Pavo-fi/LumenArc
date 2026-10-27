@@ -213,8 +213,10 @@ void MainWindow::setupShell()
     // v2.2：检视器自己管滚动（上半事实可滚，下半工具固定）——
     // 这里直接放面板本体，不要再套一层 QScrollArea。
     m_inspectorDock->setWidget(m_inspector);
-    // v2.3：与案件坞同一个一级标题样式；去掉 ✕（左侧栏由顶栏开关统一管）
-    m_inspectorDock->setFeatures(QDockWidget::DockWidgetMovable);
+    // v2.3：整个侧边栏只保留**一个**标题标签（在案件坞上）——检视器不再单列标题
+    m_inspectorDock->setFeatures(QDockWidget::NoDockWidgetFeatures);
+    m_inspectorDock->setTitleBarWidget(new QWidget());
+    m_inspectorDock->titleBarWidget()->setFixedHeight(0);
     m_inspectorDock->setStyleSheet(QStringLiteral(
             "QDockWidget{font-size:11px;font-weight:600;color:%1;}"
             "QDockWidget::title{background:%2;padding:5px 8px;"
@@ -402,7 +404,9 @@ void MainWindow::toggleLeftColumn()
 {
     QList<QDockWidget *> left;
     for (QDockWidget *d : findChildren<QDockWidget *>()) {
-        if (d && dockWidgetArea(d) == Qt::LeftDockWidgetArea)
+        if (!d || d == m_casePlaceholder)   // 占位细条单独管
+            continue;
+        if (dockWidgetArea(d) == Qt::LeftDockWidgetArea)
             left << d;
     }
     if (left.isEmpty())
@@ -414,8 +418,15 @@ void MainWindow::toggleLeftColumn()
             m_leftDockStash.insert(d, d->isVisible());
         for (QDockWidget *d : left)
             d->hide();
+        // 留一条细条当还原入口（▶）
+        if (m_casePlaceholder) {
+            m_casePlaceholder->setVisible(true);
+            resizeDocks({m_casePlaceholder}, {24}, Qt::Horizontal);
+        }
         m_leftColumnHidden = true;
     } else {
+        if (m_casePlaceholder)
+            m_casePlaceholder->setVisible(false);
         for (QDockWidget *d : left) {
             if (m_leftDockStash.value(d, false))
                 d->show();
@@ -836,7 +847,8 @@ void MainWindow::applyStageChrome(ui::Stage s)
     // v2.2：左侧栏整体收起时，阶段切换不得把它放出来
     if (m_leftColumnHidden) {
         for (QDockWidget *d : findChildren<QDockWidget *>())
-            if (d && dockWidgetArea(d) == Qt::LeftDockWidgetArea)
+            if (d && d != m_casePlaceholder
+                && dockWidgetArea(d) == Qt::LeftDockWidgetArea)
                 d->hide();
     }
 

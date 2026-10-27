@@ -283,7 +283,7 @@ void MainWindow::removeMagnifier()
 
     // 恢复案件面板（v1.13.1：与视频列表同语义——占位条还亮着说明用户
     // 没主动展开过，按进入前状态恢复）
-    if (m_casePlaceholder && m_casePlaceholder->isVisible()) {
+    if (!m_leftColumnHidden && m_casePlaceholder && m_casePlaceholder->isVisible()) {
         // v2.1：统一入口（进入前展开/收起都原样恢复）
         setCaseListExpanded(m_caseDockWasExpanded);
     }
