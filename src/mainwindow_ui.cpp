@@ -1528,6 +1528,8 @@ void MainWindow::buildCaseUi(const QString &collapseBtnStyle)
     }
     addDockWidget(Qt::LeftDockWidgetArea, m_caseDock);
     resizeDocks({m_caseDock}, {250}, Qt::Horizontal);
+    // v2.2：案件区高度下限——检视器内容变多后会把案件树挤到只剩几行
+    m_caseDock->setMinimumHeight(380);
     m_caseDock->setVisible(false);   // 仅案件模式可见（替代视频列表）
 
     // v1.13.1（用户实测反馈）：案件列表常驻手动折叠条（与视频列表同款

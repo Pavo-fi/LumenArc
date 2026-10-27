@@ -47,8 +47,8 @@ InspectorPanel::InspectorPanel(QWidget *parent)
 {
     setObjectName(QStringLiteral("inspectorPanel"));
     auto *lay = new QVBoxLayout(this);
-    lay->setContentsMargins(10, 8, 10, 8);
-    lay->setSpacing(3);
+    lay->setContentsMargins(12, 10, 12, 10);
+    lay->setSpacing(5);
 
     addSection(lay, lang(QStringLiteral("素材"), QStringLiteral("Source")));
     m_name = addRow(lay, lang(QStringLiteral("名称"), QStringLiteral("Name")));
@@ -113,9 +113,10 @@ InspectorPanel::InspectorPanel(QWidget *parent)
 QLabel *InspectorPanel::addSection(QVBoxLayout *lay, const QString &title)
 {
     auto *l = new QLabel(title, this);
-    l->setStyleSheet(QStringLiteral("color:%1;font-size:11px;letter-spacing:.8px;"
-                                    "font-weight:600;background:transparent;padding-top:10px;")
-                         .arg(Theme::TextSecond));
+    // L1 分区标题：小、暗、宽字距 + 粗体 —— 只做结构，不与数值抢视线
+    l->setStyleSheet(QStringLiteral("color:%1;font-size:10px;letter-spacing:1.4px;"
+                                    "font-weight:700;background:transparent;padding-top:12px;")
+                         .arg(Theme::TextMuted));
     lay->addWidget(l);
     return l;
 }
@@ -128,10 +129,12 @@ QLabel *InspectorPanel::addRow(QVBoxLayout *lay, const QString &key)
     h->setSpacing(6);
 
     auto *k = new QLabel(key, row);
-    k->setStyleSheet(QStringLiteral("color:%1;font-size:12px;background:transparent;")
+    // L2 行键：中性灰、常规字重
+    k->setStyleSheet(QStringLiteral("color:%1;font-size:11px;background:transparent;")
                          .arg(Theme::TextSecond));
     auto *v = new QLabel(QStringLiteral("—"), row);
-    v->setStyleSheet(QStringLiteral("color:%1;font-size:12px;font-weight:600;"
+    // L3 行值：最亮、最大、半粗 —— 真正要读的那一层
+    v->setStyleSheet(QStringLiteral("color:%1;font-size:13px;font-weight:600;"
                                     "background:transparent;")
                          .arg(Theme::TextPrimary));
     v->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
@@ -160,7 +163,7 @@ void InspectorPanel::setCalibration(const QString &state, bool ok)
     if (!m_cal)
         return;
     m_cal->setText(state);
-    m_cal->setStyleSheet(QStringLiteral("color:%1;font-size:12px;font-weight:600;"
+    m_cal->setStyleSheet(QStringLiteral("color:%1;font-size:13px;font-weight:600;"
                                         "background:transparent;")
                              .arg(ok ? Theme::Success : Theme::TextSecond));
 }
@@ -234,8 +237,9 @@ void InspectorPanel::addToolGroup(const QString &label, const QList<QWidget *> &
     // 分组小标签（比分区标题小一号，不抢眼）
     if (!label.isEmpty()) {
         auto *sub = new QLabel(label, this);
-        sub->setStyleSheet(QStringLiteral("color:%1;font-size:11px;background:transparent;")
-                               .arg(Theme::TextSecond));
+        sub->setStyleSheet(QStringLiteral("color:%1;font-size:10px;letter-spacing:.6px;"
+                                          "font-weight:600;background:transparent;")
+                               .arg(Theme::TextMuted));
         m_toolLay->addWidget(sub);
     }
     m_toolLay->addLayout(makeChipGrid(widgets, primary));

@@ -299,12 +299,8 @@ void CamTileWidget::paintEvent(QPaintEvent *)
         p.drawText(rect(), Qt::AlignCenter, m_placeholder);
     }
 
-    // 选中外框（画面调节作用于该瓦片，v1.12.8）
-    if (m_selected) {
-        p.setPen(QPen(QColor(Theme::Accent), 3));
-        p.setBrush(Qt::NoBrush);
-        p.drawRect(rect().adjusted(1, 1, -2, -2));
-    }
+    // v2.2：删除全幅选中画框（用户 2026-10-27）——选中已由右上角 🔊 徽标表达，
+    // 3px 黄框压在画面上太抢眼。m_selected 仍用于「画面调节」的作用对象。
 
     // OSD（U-5 可关）
     if (m_osdVisible) {

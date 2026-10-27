@@ -146,7 +146,18 @@ void MainWindow::setCaseListExpanded(bool on)
     if (m_casePlaceholder)
         m_casePlaceholder->setVisible(false);
     m_caseDock->setVisible(true);
-    resizeDocks({m_caseDock}, {on ? 250 : 28}, Qt::Horizontal);
+
+    // v2.2：用尺寸上下限**硬性**控制折叠宽度。
+    // resizeDocks 在左侧停靠区会被兄弟坞（检视器）的尺寸协商覆盖，
+    // 这正是此前「点了 ◀ 没反应 / 反应一半」的原因。
+    if (on) {
+        m_caseDock->setMaximumWidth(QWIDGETSIZE_MAX);
+        m_caseDock->setMinimumWidth(200);
+        resizeDocks({m_caseDock}, {250}, Qt::Horizontal);
+    } else {
+        m_caseDock->setMinimumWidth(28);
+        m_caseDock->setMaximumWidth(28);
+    }
 }
 
 void MainWindow::enterCaseMode()
@@ -158,14 +169,16 @@ void MainWindow::enterCaseMode()
     m_caseDock->refreshTree();
     resizeDocks({m_caseDock}, {250}, Qt::Horizontal);
 
-    // v2.1：案件区加长——检视器下方本就有大片空位，把纵向比例往案件面板倾斜
-    QTimer::singleShot(0, this, [this]() {
+    // v2.2：案件区加长——检视器内容多，会把案件树挤到只剩几行（用户：案件被遮盖）。
+    // 必须等两坞真正布局完成再量高度（singleShot(0) 时案件坞高度还是 0，
+    // 用 inspector 一项算比例 = 等于没调，v2.1 就是这么失效的）。
+    QTimer::singleShot(120, this, [this]() {
         if (!m_caseDock || !m_inspectorDock)
             return;
         const int total = m_caseDock->height() + m_inspectorDock->height();
-        if (total <= 400)
+        if (total < 600)   // 还没布局好 / 窗口太矮 → 不动
             return;
-        const int top = int(total * 0.62);
+        const int top = qBound(380, int(total * 0.62), total - 150);
         resizeDocks({m_caseDock, m_inspectorDock}, {top, total - top}, Qt::Vertical);
     });
     m_caseStatusBtn->setText(

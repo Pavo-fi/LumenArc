@@ -55,6 +55,7 @@
 #include <QRadioButton>
 #include <QSlider>
 #include <QSpinBox>
+#include <QScrollArea>
 #include <QStackedWidget>
 #include <QSplitter>
 #include <QStatusBar>
@@ -191,11 +192,19 @@ void MainWindow::setupShell()
     m_inspector = new ui::InspectorPanel(this);
     m_inspectorDock = new QDockWidget(lang(QStringLiteral("检视器"), QStringLiteral("Inspector")), this);
     m_inspectorDock->setObjectName(QStringLiteral("inspectorDock"));
-    m_inspectorDock->setWidget(m_inspector);
+    // v2.2：检视器内容多、sizeHint 高 → 会把上方案件坞挤扁（用户：案件被遮盖）。
+    // 装进滚动区后高度不再由内容撑开，交给停靠区协商；内容超出时可滚动。
+    auto *inspScroll = new QScrollArea(m_inspectorDock);
+    inspScroll->setWidgetResizable(true);
+    inspScroll->setFrameShape(QFrame::NoFrame);
+    inspScroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    inspScroll->setWidget(m_inspector);
+    m_inspectorDock->setWidget(inspScroll);
     m_inspectorDock->setAllowedAreas(Qt::LeftDockWidgetArea | Qt::RightDockWidgetArea);
     addDockWidget(Qt::LeftDockWidgetArea, m_inspectorDock);
     m_inspectorDock->setMinimumWidth(200);
     m_inspectorDock->setMaximumWidth(320);
+    m_inspectorDock->setMinimumHeight(150);
 
     // v2.1：把「分析与标注」整行的**真控件**收进检视器「工具」区。
     // 同一批指针 reparent → 启用态/勾选态自动跟随，不重建、不重复连线。
@@ -1021,6 +1030,15 @@ int MainWindow::runShellSelfCheck()
         check(m_caseListContent->isVisible(), QStringLiteral("案件列表：再次展开恢复可见"));
         check(!m_casePlaceholder->isVisible(),
               QStringLiteral("案件列表：展开后占位细条已撤（不留双条）"));
+        check(m_caseDock->width() >= 200,
+              QStringLiteral("案件列表：展开后宽度回到 %1px").arg(m_caseDock->width()));
+
+        setCaseListExpanded(false);
+        pump(); wait(120);
+        check(m_caseDock->width() <= 40,
+              QStringLiteral("案件列表：收起后宽度收到 %1px").arg(m_caseDock->width()));
+        setCaseListExpanded(true);
+        pump(); wait(120);
 
         m_caseDock->setVisible(false);   // 收尾：不干扰后续「停靠全隐藏」检查
         pump(); wait(80);
