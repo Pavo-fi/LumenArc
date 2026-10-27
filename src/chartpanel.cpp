@@ -1788,7 +1788,7 @@ void ChartPanel::updateCursorPosition()
         qreal labelY = plotArea.top() - totalH - 10;
 
         // Clamp to plot area bounds（v2.1：左界让出轨道徽标，读数不压徽标）
-        const qreal leftBound = plotArea.left() + m_readoutReserved;
+        const qreal leftBound = qMax(plotArea.left(), m_readoutMinX);
         const qreal rightBound = qMax(leftBound, plotArea.right() - maxW);
         labelX = qBound(leftBound, labelX, rightBound);
         labelY = qMax(labelY, plotArea.top() - totalH - 14);

@@ -1043,7 +1043,7 @@ void MainWindow::buildCentralLayout(const QString &titleBarStyle,
 
     // 游标读数左界让出徽标宽度（否则两者在左上角叠成一坨灰块）
     if (m_chartPanel)
-        m_chartPanel->setCursorReadoutReserved(qMax(140, chartBadge->sizeHint().width() + 14));
+        m_chartPanel->setCursorReadoutMinX(chartBadge->sizeHint().width() + 3 + 30);
 
     // 徽标外框：左上偏移 40px，避开 y 轴刻度文字
     auto *chartBadgeHolder = new QWidget(m_chartContainer);

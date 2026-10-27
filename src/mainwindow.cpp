@@ -25,6 +25,7 @@
 #include "app/report_docx_builder.h"
 #include "reportpreflightdialog.h"
 #include "sitemapeditordialog.h"
+#include <QStackedWidget>
 #include <QProgressDialog>
 #include <QFutureWatcher>
 #include <QtConcurrent/QtConcurrent>
@@ -1804,6 +1805,17 @@ bool MainWindow::handleGlobalShortcut(QKeyEvent *e)
     // Protection: Don't intercept text input widgets
     if (qobject_cast<QLineEdit*>(fw) || qobject_cast<QTextEdit*>(fw)) {
         return false;
+    }
+
+    // v2.1：宫格在屏时，空格归宫格自己的播放键
+    // （否则会去打主视口那条已被暂停/隐藏的视频，用户观感就是「空格被劫持」）
+    if (m_workspaceStack && m_multiCamWin
+        && m_workspaceStack->currentWidget() == m_multiCamWin.data()) {
+        if (key == Qt::Key_Space) {
+            QMetaObject::invokeMethod(m_multiCamWin.data(), "onTogglePlay",
+                                      Qt::DirectConnection);
+            return true;
+        }
     }
 
     // Check if video engine is available

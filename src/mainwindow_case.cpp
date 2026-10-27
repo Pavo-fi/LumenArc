@@ -549,6 +549,7 @@ void MainWindow::onMultiCamView()
     win->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
     if (m_workspaceStack)
         m_workspaceStack->addWidget(win);
+    installKeyGuardOn(win);   // v2.1：宫格页的子按钮会吃掉空格 → 必须挂守卫
     showGridWorkspace();
 }
 

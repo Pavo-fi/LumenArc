@@ -377,6 +377,14 @@ void MainWindow::showStage(ui::Stage s)
         return;
 
     m_appState->setStage(s);
+
+    // v2.1：离开「校时」阶段 → 右侧校时坞自动收起（否则它一直压在视频上，
+    // 分析/整备/产出/交付页都不需要它；回到③校时会自动重新弹出）
+    if (s != ui::Stage::Align) {
+        if (auto *dk = findChild<QDockWidget *>(QStringLiteral("calibrationDock")))
+            dk->hide();
+    }
+
     applyStageChrome(s);
 
     // 校时：停靠式——视频必须保持可见（否则无法框选时间戳），所以不换页
@@ -943,9 +951,20 @@ int MainWindow::runShellSelfCheck()
     check(visibleDocks == 0,
           QStringLiteral("整备阶段：停靠面板全隐藏（实存 %1）").arg(visibleDocks));
 
+    // 4d. 校时坞：离开③校时后应自动收起（用户 2026-10-27 报告）
+    auto *fakeCalibDock = new QDockWidget(QStringLiteral("calib"), this);
+    fakeCalibDock->setObjectName(QStringLiteral("calibrationDock"));
+    fakeCalibDock->setWidget(new QWidget(fakeCalibDock));
+    addDockWidget(Qt::RightDockWidgetArea, fakeCalibDock);
+    fakeCalibDock->show();
+
     showStage(ui::Stage::Analyze); pump(); wait(200);
+    check(!fakeCalibDock->isVisible(),
+          QStringLiteral("切回分析阶段：右侧校时坞自动收起"));
     check(m_inspectorDock && m_inspectorDock->isVisible(),
           QStringLiteral("回分析阶段：检视器恢复显示"));
+    removeDockWidget(fakeCalibDock);
+    fakeCalibDock->deleteLater();
 
     // 5. 整备：创建 + 嵌入
     showStage(ui::Stage::Prepare);
