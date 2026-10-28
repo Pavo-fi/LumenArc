@@ -257,6 +257,12 @@ void MainWindow::setupShell()
         m_inspector->setCaptureWidgets(QList<QWidget *>{ m_captureBtn, m_editBtn, m_placeBtn });
         // 显示：快照 / 画面调节 归到显示（自动排在放大镜之前）
         m_inspector->setDisplayWidgets(QList<QWidget *>{ m_snapshotBtn, m_adjustBtn });
+
+        // v2.5：ROI 三段控件的外框容器（modeSegment）三个按钮已被检视器接管，
+        // 容器本身没人管 → 它作为 MainWindow 的顶层子控件停在 (0,0) 100x30，
+        // 正好压在**菜单栏左上角**，用户看到的就是「菜单栏被灰色色块挡住」。
+        if (QWidget *seg = findChild<QWidget *>(QStringLiteral("roiModeSegment")))
+            seg->hide();
         // 这两个原先因「阶段条已覆盖」被隐藏，现在在检视器里有位置了
         if (m_setTimeBtn) m_setTimeBtn->setVisible(true);
         if (m_adjustBtn)  m_adjustBtn->setVisible(true);
@@ -1218,6 +1224,30 @@ int MainWindow::runShellSelfCheck()
         pump(); wait(250);
         m_chartCollapseBtn->click();
         pump(); wait(250);
+    }
+
+    // 4c2. 顶栏左上角（菜单栏区域）不许被任何控件压住
+    {
+        QStringList intruders;
+        for (QWidget *w : findChildren<QWidget *>()) {
+            if (!w || !w->isVisible() || w->parentWidget() != this)
+                continue;
+            if (qobject_cast<QMenuBar *>(w) || qobject_cast<QToolBar *>(w)
+                || qobject_cast<QStatusBar *>(w))
+                continue;
+            const QRect r(w->mapTo(this, QPoint(0, 0)), w->size());
+            if (r.intersects(QRect(0, 0, 260, 40)))
+                intruders << QStringLiteral("%1(%2,%3 %4x%5)")
+                                 .arg(QString::fromLatin1(w->metaObject()->className()))
+                                 .arg(r.x()).arg(r.y()).arg(r.width()).arg(r.height());
+        }
+        check(intruders.isEmpty(),
+              QStringLiteral("菜单栏左上角无遮挡物%1")
+                  .arg(intruders.isEmpty() ? QString()
+                                           : QStringLiteral("：") + intruders.join(QStringLiteral(" / "))));
+        QWidget *hit = menuBar() ? childAt(60, 12) : nullptr;
+        check(hit == nullptr || hit == menuBar() || hit->isAncestorOf(menuBar()),
+              QStringLiteral("(60,12) 命中的是菜单栏，不是覆盖层"));
     }
 
     // 4h. 检视器：每条主读数都必须完整显示（高度不得小于折行所需高度）

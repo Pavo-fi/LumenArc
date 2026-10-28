@@ -830,6 +830,7 @@ void MainWindow::createToolBar()
 
     // 分段控件容器：三个模式按钮共享一个圆角外框
     auto *modeSegment = new QWidget(this);
+    modeSegment->setObjectName(QStringLiteral("roiModeSegment"));
     modeSegment->setStyleSheet("background: " + Theme::BgCard + "; border-radius: 6px;");
     auto *modeLayout = new QHBoxLayout(modeSegment);
     modeLayout->setContentsMargins(2, 2, 2, 2);
