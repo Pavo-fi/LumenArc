@@ -55,6 +55,9 @@ private:
     /// L1 一级标题（检视器 / 工具）—— 与「案件：XXX」同字号同字重
     QLabel *addSectionL1(QVBoxLayout *lay, const QString &title);
     QLabel *addRow(QVBoxLayout *lay, const QString &key, bool inlineRow = false);
+    /// 造一个「键 + 值」单元格：inlineRow=false → 键一行、值一行；true → 键值同行
+    QWidget *makeCell(QWidget *parent, const QString &key, bool inlineRow,
+                      QLabel **valOut = nullptr);
 
     QLabel *m_name = nullptr;
     QLabel *m_size = nullptr;

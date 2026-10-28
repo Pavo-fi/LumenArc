@@ -53,44 +53,60 @@ InspectorPanel::InspectorPanel(QWidget *parent)
     outer->setContentsMargins(0, 0, 0, 0);
     outer->setSpacing(0);
 
-    // ---- 上半：事实（可滚动）----
-    // v2.2：工具栏与检视器分开 —— 事实随内容滚，工具常驻底部不跟着滚走
-    auto *factsScroll = new QScrollArea(this);
-    factsScroll->setWidgetResizable(true);
-    factsScroll->setFrameShape(QFrame::NoFrame);
-    factsScroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAsNeeded);   // 极端长串也能完整看到
-    auto *facts = new QWidget(factsScroll);
-    auto *lay = new QVBoxLayout(facts);
+    // ---- v2.5：整块可滚动 ----
+    // 左侧栏改成 案件 70% : 检视器 30% 后，检视器高度只剩 ~270px，
+    // 「事实常驻 + 工具常驻底部」会把事实区压成 0 —— 所以整块一起滚。
+    auto *scroll = new QScrollArea(this);
+    scroll->setWidgetResizable(true);
+    scroll->setFrameShape(QFrame::NoFrame);
+    scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);   // 一律换行，不横向滚
+    auto *body = new QWidget(scroll);
+    auto *lay = new QVBoxLayout(body);
     lay->setContentsMargins(10, 4, 8, 8);
-    lay->setSpacing(5);
+    lay->setSpacing(4);
 
     addSection(lay, lang(QStringLiteral("素材"), QStringLiteral("Source")));
     m_name = addRow(lay, lang(QStringLiteral("名称"), QStringLiteral("Name")));
-    m_size = addRow(lay, lang(QStringLiteral("分辨率"), QStringLiteral("Size")));
-    m_fps = addRow(lay, lang(QStringLiteral("帧率"), QStringLiteral("FPS")));
+    {   // 分辨率 | 帧率 → 并行（省一整行）
+        auto *row = new QWidget(body);
+        auto *h = new QHBoxLayout(row);
+        h->setContentsMargins(0, 0, 0, 0);
+        h->setSpacing(8);
+        h->addWidget(makeCell(row, lang(QStringLiteral("分辨率"), QStringLiteral("Size")),
+                              false, &m_size), 1);
+        h->addWidget(makeCell(row, lang(QStringLiteral("帧率"), QStringLiteral("FPS")),
+                              false, &m_fps), 1);
+        lay->addWidget(row);
+    }
     m_dur = addRow(lay, lang(QStringLiteral("时长"), QStringLiteral("Length")));
 
     addSection(lay, lang(QStringLiteral("时间基准"), QStringLiteral("Time base")));
-    m_cal = addRow(lay, lang(QStringLiteral("校时"), QStringLiteral("Calibration")), true);
-    m_cursor = addRow(lay, lang(QStringLiteral("游标"), QStringLiteral("Cursor")), true);
+    {   // 校时 | 游标 → 并行
+        auto *row = new QWidget(body);
+        auto *h = new QHBoxLayout(row);
+        h->setContentsMargins(0, 0, 0, 0);
+        h->setSpacing(8);
+        h->addWidget(makeCell(row, lang(QStringLiteral("校时"), QStringLiteral("Calibration")),
+                              true, &m_cal), 1);
+        h->addWidget(makeCell(row, lang(QStringLiteral("游标"), QStringLiteral("Cursor")),
+                              true, &m_cursor), 1);
+        lay->addWidget(row);
+    }
 
     addSection(lay, lang(QStringLiteral("区域"), QStringLiteral("Regions")));
     m_roi = addRow(lay, lang(QStringLiteral("ROI"), QStringLiteral("ROI")), true);
-    lay->addStretch(1);
-    factsScroll->setWidget(facts);
-    outer->addWidget(factsScroll, 1);
 
     // ---- 分隔线 ----
-    auto *sep = new QFrame(this);
+    auto *sep = new QFrame(body);
     sep->setFrameShape(QFrame::HLine);
     sep->setFixedHeight(1);
     sep->setStyleSheet(QStringLiteral("background:%1;border:0;").arg(Theme::Border));
-    outer->addWidget(sep, 0);
+    lay->addWidget(sep);
 
-    // ---- 下半：工具（固定，不随滚动）----
-    auto *toolsHost = new QWidget(this);
+    // ---- 工具区（随整块一起滚）----
+    auto *toolsHost = new QWidget(body);
     auto *tlay = new QVBoxLayout(toolsHost);
-    tlay->setContentsMargins(10, 6, 8, 8);
+    tlay->setContentsMargins(0, 5, 0, 0);
     tlay->setSpacing(3);
 
     // 工具：容器留空，由 MainWindow 把「分析与标注」整行的真控件收进来
@@ -98,18 +114,18 @@ InspectorPanel::InspectorPanel(QWidget *parent)
     addSectionL1(tlay, lang(QStringLiteral("工具"), QStringLiteral("Tool")));
     m_toolLay = new QVBoxLayout();
     m_toolLay->setContentsMargins(0, 0, 0, 0);
-    m_toolLay->setSpacing(5);
+    m_toolLay->setSpacing(4);
     tlay->addLayout(m_toolLay);
 
     // 截图叠加：这一栏只是标题（本身不是开关），下面是 截取 / 编辑 / 放置
-    addSection(tlay, lang(QStringLiteral("截图叠加"), QStringLiteral("Overlay")), 8);
+    addSection(tlay, lang(QStringLiteral("截图叠加"), QStringLiteral("Overlay")), 6);
     m_captureLay = new QVBoxLayout();
     m_captureLay->setContentsMargins(0, 0, 0, 0);
     m_captureLay->setSpacing(4);
     tlay->addLayout(m_captureLay);
 
     // 显示栏：快照/画面调节 由 MainWindow 追加（自动排在放大镜之前）
-    addSection(tlay, lang(QStringLiteral("显示"), QStringLiteral("Display")), 8);
+    addSection(tlay, lang(QStringLiteral("显示"), QStringLiteral("Display")), 6);
     m_displayLay = new QVBoxLayout();
     m_displayLay->setContentsMargins(0, 0, 0, 0);
     m_displayLay->setSpacing(4);
@@ -117,7 +133,7 @@ InspectorPanel::InspectorPanel(QWidget *parent)
     {
         const QString css = QStringLiteral(
             "QPushButton{background:%1;color:%2;border:1px solid %3;border-radius:4px;"
-            "font-size:11px;padding:3px 0;}"
+            "font-size:11px;padding:2px 0;}"
             "QPushButton:hover{border-color:%4;}"
             "QPushButton:checked{color:%5;border-color:%5;}")
             .arg(Theme::BgCard, Theme::TextSecond, Theme::Border,
@@ -130,7 +146,11 @@ InspectorPanel::InspectorPanel(QWidget *parent)
         m_displayLay->addWidget(m_magBtn);
         connect(m_magBtn, &QPushButton::toggled, this, &InspectorPanel::magnifierToggled);
     }
-    outer->addWidget(toolsHost, 0);
+    lay->addWidget(toolsHost);
+    lay->addStretch(1);
+
+    scroll->setWidget(body);
+    outer->addWidget(scroll, 1);
 
     // 初始空态
     setSource(QString(), 0, 0, 0.0, 0);
@@ -188,28 +208,31 @@ void InspectorPanel::setRowText(QLabel *l, const QString &value, const QString &
     }
 }
 
-QLabel *InspectorPanel::addRow(QVBoxLayout *lay, const QString &key, bool inlineRow)
+QWidget *InspectorPanel::makeCell(QWidget *parent, const QString &key, bool inlineRow,
+                                   QLabel **valOut)
 {
     if (inlineRow) {
-        auto *row = new QLabel(this);
+        // 短读数：键小灰 + 值同行
+        auto *row = new QLabel(parent);
         row->setTextFormat(Qt::RichText);
         row->setWordWrap(true);
         row->setTextInteractionFlags(Qt::TextSelectableByMouse);
         row->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Minimum);
+        row->setMinimumWidth(0);
         row->setObjectName(QStringLiteral("inspInline"));
         row->setProperty("k", key);
         row->setProperty("inline", true);
         setRowText(row, QStringLiteral("—"), Theme::TextPrimary);
-        lay->addWidget(row);
+        if (valOut)
+            *valOut = row;
         return row;
     }
 
-    // caption 式：上面一行小字说明，下面一行大字数值。
-    // 值 setWordWrap + 独占整行宽 → 再长的文件名也是换行，绝不裁切。
-    auto *host = new QWidget(this);
+    // 主读数：键一行小字说明，值一行大字
+    auto *host = new QWidget(parent);
     auto *v = new QVBoxLayout(host);
     v->setContentsMargins(0, 0, 0, 0);
-    v->setSpacing(1);
+    v->setSpacing(0);
     auto *k = new QLabel(key, host);
     k->setStyleSheet(QStringLiteral("color:%1;font-size:10px;background:transparent;")
                          .arg(Theme::TextMuted));
@@ -218,12 +241,20 @@ QLabel *InspectorPanel::addRow(QVBoxLayout *lay, const QString &key, bool inline
     val->setWordWrap(true);
     val->setTextFormat(Qt::PlainText);
     val->setTextInteractionFlags(Qt::TextSelectableByMouse);
-    val->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Minimum);
+    val->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Minimum);   // 不撑宽，只换行
     val->setObjectName(QStringLiteral("inspVal"));
     val->setProperty("k", key);
     val->setProperty("inline", false);
     v->addWidget(val);
-    lay->addWidget(host);
+    if (valOut)
+        *valOut = val;
+    return host;
+}
+
+QLabel *InspectorPanel::addRow(QVBoxLayout *lay, const QString &key, bool inlineRow)
+{
+    QLabel *val = nullptr;
+    lay->addWidget(makeCell(this, key, inlineRow, &val));
     return val;
 }
 

@@ -432,9 +432,9 @@ void MainWindow::applyLeftColumnRatio(bool force)
         && qAbs(caseH - m_leftRatioCaseH) > 6)
         return;
 
-    constexpr int kCaseMinH = 180;         // 至少还能看见几行机位
-    constexpr int kInspMinH = 200;         // 至少够「工具」区常驻
-    const int want = qRound(total * 0.4);  // 案件 40%，检视器 60%
+    constexpr int kCaseMinH = 220;         // 至少还能看见几行机位
+    constexpr int kInspMinH = 210;         // 检视器整块可滚，210 够「素材」+「工具」标题
+    const int want = qRound(total * 0.7);  // 案件 70%，检视器 30%
     const int top = qBound(kCaseMinH, want, qMax(kCaseMinH, total - kInspMinH));
 
     // 关键：左侧停靠区里 resizeDocks 会被兄弟坞的尺寸协商覆盖
@@ -1278,7 +1278,15 @@ int MainWindow::runShellSelfCheck()
 
     // 4j. 左侧栏比例：案件 : 检视器 = 4 : 6（用户指定）
     {
-        setCaseListExpanded(true);        // 保证案件坞在屏（前面的用例可能收起了）
+        // 前面用例可能留下别的左侧坞（视频列表/占位条）分走高度 → 先清干净，
+        // 还原成真实案件模式：左侧区只有 案件坞 + 检视器。
+        for (QDockWidget *d : findChildren<QDockWidget *>()) {
+            if (!d || d == m_caseDock || d == m_inspectorDock)
+                continue;
+            if (dockWidgetArea(d) == Qt::LeftDockWidgetArea)
+                d->hide();
+        }
+        setCaseListExpanded(true);
         m_caseDock->setVisible(true);
         pump();
         wait(80);
@@ -1289,15 +1297,15 @@ int MainWindow::runShellSelfCheck()
         const int inspH = m_inspectorDock->height();
         const int tot = caseH + inspH;
         const double r = tot > 0 ? double(caseH) / double(tot) : 0.0;
-        check(qAbs(r - 0.4) <= 0.06,
+        check(qAbs(r - 0.7) <= 0.06,
               QStringLiteral("左侧栏比例：案件 %1%（%2px）/ 检视器 %3%（%4px）")
                   .arg(int(r * 100 + 0.5)).arg(caseH)
                   .arg(100 - int(r * 100 + 0.5)).arg(inspH));
-        check(inspH > caseH,
-              QStringLiteral("左侧栏比例：检视器高于案件区（不再被压缩）"));
+        check(caseH > inspH,
+              QStringLiteral("左侧栏比例：案件区高于检视器（用户指定 7:3）"));
         snap(QStringLiteral("ratio"));
-        check(inspH >= 300,
-              QStringLiteral("左侧栏比例：检视器至少 300px（实际 %1px）").arg(inspH));
+        check(inspH >= 200,
+              QStringLiteral("左侧栏比例：检视器至少 200px（实际 %1px）").arg(inspH));
     }
 
     // 4i. 放大镜：只分视频区，绝不动左侧栏（用户要求）
