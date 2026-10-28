@@ -288,6 +288,12 @@ void MainWindow::resizeEvent(QResizeEvent *event)
         const int rest = h - videoH;
         m_splitter->setSizes({videoH, rest / 2, rest - rest / 2});
     }
+    // v2.4：左侧栏 案件 : 检视器 = 4 : 6，窗口高度变化时跟随
+    if (m_leftRatioApplied)
+        applyLeftColumnRatio(false);
+    else if (m_caseDock && m_caseDock->isVisible())
+        applyLeftColumnRatio(true);
+
     if (m_caseOpenPanel && m_caseOpenPanel->isVisible())
         centerCaseOpenPanel();
 }

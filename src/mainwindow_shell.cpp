@@ -414,6 +414,50 @@ void MainWindow::embedWorkspace(ui::Stage s, QWidget *w)
     showStage(s);
 }
 
+void MainWindow::applyLeftColumnRatio(bool force)
+{
+    if (!m_caseDock || !m_inspectorDock)
+        return;
+    if (!m_caseDock->isVisible() || !m_inspectorDock->isVisible())
+        return;
+
+    const int caseH = m_caseDock->height();
+    const int total = caseH + m_inspectorDock->height();
+    if (total < 400)                       // 还没布局好 / 窗口太矮 → 不动
+        return;
+
+    // 总高没变但案件区高度变了 → 只可能是用户亲手拖过分隔条，尊重用户
+    if (!force && m_leftRatioApplied
+        && qAbs(total - m_leftRatioTotal) <= 8
+        && qAbs(caseH - m_leftRatioCaseH) > 6)
+        return;
+
+    constexpr int kCaseMinH = 180;         // 至少还能看见几行机位
+    constexpr int kInspMinH = 200;         // 至少够「工具」区常驻
+    const int want = qRound(total * 0.4);  // 案件 40%，检视器 60%
+    const int top = qBound(kCaseMinH, want, qMax(kCaseMinH, total - kInspMinH));
+
+    // 关键：左侧停靠区里 resizeDocks 会被兄弟坞的尺寸协商覆盖
+    // （折叠时踩过同样的坑）→ 用尺寸上限硬控：两个上限之和正好等于总高，
+    // 布局只有一种解，比例必然落地。
+    m_caseDock->setMinimumHeight(kCaseMinH);
+    m_caseDock->setMaximumHeight(top);
+    m_inspectorDock->setMinimumHeight(kInspMinH);
+    m_inspectorDock->setMaximumHeight(total - top);
+
+    m_leftRatioCaseH = top;
+    m_leftRatioTotal = total;
+    m_leftRatioApplied = true;
+
+    // 400ms 后解除上限 —— 比例已落位，之后允许用户再手动拖
+    QTimer::singleShot(400, this, [this]() {
+        if (m_caseDock)
+            m_caseDock->setMaximumHeight(QWIDGETSIZE_MAX);
+        if (m_inspectorDock)
+            m_inspectorDock->setMaximumHeight(QWIDGETSIZE_MAX);
+    });
+}
+
 void MainWindow::toggleLeftColumn()
 {
     QList<QDockWidget *> left;
@@ -446,6 +490,8 @@ void MainWindow::toggleLeftColumn()
                 d->show();
         }
         m_leftColumnHidden = false;
+        // 整列还原后重新摆 4:6（收起期间窗口尺寸可能变了）
+        QTimer::singleShot(0, this, [this]() { applyLeftColumnRatio(true); });
     }
 
     if (m_leftToggleBtn) {
@@ -1228,6 +1274,30 @@ int MainWindow::runShellSelfCheck()
         check(titlePx(m_caseDock) == titlePx(m_inspectorDock),
               QStringLiteral("一级标题：字号一致（%1 / %2）")
                   .arg(titlePx(m_caseDock)).arg(titlePx(m_inspectorDock)));
+    }
+
+    // 4j. 左侧栏比例：案件 : 检视器 = 4 : 6（用户指定）
+    {
+        setCaseListExpanded(true);        // 保证案件坞在屏（前面的用例可能收起了）
+        m_caseDock->setVisible(true);
+        pump();
+        wait(80);
+        applyLeftColumnRatio(true);
+        wait(200);
+        pump();
+        const int caseH = m_caseDock->height();
+        const int inspH = m_inspectorDock->height();
+        const int tot = caseH + inspH;
+        const double r = tot > 0 ? double(caseH) / double(tot) : 0.0;
+        check(qAbs(r - 0.4) <= 0.06,
+              QStringLiteral("左侧栏比例：案件 %1%（%2px）/ 检视器 %3%（%4px）")
+                  .arg(int(r * 100 + 0.5)).arg(caseH)
+                  .arg(100 - int(r * 100 + 0.5)).arg(inspH));
+        check(inspH > caseH,
+              QStringLiteral("左侧栏比例：检视器高于案件区（不再被压缩）"));
+        snap(QStringLiteral("ratio"));
+        check(inspH >= 300,
+              QStringLiteral("左侧栏比例：检视器至少 300px（实际 %1px）").arg(inspH));
     }
 
     // 4i. 放大镜：只分视频区，绝不动左侧栏（用户要求）

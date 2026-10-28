@@ -169,18 +169,10 @@ void MainWindow::enterCaseMode()
     m_caseDock->refreshTree();
     resizeDocks({m_caseDock}, {250}, Qt::Horizontal);
 
-    // v2.2：案件区加长——检视器内容多，会把案件树挤到只剩几行（用户：案件被遮盖）。
-    // 必须等两坞真正布局完成再量高度（singleShot(0) 时案件坞高度还是 0，
-    // 用 inspector 一项算比例 = 等于没调，v2.1 就是这么失效的）。
-    QTimer::singleShot(120, this, [this]() {
-        if (!m_caseDock || !m_inspectorDock)
-            return;
-        const int total = m_caseDock->height() + m_inspectorDock->height();
-        if (total < 600)   // 还没布局好 / 窗口太矮 → 不动
-            return;
-        const int top = qBound(380, int(total * 0.62), total - 150);
-        resizeDocks({m_caseDock, m_inspectorDock}, {top, total - top}, Qt::Vertical);
-    });
+    // v2.4：左侧栏比例 = 案件 : 检视器 = 4 : 6（用户指定）。
+    // 必须等两坞真正布局完成再量高度（singleShot(0) 时高度还是 0）。
+    QTimer::singleShot(0, this, [this]() { applyLeftColumnRatio(true); });
+    QTimer::singleShot(120, this, [this]() { applyLeftColumnRatio(true); });
     m_caseStatusBtn->setText(
         m_caseManager->meta().caseNo);  // 规范§6：emoji 禁令（原 📁 前缀已删）
     m_caseStatusBtn->setVisible(true);

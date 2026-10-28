@@ -481,6 +481,12 @@ protected:
     QWidget *m_spectrogramContent = nullptr;
     QList<int> m_splitterSizes;
     bool m_initialSplitApplied = false;  ///< v1.13.1 首次 resizeEvent 落地纵向比例
+    /// v2.4：左侧栏 案件 : 检视器 = 4 : 6（用户指定比例）
+    /// force=true 强制按比例摆；false 时若用户手动拖过分隔条则不抢
+    void applyLeftColumnRatio(bool force = false);
+    bool m_leftRatioApplied = false;     ///< 是否已成功落地过一次
+    int  m_leftRatioCaseH = 0;           ///< 上次由代码设定的案件坞高度
+    int  m_leftRatioTotal = 0;           ///< 上次设定时的两坞总高
     QList<int> m_chartSavedSizes;
     // v2.3：轨道收起用**显式状态位**（原来靠 minimumHeight()==24 猜，
     // 而收起时设的是 28 → 条件永不成立 → 展开一条会连带把另一条拉出来且内容空白）

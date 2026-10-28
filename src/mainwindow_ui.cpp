@@ -1530,8 +1530,8 @@ void MainWindow::buildCaseUi(const QString &collapseBtnStyle)
             .arg(Theme::TextPrimary, Theme::BgPanel, Theme::Border));
     addDockWidget(Qt::LeftDockWidgetArea, m_caseDock);
     resizeDocks({m_caseDock}, {250}, Qt::Horizontal);
-    // v2.2：案件区高度下限——检视器内容变多后会把案件树挤到只剩几行
-    m_caseDock->setMinimumHeight(380);
+    // v2.4：下限放宽到 180 —— 原来 380 会把「案件:检视器 = 4:6」顶死
+    m_caseDock->setMinimumHeight(180);
     m_caseDock->setVisible(false);   // 仅案件模式可见（替代视频列表）
 
     // v2.2：去掉案件坞内的左右竖条（用户：不要左右折叠了，
