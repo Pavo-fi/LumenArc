@@ -593,20 +593,8 @@ void TimeSettingsDialog::refreshWorkingSummary()
                 .arg(fmtOffset(m_working.truthOffsetMs));
         m_workingSummary->setText(text);
     }
-    // 北京时间对齐区显示当前播放位置换算出的画面时间
-    if (m_working.isValid() && m_working.dateKnown) {
-        const qint64 curWall = m_working.wallMsOf(m_currentPosMs);
-        m_monitorTimeLabel->setText(fmtWall(curWall));
-        // 方式二手输默认取当前画面时间（可编辑；取后用户自行微调）
-        if (!m_monitorEdit->hasFocus())
-            m_monitorEdit->setDateTime(QDateTime::fromMSecsSinceEpoch(curWall));
-        // v1.18.2：手动取样位置由用户点「取当前」显式记录，
-        // 不随播放头漂移（输入框保持用户填的画面时间）
-    } else {
-        m_monitorTimeLabel->setText(lang("（需先完成自动校时）",
-                                         "(run auto calibrate first)"));
-    }
-    onTruthInputChanged();
+    // 北京时间对齐区 / 头部位置：跟随播放头（v2.5 统一到 refreshPlayheadViews）
+    refreshPlayheadViews();
 }
 
 // ---------------------------------------------------------------------------
@@ -1549,10 +1537,47 @@ TimeCalibration::Sample makeManualSample(qint64 streamMs, qint64 wallMs)
 
 void TimeSettingsDialog::setPlayhead(qint64 ms)
 {
-    m_playheadMs = qMax<qint64>(0, ms);
+    ms = qMax<qint64>(0, ms);
+    const bool secondChanged = (ms / 1000) != (m_playheadMs / 1000);
+    m_playheadMs = ms;
+    // v2.5：m_currentPosMs 此前**只在构造时赋值一次**，于是
+    //   · 头部「当前播放位置：」永远停在 0:00:00
+    //   · 方式二「画面上的时间（当前播放位置）」永远显示流内 0 点的基准
+    // 用户实测（2026-10-30 顺德件）：播放到 1:03:35、画面 OSD 14:51:37，
+    // 面板仍显示 13:48:02 → 用「取当前画面时间」做两步对时，偏移整整差了
+    // 一个播放头（1 小时 3 分 35 秒）。
+    m_currentPosMs = m_playheadMs;
     if (m_manualLivePos)
         m_manualLivePos->setText(lang("位置取当前播放头：%1", "Uses playhead: %1")
                                      .arg(fmtStreamMs(m_playheadMs)));
+    // 播放时 onPositionChanged 每帧都进来，按秒节流即可（这些文本只精确到秒）
+    if (secondChanged)
+        refreshPlayheadViews();
+}
+
+void TimeSettingsDialog::refreshPlayheadViews()
+{
+    if (m_videoLabel) {
+        m_videoLabel->setText(QStringLiteral("📹 %1")
+            .arg(QFileInfo(m_videoPath).fileName())
+            + QLatin1Char('\n')
+            + lang("当前播放位置：", "Current position: ")
+            + fmtStreamMs(m_currentPosMs));
+    }
+    if (!m_working.isValid() || !m_working.dateKnown) {
+        if (m_monitorTimeLabel)
+            m_monitorTimeLabel->setText(lang("（需先完成自动校时）",
+                                             "(run auto calibrate first)"));
+        return;
+    }
+    // 画面上的时间 = 播放头位置的监控墙钟（wallMsOf 不含北京时间偏移，正确口径）
+    const qint64 curWall = m_working.wallMsOf(m_currentPosMs);
+    if (m_monitorTimeLabel)
+        m_monitorTimeLabel->setText(fmtWall(curWall));
+    // 方式二手输默认取当前画面时间（用户正在编辑就不抢）
+    if (m_monitorEdit && !m_monitorEdit->hasFocus())
+        m_monitorEdit->setDateTime(QDateTime::fromMSecsSinceEpoch(curWall));
+    onTruthInputChanged();
 }
 
 void TimeSettingsDialog::onTakeManualP1()

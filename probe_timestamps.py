@@ -66,7 +66,7 @@ RE_FULL = re.compile(
     r"(?:星期[一二三四五六日天]\s*)?"
     r"(?:\([A-Za-z]{3}\)\s*|[A-Za-z]{3}\.\s*)?"
     r"[T\s]?"
-    r"(\d{1,2}):(\d{2})(?:\s*:(\d{2}))?(?:[:.](\d{1,3}))?")
+    r"(\d{1,2}):(\d{2})(?:\s*[:/](\d{2}))?(?:[:.](\d{1,3}))?")
 RE_NO_YEAR = re.compile(
     r"(?<!\d)(\d{1,2})[-/月.](\d{1,2})[日号]?\s+(\d{1,2}):(\d{2})\s*:(\d{2})(?!\d)")
 RE_TIME_ONLY = re.compile(r"(?<!\d)(\d{1,2}):(\d{2})\s*:(\d{2})(?!\d)")
@@ -398,6 +398,25 @@ def parse_timestamp(text, filename=""):
         y, mo, d = int(m.group(1)), int(m.group(2)), int(m.group(3))
         h, mi = int(m.group(4)), int(m.group(5))
         s = int(m.group(6)) if m.group(6) else 0
+        # 秒位分隔符被读错（实测 2026-10-30 顺德件：画面 "15:11:25" 的第二个
+        # 冒号被 OCR 读成 "/"，正则只吃到 "15:11"，秒静默按 0 收 → 该点墙钟
+        # 少 25 秒；两点拟合把这 25 秒摊成 -433 秒/天的假漂移，整条时间轴
+        # 偏 19 秒（用户反馈"校时跟墙钟对不上"）。
+        # 规则：HH:MM 后面若还跟着「分隔符 + 恰好两位数字」，那两位就是秒；
+        # 若有分隔符但后面不是两位数字 → 整条样本作废（绝不静默 :00）。
+        if m.group(6) is None:
+            tail = t[m.end():]
+            mm = re.match(r"\s*[/|;,'·\-](\d{2})(?!\d)", tail)
+            if mm:
+                s = int(mm.group(1))
+            else:
+                # 竖线/字母被归一成数字后分隔符消失（"15:11|25" → "15:11125"）：
+                # 紧随其后的 2~3 位数字里，末两位就是秒
+                run = re.match(r"(\d{2,3})(?!\d)", tail)
+                if run:
+                    s = int(run.group(1)[-2:])
+                elif re.match(r"\s*[/|;,'·\-]", tail):
+                    return None
         frac = m.group(7) or ""
         ms = int(frac.ljust(3, "0")[:3]) if frac else 0
         if _valid(y, mo, d, h, mi, s):

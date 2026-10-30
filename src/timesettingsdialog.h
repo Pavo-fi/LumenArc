@@ -122,6 +122,8 @@ public slots:
     /// v1.18.2：主窗口推送当前播放位置。本窗口不跟踪播放头，
     /// 手动两点取样靠它知道“取当前”到底取的是哪个位置。
     void setPlayhead(qint64 ms);
+    /// 播放头变化后刷新「当前播放位置 / 画面上的时间 / 北京时间默认值」
+    void refreshPlayheadViews();
     /// 框选就绪（拖拽松开/叠加层确认）：恢复窗口并给出「确认并开始校时」；
     /// rect 无效 = 用户跳过框选 → GO 流程直接自动扫描开始
     void stageTimestampRoi(const QRectF &rect);
