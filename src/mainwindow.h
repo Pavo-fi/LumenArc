@@ -156,6 +156,8 @@ private slots:
     void onMagnifierWheelZoom(int delta, QPoint videoPos);
     void removeMagnifier();          ///< 带动效关闭（先收右侧窗格，再拆）
     void finalizeRemoveMagnifier();  ///< 真正拆除（动效结束后调用）
+    /// v2.5：切换视频后按新视频重建「校时」坞（否则坞里还是上一支视频的数据）
+    void refreshCalibrationDock();
 
     // Analysis task service callbacks（v1.8.0 P1a：UI 中性信号，取代引擎直连）
     void onTaskStarted(const QString &taskId);

@@ -562,6 +562,7 @@ void MainWindow::openVideoFile(const QString &filePath)
             // v1.7.1：案件树高亮正在播放的文件
             if (m_caseDock)
                 m_caseDock->setCurrentVideoPath(m_sessionMgr->currentVideoPath());
+            refreshCalibrationDock();   // v2.5：校时坞跟着换视频刷新
             onPlay();
             return;
         }
@@ -637,6 +638,7 @@ void MainWindow::openVideoFile(const QString &filePath)
         // v1.7.1：案件树高亮正在播放的文件（无缓存/继承路径同待遇）
         if (m_caseDock)
             m_caseDock->setCurrentVideoPath(m_sessionMgr->currentVideoPath());
+        refreshCalibrationDock();       // v2.5：校时坞跟着换视频刷新
         onPlay();
     } else {
         QMessageBox::critical(this, lang("错误", "Error"),
@@ -805,6 +807,28 @@ ProjectIO::VlaSaveRequest MainWindow::collectVlaSaveRequest()
 
 
 
+
+void MainWindow::refreshCalibrationDock()
+{
+    // 「校时」坞没开着 → 没有需要刷新的东西
+    auto *dk = findChild<QDockWidget *>(QStringLiteral("calibrationDock"));
+    if (!m_calibrationDialog || !dk || !dk->isVisible())
+        return;
+
+    // 旧对话框绑的是上一支视频（路径 / 时长 / 当前校时值全是旧的）——
+    // 用户实测：在案件列表里点了新视频，校时窗还停在上一支，必须手动关掉重开。
+    // 做法：断开旧对象的所有连接（否则它的 destroyed 回调会把新指针清空），
+    // 关掉它，再按新视频重建。
+    TimeSettingsDialog *old = m_calibrationDialog.data();
+    m_calibrationDialog = nullptr;
+    if (m_roiDialog == old)
+        m_roiDialog = nullptr;
+    if (m_videoWidget)
+        m_videoWidget->endTimestampRoiSelection();
+    QObject::disconnect(old, nullptr, this, nullptr);
+    old->close();                       // WA_DeleteOnClose
+    onSetStartTime();                   // 同一轮事件循环里 m_calibration 已是新值
+}
 
 void MainWindow::onSetStartTime()
 {

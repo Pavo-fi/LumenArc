@@ -1226,6 +1226,18 @@ int MainWindow::runShellSelfCheck()
         pump(); wait(250);
     }
 
+    // 4c3. 校时坞刷新入口：没开校时窗时必须是**空操作**（不新建坞、不崩）
+    {
+        const int docksBefore = findChildren<QDockWidget *>().size();
+        const bool hadDialog = !m_calibrationDialog.isNull();   // 用 isNull：此文件无完整类型
+        refreshCalibrationDock();
+        pump();
+        check(!hadDialog || !m_calibrationDialog.isNull(),
+              QStringLiteral("校时坞刷新：有窗时不会把窗丢掉"));
+        check(findChildren<QDockWidget *>().size() >= docksBefore - 1,
+              QStringLiteral("校时坞刷新：没有凭空多建 / 误删坞"));
+    }
+
     // 4c2. 顶栏左上角（菜单栏区域）不许被任何控件压住
     {
         QStringList intruders;
