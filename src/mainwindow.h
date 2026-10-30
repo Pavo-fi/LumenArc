@@ -154,7 +154,8 @@ private slots:
 
     // Magnifier
     void onMagnifierWheelZoom(int delta, QPoint videoPos);
-    void removeMagnifier();
+    void removeMagnifier();          ///< 带动效关闭（先收右侧窗格，再拆）
+    void finalizeRemoveMagnifier();  ///< 真正拆除（动效结束后调用）
 
     // Analysis task service callbacks（v1.8.0 P1a：UI 中性信号，取代引擎直连）
     void onTaskStarted(const QString &taskId);
@@ -283,6 +284,7 @@ private:
     /// @brief 用 Python 分析引擎的真实帧数/FPS 计算可信时长
     qint64 trustedDurationFor(const QString &path) const;
     void createMagnifier();
+    bool m_magnifierClosing = false;   ///< v2.5：关闭动效进行中（防重复触发）
     void showVideoContextMenu(const QPoint &pos);
     void updatePinnedImage(const QImage &frame);
     /// @brief 按步进调整播放速度

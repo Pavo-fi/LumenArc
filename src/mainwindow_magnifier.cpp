@@ -113,7 +113,7 @@
 /// @brief 创建放大镜：设置视频尺寸/区域模型/同步截图叠加
 void MainWindow::createMagnifier()
 {
-    if (m_magnifier)
+    if (m_magnifier || m_magnifierClosing)
         return;
 
     m_magnifier = new MagnifierWidget(this);
@@ -262,13 +262,48 @@ void MainWindow::createMagnifier()
 
 void MainWindow::removeMagnifier()
 {
+    if (!m_magnifier || m_magnifierClosing)
+        return;
+
+    // v2.5：开有动效，关也要有 —— ESC / 关闭按钮 / 右键菜单都走这里。
+    // 先把右侧窗格宽度收回到 0（160ms InCubic），动画结束再真正拆控件；
+    // 否则一按 ESC 画面就「啪」地跳回满幅，和开启时的顺滑对不上。
+    const int w = m_topRow ? m_topRow->width() : 0;
+    const QList<int> from = m_topRow ? m_topRow->sizes() : QList<int>();
+    if (w <= 0 || from.size() != 2 || from[1] <= 0 || from[0] >= w - 1) {
+        finalizeRemoveMagnifier();
+        return;
+    }
+
+    m_magnifierClosing = true;
+    m_topRowSavedSizes = from;      // 记住用户调过的左右比例，下次打开沿用
+
+    auto *anim = new QVariantAnimation(this);
+    anim->setDuration(160);
+    anim->setEasingCurve(QEasingCurve::InCubic);   // 越收越快，收尾利落
+    anim->setStartValue(0.0);
+    anim->setEndValue(1.0);
+    connect(anim, &QVariantAnimation::valueChanged, this,
+            [this, from, w](const QVariant &v) {
+                if (!m_topRow || m_topRow->count() != 2)
+                    return;
+                const double t = v.toDouble();
+                const int left = int(from[0] + (w - from[0]) * t);
+                m_topRow->setSizes({left, w - left});
+            });
+    connect(anim, &QVariantAnimation::finished, this, [this]() {
+        m_magnifierClosing = false;
+        finalizeRemoveMagnifier();
+    });
+    anim->start(QAbstractAnimation::DeleteWhenStopped);
+}
+
+void MainWindow::finalizeRemoveMagnifier()
+{
     if (!m_magnifier)
         return;
 
-    // v2.4：左侧栏未被动过 → 无需恢复
-
     m_videoWidget->overlay()->setMagnifierRect(QRect(), 0.0);   // 标识框随放大镜关闭消失
-    m_topRowSavedSizes = m_topRow->sizes();   // 保存用户调过的左右比例
     m_magnifier->clearSnapshotOverlay();
     // 立即摘出分割条（deleteLater 要等事件循环才重排，右侧会留半行空白）
     m_magnifier->setParent(nullptr);
@@ -276,7 +311,8 @@ void MainWindow::removeMagnifier()
     m_magnifier->deleteLater();
     m_magnifier = nullptr;
     // 单孩 QSplitter 不自动拉伸剩余子项（offscreen 实测），显式吃满整行
-    m_topRow->setSizes({m_topRow->width()});
+    if (m_topRow)
+        m_topRow->setSizes({m_topRow->width()});
 }
 
 void MainWindow::onMagnifierWheelZoom(int delta, QPoint videoPos)

@@ -1358,8 +1358,23 @@ int MainWindow::runShellSelfCheck()
         check(m_casePlaceholder == nullptr || !m_casePlaceholder->isVisible(),
               QStringLiteral("放大镜：不弹占位细条"));
         m_inspector->setMagnifierOn(false);
-        QCoreApplication::processEvents();
-        check(m_magnifier == nullptr, QStringLiteral("放大镜：关闭后已移除"));
+        pump();
+        // v2.5：关闭也带动效 —— 先收右侧窗格（160ms），结束后才拆控件
+        check(m_magnifier != nullptr && m_magnifierClosing,
+              QStringLiteral("放大镜：关闭走动效（先收窗格，控件还在）"));
+        wait(60);
+        pump();
+        const int wMid = m_topRow ? m_topRow->width() : 0;
+        const QList<int> mid = m_topRow ? m_topRow->sizes() : QList<int>();
+        check(mid.size() == 2 && mid[1] < wMid / 2,
+              QStringLiteral("放大镜：关闭动效中右侧窗格在收（%1 → %2）")
+                  .arg(wMid).arg(mid.size() == 2 ? mid[1] : -1));
+        wait(320);
+        pump();
+        check(m_magnifier == nullptr, QStringLiteral("放大镜：动效结束后已移除"));
+        check(m_topRow && m_topRow->count() == 1
+                  && qAbs(m_topRow->sizes().value(0) - m_topRow->width()) <= 2,
+              QStringLiteral("放大镜：关闭后视频区吃满整行"));
     }
 
     // 5. 整备：创建 + 嵌入
