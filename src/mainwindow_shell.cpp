@@ -1331,6 +1331,61 @@ int MainWindow::runShellSelfCheck()
                 moreHidden = moreHidden;   // 占位：不因隐藏而失败
         check(moreHidden, QStringLiteral("校时面板：「更多」抽屉默认收起"));
 
+        // v2.5：窄宽自适应 —— 面板要能塞进 380px 宽的校时坞
+        // （原来 ctor 写死 setMinimumWidth(780)，嵌进坞后必然顶出可视区、右侧文字被切）
+        {
+            for (QToolButton *tb : dlg.findChildren<QToolButton *>())
+                if (tb->text().contains(QStringLiteral("偏移")))
+                    tb->setChecked(true);        // 最长的那一行也展开一起量
+            dlg.setMinimumWidth(0);
+            dlg.setMinimumHeight(0);
+            const int minW = dlg.minimumSizeHint().width();
+            check(minW <= 372,
+                  QStringLiteral("窄宽自适应：布局最小宽 %1px ≤ 372px（能塞进 380px 坞）")
+                      .arg(minW));
+
+            QStringList bad;
+            for (int wTest : {360, 480}) {
+                dlg.resize(wTest, 760);
+                pump();
+                wait(40);
+                for (QWidget *w : dlg.findChildren<QWidget *>()) {
+                    if (!w->isVisible())
+                        continue;
+                    QString txt;
+                    if (auto *l = qobject_cast<QLabel *>(w))
+                        txt = l->text();
+                    else if (auto *b = qobject_cast<QAbstractButton *>(w))
+                        txt = b->text();
+                    else
+                        continue;
+                    if (txt.isEmpty() || txt.contains(QLatin1Char('<')))
+                        continue;   // 富文本（头部）自己会换行
+                    if (w->width() + 2 < w->fontMetrics().horizontalAdvance(txt))
+                        bad << QStringLiteral("%1:%2(%3<%4)")
+                                   .arg(wTest).arg(txt.left(10)).arg(w->width())
+                                   .arg(w->fontMetrics().horizontalAdvance(txt));
+                    else if (auto *l = qobject_cast<QLabel *>(w))
+                        if (l->wordWrap()
+                            && l->heightForWidth(l->width()) > l->height() + 1)
+                            bad << QStringLiteral("%1:%2(换行高度不足)")
+                                       .arg(wTest).arg(txt.left(10));
+                }
+            }
+            check(bad.isEmpty(),
+                  QStringLiteral("窄宽自适应：360/480px 下无被裁文字%1")
+                      .arg(bad.isEmpty() ? QString()
+                                         : QStringLiteral("：")
+                                               + bad.mid(0, 6).join(QStringLiteral(" | "))));
+        }
+
+        // 窄宽现场图（坞默认 380 宽）——人工核对用
+        dlg.resize(380, 760);
+        pump();
+        wait(40);
+        dlg.grab().save(QDir(QCoreApplication::applicationDirPath())
+                            .filePath(QStringLiteral("selfcheck-calib-narrow.png")));
+
         // 现场图（人工核对排版用）
         dlg.resize(780, 700);
         dlg.show();

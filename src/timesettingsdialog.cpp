@@ -78,7 +78,9 @@ TimeSettingsDialog::TimeSettingsDialog(const QString &videoPath,
     , m_service(service)
 {
     setWindowTitle(lang("视频校时", "Time Calibration"));
-    setMinimumWidth(780);
+    // v2.5：原来写死 780（还是独立窗口时的尺寸）——嵌进 380~560 宽的校时坞后
+    // 面板会顶出可视区，右侧文字被切掉。改为可自由缩，靠布局换行自适应。
+    setMinimumWidth(0);
     setWindowFlag(Qt::Window, true);   // 非模态：可最小化/关闭，主窗口照常操作
     setWindowFlags(windowFlags() | Qt::WindowMinimizeButtonHint
                    | Qt::WindowMaximizeButtonHint);
@@ -526,36 +528,44 @@ void TimeSettingsDialog::buildUi()
                                         "Manual — enter both times:"), this);
     manualTitle->setStyleSheet(QStringLiteral("font-weight:bold;"));
     grid->addWidget(manualTitle, 0, 0, 1, 2);
-    grid->addWidget(new QLabel(lang("画面上的时间（当前播放位置）：",
-                                    "On-screen time (playhead): "), this), 1, 0);
+    grid->setColumnStretch(0, 0);
+    grid->setColumnStretch(1, 1);
+    grid->addWidget(new QLabel(lang("画面", "On-screen"), this), 1, 0);
     m_monitorTimeLabel = new QLabel(this);
     grid->addWidget(m_monitorTimeLabel, 1, 1);
-    grid->addWidget(new QLabel(lang("监控主机时间：", "Recorder time: "), this), 2, 0);
+    grid->addWidget(new QLabel(lang("监控", "Recorder"), this), 2, 0);
     auto *monRow = new QHBoxLayout();
     m_monitorEdit = new QDateTimeEdit(QDateTime::currentDateTime(), this);
     m_monitorEdit->setObjectName(QStringLiteral("truthMonitorEdit"));
     m_monitorEdit->setDisplayFormat(QStringLiteral("yyyy-MM-dd HH:mm:ss"));
     m_monitorEdit->setCalendarPopup(true);
+    m_monitorEdit->setMinimumWidth(110);          // 窄宽时可压缩
+    m_monitorEdit->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
     monRow->addWidget(m_monitorEdit);
-    auto *takeCurBtn = new QPushButton(lang("取当前画面时间", "Use playhead time"), this);
+    auto *takeCurBtn = new QPushButton(lang("取画面", "Use playhead"), this);
     monRow->addWidget(takeCurBtn);
     monRow->addStretch(1);
     grid->addLayout(monRow, 2, 1);
-    grid->addWidget(new QLabel(lang("真实北京时间：", "Actual Beijing time: "), this), 3, 0);
+    grid->addWidget(new QLabel(lang("真实", "Actual"), this), 3, 0);
     m_beijingEdit = new QDateTimeEdit(QDateTime::currentDateTime(), this);
     m_beijingEdit->setObjectName(QStringLiteral("truthBeijingEdit"));
     m_beijingEdit->setDisplayFormat(QStringLiteral("yyyy-MM-dd HH:mm:ss"));
     m_beijingEdit->setCalendarPopup(true);
+    m_beijingEdit->setMinimumWidth(110);
+    m_beijingEdit->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
     grid->addWidget(m_beijingEdit, 3, 1);
     m_truthPreviewLabel = new QLabel(this);
     m_truthPreviewLabel->setObjectName(QStringLiteral("truthPreviewLabel"));
     m_truthPreviewLabel->setStyleSheet(QStringLiteral("font-weight:bold;"));
-    grid->addWidget(m_truthPreviewLabel, 4, 1);
-    grid->addWidget(m_adoptTruthBtn = new QPushButton(
-                        lang("使用此偏移", "Use this offset"), this), 5, 0);
+    m_truthPreviewLabel->setWordWrap(true);
+    grid->addWidget(m_truthPreviewLabel, 4, 0, 1, 2);   // 跨两列，窄宽下自动换行
+    auto *truthBtnRow = new QHBoxLayout();
+    grid->addLayout(truthBtnRow, 5, 0, 1, 2);
+    truthBtnRow->addWidget(m_adoptTruthBtn = new QPushButton(
+                        lang("使用此偏移", "Use this offset"), this), 1);
     m_adoptTruthBtn->setObjectName(QStringLiteral("adoptTruthBtn"));
-    grid->addWidget(m_clearTruthBtn = new QPushButton(
-                        lang("清除偏移", "Clear"), this), 5, 1);
+    truthBtnRow->addWidget(m_clearTruthBtn = new QPushButton(
+                        lang("清除偏移", "Clear"), this), 1);
     m_clearTruthBtn->setObjectName(QStringLiteral("clearTruthBtn"));
     m_twoBox = new QWidget(this);
     m_twoBox->setLayout(grid);          // 整块接管（含标题与两行输入）
@@ -571,13 +581,16 @@ void TimeSettingsDialog::buildUi()
     offLay->setSpacing(4);
     offLay->addWidget(offTitle);
     auto *offRow = new QHBoxLayout();
+    auto *offRow2 = new QHBoxLayout();   // 窄宽下第二行：日/时/分/秒 + 采用
+    offRow2->setSpacing(4);
     offRow->addWidget(new QLabel(lang("监控主机时间比北京时间",
-                                      "Recorder clock is"), this));
+                                      "Recorder clock is"), this), 0);
     m_offsetDirCombo = new QComboBox(this);
     m_offsetDirCombo->setObjectName(QStringLiteral("truthOffsetDir"));
     m_offsetDirCombo->addItem(lang("慢", "slower than Beijing by"));
     m_offsetDirCombo->addItem(lang("快", "faster than Beijing by"));
-    offRow->addWidget(m_offsetDirCombo);
+    m_offsetDirCombo->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+    offRow->addWidget(m_offsetDirCombo, 1);
     const auto mkSpin = [this](int maxV, const QString &suffix) {
         auto *sp = new QSpinBox(this);
         sp->setRange(0, maxV);
@@ -592,15 +605,19 @@ void TimeSettingsDialog::buildUi()
     m_offsetHours->setObjectName(QStringLiteral("truthOffsetHours"));
     m_offsetMins->setObjectName(QStringLiteral("truthOffsetMins"));
     m_offsetSecs->setObjectName(QStringLiteral("truthOffsetSecs"));
-    offRow->addWidget(m_offsetDays);
-    offRow->addWidget(m_offsetHours);
-    offRow->addWidget(m_offsetMins);
-    offRow->addWidget(m_offsetSecs);
+    for (QSpinBox *sp : {m_offsetDays, m_offsetHours, m_offsetMins, m_offsetSecs}) {
+        sp->setMinimumWidth(46);
+        sp->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
+        offRow2->addWidget(sp, 1);
+    }
     auto *adoptOffBtn = new QPushButton(lang("采用此偏移量", "Use this offset"), this);
     adoptOffBtn->setObjectName(QStringLiteral("adoptManualOffsetBtn"));
-    offRow->addWidget(adoptOffBtn);
-    offRow->addStretch(1);
+    auto *offRow3 = new QHBoxLayout();
+    offRow3->addWidget(adoptOffBtn, 0);
+    offRow3->addStretch(1);
     offLay->addLayout(offRow);
+    offLay->addLayout(offRow2);
+    offLay->addLayout(offRow3);
 
     m_truthNoteEdit = new QLineEdit(this);
     m_truthNoteEdit->setPlaceholderText(
