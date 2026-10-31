@@ -210,6 +210,29 @@ struct TimeCalibration
     /// 应用拟合结果：rateApplied = rateSignificant && rateSane
     void applyFit(const FitResult &fr);
 
+    // ---- v2.5 ①：置信度门控拟合（速率只由高置信测点决定）----
+
+    /// 参与「速率」判定的最低置信度。低于此值的测点仍可用于**定基准**，
+    /// 但无权决定速率。
+    /// 依据（2026-10-30 顺德 D12 件实测）：两条测点里 conf=0.70 的那条
+    /// 秒位被读错 25 秒，两点拟合出 -433.2 秒/天的假漂移并**自动应用**，
+    /// 整条时间轴在 1 小时处偏 19 秒（用户反馈「校时跟墙钟对不上」）。
+    /// 破图恰恰是错读源，所以「低置信点不定速率」是最划算的一道闸。
+    static constexpr double kRateFitMinConf = 0.85;
+
+    /**
+     * @brief 门控拟合：高置信测点 ≥2 → 速率只由它们拟合；低置信点只按
+     *        拟合出的速率取中位数锚定 offset（对单点错读稳健）。
+     *
+     * - 全部测点都高置信（或 conf<=0 表示引擎未报置信度，视为可信）→ 等价 fit()
+     * - 高置信点 <2 → 速率必然来自低置信点 → rateSignificant 强制 false
+     *   （只定基准，不应用漂移修正）
+     *
+     * @param lowConfCount 回传被降级的测点数（诊断/UI 用，可空）
+     */
+    static FitResult fitRateGated(const QVector<Sample> &samples,
+                                  int *lowConfCount = nullptr);
+
     /// v1.18.x：大倍率是否“自洽”——区分【非实时导出/变速件】与【OCR 误读】。
     /// - |rate−1| > kConfirmableRateDev（50%）→ false：没有哪种导出会压缩一倍以上，
     ///   日期/上下午读错典型就是 ~2×，必为错读；

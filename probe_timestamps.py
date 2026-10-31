@@ -362,9 +362,38 @@ def merge_ocr_lines(items):
     return out
 
 
+# 「星期X」整段（含被读花的字）：星期对时间换算没有信息量（可由日期反推），
+# 但读花的字会让整行失配 —— 实测 `2026年07月22日星期亐0 06:08:34`（真值星期三）
+# 因「亐」不在 [一二三四五六日天] 里，RE_FULL 整条失配 → 该测点被白丢。
+# 规则：星期 + 至多 3 个非数字字符 + 至多 1 位「不接冒号/数字」的杂散数字。
+RE_WEEKDAY = re.compile(r"星期[^\d:]{0,3}(?:\d(?![\d:]))?\s*")
+WEEKDAY_CN = "一二三四五六日"
+
+
+def strip_weekday_noise(t):
+    """去掉「星期…」整段（rawText 原样保留，只作用于派生副本）。"""
+    return RE_WEEKDAY.sub(" ", t)
+
+
+def weekday_mismatch(text, dt):
+    """rawText 里写明的星期与日期不符 → True（可定位日期错读，仅诊断用）。
+
+    注意：**不据此拒样**——部分录像机的星期显示本身就是错的，
+    拒样会误杀正常测点；这里只提供判据给自检/排查用。
+    """
+    m = re.search(r"星期([一二三四五六日天])", text)
+    if not m:
+        return False
+    stated = m.group(1)
+    if stated == "天":
+        stated = "日"
+    return stated != WEEKDAY_CN[dt.weekday()]
+
+
 def normalize_for_parse(text):
     t = text.translate(_CONFUSION)
     t = t.replace("：", ":").replace("　", " ")
+    t = strip_weekday_noise(t)
     return t
 
 

@@ -23,6 +23,7 @@
 #include "multicamplaybackwindow.h"
 #include "playbackadjustpanel.h"
 #include "theme.h"
+#include "domain/time_calibration.h"
 #include "ui/app_state.h"
 #include "ui/command_registry.h"
 #include "multicamview.h"
@@ -1224,6 +1225,56 @@ int MainWindow::runShellSelfCheck()
         pump(); wait(250);
         m_chartCollapseBtn->click();
         pump(); wait(250);
+    }
+
+    // 4c4. 校时：低置信测点无权决定速率（复现 2026-10-30 顺德 D12 现场）
+    {
+        using TC = TimeCalibration;
+        TC::Sample bad;                       // conf=0.70 的错读样本（秒位少 25 秒）
+        bad.streamMs = 5003080;
+        bad.wallMs   = 1789888260000;         // 15:11:00（真值 15:11:25）
+        bad.conf     = 0.70;
+        bad.rawText  = QStringLiteral("...15:11/25");
+        TC::Sample good;                      // conf=0.95 的干净样本
+        good.streamMs = 1000;
+        good.wallMs   = 1789883283000;        // 13:48:03
+        good.conf     = 0.95;
+        good.rawText  = QStringLiteral("...13:48:03");
+
+        QVector<TC::Sample> two{good, bad};
+        int lowConf = 0;
+        const TC::FitResult gated = TC::fitRateGated(two, &lowConf);
+        const TC::FitResult plain = TC::fit(two);
+        check(lowConf == 1, QStringLiteral("校时门控：识别出 1 个低置信测点"));
+        check(plain.rateSignificant,
+              QStringLiteral("校时门控：对照组（不门控）确实会应用假漂移 %1 秒/天")
+                  .arg(plain.driftSecondsPerDay(), 0, 'f', 1));
+        check(gated.ok && !gated.rateSignificant,
+              QStringLiteral("校时门控：门控后同一组样本不再应用速率"));
+
+        TC cal;
+        cal.dateKnown = true;
+        cal.applyFit(gated);
+        check(!cal.rateApplied, QStringLiteral("校时门控：rateApplied=false（不修正漂移）"));
+        // 播放头 1:03:35 处应对上画面 OSD 14:51:37（±2 秒）
+        const qint64 expect = 1789883282000 + 3815000;   // 13:48:02 + 播放头 1:03:35
+        const qint64 gotMs = cal.wallMsOf(3815000);
+        check(qAbs(gotMs - expect) <= 200,
+              QStringLiteral("校时门控：1:03:35 处换算 = %1（应 ≈14:51:36.9，偏差 %2ms）")
+                  .arg(QDateTime::fromMSecsSinceEpoch(gotMs)
+                           .toString(QStringLiteral("HH:mm:ss")))
+                  .arg(gotMs - expect));
+
+        // 两个点都高置信 → 门控不介入，与 fit() 等价
+        TC::Sample good2 = good;
+        good2.streamMs = 5003080;
+        good2.wallMs   = 1789888285000;       // 15:11:25（正确读数）
+        QVector<TC::Sample> hiTwo{good, good2};
+        int low2 = -1;
+        const TC::FitResult g2 = TC::fitRateGated(hiTwo, &low2);
+        const TC::FitResult p2 = TC::fit(hiTwo);
+        check(low2 == 0 && g2.rate == p2.rate && g2.offsetMs == p2.offsetMs,
+              QStringLiteral("校时门控：全高置信时与 fit() 完全一致"));
     }
 
     // 4c3. 校时坞刷新入口：没开校时窗时必须是**空操作**（不新建坞、不崩）

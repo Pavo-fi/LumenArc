@@ -107,6 +107,62 @@ TimeCalibration::FitResult TimeCalibration::fit(const QVector<Sample> &samples)
     return fr;
 }
 
+TimeCalibration::FitResult TimeCalibration::fitRateGated(
+    const QVector<Sample> &samples, int *lowConfCount)
+{
+    // 分成「高置信」与「低置信」两组。
+    // conf<=0 = 引擎没报置信度（旧数据/手工录入之外的历史件）→ 视为可信，
+    // 不做门控，避免把老案件整单降级。
+    QVector<Sample> hi;
+    int low = 0;
+    for (const Sample &s : samples) {
+        if (!s.used || s.streamMs < 0)
+            continue;
+        if (s.conf > 0.0 && s.conf < kRateFitMinConf) {
+            ++low;
+            continue;
+        }
+        hi.append(s);
+    }
+    if (lowConfCount)
+        *lowConfCount = low;
+
+    // 没有低置信点 → 与原有路径完全一致
+    if (low == 0)
+        return fit(samples);
+
+    if (hi.size() >= 2) {
+        // 速率只由高置信点决定
+        FitResult fr = fit(hi);
+        if (fr.ok) {
+            // 低置信点仍参与基准：按拟合速率换算出各点残差取中位数
+            // （中位数抗单点错读；比均值稳）
+            QVector<double> anchors;
+            for (const Sample &s : samples) {
+                if (!s.used || s.streamMs < 0)
+                    continue;
+                anchors.append(static_cast<double>(s.wallMs)
+                               - fr.rate * static_cast<double>(s.streamMs));
+            }
+            if (!anchors.isEmpty()) {
+                std::sort(anchors.begin(), anchors.end());
+                const int n = anchors.size();
+                const double med = (n % 2 == 1)
+                    ? anchors[n / 2]
+                    : 0.5 * (anchors[n / 2 - 1] + anchors[n / 2]);
+                fr.offsetMs = static_cast<qint64>(std::llround(med));
+            }
+        }
+        return fr;
+    }
+
+    // 高置信点不足两点：速率只能由低置信点决定 → 只定基准，不应用漂移
+    FitResult fr = fit(samples);
+    if (fr.ok)
+        fr.rateSignificant = false;
+    return fr;
+}
+
 void TimeCalibration::applyFit(const FitResult &fr)
 {
     if (!fr.ok)

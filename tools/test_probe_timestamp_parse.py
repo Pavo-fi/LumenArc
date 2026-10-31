@@ -39,6 +39,22 @@ CASES = [
     ("2026年09月20日 星期日 15:11", datetime.datetime(2026, 9, 20, 15, 11, 0), 0, "full"),
     # 有分隔符但后面不是两位数字 → 整条作废（返回 None，由调用方跳过该测点）
     ("2026年09月20日 星期日 15:11/2x", None, None, None),
+    # 星期被读花（实测 `星期亐0`，真值星期三）：星期整段剥离，样本必须可用
+    ("2026年07月22日星期亐0 06:08:34", datetime.datetime(2026, 7, 22, 6, 8, 34), 0, "full"),
+    # 剥离星期不能吃掉小时的数字（"星期三 05:21:39" 不能变成 5:21 丢前导 0 再错位）
+    ("2026年07月22日 星期三 05:21:39", datetime.datetime(2026, 7, 22, 5, 21, 39), 0, "full"),
+    ("2026年09月11日 星期五 04:08 :49", datetime.datetime(2026, 9, 11, 4, 8, 49), 0, "full"),
+    ("2026-09-20 星期日 15:11:25", datetime.datetime(2026, 9, 20, 15, 11, 25), 0, "full"),
+    # 「日」字丢失
+    ("2026年09月20 星期日 15:33:54", datetime.datetime(2026, 9, 20, 15, 33, 54), 0, "full"),
+]
+
+# (rawText, 期望 weekday_mismatch) —— 只做诊断，绝不据此拒样
+WEEKDAY_CASES = [
+    ("2026年07月22日 星期三 05:21:39", False),   # 2026-07-22 确为星期三
+    ("2026年09月20日 星期日 13:48:03", False),
+    ("2026年09月20 星期五 15:33:54", True),      # 2026-09-20 是星期日 → 与文本冲突
+    ("2026年09月20日 星期日 15:11/25", False),   # 秒位错读不影响星期判据
 ]
 
 
@@ -52,6 +68,15 @@ def main() -> int:
         print(("PASS" if ok else "FAIL") + " | " + repr(text) + " -> " + repr(got))
         if not ok:
             print("        期望: " + repr((want_dt, want_ms, want_kind)))
+            fails += 1
+
+    for text, want in WEEKDAY_CASES:
+        r = P.parse_timestamp(text, FILENAME)
+        got = P.weekday_mismatch(text, r[0]) if r else None
+        ok = (got == want)
+        print(("PASS" if ok else "FAIL") + " | 星期判据 " + repr(text)
+              + " -> mismatch=" + repr(got))
+        if not ok:
             fails += 1
 
     # 端到端：用实测两点重算，假漂移必须消失、播放头处必须对上画面时间

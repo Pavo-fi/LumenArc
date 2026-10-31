@@ -10,6 +10,8 @@
  */
 #include "timesettingsdialog.h"
 
+#include <cmath>
+
 // 取证日志门控（2026-09-28）：校时排查用的 calib_debug.log 只在显式开启时写，
 // 默认**不往程序目录写文件**（避免用户机器上留调试产物）。
 // 需要排查时设环境变量 LUMENARC_CALIB_DEBUG=1。
@@ -576,9 +578,25 @@ void TimeSettingsDialog::refreshWorkingSummary()
                             "Calibrated (source: %1); on-screen base = %2")
             .arg(src).arg(m_working.dateKnown ? fmtWall(m_working.offsetMs)
                                               : fmtStreamMs(m_working.offsetMs));
-        if (m_working.rateApplied)
+        if (m_working.rateApplied) {
             text += lang("；时钟每天快/慢 %1 秒", "; clock drift %1 s/day")
                 .arg(m_working.driftSecondsPerDay(), 0, 'f', 1);
+        } else if (!m_working.samples.isEmpty()
+                   && std::fabs(m_working.driftSecondsPerDay()) >= 10.0) {
+            // v2.5：算出漂移但没应用 —— 说清为什么（否则用户以为软件算错了）
+            int lowConf = 0;
+            for (const auto &smp : m_working.samples)
+                if (smp.used && smp.conf > 0.0
+                    && smp.conf < TimeCalibration::kRateFitMinConf)
+                    ++lowConf;
+            text += lowConf > 0
+                ? lang("；测得漂移 %1 秒/天但**未采用**（%2 个低置信测点不参与速率判定）",
+                       "; measured drift %1 s/day NOT applied (%2 low-confidence "
+                       "sample(s) excluded from rate)")
+                      .arg(m_working.driftSecondsPerDay(), 0, 'f', 1).arg(lowConf)
+                : lang("；测得漂移 %1 秒/天但未采用（测点不足以支持该速率）",
+                       "; measured drift %1 s/day not applied (insufficient samples)");
+        }
         // v1.18.x：非实时导出/变速件（画面时间 ≈ rate× 播放进度）——报告与徽标需一眼可见
         // （piecewise 路径已有“分段重建 N 段（变速）”，此处只管全局倍率那类）
         if (m_working.speedVariant && m_working.rateApplied && !m_working.piecewiseMode())
@@ -1372,7 +1390,9 @@ void TimeSettingsDialog::onNoDriftCorrectionToggled(bool)
 void TimeSettingsDialog::refitSummaryRefresh()
 {
     // 按勾选状态重拟合（野点剔除重拟合）后刷新一句话结果
-    const TimeCalibration::FitResult fr = TimeCalibration::fit(m_fitResult.samples);
+    // v2.5 ①：速率门控（低置信测点不定速率）
+    const TimeCalibration::FitResult fr =
+        TimeCalibration::fitRateGated(m_fitResult.samples);
     m_fitResult.applyFit(fr);
     QString text = fr.ok
         ? lang("识别 %1 个取样点；画面时间基准 = %2",
@@ -1603,7 +1623,7 @@ bool TimeSettingsDialog::applyManualSamples(
     // 注意在确认框/早退之前取，取消时不清 pending。
     const bool replacedPending = m_fitPending;
     const double replacedRate = m_fitResult.rate;
-    const TimeCalibration::FitResult fr = TimeCalibration::fit(samples);
+    const TimeCalibration::FitResult fr = TimeCalibration::fitRateGated(samples);
     if (!fr.ok) {
         QMessageBox::warning(this, lang("无法应用", "Cannot apply"),
             lang("取样点无效，无法建立基准。", "Invalid samples."));

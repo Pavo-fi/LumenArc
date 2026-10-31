@@ -409,13 +409,18 @@ void CalibrationService::onAtPositionsFinished(
     // 要么整单被拒、要么算出荒谬倍率）——剔除的样本标 ocrSuspicious 供 UI 显示 ⚠，
     // 用户仍可在测点表里重新勾选它。
     int dropped = -1;
-    const TimeCalibration::FitResult rt =
+    const TimeCalibration::FitResult rtDropped =
         TimeCalibration::fitDroppingWorstOutlier(samples_used, &dropped);
     if (dropped >= 0 && dropped < cal.samples.size()) {
         cal.samples[dropped].used = false;
         cal.samples[dropped].ocrSuspicious = true;
     }
-    cal.applyFit(rt);
+    // v2.5 ①：置信度门控 —— 速率只由高置信测点决定（低置信点常是错读源，
+    // 但仍参与基准锚定）；高置信点不足 2 个则一律不应用漂移修正。
+    int lowConf = 0;
+    const TimeCalibration::FitResult rtGated =
+        TimeCalibration::fitRateGated(cal.samples, &lowConf);
+    cal.applyFit(rtGated.ok ? rtGated : rtDropped);
     emit threePointReady(video, cal);
 }
 
@@ -474,7 +479,7 @@ void CalibrationService::analyzeCoarse()
         if (std::fabs(overallRate - 1.0) <= PiecewiseTimeMap::kNormalRateDev) {
             // 正常录像：仿射拟合（与三点识别同路径，无需分段）
             cal.speedVariant = false;
-            cal.applyFit(TimeCalibration::fit(m_reconSamples));
+            cal.applyFit(TimeCalibration::fitRateGated(m_reconSamples));
         } else {
             // 整体变速（无内部边界）：单段表 + 警告
             TimeSegment seg;
