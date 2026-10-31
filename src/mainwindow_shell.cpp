@@ -23,6 +23,8 @@
 #include "multicamplaybackwindow.h"
 #include "playbackadjustpanel.h"
 #include "theme.h"
+#include "timesettingsdialog.h"
+#include "calibphotodialog.h"
 #include "domain/time_calibration.h"
 #include "ui/app_state.h"
 #include "ui/command_registry.h"
@@ -45,6 +47,7 @@
 #include <QTimer>
 #include <QGraphicsOpacityEffect>
 #include <QGridLayout>
+#include <QGroupBox>
 #include <QHeaderView>
 #include <QLabel>
 #include <QListWidget>
@@ -53,6 +56,7 @@
 #include <QOpenGLWidget>
 #include <QPropertyAnimation>
 #include <QPushButton>
+#include <QProgressBar>
 #include <QRadioButton>
 #include <QSlider>
 #include <QSpinBox>
@@ -1225,6 +1229,97 @@ int MainWindow::runShellSelfCheck()
         pump(); wait(250);
         m_chartCollapseBtn->click();
         pump(); wait(250);
+    }
+
+    // 4c5. 校时 v2.5：多点复核判据（「精确校准」的判据核心，纯函数）
+    {
+        using TC = TimeCalibration;
+        TC base;
+        base.source = TC::Source::Ocr;
+        base.dateKnown = true;
+        base.offsetMs = 1789883282000;   // 2026-09-20 13:48:02
+        base.rate = 1.0;
+        base.rateApplied = false;
+
+        auto mk = [](qint64 stream, qint64 wall, double conf) {
+            TC::Sample s;
+            s.streamMs = stream;
+            s.wallMs = wall;
+            s.conf = conf;
+            s.used = true;
+            return s;
+        };
+
+        // (a) 完全贴模型 → 已对齐
+        QVector<TC::Sample> onModel{ mk(1000, base.offsetMs + 1000, 0.95),
+                                     mk(3000000, base.offsetMs + 3000000, 0.95),
+                                     mk(5000000, base.offsetMs + 5000000, 0.95) };
+        const TC::VerifyReport rA = TC::verifyAgainst(base, onModel);
+        check(rA.points == 3 && rA.aligned,
+              QStringLiteral("复核判据：贴模型 → 已对齐（最大 %1ms）")
+                  .arg(int(rA.maxAbsResidualMs)));
+
+        // (b) 整体偏 19 秒 → 未对齐，但扣掉直线后能修（重拟合）
+        QVector<TC::Sample> shifted;
+        for (const auto &smp : onModel)
+            shifted.append(mk(smp.streamMs, smp.wallMs + 19000, smp.conf));
+        const TC::VerifyReport rB = TC::verifyAgainst(base, shifted);
+        check(!rB.aligned && rB.affineFixable,
+              QStringLiteral("复核判据：整体偏 19 秒 → 未对齐但可重拟合（扣直线后 %1ms）")
+                  .arg(int(rB.maxResidualAfterAffineMs)));
+        TC fixed = base;
+        fixed.applyFit(TC::fitRateGated(shifted));
+        check(TC::verifyAgainst(fixed, shifted).aligned,
+              QStringLiteral("复核判据：按 %1 点重拟合后回到已对齐").arg(rB.points));
+
+        // (c) 中段跳 30 秒 → 不成直线（分段嫌疑）
+        QVector<TC::Sample> jump{ mk(1000, base.offsetMs + 1000, 0.95),
+                                  mk(2000000, base.offsetMs + 2000000, 0.95),
+                                  mk(3000000, base.offsetMs + 3000000 + 30000, 0.95),
+                                  mk(5000000, base.offsetMs + 5000000 + 30000, 0.95) };
+        const TC::VerifyReport rC = TC::verifyAgainst(base, jump);
+        check(!rC.aligned && !rC.affineFixable,
+              QStringLiteral("复核判据：中段跳 30 秒 → 判分段嫌疑"));
+
+        // (d) 低置信错点被排除
+        QVector<TC::Sample> withLow{ onModel[0], onModel[1],
+                                     mk(4000000, base.offsetMs + 4000000 + 600000, 0.70) };
+        const TC::VerifyReport rD = TC::verifyAgainst(base, withLow);
+        check(rD.points == 2 && rD.lowConfPoints == 1 && rD.aligned,
+              QStringLiteral("复核判据：conf=0.70 的错点被排除（用 %1 点，%2 个低置信）")
+                  .arg(rD.points).arg(rD.lowConfPoints));
+    }
+
+    // 4c6. 校时面板 v2.5：文案/控件落地（真建一个对话框验，不点任何按钮）
+    {
+        TimeSettingsDialog dlg(QString(), 0, 60000, TimeCalibration(), QString(),
+                               nullptr, this);
+        const QList<QProgressBar *> bars = dlg.findChildren<QProgressBar *>();
+        check(!bars.isEmpty() && bars.first()->isHidden(),
+              QStringLiteral("校时面板：进度条已就位且初始隐藏"));
+
+        QStringList gbTitles;
+        for (QGroupBox *g : dlg.findChildren<QGroupBox *>())
+            gbTitles << g->title();
+        check(gbTitles.join(QStringLiteral(" | ")).contains(QStringLiteral("① 自动校时")),
+              QStringLiteral("校时面板：第 1 步标题已简化为「① 自动校时」"));
+        check(gbTitles.join(QStringLiteral(" | ")).contains(QStringLiteral("② 对北京时间")),
+              QStringLiteral("校时面板：第 2 步标题已简化为「② 对北京时间（可选）」"));
+
+        QStringList labels;
+        for (QLabel *l : dlg.findChildren<QLabel *>())
+            labels << l->text();
+        const QString all = labels.join(QStringLiteral("\n"));
+        check(!all.contains(QStringLiteral("第 1 步 · 自动校时"))
+                  && !all.contains(QStringLiteral("自动校时读画面时间")),
+              QStringLiteral("校时面板：旧的长标题/长横幅文案已清除"));
+
+        // 用户明确要求保留「日 时 分 秒」的完整说法
+        const QString verbose =
+            TruthPhotoConfirmDialog::fmtOffsetVerbose(4000LL * 86400000 + 3700000);
+        check(verbose.contains(QStringLiteral("日")) && verbose.contains(QStringLiteral("时"))
+                  && verbose.contains(QStringLiteral("分")) && verbose.contains(QStringLiteral("秒")),
+              QStringLiteral("校时面板：偏移仍用完整措辞「%1」").arg(verbose));
     }
 
     // 4c4. 校时：低置信测点无权决定速率（复现 2026-10-30 顺德 D12 现场）

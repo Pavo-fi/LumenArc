@@ -163,6 +163,63 @@ TimeCalibration::FitResult TimeCalibration::fitRateGated(
     return fr;
 }
 
+TimeCalibration::VerifyReport TimeCalibration::verifyAgainst(
+    const TimeCalibration &cal, const QVector<Sample> &samples, qint64 tolMs)
+{
+    VerifyReport r;
+    if (!cal.isValid())
+        return r;
+
+    QVector<QPair<qint64, double>> res;   // (streamMs, residual)
+    double sumAbs = 0.0;
+    for (const Sample &s : samples) {
+        if (!s.used || s.streamMs < 0 || s.wallMs <= 0)
+            continue;
+        if (s.conf > 0.0 && s.conf < kRateFitMinConf) {
+            ++r.lowConfPoints;
+            continue;
+        }
+        const double d = static_cast<double>(s.wallMs) -
+                         static_cast<double>(cal.wallMsOf(s.streamMs));
+        res.append(qMakePair(s.streamMs, d));
+        sumAbs += std::fabs(d);
+        r.maxAbsResidualMs = qMax(r.maxAbsResidualMs, std::fabs(d));
+    }
+    std::sort(res.begin(), res.end(),
+              [](const QPair<qint64, double> &a, const QPair<qint64, double> &b) {
+                  return a.first < b.first;
+              });
+    r.points = res.size();
+    if (r.points == 0)
+        return r;
+    r.meanAbsResidualMs = sumAbs / double(r.points);
+    r.spanMs = double(res.last().first - res.first().first);
+    r.aligned = r.maxAbsResidualMs <= double(tolMs);
+
+    // 残差能否被一条直线（偏移 + 速率误差）解释
+    double mx = 0.0, my = 0.0;
+    for (const auto &p : res) {
+        mx += double(p.first);
+        my += p.second;
+    }
+    mx /= double(r.points);
+    my /= double(r.points);
+    double sxx = 0.0, sxy = 0.0;
+    for (const auto &p : res) {
+        const double dx = double(p.first) - mx;
+        sxx += dx * dx;
+        sxy += dx * (p.second - my);
+    }
+    const double slope = (sxx > 0.0) ? sxy / sxx : 0.0;
+    for (const auto &p : res) {
+        const double fitLine = my + slope * (double(p.first) - mx);
+        r.maxResidualAfterAffineMs = qMax(r.maxResidualAfterAffineMs,
+                                          std::fabs(p.second - fitLine));
+    }
+    r.affineFixable = r.maxResidualAfterAffineMs <= double(tolMs);
+    return r;
+}
+
 void TimeCalibration::applyFit(const FitResult &fr)
 {
     if (!fr.ok)

@@ -33,6 +33,7 @@ static bool calibDebugEnabled()
 #include <QGridLayout>
 #include <QGroupBox>
 #include <QLabel>
+#include <QProgressBar>
 #include <QPushButton>
 #include <QTableWidget>
 #include <QHeaderView>
@@ -91,6 +92,8 @@ TimeSettingsDialog::TimeSettingsDialog(const QString &videoPath,
                 this, &TimeSettingsDialog::onCalibPhotoFinished);
         connect(m_service, &CalibrationService::threePointReady,
                 this, &TimeSettingsDialog::onThreePointReady);
+        connect(m_service, &CalibrationService::verifyReady,
+                this, &TimeSettingsDialog::onVerifyReady);
         connect(m_service, &CalibrationService::reconstructionReady,
                 this, &TimeSettingsDialog::onReconstructionReady);
         connect(m_service, &CalibrationService::quickCheckReady,
@@ -112,7 +115,7 @@ void TimeSettingsDialog::buildUi()
     // ---- 头部：视频与当前状态 ----
     m_videoLabel = new QLabel(QStringLiteral("📹 %1\n%2 %3")
         .arg(QFileInfo(m_videoPath).fileName())
-        .arg(lang("当前播放位置：", "Current position: "))
+        .arg(lang("播放头 ", "Playhead "))
         .arg(fmtStreamMs(m_currentPosMs)), this);
     m_videoLabel->setWordWrap(true);
     lay->addWidget(m_videoLabel);
@@ -125,9 +128,8 @@ void TimeSettingsDialog::buildUi()
 
     if (!m_sidecarWarning.isEmpty()) {
         m_sidecarWarnLabel = new QLabel(
-            lang("⚠ 此拼接文件段间存在时间缺口/重叠，首段之后的墙钟可能不准（详见报告）",
-                 "⚠ Concatenated file has time gaps/overlaps; wall clock after the "
-                 "first segment may drift (see report)"), this);
+            lang("⚠ 拼接件：分段处墙钟会跳", "⚠ Merged file: wall clock jumps at joins"),
+            this);
         m_sidecarWarnLabel->setWordWrap(true);
         m_sidecarWarnLabel->setStyleSheet(QStringLiteral("color:%1;").arg(Theme::AccentTk::Text));
         lay->addWidget(m_sidecarWarnLabel);
@@ -137,16 +139,16 @@ void TimeSettingsDialog::buildUi()
     lay->addWidget(buildUsageBanner());
 
     // ---- 第 1 步：自动校时 ----
-    auto *grpGo = new QGroupBox(lang("第 1 步 · 自动校时", "Step 1 · Auto calibrate"), this);
+    auto *grpGo = new QGroupBox(lang("① 自动校时", "① Auto calibrate"), this);
     auto *gg = new QVBoxLayout(grpGo);
     auto *goRow = new QHBoxLayout();
-    m_goBtn = new QPushButton(lang("自动校时", "GO"), this);
+    m_goBtn = new QPushButton(lang("开始", "Start"), this);
     m_goBtn->setMinimumHeight(44);
     m_goBtn->setStyleSheet(QStringLiteral(
         "QPushButton { font-size:13px; font-weight:600; }"));
     m_cancelBtn = new QPushButton(lang("取消", "Cancel"), this);
     m_cancelBtn->setVisible(false);
-    m_roiBtn = new QPushButton(lang("框选时间戳区域", "Select timestamp area"), this);
+    m_roiBtn = new QPushButton(lang("框选区域", "Box area"), this);
     m_roiBtn->setToolTip(lang(
         "在画面上框住时间戳（识别更准）。同一摄像头只需框一次，之后自动复用。",
         "Box the timestamp on screen for better OCR. Set once per camera."));
@@ -177,8 +179,7 @@ void TimeSettingsDialog::buildUi()
     auto *msRow = new QHBoxLayout(m_manualSimpleBox);
     msRow->setContentsMargins(0, 0, 0, 0);
     msRow->setSpacing(6);
-    msRow->addWidget(new QLabel(lang("画面时间读不出？填画面上的时间：",
-                                     "OCR failed? Type the on-screen time:"),
+    msRow->addWidget(new QLabel(lang("读不出就手填：", "OCR failed? Type it:"),
                                 m_manualSimpleBox));
     m_manualSimpleEdit = new QDateTimeEdit(QDateTime::currentDateTime(),
                                            m_manualSimpleBox);
@@ -291,10 +292,65 @@ void TimeSettingsDialog::buildUi()
     gg->addWidget(m_progressLabel);
     // 结果（GO 完成后出现）
     m_resultLabel = new QLabel(lang(
-        "（点击上方 GO 开始）", "(click GO above to start)"), this);
+        "点击「开始」识别画面时间", "Click Start to read on-screen time"), this);
     m_resultLabel->setWordWrap(true);
     m_resultLabel->setStyleSheet(QStringLiteral("font-weight:bold;"));
     gg->addWidget(m_resultLabel);
+
+    // v2.5：进度条 —— 原来只有一行英文调试串，用户不知道跑在哪、还要多久
+    m_progressBar = new QProgressBar(this);
+    m_progressBar->setTextVisible(false);
+    m_progressBar->setFixedHeight(6);
+    m_progressBar->setStyleSheet(QStringLiteral(
+        "QProgressBar { background:%1; border:0; border-radius:3px; }"
+        "QProgressBar::chunk { background:%2; border-radius:3px; }")
+        .arg(Theme::BgCard, Theme::Accent));
+    m_progressBar->hide();
+    gg->addWidget(m_progressBar);
+
+    // v2.5 ②：第 1 步完成后 —— 提醒用户拖时间轴核对，并给「精确校准」出口
+    m_verifyBar = new QFrame(this);
+    m_verifyBar->setObjectName(QStringLiteral("verifyBar"));
+    m_verifyBar->setStyleSheet(QStringLiteral(
+        "QFrame#verifyBar { background:%1; border:1px solid %2; border-radius:8px; }"
+        "QFrame#verifyBar QLabel { border:0; background:transparent; }")
+        .arg(Theme::BgCard, Theme::Border));
+    auto *vb = new QHBoxLayout(m_verifyBar);
+    vb->setContentsMargins(10, 8, 10, 8);
+    vb->setSpacing(8);
+    m_verifyHint = new QLabel(m_verifyBar);
+    m_verifyHint->setWordWrap(true);
+    m_verifyHint->setStyleSheet(QStringLiteral("color:%1;").arg(Theme::TextSecond));
+    vb->addWidget(m_verifyHint, 1);
+    m_verifyOkBtn = new QPushButton(lang("对上了", "Aligned"), m_verifyBar);
+    m_verifyOkBtn->setFocusPolicy(Qt::NoFocus);
+    m_verifyOkBtn->setStyleSheet(QStringLiteral(
+        "QPushButton{background:transparent;color:%1;border:1px solid %2;"
+        "border-radius:5px;padding:3px 10px;font-size:11px;}"
+        "QPushButton:hover{color:%3;border-color:%3;}")
+        .arg(Theme::TextSecond, Theme::Border, Theme::Accent));
+    vb->addWidget(m_verifyOkBtn, 0);
+    m_verifyBtn = new QPushButton(lang("没对上 · 精确校准", "Mismatch · re-check"),
+                                  m_verifyBar);
+    m_verifyBtn->setFocusPolicy(Qt::NoFocus);
+    m_verifyBtn->setCursor(Qt::PointingHandCursor);
+    m_verifyBtn->setStyleSheet(QStringLiteral(
+        "QPushButton{background:%1;color:%2;border:1px solid %1;border-radius:5px;"
+        "padding:3px 12px;font-size:11px;font-weight:600;}"
+        "QPushButton:hover{background:%3;}"
+        "QPushButton:disabled{background:%4;color:%5;border-color:%4;}")
+        .arg(Theme::Accent, Theme::AccentOnDark, Theme::AccentHover,
+             Theme::BgPressed, Theme::TextMuted));
+    vb->addWidget(m_verifyBtn, 0);
+    m_verifyBar->hide();
+    gg->addWidget(m_verifyBar);
+
+    connect(m_verifyOkBtn, &QPushButton::clicked, this, [this]() {
+        m_alignedConfirmed = true;
+        m_verifyBar->hide();
+        m_resultLabel->setText(lang("✓ 已核对：时间轴与画面一致", "✓ Checked: timeline matches"));
+    });
+    connect(m_verifyBtn, &QPushButton::clicked, this, &TimeSettingsDialog::onVerifyClicked);
     auto *rr = new QHBoxLayout();
     m_detailsBtn = new QPushButton(lang("查看细节 ▸", "Details ▸"), this);
     m_detailsBtn->setEnabled(false);
@@ -362,12 +418,11 @@ void TimeSettingsDialog::buildUi()
     //   ① 校时图片框选 OCR（一张图两个框：监控主机时间 / 北京时间，自动算偏差）
     //   ② 手动输入两个时间（自动算偏差）
     //   ③ 直接输入偏移量「监控主机时间比北京时间 快/慢 X日X时X分X秒」
-    auto *grpTruth = new QGroupBox(lang("第 2 步 · 对真实时间（可选）",
-                                        "Step 2 · Align to real time (optional)"), this);
+    auto *grpTruth = new QGroupBox(lang("② 对北京时间（可选）",
+                                        "② Align to Beijing time (optional)"), this);
     auto *gt = new QVBoxLayout(grpTruth);
     auto *truthExplain = new QLabel(lang(
-        "对到真实北京时间 · 推荐屏幕与标准时钟同框拍照",
-        "Map to real time · recommended: photograph the screen with a clock"), this);
+        "推荐把屏幕与标准时钟同框拍照", "Recommended: photo the screen with a clock"), this);
     truthExplain->setWordWrap(true);
     truthExplain->setStyleSheet(QStringLiteral("color:%1;").arg(Theme::TextMuted));
     truthExplain->setToolTip(lang(
@@ -380,8 +435,7 @@ void TimeSettingsDialog::buildUi()
     // 与 GO 同级强调：大按钮 + 主题强调色）
     auto *photoRow = new QHBoxLayout();
     m_truthPhotoBtn = new QPushButton(
-        lang("从校时图片识别（推荐：框选监控主机时间 + 北京时间）…",
-             "From calibration photo (recommended: box both clocks)…"), this);
+        lang("选择校时照片…（推荐）", "Choose calibration photo… (recommended)"), this);
     m_truthPhotoBtn->setMinimumHeight(40);
     m_truthPhotoBtn->setStyleSheet(QStringLiteral(
         "QPushButton { font-size:12px; font-weight:bold; "
@@ -398,7 +452,7 @@ void TimeSettingsDialog::buildUi()
 
     // 方式二：手动输入两个时间（自动算偏差）
     auto *grid = new QGridLayout();
-    auto *manualTitle = new QLabel(lang("方式二 · 手动输入两个时间：",
+    auto *manualTitle = new QLabel(lang("两点输入：",
                                         "Manual — enter both times:"), this);
     manualTitle->setStyleSheet(QStringLiteral("font-weight:bold;"));
     grid->addWidget(manualTitle, 0, 0, 1, 2);
@@ -436,8 +490,7 @@ void TimeSettingsDialog::buildUi()
     gt->addLayout(grid);
 
     // 方式三：直接输入偏移量「比北京时间 快/慢 X日X时X分X秒」
-    auto *offTitle = new QLabel(lang("方式三 · 直接输入偏移量：",
-                                     "Direct offset:"), this);
+    auto *offTitle = new QLabel(lang("直接输偏移：", "Direct offset:"), this);
     offTitle->setStyleSheet(QStringLiteral("font-weight:bold;"));
     gt->addWidget(offTitle);
     auto *offRow = new QHBoxLayout();
@@ -474,7 +527,7 @@ void TimeSettingsDialog::buildUi()
 
     m_truthNoteEdit = new QLineEdit(this);
     m_truthNoteEdit->setPlaceholderText(
-        lang("说明（如：与指挥中心对时），留档用", "Note (e.g. synced with HQ), for record"));
+        lang("备注（留档用）", "Note (for the record)"));
     gt->addWidget(m_truthNoteEdit);
     lay->addWidget(grpTruth);
 
@@ -492,8 +545,7 @@ void TimeSettingsDialog::buildUi()
 
     // ---- 底部 ----
     auto *hint = new QLabel(lang(
-        "识别在后台进行，可最小化窗口继续操作。",
-        "Recognition runs in background; you can minimize and keep working."), this);
+        "识别在后台进行，可最小化。", "Runs in background; safe to minimize."), this);
     hint->setWordWrap(true);
     hint->setStyleSheet(QStringLiteral("color:%1;").arg(Theme::TextSecond));
     lay->addWidget(hint);
@@ -518,19 +570,19 @@ void TimeSettingsDialog::buildUi()
 
 QWidget *TimeSettingsDialog::buildUsageBanner()
 {
+    // v2.5：去卡片边框（用户：面板太乱）——只留一行灰字，作为第 1 步的副标题
     auto *banner = new QFrame(this);
-    // 主题令牌（原为硬编码浅色，与深色主题不一致——用户反馈：面板颜色不一致）
     banner->setStyleSheet(QStringLiteral(
-        "QFrame { background:%1; border:1px solid %2; border-radius:8px; }"
-        "QLabel { border:none; background:transparent; }")
-        .arg(Theme::BgCard, Theme::Border));
+        "QFrame { background:transparent; border:none; }"
+        "QLabel { border:none; background:transparent; color:%1; }")
+        .arg(Theme::TextMuted));
     auto *lay = new QVBoxLayout(banner);
     lay->setContentsMargins(12, 8, 12, 8);
     lay->setSpacing(4);
     // v2.0 压缩：原「用法」标题 + 两行白话 → 一行短句 + tooltip
     auto *desc = new QLabel(
-        lang("自动校时读画面时间；有整体偏差再用第 2 步",
-             "Auto-read on-screen time; use Step 2 for a constant offset"),
+        lang("读画面时间；有整体偏差再用第 2 步",
+             "Reads on-screen time; use step 2 for a constant offset"),
         banner);
     desc->setWordWrap(true);
     desc->setStyleSheet(QStringLiteral("color:%1;").arg(Theme::TextSecond));
@@ -574,12 +626,13 @@ void TimeSettingsDialog::refreshWorkingSummary()
         case TimeCalibration::Source::Inherited: src = lang("前处理继承", "Inherited"); break;
         default: src = QStringLiteral("—"); break;
         }
-        QString text = lang("当前状态：已校时（来源：%1）画面时间基准 = %2",
-                            "Calibrated (source: %1); on-screen base = %2")
-            .arg(src).arg(m_working.dateKnown ? fmtWall(m_working.offsetMs)
-                                              : fmtStreamMs(m_working.offsetMs));
+        // v2.5：状态只留一行（原来三处重复叙述）；来源等细节进 tooltip
+        QString text = lang("● 已校时 · 0 点 = %1", "● Calibrated · 0 = %1")
+            .arg(m_working.dateKnown ? fmtWall(m_working.offsetMs)
+                                     : fmtStreamMs(m_working.offsetMs));
+        m_workingSummary->setToolTip(lang("来源：%1", "Source: %1").arg(src));
         if (m_working.rateApplied) {
-            text += lang("；时钟每天快/慢 %1 秒", "; clock drift %1 s/day")
+            text += lang(" · 漂移 %1 秒/天", " · drift %1 s/day")
                 .arg(m_working.driftSecondsPerDay(), 0, 'f', 1);
         } else if (!m_working.samples.isEmpty()
                    && std::fabs(m_working.driftSecondsPerDay()) >= 10.0) {
@@ -600,17 +653,18 @@ void TimeSettingsDialog::refreshWorkingSummary()
         // v1.18.x：非实时导出/变速件（画面时间 ≈ rate× 播放进度）——报告与徽标需一眼可见
         // （piecewise 路径已有“分段重建 N 段（变速）”，此处只管全局倍率那类）
         if (m_working.speedVariant && m_working.rateApplied && !m_working.piecewiseMode())
-            text += lang("；非实时导出件（画面时间 ≈ %1× 播放进度）",
-                         "; non-realtime export (on-screen ≈ %1x playback)")
+            text += lang(" · 变速 %1×", " · %1x speed")
                 .arg(m_working.rate, 0, 'f', 3);
         if (m_working.piecewiseMode())
-            text += lang("；分段重建 %1 段（变速）", "; piecewise %1 segs (variable-rate)")
+            text += lang(" · 分段 %1 段", " · %1 segments")
                 .arg(m_working.piecewise.size());
         if (m_working.truthSet)
-            text += lang("；北京时间偏移 %1", "; Beijing offset %1")
+            text += lang(" · 北京 %1", " · Beijing %1")
                 .arg(fmtOffset(m_working.truthOffsetMs));
         m_workingSummary->setText(text);
     }
+    // 第 1 步完成后的「拖浮标核对」提醒条（v2.5）
+    refreshVerifyBar();
     // 北京时间对齐区 / 头部位置：跟随播放头（v2.5 统一到 refreshPlayheadViews）
     refreshPlayheadViews();
 }
@@ -1244,9 +1298,198 @@ void TimeSettingsDialog::maybeAutoApply()
     }
 }
 
+namespace {
+/// 服务层 stage 串 → 用户看得懂的中文阶段名（纯映射，无副作用）
+struct StageView {
+    QString text;
+    int done = -1;      ///< -1 = 无总数（进度条走马灯）
+    int total = -1;
+};
+
+StageView stageViewOf(const QString &raw)
+{
+    StageView v;
+    if (raw.isEmpty())
+        return v;
+    static const QRegularExpression ocrRe(QStringLiteral("^ocr (\\d+)/(\\d+)$"));
+    const QRegularExpressionMatch m = ocrRe.match(raw);
+    if (m.hasMatch()) {
+        v.done = m.captured(1).toInt();
+        v.total = qMax(1, m.captured(2).toInt());
+        v.text = lang(QStringLiteral("识别画面时间 %1/%2"), QStringLiteral("Reading %1/%2"))
+                     .arg(v.done).arg(v.total);
+        return v;
+    }
+    if (raw == QLatin1String("sampling"))
+        v.text = lang(QStringLiteral("取帧..."), QStringLiteral("Extracting frames..."));
+    else if (raw == QLatin1String("quick check"))
+        v.text = lang(QStringLiteral("快速检查表头..."), QStringLiteral("Checking header..."));
+    else if (raw.startsWith(QLatin1String("coarse")))
+        v.text = lang(QStringLiteral("选取样点..."), QStringLiteral("Picking samples..."));
+    else if (raw.startsWith(QLatin1String("date-retry")))
+        v.text = lang(QStringLiteral("补读日期..."), QStringLiteral("Re-reading dates..."));
+    else if (raw.startsWith(QLatin1String("short-hour")))
+        v.text = lang(QStringLiteral("修复错读的小时..."), QStringLiteral("Fixing hours..."));
+    else if (raw.startsWith(QLatin1String("structured-drop")))
+        v.text = lang(QStringLiteral("剔除结构异常的测点..."), QStringLiteral("Dropping bad samples..."));
+    else if (raw.startsWith(QLatin1String("date-sanity")))
+        v.text = lang(QStringLiteral("剔除日期异常的测点..."), QStringLiteral("Dropping odd dates..."));
+    else if (raw.startsWith(QLatin1String("boundary")))
+        v.text = lang(QStringLiteral("对齐分段边界..."), QStringLiteral("Aligning segments..."));
+    else if (raw.startsWith(QLatin1String("tick anchors")))
+        v.text = lang(QStringLiteral("定位秒级锚点..."), QStringLiteral("Locating anchors..."));
+    else if (raw.startsWith(QLatin1String("tick scan")))
+        v.text = lang(QStringLiteral("逐秒扫描（约 1~3 分钟）"),
+                      QStringLiteral("Second-by-second scan (1-3 min)"));
+    else if (raw.startsWith(QLatin1String("verify")))
+        v.text = lang(QStringLiteral("逐点复核..."), QStringLiteral("Re-reading points..."));
+    else
+        v.text = lang(QStringLiteral("处理中..."), QStringLiteral("Working..."));
+    return v;
+}
+
+/// 阶段键：数字归一化，用于判断「换阶段了 → 重置计时」
+QString stageKeyOf(const QString &raw)
+{
+    QString k = raw;
+    for (int i = 0; i < k.size(); ++i)
+        if (k.at(i).isDigit())
+            k[i] = QLatin1Char('#');
+    return k;
+}
+} // namespace
+
+void TimeSettingsDialog::setProgressView(const QString &rawStage, bool busy)
+{
+    if (!m_progressBar)
+        return;
+    if (!busy) {
+        m_progressBar->hide();
+        m_progressLabel->clear();
+        m_progressT0 = 0;
+        m_progressKey.clear();
+        return;
+    }
+    const StageView v = stageViewOf(rawStage);
+    const QString key = stageKeyOf(rawStage);
+    if (key != m_progressKey) {
+        m_progressKey = key;
+        m_progressT0 = QDateTime::currentMSecsSinceEpoch();
+    }
+    if (m_progressT0 <= 0)
+        m_progressT0 = QDateTime::currentMSecsSinceEpoch();
+
+    if (v.total > 0) {
+        m_progressBar->setRange(0, v.total);
+        m_progressBar->setValue(qBound(0, v.done, v.total));
+    } else {
+        m_progressBar->setRange(0, 0);   // 走马灯：不确定要多久
+    }
+    QString text = v.text;
+    if (v.total > 0 && v.done > 0) {
+        const qint64 elapsed = QDateTime::currentMSecsSinceEpoch() - m_progressT0;
+        const qint64 remain = elapsed * (v.total - v.done) / v.done;
+        if (remain >= 10000)   // 10 秒以下不显示，否则数字闪得烦
+            text += lang(QStringLiteral(" · 约 %1 秒"), QStringLiteral(" · ~%1 s"))
+                        .arg((remain + 999) / 1000);
+    }
+    m_progressLabel->setText(text);
+    m_progressBar->show();
+}
+
+void TimeSettingsDialog::refreshVerifyBar()
+{
+    if (!m_verifyBar)
+        return;
+    const bool show = (m_goStage == GoStage::Done) && m_working.isValid()
+                      && !m_alignedConfirmed && !m_verifyRunning;
+    if (show && m_verifyHint)
+        m_verifyHint->setText(lang(
+            QStringLiteral("请拖动时间轴浮标核对：画面时间与识别时间是否一致？"),
+            QStringLiteral("Drag the playhead: does the on-screen time match?")));
+    m_verifyBar->setVisible(show);
+}
+
+void TimeSettingsDialog::onVerifyClicked()
+{
+    if (!m_service || !m_working.isValid() || m_verifyRunning)
+        return;
+    m_verifyRunning = true;
+    if (m_verifyBtn)
+        m_verifyBtn->setEnabled(false);
+    m_verifyBar->setVisible(true);
+    setGoBusy(true, lang(QStringLiteral("逐点复核..."), QStringLiteral("Verifying...")));
+    m_service->runVerify(m_videoPath, m_durationMs, 16, m_roi);
+}
+
+void TimeSettingsDialog::onVerifyReady(
+    const QString &videoPath, const QVector<TimeCalibration::Sample> &samples)
+{
+    // 复核期间切走了视频 → 结果不越权写别人
+    if (!videoPath.isEmpty() && !m_videoPath.isEmpty()
+        && QDir::cleanPath(videoPath).compare(QDir::cleanPath(m_videoPath),
+                                             Qt::CaseInsensitive) != 0)
+        return;
+    m_verifyRunning = false;
+    if (m_verifyBtn)
+        m_verifyBtn->setEnabled(true);
+    setGoBusy(false, QString());
+
+    if (samples.isEmpty()) {
+        m_verifyHint->setText(lang(
+            QStringLiteral("复核失败：这一片读不到画面时间（可先「框选区域」再试）"),
+            QStringLiteral("Verify failed: no readable timestamp (box the area first)")));
+        return;
+    }
+    const TimeCalibration::VerifyReport rep =
+        TimeCalibration::verifyAgainst(m_working, samples);
+    if (rep.points < 2) {
+        m_verifyHint->setText(lang(
+            QStringLiteral("复核点不足：只有 %1 个可用读数，至少需要 2 个"),
+            QStringLiteral("Not enough points: %1 usable (need >= 2)")).arg(rep.points));
+        return;
+    }
+    const QString maxTxt = QString::number(rep.maxAbsResidualMs / 1000.0, 'f', 1);
+
+    if (rep.aligned) {
+        m_alignedConfirmed = true;
+        m_verifyBar->hide();
+        m_resultLabel->setText(lang(
+            QStringLiteral("✓ 已对齐：%1 点复核，最大偏差 %2 秒"),
+            QStringLiteral("✓ Aligned: %1 points, max deviation %2 s"))
+            .arg(rep.points).arg(maxTxt));
+        return;
+    }
+    if (rep.affineFixable) {
+        TimeCalibration::FitResult fr = TimeCalibration::fitRateGated(samples);
+        if (fr.ok) {
+            m_working.samples = samples;
+            m_working.source = TimeCalibration::Source::Ocr;
+            m_working.dateKnown = true;
+            m_working.applyFit(fr);
+            const double afterMs =
+                TimeCalibration::verifyAgainst(m_working, samples).maxAbsResidualMs;
+            m_alignedConfirmed = true;
+            m_verifyBar->hide();
+            refreshWorkingSummary();
+            m_resultLabel->setText(lang(
+                QStringLiteral("✓ 已按 %1 点重校准：原偏差 %2 秒 → 现在 %3 秒"),
+                QStringLiteral("✓ Re-calibrated on %1 points: %2 s -> %3 s"))
+                .arg(rep.points).arg(maxTxt)
+                .arg(QString::number(afterMs / 1000.0, 'f', 1)));
+            emit calibrationApplied(m_working);
+            return;
+        }
+    }
+    m_verifyHint->setText(lang(
+        QStringLiteral("偏差不成直线（最大 %1 秒）：疑似分段跳变/变速 → 建议用「时间重建」"),
+        QStringLiteral("Deviation is not linear (max %1 s): likely segment jumps -> Rebuild"))
+        .arg(maxTxt));
+}
+
 void TimeSettingsDialog::onServiceProgress(const QString &stage)
 {
-    m_progressLabel->setText(stage);
+    setProgressView(stage, true);
 }
 
 void TimeSettingsDialog::onServiceFailed(const QString &videoPath,
@@ -1531,7 +1774,12 @@ void TimeSettingsDialog::setGoBusy(bool busy, const QString &stageText)
             ? lang("✓ 完成（可重新校时）", "✓ Done (re-run)")
             : lang("自动校时", "Auto calibrate"));
     }
-    m_progressLabel->setText(busy ? stageText : QString());
+    if (busy && m_verifyBar)
+        m_verifyBar->hide();          // 跑任务时先收起来，出结果后再按需显示
+    if (busy)
+        setProgressView(stageText, true);
+    else
+        setProgressView(QString(), false);
 }
 
 // ---------------------------------------------------------------------------
@@ -1581,7 +1829,7 @@ void TimeSettingsDialog::refreshPlayheadViews()
         m_videoLabel->setText(QStringLiteral("📹 %1")
             .arg(QFileInfo(m_videoPath).fileName())
             + QLatin1Char('\n')
-            + lang("当前播放位置：", "Current position: ")
+            + lang("播放头 ", "Playhead ")
             + fmtStreamMs(m_currentPosMs));
     }
     if (!m_working.isValid() || !m_working.dateKnown) {

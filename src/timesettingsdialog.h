@@ -29,6 +29,7 @@ class QDateTimeEdit;
 class QLineEdit;
 class QCheckBox;
 class QComboBox;
+class QProgressBar;
 class QSpinBox;
 class QToolButton;
 class QWidget;
@@ -80,6 +81,9 @@ private slots:
     void onRunGo();          ///< GO 主按钮：快速检查 → 自动路由
     void onRoiButton();      ///< 手动重新框选时间戳区域
     void onCancelGo();
+    /// v2.5 ②：多点复核结果（精确校准）
+    void onVerifyReady(const QString &videoPath,
+                       const QVector<TimeCalibration::Sample> &samples);
     void onServiceProgress(const QString &stage);
     void onQuickCheckReady(const QString &videoPath, double overallRate,
                            bool suspicious, bool ocrSuspect);
@@ -153,6 +157,13 @@ private:
     void applyWorking(const TimeCalibration &cal);   ///< 应用候选并通知主窗口
     void maybeAutoApply();                           ///< GO 完成且无异常 → 自动应用
     void setGoBusy(bool busy, const QString &stageText);
+
+    // ---- v2.5：进度显现 + 第一步后的核对提醒 ----
+    /// 服务层 stage 串 → 中文阶段名 + 进度（有 x/y 才填百分比，其余走马灯）
+    void setProgressView(const QString &rawStage, bool busy);
+    /// 第 1 步完成后显示/隐藏「拖浮标核对」提醒条
+    void refreshVerifyBar();
+    void onVerifyClicked();
     void fillSampleTable(const TimeCalibration &proposed);
     static QString fmtWall(qint64 epochMs);
     static QString fmtOffset(qint64 offsetMs);
@@ -182,6 +193,15 @@ private:
     /// （实测症状：非实时导出件永远按 rate=1.0 走 → 「校时后还是不准」）。
     bool m_fitPending = false;
     GoStage m_goStage = GoStage::Idle;
+    QProgressBar *m_progressBar = nullptr;
+    QWidget *m_verifyBar = nullptr;      ///< 第 1 步后的核对提醒条
+    QLabel *m_verifyHint = nullptr;
+    QPushButton *m_verifyOkBtn = nullptr;
+    QPushButton *m_verifyBtn = nullptr;
+    qint64 m_progressT0 = 0;             ///< 本阶段起点（算 ETA）
+    QString m_progressKey;               ///< 阶段键（数字归一化），变更即重置 T0
+    bool m_alignedConfirmed = false;     ///< 用户已确认「对上了」→ 本会话不再提示
+    bool m_verifyRunning = false;        ///< 多点复核进行中
 
     // UI
     QLabel *m_videoLabel = nullptr;

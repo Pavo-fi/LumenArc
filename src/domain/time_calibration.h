@@ -165,6 +165,34 @@ struct TimeCalibration
 
     // ---- 拟合 ----
 
+    // ---- v2.5 ②：多点复核（「精确校准」的判据核心，纯函数可测）----
+
+    /// 复核报告：用一组测点对比现有模型换算值与画面实际读数
+    struct VerifyReport {
+        int    points = 0;                 ///< 参与复核的高置信测点
+        int    lowConfPoints = 0;          ///< 被排除的低置信测点
+        double maxAbsResidualMs = 0.0;     ///< 最大绝对残差（画面 − 换算）
+        double meanAbsResidualMs = 0.0;    ///< 平均绝对残差
+        double spanMs = 0.0;               ///< 复核覆盖的片内跨度
+        bool   aligned = false;            ///< 最大残差 ≤ tolMs → 已对齐
+        /// 残差能被一条直线解释（=纯偏移/速率误差，重拟合可修）
+        bool   affineFixable = false;
+        double maxResidualAfterAffineMs = 0.0;  ///< 扣掉最佳直线后还剩多少
+    };
+
+    /**
+     * @brief 用一组测点复核 cal（residual = 画面墙钟 − 模型换算值）。
+     *
+     * 判据：
+     * - aligned        : 最大 |残差| ≤ tolMs
+     * - affineFixable  : 残差对 streamMs 做最小二乘后，扣掉直线仍 ≤ tolMs
+     *                    （说明只是偏移/速率没校准 → 重拟合即可）
+     * - 二者皆假       : 残差不成直线 → 分段跳变/变速嫌疑 → 建议分段重建
+     */
+    static VerifyReport verifyAgainst(const TimeCalibration &cal,
+                                      const QVector<Sample> &samples,
+                                      qint64 tolMs = 1000);
+
     /// 拟合警告（C1：类型化，UI 负责映射 i18n 文案，domain 不放用户文本）
     enum class FitWarning { None, OutlierSuspected, RateInsane };
 

@@ -186,6 +186,36 @@ void CalibrationService::runReconstruction(const QString &videoPath,
                                 evidenceDirFor(videoPath), roi);
 }
 
+void CalibrationService::runVerify(const QString &videoPath, qint64 durationMs,
+                                  int pointCount, const QRectF &roi)
+{
+    if (videoPath.isEmpty() || isRunning())
+        return;
+    qint64 dur = durationMs;
+    if (dur <= 0 && m_analysisEngine)
+        dur = m_analysisEngine->trustedDurationMs(videoPath);
+    const qint64 streamDur = probeVideoStreamDurationMs(videoPath);
+    if (streamDur > 0 && (dur <= 0 || streamDur < dur))
+        dur = streamDur;
+    if (dur <= 0)
+        return;
+
+    const int n = qBound(4, pointCount, 40);
+    QVector<qint64> positions;
+    const qint64 first = 1000;
+    const qint64 last = qMax<qint64>(first + 2000, dur - 3000);
+    for (int i = 0; i < n; ++i)
+        positions.append(first + (last - first) * i / (n - 1));
+
+    m_pendingVideo = videoPath;
+    m_pendingDurationMs = dur;
+    m_verifyPending = true;
+    QDir().mkpath(evidenceDirFor(videoPath));
+    emit progress(QStringLiteral("verify %1 pts").arg(positions.size()));
+    m_ocrEngine->runAtPositions(videoPath, positions, dur,
+                                evidenceDirFor(videoPath), roi);
+}
+
 void CalibrationService::runQuickCheck(const QString &videoPath,
                                        qint64 durationMs,
                                        const QRectF &roi)
@@ -275,6 +305,16 @@ void CalibrationService::onAtPositionsFinished(
     QVector<TimeCalibration::Sample> samples_used = samples;
     if (m_tickStage == TickStage::Anchors) {
         onTickAnchorsFinished(samples);
+        return;
+    }
+    if (m_verifyPending) {
+        m_verifyPending = false;
+        auto sorted = samples_used;
+        std::sort(sorted.begin(), sorted.end(),
+                  [](const TimeCalibration::Sample &a, const TimeCalibration::Sample &b) {
+                      return a.streamMs < b.streamMs;
+                  });
+        emit verifyReady(video, sorted);
         return;
     }
     if (m_quickPending) {

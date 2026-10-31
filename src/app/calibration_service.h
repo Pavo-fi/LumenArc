@@ -59,6 +59,10 @@ public:
     /// 供校时窗口智能推荐（正常→① 自动校时；变速→⑤ 时间重建）。
     /// v1.2.2：时长足够时增采中点做三点共线校验（第三点确认）——
     /// 首尾任一点被 OCR 错读会误判变速 → 白跑数分钟重建。
+    /// v2.5 ②：多点复核（「精确校准」）——片内均匀取 N 点逐点读数，
+    /// 结果经 verifyReady 回传，由对话框与现有模型比残差。
+    void runVerify(const QString &videoPath, qint64 durationMs, int pointCount,
+                   const QRectF &roi);
     void runQuickCheck(const QString &videoPath, qint64 durationMs,
                        const QRectF &roi = QRectF());
 
@@ -119,6 +123,9 @@ signals:
     /// 秒级预检完成：overallRate 首尾速率；suspicious = 疑似变速；
     /// ocrSuspect = 第三点确认失败（三点不成直线，首尾/中点任一点疑似错读，
     /// 时间不可信，调用方应拒绝自动路由并提示重新框选）
+    /// 多点复核完成（按 streamMs 升序）
+    void verifyReady(const QString &videoPath,
+                     const QVector<TimeCalibration::Sample> &samples);
     void quickCheckReady(const QString &videoPath, double overallRate,
                          bool suspicious, bool ocrSuspect);
     /// v1.12.5 校时照片识别完成（转发引擎；ok=false 时 error 可读）
@@ -158,6 +165,7 @@ private:
     // 时间重建状态（两级采样）
     ReconStage m_reconStage = ReconStage::None;
     QVector<TimeCalibration::Sample> m_reconSamples;  ///< 粗采样+加密测点累积
+    bool m_verifyPending = false;      ///< 多点复核进行中（结果走 verifyReady）
     bool m_quickPending = false;   ///< 秒级预检进行中
 
     // P-98 秒级跳变对齐状态
