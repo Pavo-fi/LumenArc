@@ -111,13 +111,14 @@ TimeSettingsDialog::TimeSettingsDialog(const QString &videoPath,
 void TimeSettingsDialog::buildUi()
 {
     auto *lay = new QVBoxLayout(this);
+    lay->setContentsMargins(12, 10, 12, 10);
+    lay->setSpacing(8);
 
     // ---- 头部：视频与当前状态 ----
-    m_videoLabel = new QLabel(QStringLiteral("📹 %1\n%2 %3")
-        .arg(QFileInfo(m_videoPath).fileName())
-        .arg(lang("播放头 ", "Playhead "))
-        .arg(fmtStreamMs(m_currentPosMs)), this);
+    // v2.5：去 emoji；文件名一行加粗，播放头一行小灰（层级清楚）
+    m_videoLabel = new QLabel(this);
     m_videoLabel->setWordWrap(true);
+    m_videoLabel->setTextFormat(Qt::RichText);
     lay->addWidget(m_videoLabel);
 
     m_workingSummary = new QLabel(this);
@@ -141,9 +142,11 @@ void TimeSettingsDialog::buildUi()
     // ---- 第 1 步：自动校时 ----
     auto *grpGo = new QGroupBox(lang("① 自动校时", "① Auto calibrate"), this);
     auto *gg = new QVBoxLayout(grpGo);
+    gg->setContentsMargins(10, 6, 10, 10);
+    gg->setSpacing(6);
     auto *goRow = new QHBoxLayout();
     m_goBtn = new QPushButton(lang("开始", "Start"), this);
-    m_goBtn->setMinimumHeight(44);
+    m_goBtn->setMinimumHeight(36);
     m_goBtn->setStyleSheet(QStringLiteral(
         "QPushButton { font-size:13px; font-weight:600; }"));
     m_cancelBtn = new QPushButton(lang("取消", "Cancel"), this);
@@ -152,10 +155,38 @@ void TimeSettingsDialog::buildUi()
     m_roiBtn->setToolTip(lang(
         "在画面上框住时间戳（识别更准）。同一摄像头只需框一次，之后自动复用。",
         "Box the timestamp on screen for better OCR. Set once per camera."));
+    m_moreBtn = new QToolButton(this);
+    m_moreBtn->setCheckable(true);
+    m_moreBtn->setText(lang("更多 ▾", "More ▾"));
+    m_moreBtn->setFocusPolicy(Qt::NoFocus);
+    m_moreBtn->setCursor(Qt::PointingHandCursor);
+    m_moreBtn->setToolTip(lang("手动录入 / 时间重建 / 秒级精细对齐 / 测点明细",
+                               "Manual entry / rebuild / second-level align / samples"));
+    m_moreBtn->setStyleSheet(QStringLiteral(
+        "QToolButton{background:transparent;color:%1;border:1px solid %2;"
+        "border-radius:5px;padding:4px 10px;font-size:11px;}"
+        "QToolButton:hover{color:%3;border-color:%3;}"
+        "QToolButton:checked{color:%3;border-color:%3;}")
+        .arg(Theme::TextSecond, Theme::Border, Theme::Accent));
+
     goRow->addWidget(m_goBtn, 3);
-    goRow->addWidget(m_cancelBtn, 1);
-    goRow->addWidget(m_roiBtn, 1);
+    goRow->addWidget(m_cancelBtn, 2);
+    goRow->addWidget(m_roiBtn, 2);
+    goRow->addWidget(m_moreBtn, 0);
     gg->addLayout(goRow);
+
+    // v2.5：「更多」抽屉——长尾能力（手动录入/重建/秒级对齐/测点明细）默认收起
+    m_moreBox = new QWidget(this);
+    auto *moreLay = new QVBoxLayout(m_moreBox);
+    moreLay->setContentsMargins(0, 2, 0, 0);
+    moreLay->setSpacing(6);
+    connect(m_moreBtn, &QToolButton::toggled, this, [this](bool on) {
+        if (!m_moreBox)
+            return;
+        m_moreBox->setVisible(on);
+        if (m_moreBtn)
+            m_moreBtn->setText(on ? lang("更多 ▴", "More ▴") : lang("更多 ▾", "More ▾"));
+    });
 
     // ---- 第 1 步的手动出路（v1.18.3 简化版）----
     // 背景：自动 OCR 对某些 OSD 版式天然无效（如“今日水印相机”：时分 19:32 +
@@ -286,9 +317,10 @@ void TimeSettingsDialog::buildUi()
     m_manualResultLabel->hide();
     mb->addWidget(m_manualResultLabel);
 
-    gg->addWidget(manualBox);
+    moreLay->addWidget(manualBox);
     m_progressLabel = new QLabel(this);
-    m_progressLabel->setStyleSheet(QStringLiteral("color:%1;").arg(Theme::TextSecond));
+    m_progressLabel->setStyleSheet(QStringLiteral("color:%1;font-size:11px;")
+                                       .arg(Theme::TextSecond));
     gg->addWidget(m_progressLabel);
     // 结果（GO 完成后出现）
     m_resultLabel = new QLabel(lang(
@@ -316,8 +348,8 @@ void TimeSettingsDialog::buildUi()
         "QFrame#verifyBar QLabel { border:0; background:transparent; }")
         .arg(Theme::BgCard, Theme::Border));
     auto *vb = new QHBoxLayout(m_verifyBar);
-    vb->setContentsMargins(10, 8, 10, 8);
-    vb->setSpacing(8);
+    vb->setContentsMargins(8, 6, 8, 6);
+    vb->setSpacing(6);
     m_verifyHint = new QLabel(m_verifyBar);
     m_verifyHint->setWordWrap(true);
     m_verifyHint->setStyleSheet(QStringLiteral("color:%1;").arg(Theme::TextSecond));
@@ -352,7 +384,8 @@ void TimeSettingsDialog::buildUi()
     });
     connect(m_verifyBtn, &QPushButton::clicked, this, &TimeSettingsDialog::onVerifyClicked);
     auto *rr = new QHBoxLayout();
-    m_detailsBtn = new QPushButton(lang("查看细节 ▸", "Details ▸"), this);
+    // 结果工具行（明细/重建/秒级/使用）也进抽屉：主路径只留「开始」
+    m_detailsBtn = new QPushButton(lang("测点明细 ▸", "Samples ▸"), this);
     m_detailsBtn->setEnabled(false);
     // v1.18.x：整片一致的变速件（平台导出加速/抽帧）默认走「按此倍率校时」快路；
     // 需要分段精修时才手动起重建（长文件重建可达数十分钟——OCR 逐点 ~45s）
@@ -381,7 +414,7 @@ void TimeSettingsDialog::buildUi()
     rr->addWidget(m_reconBtn);
     rr->addStretch(1);
     rr->addWidget(m_useBtn);
-    gg->addLayout(rr);
+    moreLay->addLayout(rr);
     // 细节折叠容器
     m_detailsBox = new QWidget(this);
     auto *gd = new QVBoxLayout(m_detailsBox);
@@ -409,7 +442,9 @@ void TimeSettingsDialog::buildUi()
     m_noDriftCheck->setObjectName(QStringLiteral("noDriftCheck"));   // v1.18.x：ui_chain 回归锁定位用
     gd->addWidget(m_noDriftCheck);
     m_detailsBox->hide();
-    gg->addWidget(m_detailsBox);
+    moreLay->addWidget(m_detailsBox);
+    m_moreBox->hide();          // 抽屉默认收起
+    gg->addWidget(m_moreBox);
     lay->addWidget(grpGo);
 
     // ---- 第 2 步：对真实时间（北京时间，可选；v1.12.5 重做）----
@@ -418,9 +453,17 @@ void TimeSettingsDialog::buildUi()
     //   ① 校时图片框选 OCR（一张图两个框：监控主机时间 / 北京时间，自动算偏差）
     //   ② 手动输入两个时间（自动算偏差）
     //   ③ 直接输入偏移量「监控主机时间比北京时间 快/慢 X日X时X分X秒」
-    auto *grpTruth = new QGroupBox(lang("② 对北京时间（可选）",
-                                        "② Align to Beijing time (optional)"), this);
-    auto *gt = new QVBoxLayout(grpTruth);
+    m_grpTruth = new QGroupBox(lang("② 对北京时间（可选）",
+                                    "② Align to Beijing time (optional)"), this);
+    // v2.5：可折叠（勾选=展开），默认收起；第 1 步没完成时整体隐藏
+    m_grpTruth->setCheckable(true);
+    m_grpTruth->setChecked(false);
+    m_grpTruth->setStyleSheet(QStringLiteral(
+        "QGroupBox{font-weight:600;} QGroupBox::title{color:%1;}")
+        .arg(Theme::TextPrimary));
+    auto *gt = new QVBoxLayout(m_grpTruth);
+    gt->setContentsMargins(10, 6, 10, 10);
+    gt->setSpacing(6);
     auto *truthExplain = new QLabel(lang(
         "推荐把屏幕与标准时钟同框拍照", "Recommended: photo the screen with a clock"), this);
     truthExplain->setWordWrap(true);
@@ -449,6 +492,33 @@ void TimeSettingsDialog::buildUi()
         m_truthPhotoBtn->setToolTip(lang("OCR 引擎不可用", "OCR engine unavailable"));
     photoRow->addWidget(m_truthPhotoBtn, 1);
     gt->addLayout(photoRow);
+
+    // v2.5：其余两种方式收成两个互斥开关（默认都收起）——
+    // 原来三种方式垂直堆叠，一展开就是半屏（用户：排版还是不好）
+    auto *wayRow = new QHBoxLayout();
+    wayRow->setSpacing(6);
+    const QString wayCss = QStringLiteral(
+        "QToolButton{background:transparent;color:%1;border:1px solid %2;"
+        "border-radius:5px;padding:4px 10px;font-size:11px;}"
+        "QToolButton:hover{color:%3;border-color:%3;}"
+        "QToolButton:checked{color:%3;border-color:%3;background:%4;}")
+        .arg(Theme::TextSecond, Theme::Border, Theme::Accent, Theme::BgCard);
+    m_twoWayBtn = new QToolButton(this);
+    m_twoWayBtn->setText(lang("两点输入 ▾", "Two points ▾"));
+    m_twoWayBtn->setCheckable(true);
+    m_twoWayBtn->setFocusPolicy(Qt::NoFocus);
+    m_twoWayBtn->setCursor(Qt::PointingHandCursor);
+    m_twoWayBtn->setStyleSheet(wayCss);
+    m_offWayBtn = new QToolButton(this);
+    m_offWayBtn->setText(lang("直接输偏移 ▾", "Direct offset ▾"));
+    m_offWayBtn->setCheckable(true);
+    m_offWayBtn->setFocusPolicy(Qt::NoFocus);
+    m_offWayBtn->setCursor(Qt::PointingHandCursor);
+    m_offWayBtn->setStyleSheet(wayCss);
+    wayRow->addWidget(m_twoWayBtn, 0);
+    wayRow->addWidget(m_offWayBtn, 0);
+    wayRow->addStretch(1);
+    gt->addLayout(wayRow);
 
     // 方式二：手动输入两个时间（自动算偏差）
     auto *grid = new QGridLayout();
@@ -487,12 +557,19 @@ void TimeSettingsDialog::buildUi()
     grid->addWidget(m_clearTruthBtn = new QPushButton(
                         lang("清除偏移", "Clear"), this), 5, 1);
     m_clearTruthBtn->setObjectName(QStringLiteral("clearTruthBtn"));
-    gt->addLayout(grid);
+    m_twoBox = new QWidget(this);
+    m_twoBox->setLayout(grid);          // 整块接管（含标题与两行输入）
+    m_twoBox->hide();
+    gt->addWidget(m_twoBox);
 
     // 方式三：直接输入偏移量「比北京时间 快/慢 X日X时X分X秒」
     auto *offTitle = new QLabel(lang("直接输偏移：", "Direct offset:"), this);
     offTitle->setStyleSheet(QStringLiteral("font-weight:bold;"));
-    gt->addWidget(offTitle);
+    m_offBox = new QWidget(this);
+    auto *offLay = new QVBoxLayout(m_offBox);
+    offLay->setContentsMargins(0, 0, 0, 0);
+    offLay->setSpacing(4);
+    offLay->addWidget(offTitle);
     auto *offRow = new QHBoxLayout();
     offRow->addWidget(new QLabel(lang("监控主机时间比北京时间",
                                       "Recorder clock is"), this));
@@ -523,13 +600,31 @@ void TimeSettingsDialog::buildUi()
     adoptOffBtn->setObjectName(QStringLiteral("adoptManualOffsetBtn"));
     offRow->addWidget(adoptOffBtn);
     offRow->addStretch(1);
-    gt->addLayout(offRow);
+    offLay->addLayout(offRow);
 
     m_truthNoteEdit = new QLineEdit(this);
     m_truthNoteEdit->setPlaceholderText(
         lang("备注（留档用）", "Note (for the record)"));
-    gt->addWidget(m_truthNoteEdit);
-    lay->addWidget(grpTruth);
+    offLay->addWidget(m_truthNoteEdit);
+    m_offBox->hide();
+    gt->addWidget(m_offBox);
+
+    // 两个开关互斥：点一个就关另一个
+    connect(m_twoWayBtn, &QToolButton::toggled, this, [this](bool on) {
+        if (on && m_offWayBtn)
+            m_offWayBtn->setChecked(false);
+        if (m_twoBox)
+            m_twoBox->setVisible(on);
+    });
+    connect(m_offWayBtn, &QToolButton::toggled, this, [this](bool on) {
+        if (on && m_twoWayBtn)
+            m_twoWayBtn->setChecked(false);
+        if (m_offBox)
+            m_offBox->setVisible(on);
+    });
+    lay->addWidget(m_grpTruth);
+    // v2.5：内容贴顶——QLabel 默认纵向可拉伸，窗口一高整页就被均匀拉开（看着很散）
+    lay->addStretch(1);
 
     connect(takeCurBtn, &QPushButton::clicked, this, [this]() {
         if (m_working.isValid() && m_working.dateKnown)
@@ -662,6 +757,20 @@ void TimeSettingsDialog::refreshWorkingSummary()
             text += lang(" · 北京 %1", " · Beijing %1")
                 .arg(fmtOffset(m_working.truthOffsetMs));
         m_workingSummary->setText(text);
+    }
+    // v2.5：② 对北京时间 —— 第 1 步完成前整体隐藏，完成后按折叠态显示
+    if (m_grpTruth) {
+        const bool ready = (m_goStage == GoStage::Done) && m_working.isValid();
+        m_grpTruth->setVisible(ready);
+        const QString suffix = m_working.truthSet
+            ? QStringLiteral("  ") + TruthPhotoConfirmDialog::fmtOffsetVerbose(
+                  m_working.truthOffsetMs)
+            : lang("  未对时", "  not aligned");
+        m_grpTruth->setTitle((m_working.truthSet
+                                  ? lang("② 北京时间", "② Beijing time")
+                                  : lang("② 对北京时间（可选）",
+                                         "② Align to Beijing time (optional)"))
+                             + suffix);
     }
     // 第 1 步完成后的「拖浮标核对」提醒条（v2.5）
     refreshVerifyBar();
@@ -1826,11 +1935,12 @@ void TimeSettingsDialog::setPlayhead(qint64 ms)
 void TimeSettingsDialog::refreshPlayheadViews()
 {
     if (m_videoLabel) {
-        m_videoLabel->setText(QStringLiteral("📹 %1")
-            .arg(QFileInfo(m_videoPath).fileName())
-            + QLatin1Char('\n')
-            + lang("播放头 ", "Playhead ")
-            + fmtStreamMs(m_currentPosMs));
+        m_videoLabel->setText(QStringLiteral(
+            "<div style='font-size:12px;font-weight:600;color:%1;'>%2</div>"
+            "<div style='font-size:11px;color:%3;'>%4 %5</div>")
+            .arg(Theme::TextPrimary, QFileInfo(m_videoPath).fileName().toHtmlEscaped(),
+                 Theme::TextMuted,
+                 lang("播放头", "Playhead"), fmtStreamMs(m_currentPosMs)));
     }
     if (!m_working.isValid() || !m_working.dateKnown) {
         if (m_monitorTimeLabel)

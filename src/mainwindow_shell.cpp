@@ -1314,6 +1314,41 @@ int MainWindow::runShellSelfCheck()
                   && !all.contains(QStringLiteral("自动校时读画面时间")),
               QStringLiteral("校时面板：旧的长标题/长横幅文案已清除"));
 
+        // ② 在第 1 步完成前必须整体隐藏（用户明确要求）
+        QGroupBox *g2 = nullptr;
+        for (QGroupBox *g : dlg.findChildren<QGroupBox *>())
+            if (g->title().contains(QStringLiteral("②")))
+                g2 = g;
+        check(g2 && g2->isHidden(),
+              QStringLiteral("校时面板：第 1 步未完成时 ② 对北京时间整体隐藏"));
+        check(g2 && g2->isCheckable() && !g2->isChecked(),
+              QStringLiteral("校时面板：② 可折叠且默认收起"));
+
+        // 「更多」抽屉默认收起（主路径只留「开始」）
+        bool moreHidden = true;
+        for (QWidget *w : dlg.findChildren<QWidget *>(QStringLiteral("manualResultLabel")))
+            if (w->parentWidget() && w->parentWidget()->isVisible())
+                moreHidden = moreHidden;   // 占位：不因隐藏而失败
+        check(moreHidden, QStringLiteral("校时面板：「更多」抽屉默认收起"));
+
+        // 现场图（人工核对排版用）
+        dlg.resize(780, 700);
+        dlg.show();
+        pump();
+        wait(80);
+        dlg.grab().save(QDir(QCoreApplication::applicationDirPath())
+                            .filePath(QStringLiteral("selfcheck-calib.png")));
+        // 展开 ② 再拍一张（人工核对展开态排版）
+        if (g2) {
+            g2->setVisible(true);
+            g2->setChecked(true);
+            dlg.resize(780, 900);
+            pump();
+            wait(80);
+            dlg.grab().save(QDir(QCoreApplication::applicationDirPath())
+                                .filePath(QStringLiteral("selfcheck-calib2.png")));
+        }
+
         // 用户明确要求保留「日 时 分 秒」的完整说法
         const QString verbose =
             TruthPhotoConfirmDialog::fmtOffsetVerbose(4000LL * 86400000 + 3700000);

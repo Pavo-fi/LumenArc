@@ -30,6 +30,7 @@ class QLineEdit;
 class QCheckBox;
 class QComboBox;
 class QProgressBar;
+class QGroupBox;
 class QSpinBox;
 class QToolButton;
 class QWidget;
@@ -194,6 +195,13 @@ private:
     bool m_fitPending = false;
     GoStage m_goStage = GoStage::Idle;
     QProgressBar *m_progressBar = nullptr;
+    QGroupBox *m_grpTruth = nullptr;     ///< ② 对北京时间（第 1 步完成前整体隐藏）
+    QWidget *m_moreBox = nullptr;        ///< 「更多」抽屉（手动录入/重建/细节）
+    QToolButton *m_moreBtn = nullptr;
+    QToolButton *m_twoWayBtn = nullptr;  ///< ②「两点输入」开关（互斥）
+    QToolButton *m_offWayBtn = nullptr;  ///< ②「直接输偏移」开关（互斥）
+    QWidget *m_twoBox = nullptr;
+    QWidget *m_offBox = nullptr;
     QWidget *m_verifyBar = nullptr;      ///< 第 1 步后的核对提醒条
     QLabel *m_verifyHint = nullptr;
     QPushButton *m_verifyOkBtn = nullptr;
