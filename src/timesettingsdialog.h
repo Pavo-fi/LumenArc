@@ -210,6 +210,7 @@ private:
     QString m_progressKey;               ///< 阶段键（数字归一化），变更即重置 T0
     bool m_alignedConfirmed = false;     ///< 用户已确认「对上了」→ 本会话不再提示
     bool m_verifyRunning = false;        ///< 多点复核进行中
+    bool m_ranThisSession = false;       ///< 本次打开后是否真跑过（重开已校时视频不算）
 
     // UI
     QLabel *m_videoLabel = nullptr;

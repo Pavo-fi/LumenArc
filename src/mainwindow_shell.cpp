@@ -1329,6 +1329,37 @@ int MainWindow::runShellSelfCheck()
                   && !all.contains(QStringLiteral("自动校时读画面时间")),
               QStringLiteral("校时面板：旧的长标题/长横幅文案已清除"));
 
+        // 已校时的视频重新打开 → 直接是「已完成」态，② 立刻可用（用户实测反馈：
+        // 之前重开会话会被当成「第一步没做」，② 又藏起来、按钮还写「开始」）
+        {
+            TimeCalibration done;
+            done.source = TimeCalibration::Source::Ocr;
+            done.dateKnown = true;
+            done.offsetMs = 1789883282000;
+            done.rate = 1.0;
+            TimeSettingsDialog dlg2(QString(), 0, 60000, done, QString(), nullptr, this);
+            dlg2.show();
+            pump();
+            QGroupBox *g2b = nullptr;
+            for (QGroupBox *g : dlg2.findChildren<QGroupBox *>())
+                if (g->title().contains(QStringLiteral("②")))
+                    g2b = g;
+            check(g2b && g2b->isVisible() && g2b->isChecked(),
+                  QStringLiteral("重开已校时视频：② 对北京时间 立刻可见且已展开"));
+            bool hasRerun = false;   // 注意：② 里也有含「校时」的按钮，按完全匹配找
+            for (QPushButton *b : dlg2.findChildren<QPushButton *>())
+                if (b->text() == QStringLiteral("重新校时"))
+                    hasRerun = true;
+            check(hasRerun,
+                  QStringLiteral("重开已校时视频：主按钮显示「重新校时」而不是「开始」"));
+            QStringList tl;
+            for (QLabel *l : dlg2.findChildren<QLabel *>())
+                tl << l->text();
+            check(tl.join(QLatin1Char(' ')).contains(QStringLiteral("已完成")),
+                  QStringLiteral("重开已校时视频：结果行直接显示「已完成」"));
+            dlg2.close();
+        }
+
         // ② 在第 1 步完成前必须整体隐藏（用户明确要求）
         QGroupBox *g2 = nullptr;
         for (QGroupBox *g : dlg.findChildren<QGroupBox *>())

@@ -85,6 +85,24 @@ TimeSettingsDialog::TimeSettingsDialog(const QString &videoPath,
     setWindowFlags(windowFlags() | Qt::WindowMinimizeButtonHint
                    | Qt::WindowMaximizeButtonHint);
     buildUi();
+    // v2.5d：这支视频**已经校过时** → 直接进「已完成」态：
+    //   · GO 按钮显示「重新校时」（而不是让人以为要从头再来）
+    //   · ② 对北京时间 立刻可用（它的显隐看 m_working.isValid，不看本轮 GoStage）
+    //   · 核对提醒条不重复弹（用户上一轮已经确认过）
+    if (m_working.isValid()) {
+        m_goStage = GoStage::Done;
+        setGoBusy(false, QString());
+        if (m_resultLabel) {
+            m_resultLabel->setText(
+                lang(QStringLiteral("✓ 已完成 · %1 个取样点%2"),
+                     QStringLiteral("✓ Done · %1 samples%2"))
+                    .arg(m_working.samples.size())
+                    .arg(m_working.rateApplied
+                             ? lang(QStringLiteral(" · 已修正漂移"),
+                                    QStringLiteral(" · drift corrected"))
+                             : QString()));
+        }
+    }
     refreshWorkingSummary();
 
     if (m_service) {
@@ -756,7 +774,7 @@ void TimeSettingsDialog::refreshWorkingSummary()
                     && smp.conf < TimeCalibration::kRateFitMinConf)
                     ++lowConf;
             text += lowConf > 0
-                ? lang("；测得漂移 %1 秒/天但**未采用**（%2 个低置信测点不参与速率判定）",
+                ? lang("；测得漂移 %1 秒/天但未采用（%2 个低置信测点不参与速率判定）",
                        "; measured drift %1 s/day NOT applied (%2 low-confidence "
                        "sample(s) excluded from rate)")
                       .arg(m_working.driftSecondsPerDay(), 0, 'f', 1).arg(lowConf)
@@ -778,7 +796,7 @@ void TimeSettingsDialog::refreshWorkingSummary()
     }
     // v2.5：② 对北京时间 —— 第 1 步完成前整体隐藏，完成后按折叠态显示
     if (m_grpTruth) {
-        const bool ready = (m_goStage == GoStage::Done) && m_working.isValid();
+        const bool ready = m_working.isValid();   // 已校时 → ② 就该可用（重开也成立）
         if (ready && m_grpTruth->isHidden())
             m_grpTruth->setChecked(true);   // 出现即展开（收起态会禁用子控件）
         m_grpTruth->setVisible(ready);
@@ -1538,8 +1556,9 @@ void TimeSettingsDialog::refreshVerifyBar()
 {
     if (!m_verifyBar)
         return;
-    const bool show = (m_goStage == GoStage::Done) && m_working.isValid()
-                      && !m_alignedConfirmed && !m_verifyRunning;
+    const bool show = m_ranThisSession && (m_goStage == GoStage::Done)
+                      && m_working.isValid() && !m_alignedConfirmed
+                      && !m_verifyRunning;
     if (show && m_verifyHint)
         m_verifyHint->setText(lang(
             QStringLiteral("请拖动时间轴浮标核对：画面时间与识别时间是否一致？"),
@@ -1908,9 +1927,11 @@ void TimeSettingsDialog::setGoBusy(bool busy, const QString &stageText)
         m_goBtn->setText(stageText);
     } else {
         m_goBtn->setText(m_goStage == GoStage::Done
-            ? lang("✓ 完成（可重新校时）", "✓ Done (re-run)")
-            : lang("自动校时", "Auto calibrate"));
+            ? lang("重新校时", "Re-run")
+            : lang("开始", "Start"));
     }
+    if (busy)
+        m_ranThisSession = true;      // 本次打开后真跑过 → 完成后才提示核对
     if (busy && m_verifyBar)
         m_verifyBar->hide();          // 跑任务时先收起来，出结果后再按需显示
     if (busy)
