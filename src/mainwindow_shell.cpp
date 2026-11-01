@@ -25,6 +25,7 @@
 #include "theme.h"
 #include "timesettingsdialog.h"
 #include "calibphotodialog.h"
+#include "app/analysis_task_service.h"
 #include "app/calibration_service.h"
 #include "domain/time_calibration.h"
 #include "ui/app_state.h"
@@ -173,6 +174,23 @@ void MainWindow::setupShell()
     // 底：统一任务带
     m_taskBar = new ui::TaskBar(central);
     lay->addWidget(m_taskBar, 0);
+    // v2.5e：上拉列表里每条任务的 ✕ → 取消对应服务
+    connect(m_taskBar, &ui::TaskBar::cancelRequested, this, [this](int id) {
+        if (id == m_calibTaskId) {
+            if (m_calibrationService)
+                m_calibrationService->cancel();
+            finishCalibrationTask(false, lang(QStringLiteral("已取消"),
+                                              QStringLiteral("Cancelled")));
+            return;
+        }
+        for (auto it = m_anaTaskIds.constBegin(); it != m_anaTaskIds.constEnd(); ++it) {
+            if (it.value() == id) {
+                if (m_taskService)
+                    m_taskService->cancel();
+                return;
+            }
+        }
+    });
 
     // v2.0：底部三区 —— 左：降噪（有音频才显）· 中：播放控制 · 右：快照 + 任务
     auto *nrBar = new QWidget(m_taskBar);
@@ -1230,6 +1248,37 @@ int MainWindow::runShellSelfCheck()
         pump(); wait(250);
         m_chartCollapseBtn->click();
         pump(); wait(250);
+    }
+
+    // 4c4d. 任务带上拉列表里的 ✕ 要能取消对应任务（校时 / 分析各走各的服务）
+    {
+        int calibId = m_taskBar->addTask(QStringLiteral("校时任务"));
+        m_calibTaskId = calibId;
+        bool routed = false;
+        QMetaObject::Connection con = connect(
+            m_taskBar, &ui::TaskBar::cancelRequested, this,
+            [&routed, calibId](int id) { if (id == calibId) routed = true; });
+        emit m_taskBar->cancelRequested(calibId);
+        disconnect(con);
+        check(routed, QStringLiteral("任务带：✕ 带上任务 id（可路由到对应服务）"));
+        m_taskBar->removeTask(calibId);
+        m_calibTaskId = -1;
+    }
+
+    // 4c4c. 任务带上拉菜单（多任务堆叠）
+    {
+        const int a = m_taskBar->addTask(QStringLiteral("任务A"));
+        const int b = m_taskBar->addTask(QStringLiteral("任务B"));
+        m_taskBar->setTaskProgress(a, 40, QStringLiteral("4/10"));
+        m_taskBar->setTaskProgress(b, 10);
+        pump();
+        check(m_taskBar->activeCount() >= 2,
+              QStringLiteral("任务带：两个任务同时登记（堆叠前提）"));
+        auto *more = m_taskBar->findChild<QToolButton *>();
+        Q_UNUSED(more);
+        m_taskBar->removeTask(a);
+        m_taskBar->removeTask(b);
+        check(m_taskBar->activeCount() == 0, QStringLiteral("任务带：清理后归零"));
     }
 
     // 4c4b. 校时后台结果暂存（切走视频不丢结果）

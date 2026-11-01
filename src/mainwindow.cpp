@@ -1471,8 +1471,23 @@ void MainWindow::onMicroDiffCurve()
 
 
 
+/// v2.5e：任务带的显示名（任务带只显示第一条，其余进上拉列表）
+static QString taskBarTitle(const QString &taskId)
+{
+    if (taskId == AnalysisChannels::audio())
+        return lang(QStringLiteral("音频分析"), QStringLiteral("Audio analysis"));
+    if (taskId == AnalysisChannels::microdiff())
+        return lang(QStringLiteral("微变曲线"), QStringLiteral("Rate curve"));
+    return lang(QStringLiteral("亮度 / 区域量化"),
+                QStringLiteral("Luminance / regions"));
+}
+
 void MainWindow::onTaskStarted(const QString &taskId)
 {
+    // v2.5e：所有分析任务都进任务带（原来只有一条隐藏进度条，用户看不到在跑什么）
+    if (m_taskBar && !m_anaTaskIds.contains(taskId)) {
+        m_anaTaskIds.insert(taskId, m_taskBar->addTask(taskBarTitle(taskId)));
+    }
     // 按钮态复刻旧行为：亮度任务只置灰分析按钮（音频按钮点击会得到
     // "分析正在运行中"提示）；音频任务双按钮都置灰
     if (taskId == AnalysisChannels::audio()) {
@@ -1498,8 +1513,10 @@ void MainWindow::onTaskStarted(const QString &taskId)
 
 void MainWindow::onTaskProgress(const QString &taskId, qreal percent, const QString &detail)
 {
-    Q_UNUSED(taskId);
-    Q_UNUSED(percent);
+    // v2.5e：同步到任务带（detail 直接当右侧备注，例如「已分析 320/900 帧」）
+    if (m_taskBar && m_anaTaskIds.contains(taskId))
+        m_taskBar->setTaskProgress(m_anaTaskIds.value(taskId),
+                                   qBound(0, int(percent), 100), detail);
     // 统一 0~100（Q6 拍板：音频不再映射 70~100）；detail 已按任务语义格式化
     m_statusLabel->setText(detail);
     int newPercent = qBound(0, static_cast<int>(percent), 100);
@@ -1510,6 +1527,9 @@ void MainWindow::onTaskProgress(const QString &taskId, qreal percent, const QStr
 
 void MainWindow::onTaskFinished(const QString &taskId, const AnalysisSnapshot &snapshot)
 {
+    if (m_taskBar && m_anaTaskIds.contains(taskId)) {
+        m_taskBar->finishTask(m_anaTaskIds.take(taskId), true);
+    }
     const AnalysisTaskDesc *desc = TaskRegistry::instance().find(taskId);
 
     m_analyzeBtn->setText(lang("亮度分析", "Luminance"));
@@ -1555,6 +1575,11 @@ void MainWindow::onTaskFinished(const QString &taskId, const AnalysisSnapshot &s
 
 void MainWindow::onTaskFailed(const QString &taskId, const QString &code, const QString &detail)
 {
+    if (m_taskBar && m_anaTaskIds.contains(taskId)) {
+        const int id = m_anaTaskIds.take(taskId);
+        m_taskBar->finishTask(id, false);
+        QTimer::singleShot(5000, this, [this, id]() { m_taskBar->removeTask(id); });
+    }
     const AnalysisTaskDesc *desc = TaskRegistry::instance().find(taskId);
     const QString name = desc ? lang(desc->displayNameZh, desc->displayNameEn) : taskId;
 
@@ -1582,7 +1607,8 @@ void MainWindow::onTaskFailed(const QString &taskId, const QString &code, const 
 
 void MainWindow::onTaskCancelled(const QString &taskId)
 {
-    Q_UNUSED(taskId);
+    if (m_taskBar && m_anaTaskIds.contains(taskId))
+        m_taskBar->finishTask(m_anaTaskIds.take(taskId), true);
     // 取消：仅复位 UI（行为冻结：旧版对取消不弹任何窗）
     m_analyzeBtn->setText(lang("亮度分析", "Luminance"));
     m_analyzeBtn->setEnabled(true);

@@ -12,6 +12,8 @@
 #include <QString>
 
 class QLabel;
+class QToolButton;
+class QFrame;
 class QProgressBar;
 class QPushButton;
 class QHBoxLayout;
@@ -54,6 +56,9 @@ private:
     };
 
     void refresh();
+    /// v2.5e：上拉菜单——同时跑多个任务时，点「共 N 项」向上弹出堆叠列表
+    void togglePopup();
+    void rebuildPopup();
 
     QList<Entry>   m_tasks;
     int            m_nextId = 1;
@@ -65,7 +70,8 @@ private:
     QLabel        *m_pct = nullptr;
     QLabel        *m_eta = nullptr;
     QPushButton   *m_cancel = nullptr;
-    QLabel        *m_more = nullptr;
+    QToolButton   *m_more = nullptr;      ///< 「共 N 项 ▴」（>=2 个任务才显示）
+    QFrame        *m_popup = nullptr;     ///< 上拉堆叠列表（Qt::Popup）
 };
 
 } // namespace ui

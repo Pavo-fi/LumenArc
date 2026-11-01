@@ -11,6 +11,10 @@
 #include <QLabel>
 #include <QProgressBar>
 #include <QPushButton>
+#include <QToolButton>
+#include <QFrame>
+#include <QVBoxLayout>
+#include <QHBoxLayout>
 
 namespace ui {
 
@@ -71,10 +75,19 @@ TaskBar::TaskBar(QWidget *parent)
 
     lay->addStretch(1);
 
-    m_more = new QLabel(this);
-    m_more->setStyleSheet(QStringLiteral("color:%1;background:transparent;")
-                              .arg(Theme::TextMuted));
+    // v2.5e：任务 >=2 时出现「共 N 项 ▴」——点它向上弹出堆叠列表
+    m_more = new QToolButton(this);
+    m_more->setText(QString());
+    m_more->setFocusPolicy(Qt::NoFocus);
+    m_more->setCursor(Qt::PointingHandCursor);
+    m_more->setStyleSheet(QStringLiteral(
+        "QToolButton{background:transparent;color:%1;border:1px solid transparent;"
+        "border-radius:5px;padding:2px 8px;font-size:11px;}"
+        "QToolButton:hover{color:%2;border-color:%3;}")
+        .arg(Theme::TextMuted, Theme::Accent, Theme::Border));
+    m_more->hide();
     lay->addWidget(m_more);
+    connect(m_more, &QToolButton::clicked, this, &TaskBar::togglePopup);
 
     connect(m_cancel, &QPushButton::clicked, this, [this]() {
         if (!m_tasks.isEmpty())
@@ -184,7 +197,9 @@ void TaskBar::refresh()
     m_cancel->setVisible(busy);
 
     if (!busy) {
-        m_more->setText(lang(QStringLiteral("空闲"), QStringLiteral("Idle")));
+        m_more->hide();
+        if (m_popup)
+            m_popup->hide();
         return;
     }
 
@@ -193,10 +208,112 @@ void TaskBar::refresh()
     m_bar->setValue(e.percent);
     m_pct->setText(QStringLiteral("%1%").arg(e.percent));
     m_eta->setText(e.eta);
-    m_more->setText(m_tasks.size() > 1
-                        ? lang(QStringLiteral("另有 %1 个任务").arg(m_tasks.size() - 1),
-                               QStringLiteral("%1 more").arg(m_tasks.size() - 1))
+    const int extra = m_tasks.size() - 1;
+    m_more->setVisible(extra >= 1);
+    m_more->setText(extra >= 1
+                        ? lang(QStringLiteral("共 %1 项 ▴").arg(m_tasks.size()),
+                               QStringLiteral("%1 tasks ▴").arg(m_tasks.size()))
                         : QString());
+    if (m_popup && m_popup->isVisible())
+        rebuildPopup();      // 弹着的时候实时跟着刷新
+}
+
+// ---------------------------------------------------------------------------
+// v2.5e：上拉菜单堆叠显示
+// 同时跑校时 / 音频 / 微变 / ROI 量化时，任务带只显示第一条；其余进这里，
+// 点「共 N 项 ▴」在任务带上方向上弹出，每条一行：标题 + 进度 + 备注 + 取消
+// ---------------------------------------------------------------------------
+void TaskBar::togglePopup()
+{
+    if (m_popup && m_popup->isVisible()) {
+        m_popup->hide();
+        return;
+    }
+    if (!m_popup) {
+        m_popup = new QFrame(this, Qt::Popup);
+        m_popup->setObjectName(QStringLiteral("taskPopup"));
+        m_popup->setStyleSheet(QStringLiteral(
+            "QFrame#taskPopup{background:%1;border:1px solid %2;border-radius:8px;}"
+            "QFrame#taskPopup QLabel{background:transparent;border:0;}")
+            .arg(Theme::BgCard, Theme::Border));
+        auto *v = new QVBoxLayout(m_popup);
+        v->setContentsMargins(10, 8, 10, 8);
+        v->setSpacing(6);
+    }
+    rebuildPopup();
+    const QSize hint = m_popup->sizeHint();
+    m_popup->resize(qMax(340, hint.width()), hint.height());
+    const QPoint anchor = m_more->mapToGlobal(QPoint(m_more->width(), 0));
+    m_popup->move(anchor.x() - m_popup->width(),
+                  anchor.y() - m_popup->height() - 4);   // 向上弹
+    m_popup->show();
+}
+
+void TaskBar::rebuildPopup()
+{
+    if (!m_popup || !m_popup->layout())
+        return;
+    QLayout *v = m_popup->layout();
+    // 清空旧行
+    while (QLayoutItem *it = v->takeAt(0)) {
+        if (QWidget *w = it->widget())
+            w->deleteLater();
+        delete it;
+    }
+    for (const Entry &e : m_tasks) {
+        auto *row = new QWidget(m_popup);
+        auto *hl = new QHBoxLayout(row);
+        hl->setContentsMargins(0, 0, 0, 0);
+        hl->setSpacing(8);
+
+        auto *title = new QLabel(e.title, row);
+        title->setMinimumWidth(120);
+        title->setStyleSheet(QStringLiteral("color:%1;font-size:11px;")
+                                 .arg(Theme::TextPrimary));
+        hl->addWidget(title, 1);
+
+        auto *bar = new QProgressBar(row);
+        bar->setRange(0, 100);
+        bar->setValue(e.percent);
+        bar->setTextVisible(false);
+        bar->setFixedSize(90, 6);
+        bar->setStyleSheet(QStringLiteral(
+            "QProgressBar{background:%1;border:0;border-radius:3px;}"
+            "QProgressBar::chunk{background:%2;border-radius:3px;}")
+            .arg(Theme::BgPanel, Theme::Accent));
+        hl->addWidget(bar, 0);
+
+        auto *pct = new QLabel(QStringLiteral("%1%").arg(e.percent), row);
+        pct->setStyleSheet(QStringLiteral("color:%1;font-size:11px;")
+                               .arg(Theme::TextSecond));
+        pct->setMinimumWidth(38);
+        hl->addWidget(pct, 0);
+
+        if (!e.eta.isEmpty()) {
+            auto *eta = new QLabel(e.eta, row);
+            eta->setStyleSheet(QStringLiteral("color:%1;font-size:11px;")
+                                   .arg(Theme::TextMuted));
+            hl->addWidget(eta, 0);
+        }
+
+        auto *btn = new QToolButton(row);
+        btn->setText(QString(QChar(0x2715)));    // ✕
+        btn->setFocusPolicy(Qt::NoFocus);
+        btn->setCursor(Qt::PointingHandCursor);
+        btn->setToolTip(lang(QStringLiteral("取消这个任务"),
+                             QStringLiteral("Cancel this task")));
+        btn->setStyleSheet(QStringLiteral(
+            "QToolButton{background:transparent;color:%1;border:0;padding:0 4px;}"
+            "QToolButton:hover{color:%2;}")
+            .arg(Theme::TextMuted, Theme::Accent));
+        const int id = e.id;
+        connect(btn, &QToolButton::clicked, this, [this, id]() {
+            emit cancelRequested(id);
+        });
+        hl->addWidget(btn, 0);
+
+        v->addWidget(row);
+    }
 }
 
 } // namespace ui

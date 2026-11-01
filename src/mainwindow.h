@@ -495,6 +495,8 @@ protected:
     void applyPendingCalibration();
     int  m_calibTaskId = -1;      ///< 任务带里的校时任务 id（-1=无）
     int  m_calibTaskPct = 0;
+    /// v2.5e：分析类任务（亮度/音频/微变/ROI 量化）在任务带里的 id 映射
+    QHash<QString, int> m_anaTaskIds;
     bool m_leftRatioApplied = false;     ///< 是否已成功落地过一次
     int  m_leftRatioCaseH = 0;           ///< 上次由代码设定的案件坞高度
     int  m_leftRatioTotal = 0;           ///< 上次设定时的两坞总高
