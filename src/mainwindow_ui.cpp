@@ -1440,6 +1440,22 @@ void MainWindow::buildServices()
     // 校时服务（v1.2.0：三点识别/absStart/sidecar 继承；产出仅预填，
     // 「采用」由 TimeSettingsDialog 决定）
     m_calibrationService = new CalibrationService(m_analysisEngine, this);
+    // v2.5c：校时任务进任务带 + 结束收尾（用户反馈：右下角一直「空闲」）
+    connect(m_calibrationService, &CalibrationService::progress,
+            this, &MainWindow::onCalibrationProgress);
+    connect(m_calibrationService, &CalibrationService::threePointReady,
+            this, [this](const QString &, const TimeCalibration &) {
+                finishCalibrationTask(true);
+            });
+    connect(m_calibrationService, &CalibrationService::reconstructionReady,
+            this, [this](const QString &, const TimeCalibration &) {
+                finishCalibrationTask(true);
+            });
+    connect(m_calibrationService, &CalibrationService::failed,
+            this, [this](const QString &, const QString &) {
+                finishCalibrationTask(false,
+                    lang(QStringLiteral("失败"), QStringLiteral("Failed")));
+            });
 
     // 案件管理器（v1.3.0 M2）：唯一持有打开的案件；无案件时所有分流
     // 接口（vlaPathFor/timestampRoiFor…）自动回落独立模式老行为

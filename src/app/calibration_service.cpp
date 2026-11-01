@@ -186,6 +186,29 @@ void CalibrationService::runReconstruction(const QString &videoPath,
                                 evidenceDirFor(videoPath), roi);
 }
 
+bool CalibrationService::takePendingResult(const QString &videoPath,
+                                           TimeCalibration *out)
+{
+    if (!m_hasPendingResult || videoPath.isEmpty())
+        return false;
+    if (!m_pendingResultVideo.isEmpty()
+        && QString::compare(QDir::cleanPath(videoPath),
+                            QDir::cleanPath(m_pendingResultVideo),
+                            Qt::CaseInsensitive) != 0)
+        return false;
+    if (out)
+        *out = m_pendingResultCal;
+    m_hasPendingResult = false;
+    m_pendingResultVideo.clear();
+    return true;
+}
+
+void CalibrationService::clearPendingResult()
+{
+    m_hasPendingResult = false;
+    m_pendingResultVideo.clear();
+}
+
 void CalibrationService::runVerify(const QString &videoPath, qint64 durationMs,
                                   int pointCount, const QRectF &roi)
 {
@@ -461,6 +484,10 @@ void CalibrationService::onAtPositionsFinished(
     const TimeCalibration::FitResult rtGated =
         TimeCalibration::fitRateGated(cal.samples, &lowConf);
     cal.applyFit(rtGated.ok ? rtGated : rtDropped);
+    // v2.5c：先暂存，再通知（对话框在别的视频上时会丢弃通知，暂存不会丢）
+    m_pendingResultVideo = video;
+    m_pendingResultCal = cal;
+    m_hasPendingResult = true;
     emit threePointReady(video, cal);
 }
 
@@ -535,6 +562,9 @@ void CalibrationService::analyzeCoarse()
         }
         m_reconStage = ReconStage::None;
         m_reconSamples.clear();
+        m_pendingResultVideo = m_pendingVideo;
+        m_pendingResultCal = cal;
+        m_hasPendingResult = true;
         emit reconstructionReady(m_pendingVideo, cal);
         return;
     }

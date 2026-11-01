@@ -25,6 +25,7 @@
 #include "theme.h"
 #include "timesettingsdialog.h"
 #include "calibphotodialog.h"
+#include "app/calibration_service.h"
 #include "domain/time_calibration.h"
 #include "ui/app_state.h"
 #include "ui/command_registry.h"
@@ -1231,6 +1232,20 @@ int MainWindow::runShellSelfCheck()
         pump(); wait(250);
     }
 
+    // 4c4b. 校时后台结果暂存（切走视频不丢结果）
+    {
+        using TC = TimeCalibration;
+        TC cal;
+        cal.source = TC::Source::Ocr;
+        cal.dateKnown = true;
+        cal.offsetMs = 1789883282000;
+        cal.rate = 1.0;
+        // 直接验服务层的暂存/取回语义（不依赖真实 OCR）
+        TC got;
+        check(!m_calibrationService->takePendingResult(QStringLiteral("x.mp4"), &got),
+              QStringLiteral("后台结果：没有暂存时取回返回 false"));
+    }
+
     // 4c5. 校时 v2.5：多点复核判据（「精确校准」的判据核心，纯函数）
     {
         using TC = TimeCalibration;
@@ -1321,8 +1336,9 @@ int MainWindow::runShellSelfCheck()
                 g2 = g;
         check(g2 && g2->isHidden(),
               QStringLiteral("校时面板：第 1 步未完成时 ② 对北京时间整体隐藏"));
-        check(g2 && g2->isCheckable() && !g2->isChecked(),
-              QStringLiteral("校时面板：② 可折叠且默认收起"));
+        check(g2 && g2->isCheckable() && g2->isChecked(),
+              QStringLiteral("校时面板：② 可折叠且出现即展开（收起态会禁用子控件，"
+                             "曾导致「第 2 步点不动」）"));
 
         // 「更多」抽屉默认收起（主路径只留「开始」）
         bool moreHidden = true;

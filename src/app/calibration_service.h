@@ -80,6 +80,13 @@ public:
     static bool quickCheckSamplesInconsistent(
         const QVector<TimeCalibration::Sample> &samples);
     void cancel();
+
+    /// v2.5c：后台完成的校时结果暂存 —— 切走视频后结果不再被丢弃，
+    /// 切回来时由主窗口取走应用（只在该视频重新成为当前视频时应用，
+    /// 绝不跨视频写 .vla）。
+    bool takePendingResult(const QString &videoPath, TimeCalibration *out);
+    void clearPendingResult();
+    bool hasPendingResult() const { return m_hasPendingResult; }
     bool isRunning() const;
 
     /// sidecar（<输出>.lumencal.json）继承：读取并构造校时；warning 出参
@@ -165,6 +172,9 @@ private:
     // 时间重建状态（两级采样）
     ReconStage m_reconStage = ReconStage::None;
     QVector<TimeCalibration::Sample> m_reconSamples;  ///< 粗采样+加密测点累积
+    bool m_hasPendingResult = false;     ///< 暂存结果是否有效
+    QString m_pendingResultVideo;        ///< 暂存结果属于哪支视频
+    TimeCalibration m_pendingResultCal;  ///< 暂存的校时模型
     bool m_verifyPending = false;      ///< 多点复核进行中（结果走 verifyReady）
     bool m_quickPending = false;   ///< 秒级预检进行中
 

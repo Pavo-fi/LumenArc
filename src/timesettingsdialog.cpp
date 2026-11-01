@@ -458,11 +458,12 @@ void TimeSettingsDialog::buildUi()
     m_grpTruth = new QGroupBox(lang("② 对北京时间（可选）",
                                     "② Align to Beijing time (optional)"), this);
     // v2.5：可折叠（勾选=展开），默认收起；第 1 步没完成时整体隐藏
+    // v2.5b：checkable 但**默认展开**——收起态下 Qt 会禁用子控件，而自定义
+    // 样式又把标题前的勾选框盖掉了，用户看到「第 2 步点不动」（实测反馈）。
+    // 现在：出现即可用，想收起来可以点标题；不再覆盖 QGroupBox 样式，
+    // 让指示器正常显示。
     m_grpTruth->setCheckable(true);
-    m_grpTruth->setChecked(false);
-    m_grpTruth->setStyleSheet(QStringLiteral(
-        "QGroupBox{font-weight:600;} QGroupBox::title{color:%1;}")
-        .arg(Theme::TextPrimary));
+    m_grpTruth->setChecked(true);
     auto *gt = new QVBoxLayout(m_grpTruth);
     gt->setContentsMargins(10, 6, 10, 10);
     gt->setSpacing(6);
@@ -778,6 +779,8 @@ void TimeSettingsDialog::refreshWorkingSummary()
     // v2.5：② 对北京时间 —— 第 1 步完成前整体隐藏，完成后按折叠态显示
     if (m_grpTruth) {
         const bool ready = (m_goStage == GoStage::Done) && m_working.isValid();
+        if (ready && m_grpTruth->isHidden())
+            m_grpTruth->setChecked(true);   // 出现即展开（收起态会禁用子控件）
         m_grpTruth->setVisible(ready);
         const QString suffix = m_working.truthSet
             ? QStringLiteral("  ") + TruthPhotoConfirmDialog::fmtOffsetVerbose(
@@ -805,6 +808,14 @@ void TimeSettingsDialog::onRunGo()
     if (m_goStage == GoStage::Quick || m_goStage == GoStage::Ocr
         || m_goStage == GoStage::Recon)
         return;
+    // v2.5c：服务是全局单例——另一支视频的校时还在后台跑时，这里点了会被
+    // 静默拒绝（用户看到「点了没反应」）。明说原因。
+    if (m_service->isRunning()) {
+        m_resultLabel->setText(lang(
+            QStringLiteral("另一支视频的校时还在后台运行：等它完成，或点「取消」中止"),
+            QStringLiteral("Another calibration is still running in the background")));
+        return;
+    }
     // 框选就绪待确认：ROI 有效 → 开始校时（「确认并开始校时」按钮语义）
     if (m_goStage == GoStage::Staged) {
         if (m_roi.isValid())

@@ -488,6 +488,13 @@ protected:
     /// v2.4：左侧栏 案件 : 检视器 = 4 : 6（用户指定比例）
     /// force=true 强制按比例摆；false 时若用户手动拖过分隔条则不抢
     void applyLeftColumnRatio(bool force = false);
+    /// v2.5c：校时在任务带（右下角）显示「正在进行 + 进度」，别再一直显示「空闲」
+    void onCalibrationProgress(const QString &stage);
+    void finishCalibrationTask(bool ok, const QString &note = QString());
+    /// v2.5c：切回某支视频时，把它在后台跑完的校时结果取来应用
+    void applyPendingCalibration();
+    int  m_calibTaskId = -1;      ///< 任务带里的校时任务 id（-1=无）
+    int  m_calibTaskPct = 0;
     bool m_leftRatioApplied = false;     ///< 是否已成功落地过一次
     int  m_leftRatioCaseH = 0;           ///< 上次由代码设定的案件坞高度
     int  m_leftRatioTotal = 0;           ///< 上次设定时的两坞总高

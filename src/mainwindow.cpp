@@ -60,6 +60,7 @@
 #include "logindialog.h"
 #include "infrastructure/credential_store.h"
 #include "theme.h"
+#include "ui/task_bar.h"
 
 #include <QListWidget>
 #include <QSplitter>
@@ -562,6 +563,7 @@ void MainWindow::openVideoFile(const QString &filePath)
             // v1.7.1：案件树高亮正在播放的文件
             if (m_caseDock)
                 m_caseDock->setCurrentVideoPath(m_sessionMgr->currentVideoPath());
+            applyPendingCalibration();  // v2.5c：先取回后台完成的校时结果
             refreshCalibrationDock();   // v2.5：校时坞跟着换视频刷新
             onPlay();
             return;
@@ -638,6 +640,7 @@ void MainWindow::openVideoFile(const QString &filePath)
         // v1.7.1：案件树高亮正在播放的文件（无缓存/继承路径同待遇）
         if (m_caseDock)
             m_caseDock->setCurrentVideoPath(m_sessionMgr->currentVideoPath());
+        applyPendingCalibration();      // v2.5c：先取回后台完成的校时结果
         refreshCalibrationDock();       // v2.5：校时坞跟着换视频刷新
         onPlay();
     } else {
@@ -807,6 +810,84 @@ ProjectIO::VlaSaveRequest MainWindow::collectVlaSaveRequest()
 
 
 
+
+void MainWindow::onCalibrationProgress(const QString &stage)
+{
+    if (!m_taskBar)
+        return;
+    // 阶段 → 粗粒度百分比（服务层只有 ocr 是 x/y，其余按阶段估计）
+    int pct = m_calibTaskPct;
+    QString note;
+    bool hasEta = false;
+    if (stage.startsWith(QLatin1String("ocr "))) {
+        const QStringList parts = stage.mid(4).split(QLatin1Char('/'));
+        if (parts.size() == 2) {
+            const int done = parts.at(0).toInt();
+            const int total = qMax(1, parts.at(1).toInt());
+            pct = 10 + 60 * done / total;
+            note = QStringLiteral("%1/%2").arg(done).arg(total);
+            hasEta = true;
+        }
+    } else if (stage == QLatin1String("sampling")) {
+        pct = 5;
+    } else if (stage == QLatin1String("quick check")) {
+        pct = 10;
+    } else if (stage.startsWith(QLatin1String("coarse"))) {
+        pct = 75;
+    } else if (stage.startsWith(QLatin1String("boundary"))
+               || stage.startsWith(QLatin1String("tick anchors"))) {
+        pct = 80;
+    } else if (stage.startsWith(QLatin1String("tick scan"))) {
+        pct = 85;
+    } else if (stage.startsWith(QLatin1String("verify"))) {
+        pct = 50;
+    } else if (stage.startsWith(QLatin1String("date-retry"))
+               || stage.startsWith(QLatin1String("short-hour"))
+               || stage.startsWith(QLatin1String("structured-drop"))
+               || stage.startsWith(QLatin1String("date-sanity"))) {
+        pct = qMax(m_calibTaskPct, 70);
+    }
+    if (pct < m_calibTaskPct)
+        pct = m_calibTaskPct;
+    m_calibTaskPct = pct;
+    if (!hasEta)
+        note = QString();
+    if (m_calibTaskId < 0) {
+        const QString title = m_sessionMgr && !m_sessionMgr->currentVideoPath().isEmpty()
+            ? lang(QStringLiteral("校时 · %1"), QStringLiteral("Calibrate · %1"))
+                  .arg(QFileInfo(m_sessionMgr->currentVideoPath()).fileName())
+            : lang(QStringLiteral("校时"), QStringLiteral("Calibrate"));
+        m_calibTaskId = m_taskBar->addTask(title);
+        m_calibTaskPct = pct;
+    }
+    m_taskBar->setTaskProgress(m_calibTaskId, pct, note);
+}
+
+void MainWindow::finishCalibrationTask(bool ok, const QString &note)
+{
+    if (m_calibTaskId < 0 || !m_taskBar)
+        return;
+    m_taskBar->finishTask(m_calibTaskId, ok, note);
+    m_calibTaskId = -1;
+    m_calibTaskPct = 0;
+}
+
+void MainWindow::applyPendingCalibration()
+{
+    if (!m_calibrationService || !m_sessionMgr)
+        return;
+    TimeCalibration cal;
+    if (!m_calibrationService->takePendingResult(m_sessionMgr->currentVideoPath(), &cal))
+        return;
+    m_calibration = cal;
+    if (m_chartPanel)
+        m_chartPanel->setCalibration(m_calibration);
+    saveCurrentVlaAsync();
+    if (m_caseDock)
+        m_caseDock->refreshTree();
+    showOperationStatus(lang(QStringLiteral("已应用后台完成的校时结果"),
+                             QStringLiteral("Applied the background calibration result")));
+}
 
 void MainWindow::refreshCalibrationDock()
 {
