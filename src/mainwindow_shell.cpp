@@ -1406,6 +1406,19 @@ int MainWindow::runShellSelfCheck()
                 tl << l->text();
             check(tl.join(QLatin1Char(' ')).contains(QStringLiteral("已完成")),
                   QStringLiteral("重开已校时视频：结果行直接显示「已完成」"));
+            bool tickOn = false;
+            for (QPushButton *b : dlg2.findChildren<QPushButton *>())
+                if (b->text().contains(QStringLiteral("秒级精细对齐")) && b->isEnabled())
+                    tickOn = true;
+            check(tickOn,
+                  QStringLiteral("重开已校时视频：秒级精细对齐 可点（此前灰掉，"
+                                 "对漂移不满意却无法动手）"));
+            bool moreOpen = false;
+            for (QToolButton *tb : dlg2.findChildren<QToolButton *>())
+                if (tb->text().contains(QStringLiteral("更多")) && tb->isChecked())
+                    moreOpen = true;
+            check(moreOpen,
+                  QStringLiteral("重开已校时视频：「更多 ▾」默认展开（入口看得见）"));
             dlg2.close();
         }
 

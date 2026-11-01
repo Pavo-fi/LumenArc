@@ -500,6 +500,30 @@ bool CaseManager::assignToGroup(const QString &refId, const QString &groupId,
     return true;
 }
 
+bool CaseManager::removeGroup(const QString &groupId, QString *error)
+{
+    if (!m_open) {
+        if (error) *error = QStringLiteral("没有打开的案件");
+        return false;
+    }
+    for (int i = 0; i < m_meta.cameraGroups.size(); ++i) {
+        const CaseCameraGroup &g = m_meta.cameraGroups[i];
+        if (g.groupId != groupId)
+            continue;
+        if (!g.memberIds.isEmpty()) {
+            if (error)
+                *error = QStringLiteral("机位组里还有 %1 个文件")
+                             .arg(g.memberIds.size());
+            return false;
+        }
+        m_meta.cameraGroups.removeAt(i);
+        setModified();
+        return true;
+    }
+    if (error) *error = QStringLiteral("机位组不存在：%1").arg(groupId);
+    return false;
+}
+
 bool CaseManager::renameGroup(const QString &groupId, const QString &name,
                               QString *error)
 {

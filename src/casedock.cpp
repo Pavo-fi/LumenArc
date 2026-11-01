@@ -778,6 +778,23 @@ void CaseDock::onContextMenu(const QPoint &pos)
     } else if (kind == QLatin1String("camgroup")) {
         menu.addAction(lang("机位组改名…", "Rename group…"), this,
                        [this, id]() { renameGroupFlow(id); });
+        // v2.5f：空机位组可删（此前压根没有删除项，右键只有改名/新建）
+        int members = 0;
+        for (const CaseCameraGroup &g : m_caseManager->meta().cameraGroups)
+            if (g.groupId == id) {
+                members = g.memberIds.size();
+                break;
+            }
+        auto *delAct = menu.addAction(lang("删除机位组…", "Delete group…"), this,
+                                      [this, id]() { deleteGroupFlow(id); });
+        delAct->setEnabled(members == 0);
+        delAct->setToolTip(members == 0
+            ? lang("删掉这个空机位组", "Delete this empty camera group")
+            : lang("组里还有 %1 个文件：先把文件「移到机位组」换到别的组，"
+                   "或「移除出案件」，再来删除", 
+                   "Group still has %1 file(s): move them to another group first")
+                  .arg(members));
+        menu.addSeparator();
         menu.addAction(lang("新建机位组…", "New group…"), this, [this]() {
             bool ok = false;
             const QString name = QInputDialog::getText(this,
@@ -910,6 +927,48 @@ void CaseDock::removeCaseFile(QTreeWidgetItem *item)
             err = lang("无法删除文件", "Cannot delete file");
     }
     if (!err.isEmpty()) {
+        QMessageBox::warning(this, lang("删除失败", "Delete failed"), err);
+        return;
+    }
+    m_caseManager->saveCase(&err);
+    refreshTree();
+}
+
+/// 删除空机位组（组节点右键；非空时菜单项禁用，不做静默连带删除）
+void CaseDock::deleteGroupFlow(const QString &groupId)
+{
+    QString name;
+    int members = 0;
+    for (const CaseCameraGroup &g : m_caseManager->meta().cameraGroups)
+        if (g.groupId == groupId) {
+            name = CaseModel::groupDisplayName(g);
+            members = g.memberIds.size();
+            break;
+        }
+    if (name.isEmpty()) {
+        name = groupId;
+    }
+    if (members > 0) {
+        QMessageBox::warning(this, lang("不能删除", "Cannot delete"),
+            lang("机位组「%1」里还有 %2 个文件，先把它们移到别的组或移出案件。",
+                 "Group \"%1\" still has %2 file(s).")
+                .arg(name).arg(members));
+        return;
+    }
+    QMessageBox box(QMessageBox::Question, lang("删除机位组", "Delete group"),
+                    lang("删除空机位组「%1」？（只删组织关系，不动任何文件）",
+                         "Delete empty group \"%1\"? No files are touched.")
+                        .arg(name),
+                    QMessageBox::NoButton, this);
+    QAbstractButton *yes = box.addButton(lang("删除", "Delete"),
+                                         QMessageBox::DestructiveRole);
+    box.addButton(lang("取消", "Cancel"), QMessageBox::RejectRole);
+    box.setDefaultButton(qobject_cast<QPushButton *>(box.buttons().first()));
+    box.exec();
+    if (box.clickedButton() != yes)
+        return;
+    QString err;
+    if (!m_caseManager->removeGroup(groupId, &err)) {
         QMessageBox::warning(this, lang("删除失败", "Delete failed"), err);
         return;
     }

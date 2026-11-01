@@ -88,6 +88,9 @@ public:
     /// 把引用移入组（自动从旧组摘除；空组自动清理）。置 dirty。
     bool assignToGroup(const QString &refId, const QString &groupId,
                        QString *error);
+    /// 删除机位组（v2.5f）。只允许删**空组**：组里还有成员时返回 false 并说明，
+    /// 避免用户以为「删组」= 连带删视频。置 dirty。
+    bool removeGroup(const QString &groupId, QString *error);
     /// 组改名（同步全部成员 cameraLabel 镜像；不改键）。
     bool renameGroup(const QString &groupId, const QString &name,
                      QString *error);

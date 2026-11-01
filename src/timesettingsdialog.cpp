@@ -102,6 +102,14 @@ TimeSettingsDialog::TimeSettingsDialog(const QString &videoPath,
                                     QStringLiteral(" · drift corrected"))
                              : QString()));
         }
+        // v2.5f：已有结果就该能继续加工——「秒级精细对齐」此前只在跑完那一次
+        // 才 setEnabled(true)，重开已校时视频时是灰的，用户对漂移不满意却点不动。
+        if (m_tickBtn)
+            m_tickBtn->setEnabled(true);
+        if (m_detailsBtn && !m_working.samples.isEmpty())
+            m_detailsBtn->setEnabled(true);
+        if (m_moreBtn)
+            m_moreBtn->setChecked(true);   // 展开「更多 ▾」，让人看得见这些入口
     }
     refreshWorkingSummary();
 
@@ -774,11 +782,11 @@ void TimeSettingsDialog::refreshWorkingSummary()
                     && smp.conf < TimeCalibration::kRateFitMinConf)
                     ++lowConf;
             text += lowConf > 0
-                ? lang("；测得漂移 %1 秒/天但未采用（%2 个低置信测点不参与速率判定）",
+                ? lang("；测得漂移 %1 秒/天但未采用（%2 个低置信测点）→ 可「更多 ▾ → 秒级精细对齐」",
                        "; measured drift %1 s/day NOT applied (%2 low-confidence "
                        "sample(s) excluded from rate)")
                       .arg(m_working.driftSecondsPerDay(), 0, 'f', 1).arg(lowConf)
-                : lang("；测得漂移 %1 秒/天但未采用（测点不足以支持该速率）",
+                : lang("；测得漂移 %1 秒/天但未采用（测点不足）→ 可「更多 ▾ → 秒级精细对齐」",
                        "; measured drift %1 s/day not applied (insufficient samples)");
         }
         // v1.18.x：非实时导出/变速件（画面时间 ≈ rate× 播放进度）——报告与徽标需一眼可见
