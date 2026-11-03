@@ -1463,6 +1463,14 @@ void MainWindow::buildServices()
     // v1.9.0 P-31 T1：工程读写服务（vla/CSV/时间戳ROI/徽标）
     m_projectIo = new ProjectIO(m_caseManager, m_timelineModel, this);
     // C2 不静默：后台保存失败上表面（此前 vlaSaved 无消费者，写盘失败用户无感）
+    connect(m_projectIo, &ProjectIO::vlaSaveRejected, this,
+            [this](const QString &path, const QString &reason) {
+                if (m_statusLabel)
+                    m_statusLabel->setText(
+                        lang("结果未写入：%1", "Not saved: %1").arg(reason));
+                qWarning("vla save rejected: %s (%s)",
+                         qUtf8Printable(path), qUtf8Printable(reason));
+            });
     connect(m_projectIo, &ProjectIO::vlaSaved, this,
             [this](const QString &path, bool ok) {
                 if (!ok)

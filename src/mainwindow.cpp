@@ -777,8 +777,11 @@ void MainWindow::saveCurrentVlaAsync()
     if (m_sessionMgr->currentVideoPath().isEmpty()
         || m_sessionMgr->currentVideoPath().endsWith(".vla", Qt::CaseInsensitive))
         return;
-    m_projectIo->saveVlaAsync(m_caseManager->vlaPathFor(m_sessionMgr->currentVideoPath()),
-                              collectVlaSaveRequest());
+    // v2.5j：路径、视频身份、点数**在同一次调用里一起固定**，避免后台线程
+    // 拿到已被 resetForNewVideo() 清空的模型，把 0 点写到这支视频的 .vla 上
+    ProjectIO::VlaSaveRequest req = collectVlaSaveRequest();
+    req.videoPath = m_sessionMgr->currentVideoPath();
+    m_projectIo->saveVlaAsync(m_caseManager->vlaPathFor(req.videoPath), req);
     // 同步刷新案件校时徽标缓存（.vla 为 SSOT；案件模式空指针安全）
     m_caseManager->updateCalibrationBadge(
         m_sessionMgr->currentVideoPath(), m_calibration.isEffective(),
@@ -802,6 +805,11 @@ ProjectIO::VlaSaveRequest MainWindow::collectVlaSaveRequest()
     req.abRegion.a = m_chartPanel->abPointA();      // P-68 拍板 Q5：入 .vla
     req.abRegion.b = m_chartPanel->abPointB();
     req.abRegion.loop = m_chartPanel->isABLoop();
+    // v2.5j：视频身份 + 亮度点数在**收集这一刻**固定（后台线程不能再数模型）
+    req.videoPath = m_sessionMgr ? m_sessionMgr->currentVideoPath() : QString();
+    req.pointCount = m_timelineModel
+                         ? m_timelineModel->snapshot().timestamps.size()
+                         : -1;
     req.speedPlan = m_speedPlan;
     return req;
 }

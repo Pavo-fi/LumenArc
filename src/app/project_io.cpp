@@ -44,14 +44,56 @@ QString ProjectIO::suggestSavePath(const QString &currentVideoPath) const
     return defaultPath;
 }
 
+int ProjectIO::diskPointCount(const QString &path)
+{
+    // 用一个哑模型只读：loadFromFile 会发 dataReplaced，但这里没有连接，
+    // 不会污染任何 UI。只在「本次要写 0 点」这种极罕见情况下才调用。
+    TimelineModel tmp;
+    if (!tmp.loadFromFile(path))
+        return -1;                       // 读不动（旧格式/损坏）→ 未知，不拦
+    return tmp.snapshot().timestamps.size();
+}
+
+bool ProjectIO::saveGuarded(const QString &path, const VlaSaveRequest &req,
+                           TimelineModel *m)
+{
+    // ② 写盘绑定视频身份：目标路径必须仍是「请求里那支视频」的 .vla
+    if (m_cases && !req.videoPath.isEmpty()) {
+        const QString expect = m_cases->vlaPathFor(req.videoPath);
+        if (!expect.isEmpty()
+            && QFileInfo(expect).absoluteFilePath()
+                   != QFileInfo(path).absoluteFilePath()) {
+            emit vlaSaveRejected(
+                path,
+                QStringLiteral("目标文件不属于这支视频（期望 %1），本次写入已丢弃")
+                    .arg(expect));
+            return false;
+        }
+    }
+
+    // ① 防空写护闸：本次 0 个点，而磁盘上已有 >0 点的旧结果 → 拒绝覆盖
+    if (req.pointCount == 0 && QFileInfo::exists(path)) {
+        const int old = diskPointCount(path);
+        if (old > 0) {
+            emit vlaSaveRejected(
+                path,
+                QStringLiteral("本次快照 0 个点，磁盘已有 %1 个点 → 拒绝覆盖"
+                               "（避免切视频/清模型把分析结果冲掉）").arg(old));
+            return false;
+        }
+    }
+
+    QDir().mkpath(QFileInfo(path).absolutePath());
+    return m->saveToFile(path, req.regions, req.calibration,
+                         req.magnifierRect, req.labels, req.pinnedRect,
+                         req.fusion, req.polygons, req.guideLines,
+                         req.regionRoiIds, req.polygonRoiIds,
+                         req.abRegion, req.speedPlan);
+}
+
 bool ProjectIO::saveVlaNow(const QString &path, const VlaSaveRequest &req)
 {
-    QDir().mkpath(QFileInfo(path).absolutePath());
-    return model()->saveToFile(path, req.regions, req.calibration,
-                               req.magnifierRect, req.labels, req.pinnedRect,
-                               req.fusion, req.polygons, req.guideLines,
-                               req.regionRoiIds, req.polygonRoiIds,
-                               req.abRegion, req.speedPlan);
+    return saveGuarded(path, req, model());
 }
 
 void ProjectIO::saveVlaAsync(const QString &path, const VlaSaveRequest &req)
@@ -85,13 +127,7 @@ void ProjectIO::runSaveLoop(TimelineModel *m)
             req = m_savePendingReq;
             m_savePending = false;
         }
-        QDir().mkpath(QFileInfo(path).absolutePath());
-        const bool ok = m->saveToFile(path, req.regions, req.calibration,
-                                      req.magnifierRect, req.labels,
-                                      req.pinnedRect, req.fusion, req.polygons,
-                                      req.guideLines, req.regionRoiIds,
-                                      req.polygonRoiIds,
-                                      req.abRegion, req.speedPlan);
+        const bool ok = saveGuarded(path, req, m);
         emit vlaSaved(path, ok);   // 工作线程发射 → 槽侧自动队列回 UI 线程
     }
 }

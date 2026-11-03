@@ -49,6 +49,15 @@ public:
         QVector<int> polygonRoiIds;
         AbRegionData abRegion;               // P-68 入 .vla（拍板 Q5）
         speedplan::SpeedPlan speedPlan;
+
+        // ---- v2.5j 写盘护栏用的「身份 + 体量」快照 ----
+        /// 请求发出时这支视频的路径（值拷贝）。写盘时校验目标 .vla 仍是它的，
+        /// 不匹配直接丢弃——绝不把 A 的结果写到「当前视频」B 头上。
+        QString videoPath;
+        /// 请求发出时的亮度点数。-1 = 未采集（跳过防空写护栏）。
+        /// 关键：必须在**收集请求的那一刻**记下，不能等后台线程再去数模型
+        /// （模型那时可能已被 resetForNewVideo() 清空 → 数出 0 点是必然的）。
+        int pointCount = -1;
     };
 
     /// .vla 加载结果字段包（还原应用由 UI 层执行）
@@ -96,10 +105,17 @@ public:
 signals:
     /// 后台保存完成（false = 写失败，C2 不静默）
     void vlaSaved(const QString &path, bool ok);
+    /// v2.5j：写盘被护栏拒绝（防空写 / 身份不符）。reason 是给人看的中文原因。
+    void vlaSaveRejected(const QString &path, const QString &reason);
 
 private:
     static QRectF readTimestampRoiRegistry(const QString &videoPath);
-    void runSaveLoop(TimelineModel *m);   // 保存工作线程（单飞+尾追）
+    void runSaveLoop(TimelineModel *m);
+    /// v2.5j 写盘护栏：①防空写 ②目标路径必须仍属于请求里那支视频。
+    /// 通过则真正落盘并返回 true；被拒绝返回 false（并发 vlaSaveRejected）。
+    bool saveGuarded(const QString &path, const VlaSaveRequest &req, TimelineModel *m);
+    /// 磁盘上该 .vla 的亮度点数；读不动返回 -1（未知，此时不拦）
+    static int diskPointCount(const QString &path);   // 保存工作线程（单飞+尾追）
 
     CaseManager *m_cases = nullptr;      // 不持有
     TimelineModel *m_model = nullptr;    // 不持有；空 → 惰性临时模型
