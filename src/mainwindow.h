@@ -497,6 +497,9 @@ protected:
     int  m_calibTaskPct = 0;
     /// v2.5e：分析类任务（亮度/音频/微变/ROI 量化）在任务带里的 id 映射
     QHash<QString, int> m_anaTaskIds;
+    QString m_anaProgressTask;    ///< 节流：上次更新进度的是哪个任务
+    int     m_anaProgressPct = -1;
+    qint64  m_anaProgressAt = 0;
     bool m_leftRatioApplied = false;     ///< 是否已成功落地过一次
     int  m_leftRatioCaseH = 0;           ///< 上次由代码设定的案件坞高度
     int  m_leftRatioTotal = 0;           ///< 上次设定时的两坞总高

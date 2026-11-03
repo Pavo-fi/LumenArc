@@ -1507,16 +1507,27 @@ void MainWindow::onTaskStarted(const QString &taskId)
     }
     m_cancelBtn->setEnabled(true);
     m_cancelBtn->setVisible(true);
-    m_progressBar->setVisible(true);
+    m_progressBar->setVisible(false);   // v2.5i：进度统一在任务带，状态栏不再重复
     m_progressBar->setValue(0);
 }
 
 void MainWindow::onTaskProgress(const QString &taskId, qreal percent, const QString &detail)
 {
-    // v2.5e：同步到任务带（detail 直接当右侧备注，例如「已分析 320/900 帧」）
+    // v2.5i：进度**只**显示在任务带（最下一排）。原来同时写状态栏
+    // m_statusLabel + m_progressBar → 同一件事出现两行（用户反馈）。
+    // 顺带节流：引擎按帧回调（可达 25Hz），每次都改 4~5 个标签会让布局抖动，
+    // 分析期间切视频就表现为「严重卡顿」。
+    const int nowPct = qBound(0, int(percent), 100);
+    const qint64 nowMs = QDateTime::currentMSecsSinceEpoch();
+    const bool sameTask = (taskId == m_anaProgressTask);
+    if (sameTask && nowPct == m_anaProgressPct && nowMs - m_anaProgressAt < 500)
+        return;
+    m_anaProgressTask = taskId;
+    m_anaProgressPct = nowPct;
+    m_anaProgressAt = nowMs;
     if (m_taskBar && m_anaTaskIds.contains(taskId))
-        m_taskBar->setTaskProgress(m_anaTaskIds.value(taskId),
-                                   qBound(0, int(percent), 100), detail);
+        m_taskBar->setTaskProgress(m_anaTaskIds.value(taskId), nowPct, detail);
+    return;
     // 统一 0~100（Q6 拍板：音频不再映射 70~100）；detail 已按任务语义格式化
     m_statusLabel->setText(detail);
     int newPercent = qBound(0, static_cast<int>(percent), 100);
