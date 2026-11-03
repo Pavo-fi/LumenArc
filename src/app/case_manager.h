@@ -92,6 +92,10 @@ public:
     /// 避免用户以为「删组」= 连带删视频。置 dirty。
     /// force=true：成员登记已全部失效时允许直接清掉（不会误删在册文件）
     bool removeGroup(const QString &groupId, QString *error, bool force = false);
+    /// v2.5h：从组里移除**一条失效登记**（能解析的引用一律拒绝——那种情况应当
+    /// 用 assignToGroup 换组，避免把在册文件悬空）。置 dirty。
+    bool removeGroupMember(const QString &groupId, const QString &refId,
+                          QString *error);
     /// 组改名（同步全部成员 cameraLabel 镜像；不改键）。
     bool renameGroup(const QString &groupId, const QString &name,
                      QString *error);

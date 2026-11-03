@@ -71,7 +71,9 @@ private:
     void moveToGroupFlow(const QString &id);         // 移到机位组▸ 流程
     void renameGroupFlow(const QString &groupId);
     /// v2.5f：删除空机位组（非空禁用）
-    void deleteGroupFlow(const QString &groupId);    // 组改名
+    void deleteGroupFlow(const QString &groupId);
+    /// v2.5h：移除一条失效成员登记（占位行右键）
+    void removeStaleMember(const QString &groupId, const QString &refId);    // 组改名
     void fillReports(QTreeWidgetItem *group);
     void fillSnapshots(QTreeWidgetItem *group);
     /// 哈希徽标：✗缺失 ⚠已变更 ⏳待算 ✓一致（同步快判，与 M1 校验语义一致）

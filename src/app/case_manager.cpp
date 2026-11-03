@@ -500,6 +500,33 @@ bool CaseManager::assignToGroup(const QString &refId, const QString &groupId,
     return true;
 }
 
+bool CaseManager::removeGroupMember(const QString &groupId, const QString &refId,
+                                   QString *error)
+{
+    if (!m_open) {
+        if (error) *error = QStringLiteral("没有打开的案件");
+        return false;
+    }
+    CaseCameraGroup *g = CaseModel::findGroup(m_meta, groupId);
+    if (!g) {
+        if (error) *error = QStringLiteral("机位组不存在：%1").arg(groupId);
+        return false;
+    }
+    if (!g->memberIds.contains(refId)) {
+        if (error) *error = QStringLiteral("这条登记不在该组里：%1").arg(refId);
+        return false;
+    }
+    if (videoById(refId)) {
+        if (error)
+            *error = QStringLiteral("该登记指向的文件还在案件里，"
+                                    "请用「移到机位组」换组或「移除出案件」");
+        return false;
+    }
+    g->memberIds.removeAll(refId);
+    setModified();
+    return true;
+}
+
 bool CaseManager::removeGroup(const QString &groupId, QString *error, bool force)
 {
     if (!m_open) {

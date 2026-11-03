@@ -244,15 +244,19 @@ void CaseDock::fillCameraGroups(QTreeWidgetItem *group)
             if (!v) {
                 // 登记项已失效：建一行灰色占位（不再静默 continue，否则整组空壳）
                 auto *ghost = new QTreeWidgetItem(gIt, {
-                    lang("⚠ 登记项已失效：%1（可删除该组，或重新导入后重定位）",
-                         "⚠ stale ref: %1 (delete this group or re-import)").arg(mid)});
+                    lang("⚠ 登记项已失效：%1（右键可直接移除）",
+                         "⚠ stale ref: %1 (right-click to remove)").arg(mid)});
                 ghost->setData(0, kRoleKind, QStringLiteral("stale"));
                 ghost->setData(0, kRoleId, mid);
                 ghost->setData(0, kRolePath, mid);
+                ghost->setData(0, kRoleIdx, 0);              // 占位
+                ghost->setData(0, kRoleIdx2, 0);
+                ghost->setData(0, Qt::UserRole + 5, g.groupId);   // 所属组
                 ghost->setForeground(0, QColor(Theme::TextMuted));
-                ghost->setFlags(Qt::ItemIsEnabled);
-                ghost->setToolTip(0, lang("这条成员登记指向的对象已不在案件里",
-                                          "This member no longer exists in the case"));
+                ghost->setFlags(Qt::ItemIsEnabled | Qt::ItemIsSelectable);
+                ghost->setToolTip(0, lang("这条成员登记指向的对象已不在案件里；"
+                                          "右键「移除这条失效登记」可清掉",
+                                          "This member no longer exists; right-click to remove"));
                 continue;
             }
             ++totalFiles;
@@ -801,6 +805,15 @@ void CaseDock::onContextMenu(const QPoint &pos)
                            const int oi = item->data(0, kRoleIdx2).toInt();
                            removePreprocessOutput(si, oi);
                        });
+    } else if (kind == QLatin1String("stale")) {
+        // v2.5h：失效登记右键直接移除——不必为了清一条脏数据去删整个组
+        const QString gid = item->data(0, Qt::UserRole + 5).toString();
+        menu.addAction(lang("移除这条失效登记", "Remove stale entry"), this,
+                       [this, gid, id]() { removeStaleMember(gid, id); });
+        menu.addSeparator();
+        if (!gid.isEmpty())
+            menu.addAction(lang("删除整个机位组…", "Delete this group…"), this,
+                           [this, gid]() { deleteGroupFlow(gid); });
     } else if (kind == QLatin1String("camgroup")) {
         menu.addAction(lang("机位组改名…", "Rename group…"), this,
                        [this, id]() { renameGroupFlow(id); });
@@ -956,6 +969,18 @@ void CaseDock::removeCaseFile(QTreeWidgetItem *item)
     }
     if (!err.isEmpty()) {
         QMessageBox::warning(this, lang("删除失败", "Delete failed"), err);
+        return;
+    }
+    m_caseManager->saveCase(&err);
+    refreshTree();
+}
+
+/// 移除一条失效的成员登记（占位行右键）——只清组织关系，不碰任何文件
+void CaseDock::removeStaleMember(const QString &groupId, const QString &refId)
+{
+    QString err;
+    if (!m_caseManager->removeGroupMember(groupId, refId, &err)) {
+        QMessageBox::warning(this, lang("移除失败", "Remove failed"), err);
         return;
     }
     m_caseManager->saveCase(&err);
