@@ -211,13 +211,27 @@ void CaseDock::fillCameraGroups(QTreeWidgetItem *group)
     int totalFiles = 0;
     for (const CaseCameraGroup &g : meta.cameraGroups) {
         const QString gname = CaseModel::groupDisplayName(g);
-        auto *gIt = new QTreeWidgetItem(group,
-            {lang("%1（%2 个文件）", "%1 (%2 files)")
-                 .arg(gname).arg(g.memberIds.size())});   // 规范§6/§10：去机位 emoji，包入 lang()
+        // v2.5g：组标题按**能解析出来**的成员计数。原来直接用 memberIds.size()，
+        // 一旦成员登记失效（删视频/移出案件后 memberIds 里残留 V###/P###），
+        // 标题写着「2 个文件」但下面一个子项都建不出来 → 节点没有展开箭头，
+        // 用户点不开也看不到里面是什么。
+        int liveCount = 0;
+        for (const QString &mid : g.memberIds)
+            if (m_caseManager->videoById(mid))
+                ++liveCount;
+        const int staleCount = g.memberIds.size() - liveCount;
+        QString title = lang("%1（%2 个文件）", "%1 (%2 files)")
+                            .arg(gname).arg(liveCount);
+        if (staleCount > 0)
+            title += lang("  ⚠ %1 项失效", "  ⚠ %1 stale").arg(staleCount);
+        auto *gIt = new QTreeWidgetItem(group, {title});
         gIt->setData(0, kRoleKind, QStringLiteral("camgroup"));
         gIt->setData(0, kRoleId, g.groupId);
         gIt->setData(0, kRolePath, g.groupId);   // 右键菜单非空守卫
         gIt->setFlags(Qt::ItemIsEnabled | Qt::ItemIsSelectable);
+        // 显式声明「有子项要展开」：成员数量为 0 时 Qt 默认不给箭头
+        if (!g.memberIds.isEmpty())
+            gIt->setChildIndicatorPolicy(QTreeWidgetItem::ShowIndicator);
         gIt->setToolTip(0, g.name.isEmpty()
             ? lang("未命名机位组 %1——右键「机位组改名」",
                    "Unnamed camera group %1 — right-click to rename").arg(g.groupId)
@@ -227,8 +241,20 @@ void CaseDock::fillCameraGroups(QTreeWidgetItem *group)
         gIt->setFont(0, f);
         for (const QString &mid : g.memberIds) {
             const CaseVideoRef *v = m_caseManager->videoById(mid);
-            if (!v)
+            if (!v) {
+                // 登记项已失效：建一行灰色占位（不再静默 continue，否则整组空壳）
+                auto *ghost = new QTreeWidgetItem(gIt, {
+                    lang("⚠ 登记项已失效：%1（可删除该组，或重新导入后重定位）",
+                         "⚠ stale ref: %1 (delete this group or re-import)").arg(mid)});
+                ghost->setData(0, kRoleKind, QStringLiteral("stale"));
+                ghost->setData(0, kRoleId, mid);
+                ghost->setData(0, kRolePath, mid);
+                ghost->setForeground(0, QColor(Theme::TextMuted));
+                ghost->setFlags(Qt::ItemIsEnabled);
+                ghost->setToolTip(0, lang("这条成员登记指向的对象已不在案件里",
+                                          "This member no longer exists in the case"));
                 continue;
+            }
             ++totalFiles;
             QString badgeTip;
             QColor badgeColor;
@@ -779,10 +805,12 @@ void CaseDock::onContextMenu(const QPoint &pos)
         menu.addAction(lang("机位组改名…", "Rename group…"), this,
                        [this, id]() { renameGroupFlow(id); });
         // v2.5f：空机位组可删（此前压根没有删除项，右键只有改名/新建）
-        int members = 0;
+        int members = 0;      // 只数**能解析**的成员：全失效的组也应可删
         for (const CaseCameraGroup &g : m_caseManager->meta().cameraGroups)
             if (g.groupId == id) {
-                members = g.memberIds.size();
+                for (const QString &mid : g.memberIds)
+                    if (m_caseManager->videoById(mid))
+                        ++members;
                 break;
             }
         auto *delAct = menu.addAction(lang("删除机位组…", "Delete group…"), this,
@@ -942,7 +970,9 @@ void CaseDock::deleteGroupFlow(const QString &groupId)
     for (const CaseCameraGroup &g : m_caseManager->meta().cameraGroups)
         if (g.groupId == groupId) {
             name = CaseModel::groupDisplayName(g);
-            members = g.memberIds.size();
+            for (const QString &mid : g.memberIds)
+                if (m_caseManager->videoById(mid))
+                    ++members;
             break;
         }
     if (name.isEmpty()) {
@@ -968,7 +998,7 @@ void CaseDock::deleteGroupFlow(const QString &groupId)
     if (box.clickedButton() != yes)
         return;
     QString err;
-    if (!m_caseManager->removeGroup(groupId, &err)) {
+    if (!m_caseManager->removeGroup(groupId, &err, /*force=*/true)) {
         QMessageBox::warning(this, lang("删除失败", "Delete failed"), err);
         return;
     }

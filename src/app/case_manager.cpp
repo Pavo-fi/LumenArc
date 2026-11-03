@@ -500,7 +500,7 @@ bool CaseManager::assignToGroup(const QString &refId, const QString &groupId,
     return true;
 }
 
-bool CaseManager::removeGroup(const QString &groupId, QString *error)
+bool CaseManager::removeGroup(const QString &groupId, QString *error, bool force)
 {
     if (!m_open) {
         if (error) *error = QStringLiteral("没有打开的案件");
@@ -511,10 +511,19 @@ bool CaseManager::removeGroup(const QString &groupId, QString *error)
         if (g.groupId != groupId)
             continue;
         if (!g.memberIds.isEmpty()) {
-            if (error)
-                *error = QStringLiteral("机位组里还有 %1 个文件")
-                             .arg(g.memberIds.size());
-            return false;
+            // force 时确认「没有任何成员还能解析」才放行（在册文件绝不静默丢组）
+            bool anyLive = false;
+            for (const QString &mid : g.memberIds)
+                if (videoById(mid)) {
+                    anyLive = true;
+                    break;
+                }
+            if (!force || anyLive) {
+                if (error)
+                    *error = QStringLiteral("机位组里还有 %1 个文件")
+                                 .arg(g.memberIds.size());
+                return false;
+            }
         }
         m_meta.cameraGroups.removeAt(i);
         setModified();
