@@ -1515,7 +1515,7 @@ void MainWindow::onTaskStarted(const QString &taskId)
     }
     m_cancelBtn->setEnabled(true);
     m_cancelBtn->setVisible(true);
-    m_progressBar->setVisible(false);   // v2.5i：进度统一在任务带，状态栏不再重复
+    m_progressBar->setVisible(true);    // v2.5j：进度条就在最下面显示 GPU 信息那一行
     m_progressBar->setValue(0);
 }
 
@@ -1527,15 +1527,15 @@ void MainWindow::onTaskProgress(const QString &taskId, qreal percent, const QStr
     // 分析期间切视频就表现为「严重卡顿」。
     const int nowPct = qBound(0, int(percent), 100);
     const qint64 nowMs = QDateTime::currentMSecsSinceEpoch();
-    const bool sameTask = (taskId == m_anaProgressTask);
-    if (sameTask && nowPct == m_anaProgressPct && nowMs - m_anaProgressAt < 500)
-        return;
+    if (taskId == m_anaProgressTask && nowPct == m_anaProgressPct
+        && nowMs - m_anaProgressAt < 400)
+        return;                        // 节流：引擎按帧回调，别让 UI 线程抖
     m_anaProgressTask = taskId;
     m_anaProgressPct = nowPct;
     m_anaProgressAt = nowMs;
+    m_progressBar->setVisible(true);   // 进度只在状态栏（GPU 那一行）显示
     if (m_taskBar && m_anaTaskIds.contains(taskId))
         m_taskBar->setTaskProgress(m_anaTaskIds.value(taskId), nowPct, detail);
-    return;
     // 统一 0~100（Q6 拍板：音频不再映射 70~100）；detail 已按任务语义格式化
     m_statusLabel->setText(detail);
     int newPercent = qBound(0, static_cast<int>(percent), 100);
