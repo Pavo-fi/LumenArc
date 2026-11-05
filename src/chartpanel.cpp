@@ -63,7 +63,10 @@ ChartPanel::ChartPanel(QWidget *parent)
     // 可视范围）。QtCharts 的顶端 Y 标签以 plotArea.top() 为中心、半高约 6.5px，
     // 取 13 = 半高 + 5px 间隙；原来 35 是给上方「游标读数」留的，白占 22px。
     // v2.5n：底边距 0 —— 图例（区域 1 / 音量）紧贴面板下边框，不留空
-    m_chart->setMargins(QMargins(2, 13, 2, 0));
+    // v2.5r：取值以「刻度标签不被挡住」为准（用户实测上下都被遮）：
+    //   上 26 = 悬浮徽标行高(~22) + 2 + 间距，否则顶端刻度 255.0 压在徽标下面；
+    //   下 20 = X 轴时间标签行 + 底端刻度标签，否则 81.5 / -48 / 时间轴被下边框切掉。
+    m_chart->setMargins(QMargins(2, 26, 2, 20));
     // v2.5q：内建图例关闭 —— QLegend 自带约 5~6px 内边距且无 API 可去，
     // 「图例贴底」做不到；改为主窗在轨道标题行居中自绘（见 legendEntries()）。
     m_chart->legend()->setVisible(false);
