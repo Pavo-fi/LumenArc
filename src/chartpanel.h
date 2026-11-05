@@ -149,6 +149,9 @@ signals:
     void xAxisRangeChanged(qreal xMin, qreal xMax);
     /// Emitted when chart plot area changes (for spectrogram axis alignment)
     void plotAreaUpdated(QRectF plotArea);
+    /// v2.5n：游标读数（时间 + 各区域/音量）改到面板标题行显示。
+    /// 图形内不再画读数 → 绘图区不再被两行文字压住，也不用为它留上边距。
+    void cursorReadoutChanged(const QString &timeText, const QString &dataText);
     /// Emitted when A/B region changes
     void abRegionChanged();
     /// Emitted when cursor drag ends (Scrub → Paused transition)

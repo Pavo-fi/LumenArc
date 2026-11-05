@@ -61,7 +61,8 @@ ChartPanel::ChartPanel(QWidget *parent)
     // v2.5m：顶端量程要尽可能贴近面板上沿（用户：不被标签遮挡的前提下取最大
     // 可视范围）。QtCharts 的顶端 Y 标签以 plotArea.top() 为中心、半高约 6.5px，
     // 取 13 = 半高 + 5px 间隙；原来 35 是给上方「游标读数」留的，白占 22px。
-    m_chart->setMargins(QMargins(2, 13, 2, 2));
+    // v2.5n：底边距 0 —— 图例（区域 1 / 音量）紧贴面板下边框，不留空
+    m_chart->setMargins(QMargins(2, 13, 2, 0));
     m_chart->legend()->setVisible(true);
     m_chart->legend()->setAlignment(Qt::AlignBottom);
     // 规范§8：轴/刻度/图例文字 TextMuted Caption
@@ -1798,16 +1799,18 @@ void ChartPanel::updateCursorPosition()
         labelY = qBound(plotArea.top() + 2, labelY,
                         qMax(plotArea.top() + 2, plotArea.bottom() - totalH - 2));
 
-        m_cursorTimeLabel->setPos(labelX, labelY);
-        if (hasData)
-            m_cursorDataLabel->setPos(labelX, labelY + timeRect.height());
-
-        // Background rect covering both lines
-        if (m_cursorTimeBg) {
-            QRectF bgRect(labelX - 3, labelY - 1, maxW + 6, totalH + 2);
-            m_cursorTimeBg->setRect(bgRect);
-            m_cursorTimeBg->setVisible(true);
-        }
+        // v2.5n：读数移到面板标题行（见 cursorReadoutChanged）——
+        // 图形内不再画，绘图区完整让给曲线。
+        m_cursorTimeLabel->setVisible(false);
+        m_cursorDataLabel->setVisible(false);
+        if (m_cursorTimeBg)
+            m_cursorTimeBg->setVisible(false);
+        emit cursorReadoutChanged(m_cursorTimeLabel->text(),
+                                  hasData ? m_cursorDataLabel->text()
+                                          : QString());
+        Q_UNUSED(labelX);
+        Q_UNUSED(maxW);
+        Q_UNUSED(totalH);
     }
 }
 

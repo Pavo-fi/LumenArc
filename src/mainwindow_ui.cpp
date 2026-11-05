@@ -1042,6 +1042,25 @@ void MainWindow::buildCentralLayout(const QString &titleBarStyle,
     chartGutter->addWidget(chartDot);
     chartGutter->addWidget(chartTitleLabel);
 
+    // v2.5n：游标读数（时间 + 区域/音量）落在标题行，图形内不再画
+    m_chartReadoutLabel = new QLabel(chartBadge);
+    m_chartReadoutLabel->setStyleSheet(
+        QStringLiteral("QLabel{color:%1;font-family:'Cascadia Mono','Consolas',monospace;"
+                       "font-size:9pt;background:transparent;}")
+            .arg(Theme::TextPrimary));
+    m_chartReadoutLabel->setTextInteractionFlags(Qt::NoTextInteraction);
+    chartGutter->addWidget(m_chartReadoutLabel);
+    if (m_chartPanel) {
+        connect(m_chartPanel, &ChartPanel::cursorReadoutChanged, this,
+                [this](const QString &t, const QString &d) {
+                    if (!m_chartReadoutLabel)
+                        return;
+                    m_chartReadoutLabel->setText(d.isEmpty() ? t : t + QStringLiteral("   ") + d);
+                });
+    }
+    // 徽标整体靠左，读数紧跟在标题后面
+    chartGutter->addStretch();
+
     // 游标读数左界让出徽标宽度（否则两者在左上角叠成一坨灰块）
     if (m_chartPanel)
         m_chartPanel->setCursorReadoutMinX(chartBadge->sizeHint().width() + 3 + 10);
