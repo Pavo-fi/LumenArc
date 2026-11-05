@@ -317,17 +317,12 @@ void OverlayWidget::drawRegions(QPainter &painter)
         bool selected = (i == m_selectedRegion);
         QColor baseColor = RoiModel::regionColor(i);
 
-        QColor fillColor = baseColor;
-        fillColor.setAlpha(selected ? 40 : 20);
-        painter.fillRect(rc, fillColor);
-
+        // v2.5s：只画框 —— 不再半透明填充、不再画 R1/R2 序号（用户拍板）
         QPen pen(baseColor);
         pen.setWidth(1);
         painter.setPen(pen);
+        painter.setBrush(Qt::NoBrush);
         painter.drawRect(rc);
-
-        painter.setPen(Qt::white);
-        painter.drawText(rc.topLeft() + QPoint(4, 14), QString("R%1").arg(i + 1));
 
         if (selected) {
             drawResizeHandles(painter, rc);
@@ -365,19 +360,12 @@ void OverlayWidget::drawPolygons(QPainter &painter)
         bool selected = (i == m_selectedPolygon);
         QColor baseColor = RoiModel::polygonColor(i);
 
-        QColor fillColor = baseColor;
-        fillColor.setAlpha(selected ? 40 : 20);
-        painter.setBrush(fillColor);
-
+        // v2.5s：多边形同样只留框（无填充、无 P1/P2 序号）
         QPen pen(baseColor);
         pen.setWidth(1);
         painter.setPen(pen);
+        painter.setBrush(Qt::NoBrush);
         painter.drawPolygon(widgetPoly);
-
-        // 标签
-        painter.setPen(Qt::white);
-        painter.drawText(widgetPoly.boundingRect().topLeft() + QPoint(4, 14),
-                         QString("P%1").arg(i + 1));
 
         if (selected) {
             drawPolygonHandles(painter, widgetPoly);

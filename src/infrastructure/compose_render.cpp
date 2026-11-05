@@ -67,26 +67,20 @@ void drawRoiOverlay(QPainter &painter, const QRect &dstRect, const QSize &srcSiz
         const QRectF mapped(mapPt(rc.topLeft()),
                             QSizeF(rc.width() * scale, rc.height() * scale));
         const QColor base = RoiModel::regionColor(i);
-        QColor fill = base;
-        fill.setAlpha(28);
-        painter.fillRect(mapped, fill);
+        // v2.5s：与屏上一致 —— 只留框，不填充、不画 R1/R2
+        painter.setBrush(Qt::NoBrush);
         painter.setPen(QPen(base, w));
         painter.drawRect(mapped);
-        painter.setPen(Qt::white);
-        painter.drawText(mapped.topLeft() + QPointF(2 * w, 8 * w),
-                         QStringLiteral("R%1").arg(i + 1));
     }
     for (int i = 0; i < ov.polygons.size(); ++i) {
         QPolygonF poly;
         for (const QPoint &pt : ov.polygons[i])
             poly << mapPt(pt);
         const QColor base = RoiModel::regionColor(ov.rois.size() + i);
-        QColor fill = base;
-        fill.setAlpha(28);
-        painter.setBrush(fill);
+        // v2.5s：只留框
+        painter.setBrush(Qt::NoBrush);
         painter.setPen(QPen(base, w));
         painter.drawPolygon(poly);
-        painter.setBrush(Qt::NoBrush);
     }
     painter.restore();
 }
