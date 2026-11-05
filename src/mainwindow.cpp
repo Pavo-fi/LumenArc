@@ -1492,8 +1492,11 @@ static QString taskBarTitle(const QString &taskId)
 
 void MainWindow::onTaskStarted(const QString &taskId)
 {
-    // v2.5e：所有分析任务都进任务带（原来只有一条隐藏进度条，用户看不到在跑什么）
-    if (m_taskBar && !m_anaTaskIds.contains(taskId)) {
+    // v2.5k：**单任务时不进任务带**——只有一条任务在跑时，状态栏（GPU 那一行）
+    // 已经有百分比 + 说明 + 取消，任务带再画一条就是同一件事两排（用户两次反馈）。
+    // 只有真的要堆叠（已有任务在跑）时才进任务带，用上拉列表看多任务。
+    const bool stackNeeded = (m_calibTaskId >= 0) || !m_anaTaskIds.isEmpty();
+    if (m_taskBar && stackNeeded && !m_anaTaskIds.contains(taskId)) {
         m_anaTaskIds.insert(taskId, m_taskBar->addTask(taskBarTitle(taskId)));
     }
     // 按钮态复刻旧行为：亮度任务只置灰分析按钮（音频按钮点击会得到
