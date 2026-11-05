@@ -19,6 +19,12 @@
 #include <QWheelEvent>
 #include <QtMath>
 #include <QOpenGLVertexArrayObject>
+
+namespace {
+/// v2.5l：语谱图纵轴（频率）默认量程 / 滚轮放大上限（用户拍板 6k / 10k）
+constexpr double kDefaultFreqMaxHz = 6000.0;
+constexpr double kMaxFreqZoomHz    = 10000.0;
+} // namespace
 #include <cmath>
 #include <QSurfaceFormat>
 #include <QDebug>
@@ -693,7 +699,9 @@ void SpectrogramPanelEnhanced::setSpectrogramData(const AudioData &audio)
                 m_viewYMax = nyquist;
             } else {
                 m_viewYMin = 0;
-                m_viewYMax = qMin(12000.0, nyquist);
+                // v2.5l：默认量程 0~6k（用户拍板）。以前铺到 min(12000, nyquist)，
+                // 打开就是满轴 10k，低频细节被压扁；Ctrl+滚轮仍可放大到 10k。
+                m_viewYMax = qMin(kDefaultFreqMaxHz, nyquist);
             }
             m_yRangeInitialized = true;
         }
@@ -806,7 +814,10 @@ void SpectrogramPanelEnhanced::wheelEvent(QWheelEvent *event)
         }
 
         double nyquist = m_audioData.sampleRate / 2.0;
-        double yMaxLimit = (m_freqScale == FreqScale::Logarithmic) ? nyquist : 12000.0;
+        // 线性轴放大上限 10k（用户拍板）；对数轴照旧铺到 nyquist
+        double yMaxLimit = (m_freqScale == FreqScale::Logarithmic)
+                               ? nyquist
+                               : qMin(kMaxFreqZoomHz, nyquist);
         if (m_freqScale == FreqScale::Logarithmic) {
             newMin = qBound(20.0, newMin, nyquist / 2);
             newMax = qBound(20.0, newMax, yMaxLimit);
@@ -968,7 +979,9 @@ void SpectrogramPanelEnhanced::mouseMoveEvent(QMouseEvent *event)
         int heatH = height() - TOP_MARGIN - BOTTOM_MARGIN;
         if (heatH > 0) {
             double nyquist = m_audioData.sampleRate / 2.0;
-            double yMaxLimit = (m_freqScale == FreqScale::Logarithmic) ? nyquist : 12000.0;
+            double yMaxLimit = (m_freqScale == FreqScale::Logarithmic)
+                                   ? nyquist
+                                   : qMin(kMaxFreqZoomHz, nyquist);
 
             if (m_freqScale == FreqScale::Logarithmic) {
                 // Log-scale pan: multiplicative shift
@@ -1100,7 +1113,7 @@ void SpectrogramPanelEnhanced::mouseDoubleClickEvent(QMouseEvent *event)
             m_viewYMax = nyquist;
         } else {
             m_viewYMin = 0;
-            m_viewYMax = qMin(12000.0, nyquist);
+            m_viewYMax = qMin(kDefaultFreqMaxHz, nyquist);   // 复位＝默认 6k
         }
         update();
         event->accept();
