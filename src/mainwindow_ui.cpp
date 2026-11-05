@@ -1042,24 +1042,7 @@ void MainWindow::buildCentralLayout(const QString &titleBarStyle,
     chartGutter->addWidget(chartDot);
     chartGutter->addWidget(chartTitleLabel);
 
-    // v2.5n：游标读数（时间 + 区域/音量）落在标题行，图形内不再画
-    m_chartReadoutLabel = new QLabel(chartBadge);
-    m_chartReadoutLabel->setStyleSheet(
-        QStringLiteral("QLabel{color:%1;font-family:'Cascadia Mono','Consolas',monospace;"
-                       "font-size:9pt;background:transparent;}")
-            .arg(Theme::TextPrimary));
-    m_chartReadoutLabel->setTextInteractionFlags(Qt::NoTextInteraction);
-    chartGutter->addWidget(m_chartReadoutLabel);
-    if (m_chartPanel) {
-        connect(m_chartPanel, &ChartPanel::cursorReadoutChanged, this,
-                [this](const QString &t, const QString &d) {
-                    if (!m_chartReadoutLabel)
-                        return;
-                    m_chartReadoutLabel->setText(d.isEmpty() ? t : t + QStringLiteral("   ") + d);
-                });
-    }
-    // 徽标整体靠左，读数紧跟在标题后面
-    chartGutter->addStretch();
+    // v2.5o：读数不再塞进标题徽标（会和标题挤在一起），改为独立浮块挂右上角
 
     // 游标读数左界让出徽标宽度（否则两者在左上角叠成一坨灰块）
     if (m_chartPanel)
@@ -1076,6 +1059,43 @@ void MainWindow::buildCentralLayout(const QString &titleBarStyle,
     // 同一格里叠放：图形铺满，徽标浮在左上
     chartStack->addWidget(m_chartContent, 0, 0);
     chartStack->addWidget(chartBadgeHolder, 0, 0, Qt::AlignLeft | Qt::AlignTop);
+
+    // v2.5o：游标读数独立浮块（右上角），不跟左上角徽标挤在一起
+    auto *readoutChip = new QWidget(m_chartContainer);
+    readoutChip->setStyleSheet(QStringLiteral(
+        "QWidget{background:rgba(22,24,29,96);border:1px solid %1;border-radius:7px;}")
+        .arg(Theme::Border));
+    auto *readoutChipLay = new QHBoxLayout(readoutChip);
+    readoutChipLay->setContentsMargins(8, 1, 8, 1);
+    readoutChipLay->setSpacing(0);
+    m_chartReadoutLabel = new QLabel(readoutChip);
+    m_chartReadoutLabel->setStyleSheet(
+        QStringLiteral("QLabel{color:%1;font-family:'Cascadia Mono','Consolas',monospace;"
+                       "font-size:9pt;background:transparent;border:none;}")
+            .arg(Theme::TextPrimary));
+    m_chartReadoutLabel->setTextInteractionFlags(Qt::NoTextInteraction);
+    readoutChipLay->addWidget(m_chartReadoutLabel);
+    readoutChip->setVisible(false);          // 有读数才出现
+
+    auto *readoutHolder = new QWidget(m_chartContainer);
+    auto *readoutHolderLay = new QHBoxLayout(readoutHolder);
+    readoutHolderLay->setContentsMargins(0, 2, 3, 0);
+    readoutHolderLay->setSpacing(0);
+    readoutHolderLay->addStretch();
+    readoutHolderLay->addWidget(readoutChip);
+    readoutHolderLay->addStretch();
+    chartStack->addWidget(readoutHolder, 0, 0, Qt::AlignRight | Qt::AlignTop);
+    if (m_chartPanel) {
+        connect(m_chartPanel, &ChartPanel::cursorReadoutChanged, this,
+                [this, readoutChip](const QString &t, const QString &d) {
+                    if (!m_chartReadoutLabel)
+                        return;
+                    const QString txt = d.isEmpty() ? t
+                                                    : t + QStringLiteral("   ") + d;
+                    m_chartReadoutLabel->setText(txt);
+                    readoutChip->setVisible(!txt.isEmpty());
+                });
+    }
     chartStack->setRowStretch(0, 1);
     chartStack->setColumnStretch(0, 1);
 

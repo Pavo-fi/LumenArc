@@ -20,6 +20,7 @@
 #include <QtCharts/QLineSeries>
 #include <QtCharts/QValueAxis>
 #include <QtCharts/QLegendMarker>
+#include <QGraphicsLayout>
 #include <QtCharts/QAbstractSeries>
 #include <QMouseEvent>
 #include <QWheelEvent>
@@ -65,6 +66,11 @@ ChartPanel::ChartPanel(QWidget *parent)
     m_chart->setMargins(QMargins(2, 13, 2, 0));
     m_chart->legend()->setVisible(true);
     m_chart->legend()->setAlignment(Qt::AlignBottom);
+    // v2.5o：图例仍没贴底 → QtCharts 顶层布局自带内容边距，把它清零；
+    // 图例自身也不要背景框（自带圆角+内边距会让它看起来缩进去一块）。
+    if (auto *lay = m_chart->layout())
+        lay->setContentsMargins(0, 0, 0, 0);
+    m_chart->legend()->setBackgroundVisible(false);
     // 规范§8：轴/刻度/图例文字 TextMuted Caption
     m_chart->legend()->setFont(fontSans(8));
     m_chart->legend()->setLabelColor(QColor(Theme::TextTk::Muted));
