@@ -58,10 +58,7 @@ ChartPanel::ChartPanel(QWidget *parent)
     setFocusPolicy(Qt::NoFocus);  // 防止图表窃取键盘焦点导致快捷键失效
 
     m_chart = new QChart();
-    // v2.5m：上边距 35 → 5，和语谱图的 TOP_MARGIN(5) 对齐。
-    // 原来那 35px 是给「游标读数」留的位置（画在 plotArea 上方两行）；
-    // 现在读数改画在绘图区内部靠上，两块的 Y 轴顶端就都在 5px 处齐平。
-    m_chart->setMargins(QMargins(2, 5, 2, 2));
+    m_chart->setMargins(QMargins(2, 35, 2, 2));
     m_chart->legend()->setVisible(true);
     m_chart->legend()->setAlignment(Qt::AlignBottom);
     // 规范§8：轴/刻度/图例文字 TextMuted Caption
@@ -1788,16 +1785,13 @@ void ChartPanel::updateCursorPosition()
 
         // Left-aligned at cursor x, above plot area
         qreal labelX = x;
-        // v2.5m：读数画在绘图区**内部**靠上（原来画在上方 35px 的边距里）。
-        qreal labelY = plotArea.top() + 4;
+        qreal labelY = plotArea.top() - totalH - 10;
 
         // Clamp to plot area bounds（v2.1：左界让出轨道徽标，读数不压徽标）
         const qreal leftBound = qMax(plotArea.left(), m_readoutMinX);
         const qreal rightBound = qMax(leftBound, plotArea.right() - maxW);
         labelX = qBound(leftBound, labelX, rightBound);
-        // 整块读数必须完整落在绘图区内（不越界、不被裁）
-        labelY = qBound(plotArea.top() + 2, labelY,
-                        qMax(plotArea.top() + 2, plotArea.bottom() - totalH - 2));
+        labelY = qMax(labelY, plotArea.top() - totalH - 14);
 
         m_cursorTimeLabel->setPos(labelX, labelY);
         if (hasData)
