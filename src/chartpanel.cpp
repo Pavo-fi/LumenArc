@@ -64,7 +64,9 @@ ChartPanel::ChartPanel(QWidget *parent)
     // 取 13 = 半高 + 5px 间隙；原来 35 是给上方「游标读数」留的，白占 22px。
     // v2.5n：底边距 0 —— 图例（区域 1 / 音量）紧贴面板下边框，不留空
     m_chart->setMargins(QMargins(2, 13, 2, 0));
-    m_chart->legend()->setVisible(true);
+    // v2.5q：内建图例关闭 —— QLegend 自带约 5~6px 内边距且无 API 可去，
+    // 「图例贴底」做不到；改为主窗在轨道标题行居中自绘（见 legendEntries()）。
+    m_chart->legend()->setVisible(false);
     m_chart->legend()->setAlignment(Qt::AlignBottom);
     // v2.5o：图例仍没贴底 → QtCharts 顶层布局自带内容边距，把它清零；
     // 图例自身也不要背景框（自带圆角+内边距会让它看起来缩进去一块）。
@@ -1178,6 +1180,8 @@ void ChartPanel::rebuildSeries()
         });
     }
 
+    emit legendChanged();   // v2.5q：系列重建 → 主窗重绘自绘图例
+
     if (m_timelineModel) {
         auto snap = m_timelineModel->snapshot();
         if (!snap.isEmpty() || snap.hasAudio() || snap.hasMicroDiff())
@@ -1626,6 +1630,51 @@ void ChartPanel::updateTimeLabelPositions()
             placed.append(labelRect);
         }
     }
+}
+
+/// v2.5q：当前图例项（顺序＝系列顺序；无音频时不列音量）
+QVector<ChartPanel::LegendEntry> ChartPanel::legendEntries() const
+{
+    QVector<LegendEntry> out;
+    if (!m_chart)
+        return out;
+    const bool hasAudio = m_timelineModel ? m_timelineModel->snapshot().hasAudio()
+                                          : true;
+    for (QLegendMarker *mk : m_chart->legend()->markers()) {
+        auto *ls = qobject_cast<QLineSeries *>(mk->series());
+        if (!ls)
+            continue;
+        if (ls == m_volumeSeries && !hasAudio)
+            continue;                       // 无音频不显示音量项
+        LegendEntry e;
+        const QString lb = mk->label();
+        e.text = lb.isEmpty() ? QStringLiteral("?") : lb;
+        e.color = ls->pen().color();
+        e.visible = ls->isVisible();
+        out.push_back(e);
+    }
+    return out;
+}
+
+void ChartPanel::toggleLegendEntry(int index)
+{
+    if (!m_chart)
+        return;
+    const bool hasAudio = m_timelineModel ? m_timelineModel->snapshot().hasAudio()
+                                          : true;
+    int i = 0;
+    for (QLegendMarker *mk : m_chart->legend()->markers()) {
+        auto *ls = qobject_cast<QLineSeries *>(mk->series());
+        if (!ls)
+            continue;
+        if (ls == m_volumeSeries && !hasAudio)
+            continue;
+        if (i++ != index)
+            continue;
+        ls->setVisible(!ls->isVisible());
+        break;
+    }
+    emit legendChanged();
 }
 
 void ChartPanel::resizeEvent(QResizeEvent *event)

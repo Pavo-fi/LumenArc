@@ -1085,6 +1085,63 @@ void MainWindow::buildCentralLayout(const QString &titleBarStyle,
     readoutHolderLay->addWidget(readoutChip);
     readoutHolderLay->addStretch();
     chartStack->addWidget(readoutHolder, 0, 0, Qt::AlignRight | Qt::AlignTop);
+
+    // v2.5q：自绘图例（与徽标、读数块同一行，居中）
+    // 原因：QChart 内建图例 QLegend 自带 5~6px 内边距且无 API 可去，
+    // 无法贴底；这里改成标题行居中的小圆点图例，点击切换系列显隐。
+    auto *legendChip = new QWidget(m_chartContainer);
+    legendChip->setStyleSheet(QStringLiteral(
+        "QWidget{background:rgba(22,24,29,96);border:1px solid %1;border-radius:7px;}")
+        .arg(Theme::Border));
+    auto *legendChipLay = new QHBoxLayout(legendChip);
+    legendChipLay->setContentsMargins(8, 1, 8, 1);
+    legendChipLay->setSpacing(10);
+
+    auto *legendHolder = new QWidget(m_chartContainer);
+    auto *legendHolderLay = new QHBoxLayout(legendHolder);
+    legendHolderLay->setContentsMargins(0, 2, 0, 0);
+    legendHolderLay->setSpacing(0);
+    legendHolderLay->addStretch();
+    legendHolderLay->addWidget(legendChip);
+    legendHolderLay->addStretch();
+    chartStack->addWidget(legendHolder, 0, 0, Qt::AlignHCenter | Qt::AlignTop);
+
+    auto rebuildLegend = [this, legendChip, legendChipLay]() {
+        while (QLayoutItem *it = legendChipLay->takeAt(0)) {
+            if (QWidget *w = it->widget())
+                w->deleteLater();
+            delete it;
+        }
+        if (!m_chartPanel) {
+            legendChip->setVisible(false);
+            return;
+        }
+        const auto entries = m_chartPanel->legendEntries();
+        for (int i = 0; i < entries.size(); ++i) {
+            auto *btn = new QToolButton(legendChip);
+            btn->setAutoRaise(true);
+            btn->setCursor(Qt::PointingHandCursor);
+            btn->setText(QStringLiteral("\u25CF ") + entries[i].text);
+            btn->setToolTip(lang("点击显示 / 隐藏这条曲线",
+                                 "Click to show / hide this curve"));
+            btn->setStyleSheet(
+                QStringLiteral("QToolButton{border:none;background:transparent;"
+                               "font-size:9pt;padding:0 1px;color:%1;}"
+                               "QToolButton:hover{color:%2;}")
+                    .arg(entries[i].visible ? entries[i].color.name()
+                                            : QString(Theme::TextMuted))
+                    .arg(QString(Theme::TextPrimary)));
+            connect(btn, &QToolButton::clicked, this, [this, i]() {
+                if (m_chartPanel)
+                    m_chartPanel->toggleLegendEntry(i);
+            });
+            legendChipLay->addWidget(btn);
+        }
+        legendChip->setVisible(!entries.isEmpty());
+    };
+    if (m_chartPanel)
+        connect(m_chartPanel, &ChartPanel::legendChanged, this, rebuildLegend);
+    rebuildLegend();
     if (m_chartPanel) {
         connect(m_chartPanel, &ChartPanel::cursorReadoutChanged, this,
                 [this, readoutChip](const QString &t, const QString &d) {

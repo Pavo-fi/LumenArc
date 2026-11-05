@@ -35,6 +35,18 @@ class QLabel;
  */
 class ChartPanel : public QChartView
 {
+public:
+    /// v2.5q：自绘图例用的条目（QChart 内建图例有不可去掉的 5~6px 内边距，
+    /// 无法贴底，所以图例改到轨道标题行居中显示，由主窗按此列表自绘）
+    struct LegendEntry {
+        QString text;
+        QColor  color;
+        bool    visible = true;
+    };
+    QVector<LegendEntry> legendEntries() const;
+    /// 点击自绘图例：按序号切换该系列显隐，随后 emit legendChanged()
+    void toggleLegendEntry(int index);
+
     Q_OBJECT
 
 public:
@@ -152,6 +164,8 @@ signals:
     /// v2.5n：游标读数（时间 + 各区域/音量）改到面板标题行显示。
     /// 图形内不再画读数 → 绘图区不再被两行文字压住，也不用为它留上边距。
     void cursorReadoutChanged(const QString &timeText, const QString &dataText);
+    /// v2.5q：图例项变化（系列重建/显隐切换）→ 主窗重绘自绘图例
+    void legendChanged();
     /// Emitted when A/B region changes
     void abRegionChanged();
     /// Emitted when cursor drag ends (Scrub → Paused transition)
