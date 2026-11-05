@@ -132,5 +132,8 @@ private:
     int m_rightMargin = 0;
     QRectF m_storedChartPlotArea;
     static constexpr int BOTTOM_MARGIN = 25;
-    static constexpr int TOP_MARGIN = 5;
+    // v2.5m：顶端刻度标签画在 QRect(0, y-8, .., 16) 里，y = TOP_MARGIN。
+    // TOP_MARGIN=5 时矩形上沿在 -3 → 顶部被裁掉 3px（用户：标签被遮挡）。
+    // 取 13 = 标签半高 8 + 间隙 5：标签完整可见，且距面板顶端正好 5px。
+    static constexpr int TOP_MARGIN = 13;
 };
