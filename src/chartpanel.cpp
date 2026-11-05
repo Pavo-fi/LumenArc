@@ -1631,14 +1631,9 @@ void ChartPanel::updateTimeLabelPositions()
 void ChartPanel::resizeEvent(QResizeEvent *event)
 {
     QChartView::resizeEvent(event);
-    // v2.5p：整块图形（含底部图例）再下移 10px。
-    // QChartView 只把 chart resize 到 viewport 大小，这里改成
-    // 「位置下移 + 高度减少相同值」，让绘图区/轴/图例整体跟着下去。
-    if (m_chart) {
-        const qreal drop = 10.0;
-        const qreal h = qMax<qreal>(40.0, height() - drop);
-        m_chart->setGeometry(QRectF(0, drop, width(), h));
-    }
+    // v2.5p 撤销：setGeometry 下移无效——QChartView 在布局/plotArea 变化时会把
+    // chart 几何复位，且 QLegend 自带约 5~6px 内边距（无 API 可去），
+    // 所以「图例贴底」靠移动几何解决不了，需换自绘图例（见 PENDING）。
     updateTimeLabels();
     updateTimeLabelPositions();
     updateLabelItems();
