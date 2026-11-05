@@ -1631,6 +1631,14 @@ void ChartPanel::updateTimeLabelPositions()
 void ChartPanel::resizeEvent(QResizeEvent *event)
 {
     QChartView::resizeEvent(event);
+    // v2.5p：整块图形（含底部图例）再下移 10px。
+    // QChartView 只把 chart resize 到 viewport 大小，这里改成
+    // 「位置下移 + 高度减少相同值」，让绘图区/轴/图例整体跟着下去。
+    if (m_chart) {
+        const qreal drop = 10.0;
+        const qreal h = qMax<qreal>(40.0, height() - drop);
+        m_chart->setGeometry(QRectF(0, drop, width(), h));
+    }
     updateTimeLabels();
     updateTimeLabelPositions();
     updateLabelItems();

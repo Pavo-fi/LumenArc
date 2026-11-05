@@ -136,5 +136,5 @@ private:
     // TOP_MARGIN=5 时矩形上沿在 -3 → 顶部被裁掉 3px（用户：标签被遮挡）。
     // 取 13 = 标签半高 8 + 间隙 5：标签完整可见，且距面板顶端正好 5px。
     // v2.5o：用户要看效果 —— 在 13 的基础上再压缩 10px（= 23）
-    static constexpr int TOP_MARGIN = 23;
+    static constexpr int TOP_MARGIN = 33;
 };
