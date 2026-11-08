@@ -117,13 +117,16 @@ int RoiModel::findIndexByRoiId(int roiId) const
 // 此板镜像 Theme::DataPalette 六色同序（改动必须两边同步）；矩形/多边形统一同板（规范§14）。
 static const QList<QColor> &dataPalette()
 {
+    // v2.5t：**青绿 bluish green 已摘出** —— 它被「音量」曲线占用
+    // （ChartPanel 音量画笔 QColor(0,158,115,179)），原来区域 3(R3) 与音量撞色，
+    // 曲线叠在一起分不清（用户 2026-11-05 反馈）。
+    // 其余颜色仍是 Okabe-Ito 色盲友好序列，未引入任何新色值。
     static const QList<QColor> colors = {
-        QColor(86, 180, 233),   // 天蓝 sky blue
-        QColor(230, 159, 0),    // 橙 orange
-        QColor(0, 158, 115),    // 青绿 bluish green
-        QColor(213, 94, 0),     // 朱红 vermillion
-        QColor(204, 121, 167),  // 紫红 reddish purple
-        QColor(240, 228, 66)    // 黄 yellow
+        QColor(86, 180, 233),   // 天蓝 sky blue      → 区域 1
+        QColor(230, 159, 0),    // 橙 orange          → 区域 2
+        QColor(213, 94, 0),     // 朱红 vermillion    → 区域 3（原青绿让给音量）
+        QColor(204, 121, 167),  // 紫红 reddish purple→ 区域 4
+        QColor(240, 228, 66)    // 黄 yellow          → 区域 5
     };
     return colors;
 }
