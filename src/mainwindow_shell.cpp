@@ -1814,6 +1814,9 @@ int MainWindow::runShellSelfCheck()
             m_caseOpenPanel->populateRecentCases(QStringList());
             centerCaseOpenPanel();
             pump();
+            check(m_caseOpenPanel->geometry().center()
+                      == centralWidget()->mapTo(this, centralWidget()->rect().center()),
+                  QStringLiteral("起始页以中央工作区为基准居中（主窗口坐标）"));
             check(primary->text() == lang(QStringLiteral("新建案件…"),
                                           QStringLiteral("New Case…")),
                   QStringLiteral("首访主按钮为「新建案件」"));

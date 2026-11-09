@@ -351,7 +351,10 @@ void MainWindow::centerCaseOpenPanel()
     const QSize available = r.size() - QSize(32, 32);
     const QSize wanted = m_caseOpenPanel->size().expandedTo(QSize(720, 460));
     m_caseOpenPanel->resize(wanted.boundedTo(available));
-    m_caseOpenPanel->move(r.center() - m_caseOpenPanel->rect().center());
+    // 面板父对象是 MainWindow，r.center() 却是 centralWidget 局部坐标；
+    // 必须映射到主窗口坐标，否则会被菜单/工具栏及 dock 布局带偏。
+    m_caseOpenPanel->move(centralWidget()->mapTo(this, r.center())
+                          - m_caseOpenPanel->rect().center());
 }
 
 void MainWindow::openCaseFlow(const QString &dir)
