@@ -272,6 +272,13 @@ void MainWindow::createMenus()
     });
     caseMenu->addAction(lang("起始页(&S)...", "&Start Page..."), this,
                         &MainWindow::onShowStartPage);
+    // v2.6：启动显示开关移出起始页，页面本身只保留工作入口。
+    auto *startupPageAction = caseMenu->addAction(
+        lang("启动时显示起始页", "Show start page at startup"));
+    startupPageAction->setCheckable(true);
+    startupPageAction->setChecked(CaseOpenPanel::showStartupPanel());
+    connect(startupPageAction, &QAction::toggled, this,
+            [](bool on) { CaseOpenPanel::setShowStartupPanel(on); });
     caseMenu->addSeparator();
     // v1.18 UI 重组：案件属性与案件根目录合并为一个对话框（无需开案即可改根目录）
     m_casePropsAction = caseMenu->addAction(
@@ -1672,10 +1679,29 @@ void MainWindow::buildCaseUi(const QString &collapseBtnStyle)
             this, &MainWindow::openCaseFlow);
     connect(m_caseOpenPanel, &CaseOpenPanel::browseRequested,
             this, &MainWindow::onOpenCaseBrowse);
+    // 最近案件目录被移动：选择新位置，成功打开后才移除旧记录。
+    connect(m_caseOpenPanel, &CaseOpenPanel::relocateCaseRequested,
+            this, [this](const QString &oldDir) {
+        const QString dir = QFileDialog::getExistingDirectory(this,
+            lang("重新定位案件目录", "Relocate case folder"),
+            CaseManager::caseRootDir());
+        if (dir.isEmpty())
+            return;
+        openCaseFlow(dir);
+        if (m_caseManager->isOpen()
+            && QDir(m_caseManager->caseDir()).absolutePath()
+                   == QDir(dir).absolutePath()) {
+            m_caseManager->removeRecent(oldDir);
+            m_caseOpenPanel->refresh();
+        }
+    });
     connect(m_caseOpenPanel, &CaseOpenPanel::newCaseRequested,
             this, [this]() { onNewCase(); });
     connect(m_caseOpenPanel, &CaseOpenPanel::independentRequested,
-            this, [this]() { m_caseOpenPanel->hide(); });
+            this, [this]() {
+        m_caseOpenPanel->hide();
+        onOpenFileTemporary();   // 「直接打开视频」必须真的打开文件选择器
+    });
     connect(m_caseOpenPanel, &CaseOpenPanel::closeRequested,
             this, [this]() { m_caseOpenPanel->hide(); });
     connect(m_caseManager, &CaseManager::caseOpened,

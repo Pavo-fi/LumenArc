@@ -346,8 +346,11 @@ void MainWindow::centerCaseOpenPanel()
 {
     if (!m_caseOpenPanel || !centralWidget())
         return;
-    // 以内容区为基准居中（dock/工具栏之外）
+    // 以内容区为基准居中（dock/工具栏之外）；小窗口时缩进可用区域。
     const QRect r = centralWidget()->rect();
+    const QSize available = r.size() - QSize(32, 32);
+    const QSize wanted = m_caseOpenPanel->size().expandedTo(QSize(720, 460));
+    m_caseOpenPanel->resize(wanted.boundedTo(available));
     m_caseOpenPanel->move(r.center() - m_caseOpenPanel->rect().center());
 }
 

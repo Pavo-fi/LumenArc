@@ -46,12 +46,14 @@
 #include <QEventLoop>
 #include <QFile>
 #include <QTextStream>
+#include <QTemporaryDir>
 #include <QTimer>
 #include <QGraphicsOpacityEffect>
 #include <QGridLayout>
 #include <QGroupBox>
 #include <QHeaderView>
 #include <QLabel>
+#include <QLineEdit>
 #include <QListWidget>
 #include <QLocale>
 #include <QMenuBar>
@@ -1791,6 +1793,84 @@ int MainWindow::runShellSelfCheck()
     showStage(ui::Stage::Analyze);
     pump();
     check(m_workspaceStack->currentWidget() == m_analyzePage, QStringLiteral("回到分析页"));
+
+    // 8.5 起始页：首访 / 回访 / 目录失效三态。
+    // 直接向展示组件注入目录，不读写用户 QSettings。
+    if (m_caseOpenPanel) {
+        auto *primary = m_caseOpenPanel->findChild<QPushButton *>(
+            QStringLiteral("caseOpenPrimary"));
+        auto *newCase = m_caseOpenPanel->findChild<QPushButton *>(
+            QStringLiteral("caseOpenNewCase"));
+        auto *onboarding = m_caseOpenPanel->findChild<QWidget *>(
+            QStringLiteral("caseOpenOnboarding"));
+        auto *recentList = m_caseOpenPanel->findChild<QListWidget *>(
+            QStringLiteral("caseOpenRecentList"));
+        auto *search = m_caseOpenPanel->findChild<QLineEdit *>(
+            QStringLiteral("caseOpenSearch"));
+        check(primary && newCase && onboarding && recentList && search,
+              QStringLiteral("起始页双态控件已创建"));
+        if (primary && newCase && onboarding && recentList && search) {
+            m_caseOpenPanel->show();
+            m_caseOpenPanel->populateRecentCases(QStringList());
+            centerCaseOpenPanel();
+            pump();
+            check(primary->text() == lang(QStringLiteral("新建案件…"),
+                                          QStringLiteral("New Case…")),
+                  QStringLiteral("首访主按钮为「新建案件」"));
+            check(onboarding->isVisible() && !recentList->isVisible(),
+                  QStringLiteral("首访显示简短引导，不显示空列表"));
+            check(!newCase->isVisible(), QStringLiteral("首访不重复显示新建按钮"));
+            snap(QStringLiteral("start-empty"));
+
+            QTemporaryDir temp;
+            const QString caseA = QDir(temp.path()).filePath(QStringLiteral("case-A"));
+            const QString caseB = QDir(temp.path()).filePath(QStringLiteral("case-B"));
+            QDir().mkpath(caseA);
+            QDir().mkpath(caseB);
+            m_caseOpenPanel->populateRecentCases(QStringList{caseA, caseB});
+            pump();
+            check(primary->text() == lang(QStringLiteral("继续上次案件"),
+                                          QStringLiteral("Continue last case")),
+                  QStringLiteral("回访主按钮为「继续上次案件」"));
+            check(recentList->count() == 2 && recentList->isVisible()
+                      && newCase->isVisible() && !onboarding->isVisible(),
+                  QStringLiteral("回访显示最近案件与独立新建入口"));
+            check(!search->isVisible(), QStringLiteral("少量案件不显示搜索框"));
+            snap(QStringLiteral("start-recents"));
+
+            QStringList many{caseA, caseB};
+            for (int i = 0; i < 5; ++i) {
+                const QString dir = QDir(temp.path()).filePath(
+                    QStringLiteral("case-extra-%1").arg(i));
+                QDir().mkpath(dir);
+                many.append(dir);
+            }
+            m_caseOpenPanel->populateRecentCases(many);
+            pump();
+            check(search->isVisible(), QStringLiteral("超过 6 个案件才显示搜索框"));
+            search->setText(QStringLiteral("case-A"));
+            pump();
+            int visibleItems = 0;
+            for (int i = 0; i < recentList->count(); ++i)
+                if (!recentList->item(i)->isHidden())
+                    ++visibleItems;
+            check(visibleItems == 1, QStringLiteral("最近案件搜索过滤正确"));
+
+            const QString missing = QDir(temp.path()).filePath(QStringLiteral("missing-case"));
+            m_caseOpenPanel->populateRecentCases(QStringList{missing});
+            pump();
+            check(recentList->count() == 1
+                      && !recentList->item(0)->data(Qt::UserRole + 1).toBool()
+                      && recentList->item(0)->text().contains(
+                          lang(QStringLiteral("目录已移动"), QStringLiteral("Folder moved"))),
+                  QStringLiteral("失效目录明确提示双击重新定位"));
+            // 不在此触发 itemActivated：主窗连接会打开真实目录对话框。
+            snap(QStringLiteral("start-stale"));
+        }
+        m_caseOpenPanel->refresh();   // 恢复为用户真实最近案件
+        m_caseOpenPanel->hide();
+        pump();
+    }
 
     // 9. 任务带
     const int id = m_taskBar->addTask(QStringLiteral("自检任务"));
