@@ -115,19 +115,36 @@ int RoiModel::findIndexByRoiId(int roiId) const
 // 规范§8：数据系列颜色只从 DataPalette 顺序取色（第 7 条起循环）。
 // 域层不可 include theme.h（lumenarc_roi_model_test 仅链 Core+Gui），
 // 此板镜像 Theme::DataPalette 六色同序（改动必须两边同步）；矩形/多边形统一同板（规范§14）。
+/// 与白色混合 pct%（提亮），用于把 6 个基色扩成 12 个互不相同的档位。
+static QColor lighten(const QColor &c, int pct)
+{
+    return QColor(c.red()   + (255 - c.red())   * pct / 100,
+                  c.green() + (255 - c.green()) * pct / 100,
+                  c.blue()  + (255 - c.blue())  * pct / 100);
+}
+
 static const QList<QColor> &dataPalette()
 {
-    // v2.5t：**青绿 bluish green 已摘出** —— 它被「音量」曲线占用
-    // （ChartPanel 音量画笔 QColor(0,158,115,179)），原来区域 3(R3) 与音量撞色，
-    // 曲线叠在一起分不清（用户 2026-11-05 反馈）。
-    // 其余颜色仍是 Okabe-Ito 色盲友好序列，未引入任何新色值。
-    static const QList<QColor> colors = {
-        QColor(86, 180, 233),   // 天蓝 sky blue      → 区域 1
-        QColor(230, 159, 0),    // 橙 orange          → 区域 2
-        QColor(213, 94, 0),     // 朱红 vermillion    → 区域 3（原青绿让给音量）
-        QColor(204, 121, 167),  // 紫红 reddish purple→ 区域 4
-        QColor(240, 228, 66)    // 黄 yellow          → 区域 5
-    };
+    // v2.5t：12 色档位，**12 个区域之后才循环**（用户 2026-11-05：
+    // 颜色不要太快重复）。
+    //   前 6 个 = Okabe-Ito 基础色（青绿 bluish green 已摘出，专职给「音量」曲线，
+    //   否则区域 3 与音量撞色）；
+    //   后 6 个 = 同色相提亮 45% 的变体，与同色号基础色相距 6 个槽位，
+    //   相邻区域永远不同色，且不引入任何新的色相。
+    static const QList<QColor> colors = [] {
+        const QList<QColor> base = {
+            QColor(86, 180, 233),   // 天蓝  sky blue
+            QColor(230, 159, 0),    // 橙    orange
+            QColor(213, 94, 0),     // 朱红  vermillion
+            QColor(204, 121, 167),  // 紫红  reddish purple
+            QColor(240, 228, 66),   // 黄    yellow
+            QColor(0, 114, 178),    // 深蓝  blue
+        };
+        QList<QColor> out = base;
+        for (const QColor &c : base)
+            out.append(lighten(c, 45));
+        return out;
+    }();
     return colors;
 }
 
