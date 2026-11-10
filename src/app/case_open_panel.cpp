@@ -305,10 +305,14 @@ void CaseOpenPanel::populateRecentCases(const QStringList &dirs)
         auto *item = new QListWidgetItem(m_recentList);
         item->setData(Qt::UserRole, dir);
         item->setData(Qt::UserRole + 1, exists);
-        item->setText(exists ? QDir(dir).dirName()
-                             : QDir(dir).dirName() + QStringLiteral("\n")
-                               + lang("目录已移动 · 双击重新定位",
-                                      "Folder moved · double-click to relocate"));
+        // setItemWidget 后 QListWidget 仍会绘制 item 文本；若这里 setText，
+        // 会与行内 QLabel 重绘同一字符串（截图表现为中文错位重叠）。
+        // 文本仅存数据角色供搜索/自检，绘制完全交给行内标签。
+        const QString displayText = exists ? QDir(dir).dirName()
+            : QDir(dir).dirName() + QStringLiteral("\n")
+              + lang("目录已移动 · 双击重新定位",
+                     "Folder moved · double-click to relocate");
+        item->setData(Qt::UserRole + 2, displayText);
         item->setToolTip(dir);
         item->setSizeHint(QSize(0, exists ? 38 : 54));
 
@@ -320,7 +324,7 @@ void CaseOpenPanel::populateRecentCases(const QStringList &dirs)
         auto *rowLayout = new QHBoxLayout(row);
         rowLayout->setContentsMargins(10, 2, 4, 2);
         rowLayout->setSpacing(6);
-        auto *name = new QLabel(item->text(), row);
+        auto *name = new QLabel(displayText, row);
         name->setAttribute(Qt::WA_TransparentForMouseEvents, true);
         name->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
         name->setToolTip(dir);
@@ -331,11 +335,11 @@ void CaseOpenPanel::populateRecentCases(const QStringList &dirs)
         auto *remove = new QToolButton(row);
         remove->setObjectName(QStringLiteral("caseOpenRemoveRecent"));
         remove->setProperty("recentDir", dir);
-        remove->setText(lang("删除", "Remove"));
-        remove->setToolTip(lang("仅从最近案件移除，不删除文件",
-                                "Remove from recent cases only; no files are deleted"));
+        remove->setText(lang("不再显示", "Hide"));
+        remove->setToolTip(lang("只从此列表移除；案件目录、视频和分析结果全部保留",
+                                "Hide from this list only; the case, videos and analysis stay on disk"));
         remove->setCursor(Qt::PointingHandCursor);
-        remove->setFixedSize(44, 26);
+        remove->setFixedSize(64, 26);
         remove->setStyleSheet(QStringLiteral(
             "QToolButton { background:transparent; color:%1; border:1px solid transparent;"
             " border-radius:4px; font-size:12px; padding:0 4px; }"
@@ -360,7 +364,7 @@ void CaseOpenPanel::applyFilter()
         QListWidgetItem *item = m_recentList->item(i);
         const QString dir = item->data(Qt::UserRole).toString();
         const bool match = needle.isEmpty()
-            || item->text().contains(needle, Qt::CaseInsensitive)
+            || item->data(Qt::UserRole + 2).toString().contains(needle, Qt::CaseInsensitive)
             || dir.contains(needle, Qt::CaseInsensitive);
         item->setHidden(!match);
         if (match)

@@ -1840,6 +1840,8 @@ int MainWindow::runShellSelfCheck()
                       && newCase->isVisible() && !onboarding->isVisible(),
                   QStringLiteral("回访显示最近案件与独立新建入口"));
             check(!search->isVisible(), QStringLiteral("少量案件不显示搜索框"));
+            check(recentList->item(0)->text().isEmpty(),
+                  QStringLiteral("自定义行只绘制一次案件名称（列表底层文本为空）"));
             snap(QStringLiteral("start-recents"));
 
             QStringList many{caseA, caseB};
@@ -1865,7 +1867,7 @@ int MainWindow::runShellSelfCheck()
             pump();
             check(recentList->count() == 1
                       && !recentList->item(0)->data(Qt::UserRole + 1).toBool()
-                      && recentList->item(0)->text().contains(
+                      && recentList->item(0)->data(Qt::UserRole + 2).toString().contains(
                           lang(QStringLiteral("目录已移动"), QStringLiteral("Folder moved"))),
                   QStringLiteral("失效目录明确提示双击重新定位"));
             // 不在此触发 itemActivated：主窗连接会打开真实目录对话框。
@@ -1920,9 +1922,12 @@ int MainWindow::runShellSelfCheck()
             const auto removeButtons = removalProbe.findChildren<QToolButton *>(
                 QStringLiteral("caseOpenRemoveRecent"));
             check(probeList && probeList->count() == 2
-                      && probeList->item(0)->text().startsWith(QStringLiteral("案件-甲"))
-                      && removeButtons.size() == 2,
-                  QStringLiteral("中文案件名与逐行删除按钮正常"));
+                      && probeList->item(0)->data(Qt::UserRole + 2).toString()
+                             .startsWith(QStringLiteral("案件-甲"))
+                      && removeButtons.size() == 2
+                      && removeButtons.constFirst()->text()
+                             == lang(QStringLiteral("不再显示"), QStringLiteral("Hide")),
+                  QStringLiteral("中文案件名与「不再显示」按钮正常"));
             if (!removeButtons.isEmpty())
                 removeButtons.constFirst()->click();
             check(probeList->count() == 1
