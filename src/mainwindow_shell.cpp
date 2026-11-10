@@ -35,6 +35,7 @@
 #include "ui/inspector_panel.h"
 #include "ui/task_bar.h"
 #include "ui/workflow_bar.h"
+#include "videowidget.h"
 
 #include <QAbstractAnimation>
 #include <QCheckBox>
@@ -1966,6 +1967,36 @@ int MainWindow::runShellSelfCheck()
     // 10. 工作流条强制绘制（paintEvent 不崩）
     const QPixmap shot = m_workflowBar->grab();
     check(!shot.isNull() && shot.width() > 50, QStringLiteral("工作流条 paintEvent 正常出图"));
+
+    // 11. 多边形：双击位置就是最后顶点，不退回前一个单击点。
+    OverlayWidget polygonProbe;
+    polygonProbe.resize(400, 300);
+    polygonProbe.setVideoSize(400, 300);
+    polygonProbe.setVideoDisplayRect(QRect(0, 0, 400, 300));
+    RoiModel polygonModel;
+    polygonProbe.setPolygonModel(&polygonModel);
+    polygonProbe.setPolygonMode(true);
+    auto polygonMouse = [&polygonProbe](const QPoint &pos, QEvent::Type type) {
+        QMouseEvent mouse(type, QPointF(pos), Qt::LeftButton,
+                          Qt::LeftButton, Qt::NoModifier);
+        QCoreApplication::sendEvent(&polygonProbe, &mouse);
+    };
+    const QPoint polyA(20, 20);
+    const QPoint polyB(180, 20);
+    const QPoint polyClose(180, 160);
+    polygonMouse(polyA, QEvent::MouseButtonPress);
+    polygonMouse(polyB, QEvent::MouseButtonPress);
+    // 模拟 Qt 双击序列：先一次 press（会加点），再 double-click。
+    polygonMouse(polyClose, QEvent::MouseButtonPress);
+    polygonMouse(polyClose, QEvent::MouseButtonDblClick);
+    check(polygonModel.polygonCount() == 1,
+          QStringLiteral("多边形在新位置双击可完成三顶点绘制"));
+    if (polygonModel.polygonCount() == 1) {
+        const QPolygon result = polygonModel.polygons().constFirst();
+        check(result.size() == 3 && result.at(0) == polyA && result.at(1) == polyB
+                  && result.at(2) == polyClose,
+              QStringLiteral("多边形以双击点收口且无连续重复顶点"));
+    }
 
     qInfo().noquote() << QStringLiteral("===== 自检结束：失败 %1 项 =====").arg(fails);
     lines << QStringLiteral("===== 自检结束：失败 %1 项 =====").arg(fails);

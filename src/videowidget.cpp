@@ -1240,9 +1240,15 @@ void OverlayWidget::mouseDoubleClickEvent(QMouseEvent *event)
 {
     if (event->button() == Qt::LeftButton && m_polygonMode
         && m_dragMode == DragMode::CreatePolygon) {
-        // 双击完成多边形：移除最后一个重复点（双击的第二次 press 已添加）
-        if (!m_polygonPoints.isEmpty())
+        // 双击位置本身就是最后一个顶点。Qt 在 double-click 前通常还会发一次
+        // mousePress，把该位置追加进 m_polygonPoints；旧逻辑却 removeLast()，
+        // 导致收口退回前一个单击点。现在保留双击点，仅去掉连续重复顶点。
+        const QPoint closingPoint = mapToVideo(event->pos());
+        while (m_polygonPoints.size() > 1
+               && m_polygonPoints.constLast() == m_polygonPoints.at(m_polygonPoints.size() - 2))
             m_polygonPoints.removeLast();
+        if (m_polygonPoints.isEmpty() || m_polygonPoints.constLast() != closingPoint)
+            m_polygonPoints.append(closingPoint);
 
         if (m_polygonPoints.size() >= 3 && m_polygonModel) {
             QPolygon polygon(m_polygonPoints);
