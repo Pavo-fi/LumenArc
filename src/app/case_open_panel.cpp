@@ -13,6 +13,8 @@
 #include <QPushButton>
 #include <QSettings>
 #include <QShortcut>
+#include <QSizePolicy>
+#include <QToolButton>
 #include <QVBoxLayout>
 
 #include "app/case_manager.h"
@@ -249,6 +251,12 @@ CaseOpenPanel::CaseOpenPanel(CaseManager *cm, QWidget *parent)
     connect(m_recentList, &QListWidget::itemActivated,
             this, &CaseOpenPanel::onItemActivated);
     connect(m_searchEdit, &QLineEdit::textChanged, this, &CaseOpenPanel::applyFilter);
+    auto *removeSelected = new QShortcut(QKeySequence(Qt::Key_Delete), m_recentList);
+    removeSelected->setContext(Qt::WidgetWithChildrenShortcut);
+    connect(removeSelected, &QShortcut::activated, this, [this]() {
+        if (QListWidgetItem *item = m_recentList->currentItem())
+            removeRecentEntry(item->data(Qt::UserRole).toString());
+    });
     auto *escape = new QShortcut(QKeySequence(Qt::Key_Escape), this);
     escape->setContext(Qt::WidgetWithChildrenShortcut);
     connect(escape, &QShortcut::activated, this, &CaseOpenPanel::closeRequested);
@@ -301,8 +309,41 @@ void CaseOpenPanel::populateRecentCases(const QStringList &dirs)
                                       "Folder moved · double-click to relocate"));
         item->setToolTip(dir);
         item->setSizeHint(QSize(0, exists ? 38 : 54));
-        if (!exists)
-            item->setForeground(QColor(Theme::TextSecond));
+
+        auto *row = new QWidget(m_recentList);
+        row->setObjectName(QStringLiteral("caseOpenRecentRow"));
+        row->setStyleSheet(QStringLiteral("QWidget#caseOpenRecentRow{background:transparent;}"));
+        auto *rowLayout = new QHBoxLayout(row);
+        rowLayout->setContentsMargins(10, 2, 4, 2);
+        rowLayout->setSpacing(6);
+        auto *name = new QLabel(item->text(), row);
+        name->setAttribute(Qt::WA_TransparentForMouseEvents, true);
+        name->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
+        name->setToolTip(dir);
+        name->setStyleSheet(QStringLiteral("color:%1; font-size:12px;")
+                                .arg(exists ? Theme::TextPrimary : Theme::TextSecond));
+        rowLayout->addWidget(name, 1);
+
+        auto *remove = new QToolButton(row);
+        remove->setObjectName(QStringLiteral("caseOpenRemoveRecent"));
+        remove->setProperty("recentDir", dir);
+        remove->setText(lang("删除", "Remove"));
+        remove->setToolTip(lang("仅从最近案件移除，不删除文件",
+                                "Remove from recent cases only; no files are deleted"));
+        remove->setCursor(Qt::PointingHandCursor);
+        remove->setFixedSize(44, 26);
+        remove->setStyleSheet(QStringLiteral(
+            "QToolButton { background:transparent; color:%1; border:1px solid transparent;"
+            " border-radius:4px; font-size:12px; padding:0 4px; }"
+            "QToolButton:hover { color:%2; background:%3; border-color:%4; }"
+            "QToolButton:focus { border-color:%5; }")
+            .arg(Theme::TextMuted, Theme::TextPrimary, Theme::BgHover,
+                 Theme::Border, Theme::Accent));
+        connect(remove, &QToolButton::clicked, this, [this, dir]() {
+            removeRecentEntry(dir);
+        });
+        rowLayout->addWidget(remove, 0, Qt::AlignVCenter);
+        m_recentList->setItemWidget(item, row);
     }
     applyFilter();
 }
@@ -333,6 +374,20 @@ void CaseOpenPanel::activateRecent(const QString &dir)
         emit openCaseRequested(dir);
     else
         emit relocateCaseRequested(dir);
+}
+
+void CaseOpenPanel::removeRecentEntry(const QString &dir)
+{
+    if (dir.isEmpty())
+        return;
+    if (m_caseManager) {
+        m_caseManager->removeRecent(dir);
+        refresh();
+    } else {
+        m_recents.removeAll(dir);
+        const QStringList remaining = m_recents;
+        populateRecentCases(remaining);
+    }
 }
 
 void CaseOpenPanel::onItemActivated(QListWidgetItem *item)

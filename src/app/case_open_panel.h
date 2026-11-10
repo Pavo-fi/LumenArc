@@ -44,6 +44,7 @@ signals:
 private:
     void onItemActivated(QListWidgetItem *item);
     void activateRecent(const QString &dir);
+    void removeRecentEntry(const QString &dir);   // 只移除最近记录，不碰磁盘
     void applyFilter();
 
     CaseManager *m_caseManager = nullptr;   // 不持有

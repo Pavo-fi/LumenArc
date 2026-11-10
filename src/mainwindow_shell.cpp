@@ -1869,6 +1869,43 @@ int MainWindow::runShellSelfCheck()
                   QStringLiteral("失效目录明确提示双击重新定位"));
             // 不在此触发 itemActivated：主窗连接会打开真实目录对话框。
             snap(QStringLiteral("start-stale"));
+
+            // 删除行为用无 CaseManager 的独立展示组件验证，不碰用户设置。
+            const QString chineseCase = QDir(temp.path()).filePath(
+                QStringLiteral("案件-甲"));
+            QDir().mkpath(chineseCase);
+            CaseOpenPanel removalProbe(nullptr);
+            removalProbe.populateRecentCases(QStringList{chineseCase, caseB});
+            auto *probeList = removalProbe.findChild<QListWidget *>(
+                QStringLiteral("caseOpenRecentList"));
+            const auto removeButtons = removalProbe.findChildren<QToolButton *>(
+                QStringLiteral("caseOpenRemoveRecent"));
+            check(probeList && probeList->count() == 2
+                      && probeList->item(0)->text().startsWith(QStringLiteral("案件-甲"))
+                      && removeButtons.size() == 2,
+                  QStringLiteral("中文案件名与逐行删除按钮正常"));
+            if (!removeButtons.isEmpty())
+                removeButtons.constFirst()->click();
+            check(probeList->count() == 1
+                      && probeList->item(0)->data(Qt::UserRole).toString() == caseB,
+                  QStringLiteral("删除只移除所选最近记录并保留其他案件"));
+            QToolButton *removeB = nullptr;
+            const auto remainingRemove = removalProbe.findChildren<QToolButton *>(
+                QStringLiteral("caseOpenRemoveRecent"));
+            for (QToolButton *button : remainingRemove)
+                if (button->property("recentDir").toString() == caseB)
+                    removeB = button;
+            if (removeB)
+                removeB->click();
+            auto *probePrimary = removalProbe.findChild<QPushButton *>(
+                QStringLiteral("caseOpenPrimary"));
+            auto *probeOnboarding = removalProbe.findChild<QWidget *>(
+                QStringLiteral("caseOpenOnboarding"));
+            check(probeList->count() == 0 && probePrimary
+                      && probePrimary->text() == lang(QStringLiteral("新建案件…"),
+                                                      QStringLiteral("New Case…"))
+                      && probeOnboarding && !probeOnboarding->isHidden(),
+                  QStringLiteral("删空最近案件后回到首访态"));
         }
         m_caseOpenPanel->refresh();   // 恢复为用户真实最近案件
         m_caseOpenPanel->hide();
