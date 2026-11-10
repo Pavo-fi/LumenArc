@@ -35,6 +35,10 @@ public:
     /// toleranceMs：缺口/重叠判定容差（与 domain kContinuityToleranceMs 对齐）
     void setLanes(const QVector<CamLane> &lanes, qint64 toleranceMs = 2000);
 
+    /// 时间轴条整体纵向高度（纯函数；布局与自检共用同一口径）。
+    /// v2.7 用户拍板：各宫格时间轴纵向高度压到约一半，把高度还给画面。
+    static int timelineHeightFor(int laneCount);
+
     /// 共享墙钟游标（P-57）：-1 = 不显示
     void setCursorMs(qint64 wallMs);
     qint64 cursorMs() const { return m_cursorMs; }

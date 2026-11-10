@@ -266,7 +266,9 @@ void MultiCamSyncService::play()
         m_lanePlaying[i] = syncLaneCovers(m_lanes[i], m_clockWallMs);
         if (m_lanePlaying[i]) {
             m_engines[i]->setRate(m_rate);
-            m_engines[i]->play();
+            // 每次起播都以当前墙钟重锚该路；playAt 原子落点+播放，
+            // 避免加载/暂停时的旧 position 被当作起播点。
+            m_engines[i]->playAt(syncStreamOf(m_lanes[i], m_clockWallMs));
         }
     }
     m_tick->start();
@@ -325,14 +327,18 @@ void MultiCamSyncService::seekWall(qint64 wallMs)
         const bool covers = syncLaneCovers(m_lanes[i], wallMs);
         const qint64 target = qBound<qint64>(0, syncStreamOf(m_lanes[i], wallMs),
                                              qMax<qint64>(0, m_lanes[i].durationMs));
-        m_engines[i]->seek(target);
+        // 同 play()：本想「seek 后起播」时必须一条原子命令下发，
+        // 否则单槽命令队列会让 play 覆盖 seek 参数，按旧位置起播（不同步）。
+        const bool needStart = (m_state == State::Playing) && covers && !m_lanePlaying[i];
+        if (needStart) {
+            m_engines[i]->setRate(m_rate);
+            m_engines[i]->playAt(target);
+        } else {
+            m_engines[i]->seek(target);
+        }
         if (m_state == State::Playing) {
-            if (covers && !m_lanePlaying[i]) {
-                m_engines[i]->setRate(m_rate);
-                m_engines[i]->play();
-            } else if (!covers && m_lanePlaying[i]) {
+            if (!covers && m_lanePlaying[i])
                 m_engines[i]->pause();
-            }
             m_lanePlaying[i] = covers;
         }
     }
@@ -501,10 +507,9 @@ void MultiCamSyncService::applyCoverageAndDrift(int idx, qint64 wallMs)
     }
     const qint64 target = syncStreamOf(m_lanes[idx], wallMs);
     if (!m_lanePlaying[idx]) {
-        // 缺口复出：seek 到当前墙钟对应帧再续播
-        e->seek(target);
+        // 缺口复出：原子落到当前墙钟对应帧再续播，不经过旧位置。
         e->setRate(m_rate);
-        e->play();
+        e->playAt(target);
         m_lanePlaying[idx] = true;
         m_prevErr[idx] = std::numeric_limits<qint64>::min();
         return;

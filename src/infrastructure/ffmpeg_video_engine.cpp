@@ -132,7 +132,8 @@ bool FfmpegVideoEngine::load(const QString &filePath)
     return true;
 }
 
-void FfmpegVideoEngine::play()  { postCommand(Command::Play); }
+void FfmpegVideoEngine::play()  { postCommand(Command::Play, -1); }
+void FfmpegVideoEngine::playAt(qint64 timeMs) { postCommand(Command::Play, timeMs); }
 void FfmpegVideoEngine::pause() { postCommand(Command::Pause); }
 void FfmpegVideoEngine::stop()  { postCommand(Command::Stop); }
 
@@ -1406,8 +1407,12 @@ void FfmpegVideoEngine::workerMain()
             switch (cmd) {
             case Command::Play:
                 prefetchAbort();
-                handleSeek(m_positionMs.load());
-                if (m_eof)
+                // playAt 把目标时刻随 Play 一起入队，杜绝「先 seek 后 play」
+                // 被单槽命令队列覆盖后按旧位置起播（多机不同步根因）。
+                handleSeek(arg >= 0 ? arg : m_positionMs.load());
+                // 只有普通 play()（arg<0，语义=「从头再来」）才在 EOF 归零；
+                // playAt(t) 的落点必须尊重，否则多机起播会被打回第 0 帧。
+                if (m_eof && arg < 0)
                     handleSeek(0);
                 m_clockValid = false;
                 m_state = static_cast<int>(PlaybackState::Playing);

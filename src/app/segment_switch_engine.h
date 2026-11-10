@@ -35,6 +35,7 @@ public:
     // ---- IVideoEngine（虚拟轴语义）----
     bool load(const QString &filePath) override;   // 参数忽略：内部锚定段 0
     void play() override;
+    void playAt(qint64 virtMs) override;
     void pause() override;
     void stop() override;
     void unload() override;

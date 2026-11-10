@@ -22,14 +22,26 @@
 namespace {
 constexpr int kLabelW = 168;    // 左侧机位标签列宽
 constexpr int kMarginR = 12;
-// v2.0 压缩：底部各区域整体收窄，把高度让给画面（用户实测：两侧空太多）
-constexpr int kLaneH = 28;      // 机位行高（原 34）
-constexpr int kLaneGap = 4;     // 行间距（原 8）
-constexpr int kTopMargin = 22;  // 顶部留位：游标时刻气泡高 18+2（原 26）
-constexpr int kTickLabelH = 14; // 底部刻度文字区（原 20）
-constexpr int kBandLabelH = 12; // 带标签区（缺口/重叠时长，原 16）
+// v2.7（用户拍板）：时间轴纵向高度整体压到约一半，把高度还给画面。
+//   机位行 28→14、行距 4→2 = 每行占位 32→16，**严格减半**；
+//   顶部留位 22→16 与带/刻度标签 12→10、14→12 受限于「游标气泡不能出血、
+//   9px 字不能被裁」，是不能再压的下限（压过头会出现字被切、气泡被切）。
+// @note 与 setMinimumHeight / paintEvent 共用，改动必须同步那里的字号。
+constexpr int kLaneH = 14;      // 机位行高（原 28）
+constexpr int kLaneGap = 2;     // 行间距（原 4）
+constexpr int kTopMargin = 16;  // 顶部留位：游标气泡 13+3（原 22；再小气泡出血）
+constexpr int kTickLabelH = 12; // 底部刻度文字区（原 14；下限）
+constexpr int kBandLabelH = 10; // 带标签区（原 12；9px 字要用 10px 才不裁切）
+constexpr int kLaneFontPx = 9;  // 行名/块内字（行矮了，字号跟着收）
+constexpr int kCursorBubbleH = 13;   // 游标时刻气泡高（原 16）
 constexpr qint64 kMinZoomMs = 10000;   // 最小可视窗 10s（滚轮最大放大）
 } // namespace
+
+int MultiCamViewWidget::timelineHeightFor(int laneCount)
+{
+    const int n = qMax(0, laneCount);
+    return kTopMargin + n * (kLaneH + kLaneGap) + kBandLabelH + kTickLabelH + 6;
+}
 
 // ---------------------------------------------------------------------------
 // MultiCamViewWidget
@@ -46,8 +58,7 @@ void MultiCamViewWidget::setLanes(const QVector<CamLane> &lanes,
 {
     m_lanes = lanes;
     m_tolMs = toleranceMs;
-    setMinimumHeight(kTopMargin + int(lanes.size()) * (kLaneH + kLaneGap)
-                     + kBandLabelH + kTickLabelH + 6);   // 底部留白（原 14）
+    setMinimumHeight(timelineHeightFor(int(lanes.size())));
     m_viewSpan = 0;        // v2.1：换机位/重载 → 回到全览
     m_viewT0 = 0;
     rebuildLayout();
@@ -284,7 +295,7 @@ void MultiCamViewWidget::paintEvent(QPaintEvent *)
         }
         p.drawRect(b.rect);
         QFont f = p.font();
-        f.setPixelSize(10);
+        f.setPixelSize(kLaneFontPx);
         p.setFont(f);
         p.setPen(b.overlap ? QColor(Theme::Danger) : textSec);
         const QFontMetrics fm(p.font());
@@ -304,23 +315,23 @@ void MultiCamViewWidget::paintEvent(QPaintEvent *)
         const int y = kTopMargin + i * (kLaneH + kLaneGap);
         p.setPen(textSec);
         QFont lf = p.font();
-        lf.setPixelSize(11);
+        lf.setPixelSize(kLaneFontPx);
         p.setFont(lf);
-        const QRect nameRect(4, y, kLabelW - 10, 16);
+        // 行高减半后只剩一行空间：已对时不再另起一行，改为行尾绿勾（tooltip 仍有全称）
+        const int markW = l.truthSynced ? 14 : 0;
+        const QRect nameRect(4, y, kLabelW - 10 - markW, kLaneH);
         p.drawText(nameRect, Qt::AlignVCenter | Qt::AlignLeft,
                    p.fontMetrics().elidedText(
                        QStringLiteral("%1  %2").arg(l.videoId, l.fileName),
                        Qt::ElideRight, nameRect.width()));
-        // v1.16.0：北京时间对时完成（直接/间接）→ 行标签下挂绿色明显标识
         if (l.truthSynced) {
             QFont bf2 = p.font();
-            bf2.setPixelSize(10);
+            bf2.setPixelSize(kLaneFontPx);
             bf2.setBold(true);
             p.setFont(bf2);
             p.setPen(QColor(Theme::Success));
-            p.drawText(QRect(4, y + 16, kLabelW - 10, 14),
-                       Qt::AlignVCenter | Qt::AlignLeft,
-                       lang("✓ 已对时·北京时间", "✓ Beijing-synced"));
+            p.drawText(QRect(nameRect.right(), y, markW, kLaneH),
+                       Qt::AlignVCenter | Qt::AlignRight, QStringLiteral("✓"));
         }
     }
 
@@ -342,7 +353,7 @@ void MultiCamViewWidget::paintEvent(QPaintEvent *)
             if (ov.left() > lastWarnX + 14) {
                 p.setPen(QColor(Theme::Danger));
                 QFont wf = p.font();
-                wf.setPixelSize(12);
+                wf.setPixelSize(kLaneFontPx + 1);
                 wf.setBold(true);
                 p.setFont(wf);
                 p.drawText(QRect(ov.left(), ov.top(), 16, ov.height()),
@@ -356,7 +367,7 @@ void MultiCamViewWidget::paintEvent(QPaintEvent *)
         if (r.width() > 48) {
             p.setPen(QColor(Theme::AccentOnDark));
             QFont f = p.font();
-            f.setPixelSize(11);
+            f.setPixelSize(kLaneFontPx);
             f.setBold(true);
             p.setFont(f);
             const auto &l = m_lanes[br.row];
@@ -371,7 +382,7 @@ void MultiCamViewWidget::paintEvent(QPaintEvent *)
 
     // 墙钟刻度
     QFont small = p.font();
-    small.setPixelSize(10);
+    small.setPixelSize(kLaneFontPx);
     p.setFont(small);
     const int tickY = kTopMargin + int(m_lanes.size()) * (kLaneH + kLaneGap)
                       + kBandLabelH;
@@ -415,16 +426,18 @@ void MultiCamViewWidget::paintEvent(QPaintEvent *)
             const QString t = QDateTime::fromMSecsSinceEpoch(m_cursorMs, Qt::LocalTime)
                                   .toString(QStringLiteral("MM-dd HH:mm:ss"));
             QFont cf = p.font();
-            cf.setPixelSize(11);
+            cf.setPixelSize(kLaneFontPx + 1);
             cf.setBold(true);
             p.setFont(cf);
-            const int tw = p.fontMetrics().horizontalAdvance(t) + 10;
+            const int tw = p.fontMetrics().horizontalAdvance(t) + 8;
             const int lx = qBound(kLabelW, cx - tw / 2, width() - kMarginR - tw);
+            const QRect bubble(lx, kTopMargin - 2 - kCursorBubbleH, tw,
+                               kCursorBubbleH);
             p.setPen(Qt::NoPen);
             p.setBrush(QColor(Theme::Accent));
-            p.drawRoundedRect(QRect(lx, kTopMargin - 2 - 18, tw, 16), 3, 3);
+            p.drawRoundedRect(bubble, 3, 3);
             p.setPen(QColor(Theme::AccentOnDark));
-            p.drawText(QRect(lx, kTopMargin - 2 - 18, tw, 16), Qt::AlignCenter, t);
+            p.drawText(bubble, Qt::AlignCenter, t);
         }
     }
 }

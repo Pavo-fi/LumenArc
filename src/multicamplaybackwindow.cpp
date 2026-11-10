@@ -551,12 +551,57 @@ void MultiCamPlaybackWindow::buildPlayPage()
     });
     bar->addWidget(m_adjustBtn);
 
+    // v2.7（用户反馈「宫格画面顺序不能调整」）：把窗位顺序做成工具栏明确入口。
+    // 原实现只有瓦片右键菜单，用户找不到；顺序同时决定导出宫格摆放。
+    m_gridOrderBtn = new QPushButton(lang("宫格顺序", "Grid order"), this);
+    m_gridOrderBtn->setObjectName(QStringLiteral("multicamGridOrder"));
+    m_gridOrderBtn->setToolTip(lang(
+        "调整画面顺序：选一个机位，再选它落在第几格（导出宫格同序）",
+        "Reorder cells: pick a camera, then the cell it occupies"));
+    {
+        auto *menu = new QMenu(m_gridOrderBtn);
+        connect(menu, &QMenu::aboutToShow, this, [this, menu]() {
+            menu->clear();
+            const int laneN = m_svc->laneCount();
+            if (laneN <= 0) {
+                auto *a = menu->addAction(lang("（尚未加载机位）", "(no lanes yet)"));
+                a->setEnabled(false);
+                return;
+            }
+            for (int lane = 0; lane < laneN; ++lane) {
+                const QString nm = (lane < m_svc->lanes().size())
+                    ? m_svc->lanes()[lane].displayName
+                    : lang("路 %1", "Lane %1").arg(lane + 1);
+                auto *sub = menu->addMenu(
+                    lang("机位 %1 %2 → 窗位", "Camera %1 %2 → cell")
+                        .arg(lane + 1).arg(nm));
+                for (int c = 0; c < laneN; ++c) {
+                    auto *a = sub->addAction(
+                        lang("第 %1 格", "Cell %1").arg(c + 1));
+                    a->setCheckable(true);
+                    a->setChecked(cellOfLane(lane) == c);
+                    connect(a, &QAction::triggered, this,
+                            [this, lane, c]() { moveLaneToCell(lane, c); });
+                }
+            }
+            menu->addSeparator();
+            menu->addAction(lang("恢复默认顺序", "Reset order"),
+                            this, [this]() { resetCellOrder(); });
+        });
+        m_gridOrderBtn->setMenu(menu);
+    }
+    bar->addWidget(m_gridOrderBtn);
+
     // P-68 第 10 条：多机选段导出（与单路同款分段变速逻辑；模式A 可用）
-    m_exportClipBtn = new QPushButton(lang("导出选段", "Export Clip"), this);
+    // v2.7（用户拍板「合并宫格播放和导出」）：导出是宫格视图的一等动作，
+    // 不再要求先按 A/B 打点——默认导出整个覆盖区间，A/B 只是可选裁剪。
+    m_exportClipBtn = new QPushButton(lang("导出宫格视频", "Export grid video"), this);
     m_exportClipBtn->setToolTip(lang(
-        "导出 A-B 选段：A/B 键在合并时间线上打点；分段变速 + 全机位宫格同框 MP4",
-        "Export A-B selection: mark with A/B keys on the merged timeline; "
-        "variable-speed multi-cam grid MP4"));
+        "把当前宫格顺序与同步画面导出成一个 MP4；"
+        "在合并时间线上按 A/B 可只导出其中一段",
+        "Export the current grid (same order) as one MP4; "
+        "press A/B on the timeline to export just that range"));
+    m_exportClipBtn->setObjectName(QStringLiteral("multicamExportGrid"));
     m_exportClipBtn->setEnabled(false);
     connect(m_exportClipBtn, &QPushButton::clicked,
             this, &MultiCamPlaybackWindow::onExportClip);
@@ -703,6 +748,7 @@ void MultiCamPlaybackWindow::rebuildTiles()
         m_grid->addWidget(tile, cell / cols, cell % cols);
 
         // v2.0：右键换窗位（不占用左键——左键仍用于缩放/平移/切听）
+        // 右键也能换（快捷路径）；工具栏「宫格顺序」是显式入口
         tile->setContextMenuPolicy(Qt::CustomContextMenu);
         connect(tile, &QWidget::customContextMenuRequested, this,
                 [this, i](const QPoint &) {
@@ -770,6 +816,7 @@ void MultiCamPlaybackWindow::resetCellOrder()
     for (int i = 0; i < m_cellOfLane.size(); ++i)
         m_cellOfLane[i] = i;
     rebuildTiles();
+    m_statusLabel->setText(lang("已恢复默认宫格顺序", "Grid order reset"));
 }
 
 QVector<CamLane> MultiCamPlaybackWindow::currentCamLanes() const
@@ -813,6 +860,7 @@ void MultiCamPlaybackWindow::rebuildTimelineArea()
 
     auto *lay = new QVBoxLayout(m_timelineHost);
     lay->setContentsMargins(0, 0, 0, 0);
+    lay->setSpacing(2);   // v2.7：时间轴整体压缩
 
     // P-73：对时模式强制每路独立进度条（合并条无法分路定位事件帧）
     if (m_mode == SyncTimelineMode::Merged && !m_eventCalib) {
@@ -824,7 +872,7 @@ void MultiCamPlaybackWindow::rebuildTimelineArea()
                         || m_svc->state() == MultiCamSyncService::State::Paused
                         || m_svc->state() == MultiCamSyncService::State::Ready) {
                         m_svc->beginScrub();
-                        m_svc->scrubTo(wallMs);
+                        m_svc->scrubTo(wallMs);   // 拖动即时追逐
                     }
                 });
         connect(m_mergedBar, &MultiCamViewWidget::seekCommit, this,
@@ -864,6 +912,8 @@ void MultiCamPlaybackWindow::rebuildTimelineArea()
                 name->setText(lang("路 %1（未选）", "Lane %1 (empty)")
                                   .arg(i + 1));
             auto *slider = new QSlider(Qt::Horizontal, m_timelineHost);
+            // v2.7：每路时间条行高减半（14px），把高度还给画面
+            slider->setFixedHeight(14);
             slider->setEnabled(false);
             // P-73 返修：创建即按当前路时长设量程——量程只在 Ready/LaneInfo
             // 信号里设，重建后的新滑条永远停在默认 0..99，对时模式拖动
@@ -874,7 +924,12 @@ void MultiCamPlaybackWindow::rebuildTimelineArea()
             auto *time = new QLabel(QStringLiteral("--:-- / --:--"),
                                     m_timelineHost);
             time->setStyleSheet(
-                QStringLiteral("color:%1;").arg(Theme::TextSecond));
+                QStringLiteral("color:%1; font-size:9pt;").arg(Theme::TextSecond));
+            name->setStyleSheet(QStringLiteral("font-size:9pt;"));
+            time->setFixedHeight(14);
+            name->setFixedHeight(14);
+            row->setContentsMargins(0, 0, 0, 0);
+            row->setSpacing(6);
             row->addWidget(name);
             row->addWidget(slider, 1);
             row->addWidget(time);
@@ -943,6 +998,7 @@ void MultiCamPlaybackWindow::rebuildTimelineArea()
 
 void MultiCamPlaybackWindow::refreshModeControls()
 {
+    updateExportAvailability();   // 导出可用性随路/对齐状态一起刷新
     const bool sep = (m_mode == SyncTimelineMode::Separate);
     // 对齐按钮：模式B 且两路都已加载
     const bool canAlign = sep && lanesLoaded();
@@ -1174,6 +1230,7 @@ void MultiCamPlaybackWindow::onServiceState(MultiCamSyncService::State s)
     default: break;
     }
     if (s == State::Ready) {
+        updateExportAvailability();
         // 时长就绪：重排时间线/进度条量程
         if (m_mergedBar)
             m_mergedBar->setLanes(currentCamLanes());
@@ -1383,8 +1440,7 @@ void MultiCamPlaybackWindow::keyPressEvent(QKeyEvent *event)
         if (m_abA >= 0 && m_abB >= 0 && m_abA > m_abB)
             qSwap(m_abA, m_abB);
         m_mergedBar->setABRegion(m_abA, m_abB);
-        if (m_exportClipBtn)
-            m_exportClipBtn->setEnabled(m_mergedBar->hasAB());
+        updateExportAvailability();
         m_statusLabel->setText(QStringLiteral("%1 %2").arg(cn, fmtWall(m_lastWallMs)));
     };
     switch (event->key()) {
@@ -1393,9 +1449,10 @@ void MultiCamPlaybackWindow::keyPressEvent(QKeyEvent *event)
             // Ctrl+A：清除选段
             m_abA = m_abB = -1;
             m_mergedBar->setABRegion(-1, -1);
-            if (m_exportClipBtn)
-                m_exportClipBtn->setEnabled(false);
-            m_statusLabel->setText(lang("选段已清除", "Selection cleared"));
+            updateExportAvailability();
+            m_statusLabel->setText(
+                lang("选段已清除（导出将覆盖全部区间）",
+                     "Selection cleared (export covers everything)"));
             return;
         }
         setPt(m_abA, lang("A 点", "A:"));
@@ -1408,14 +1465,40 @@ void MultiCamPlaybackWindow::keyPressEvent(QKeyEvent *event)
     }
 }
 
+/// v2.7：导出可用性统一判定（不再依赖 A/B 是否打点）。
+/// 导出按墙钟取帧，因此要求每一路都已在墙钟轴上（已校时或已对齐）；
+/// 有未对齐临时路时墙钟推算无意义，会导出「该时刻无画面」，故明确禁用并说明。
+void MultiCamPlaybackWindow::updateExportAvailability()
+{
+    if (!m_exportClipBtn)
+        return;
+    bool allLinked = m_svc->laneCount() >= 2;
+    for (int i = 0; i < m_svc->laneCount(); ++i)
+        if (!m_svc->laneLinked(i))
+            allLinked = false;
+    const bool ok = lanesLoaded() && allLinked;
+    m_exportClipBtn->setEnabled(ok);
+    if (!ok && m_svc->laneCount() >= 2) {
+        m_exportClipBtn->setToolTip(lang(
+            "有未对齐的机位：请先「对齐…」把各路纳入同一时间轴，再导出",
+            "Some lanes are not aligned yet - use Align... first"));
+    } else {
+        m_exportClipBtn->setToolTip(lang(
+            "把当前宫格顺序与同步画面导出成一个 MP4；"
+            "在合并时间线上按 A/B 可只导出其中一段",
+            "Export the current grid (same order) as one MP4; "
+            "press A/B on the timeline to export just that range"));
+    }
+}
+
 void MultiCamPlaybackWindow::onExportClip()
 {
-    if (!m_mergedBar || !m_mergedBar->hasAB())
+    if (!m_svc || m_svc->laneCount() < 2)
         return;
     // P-69：合并轨跨段合成导出不支持（本批明文拒导+说明，后续再支持）
     for (const auto &L : m_svc->lanes())
         if (L.isMerged()) {
-            QMessageBox::warning(this, lang("导出选段", "Export clip"),
+            QMessageBox::warning(this, lang("导出宫格视频", "Export grid video"),
                 lang("本次会话含合并轨（%1）——跨段合成导出不支持（本批暂不落地）。"
                      "请将各段分别作单路加入会话再导出。",
                      "Session contains a merged lane (%1) - cross-segment "
@@ -1423,8 +1506,18 @@ void MultiCamPlaybackWindow::onExportClip()
                      "single-file lane to export.").arg(L.displayName));
             return;
         }
-    const qint64 aMs = m_mergedBar->abA();
-    const qint64 bMs = m_mergedBar->abB();
+    // v2.7：没打 A/B 就以整体覆盖区间为准（导出不再被「必须先打点」卡住）
+    const bool hasAB = m_mergedBar && m_mergedBar->hasAB();
+    qint64 aMs = hasAB ? m_mergedBar->abA() : m_svc->contentStartWallMs();
+    qint64 bMs = hasAB ? m_mergedBar->abB() : m_svc->contentEndWallMs();
+    if (bMs <= aMs) {
+        m_statusLabel->setText(lang("没有可导出的区间", "Nothing to export"));
+        return;
+    }
+    if (!hasAB)
+        m_statusLabel->setText(lang(
+            "未选段 → 导出全部覆盖区间（要裁剪请按 A / B 打点）",
+            "No selection - exporting full coverage (press A / B to trim)"));
 
     speedplan::SpeedPlan plan;
     plan.aMs = aMs;
@@ -1491,6 +1584,8 @@ void MultiCamPlaybackWindow::startClipExport(const speedplan::SpeedPlan &planIn,
     pp.caseLabel = m_case ? m_case->meta().caseNo : QString();
     // 逐瓦片放大镜快照入导出（真机反馈：导出画面应包含放大镜画面）——
     // 导出时刻各瓦片的缩放/取景中心随参数冻结入格，格内右下 PIP 呈现
+    // v2.7：导出宫格与播放窗格同序（所见即所得；此前导出忽略窗位映射）
+    pp.laneCell = m_cellOfLane;
     pp.laneZooms.resize(pp.lanes.size());
     for (int i = 0; i < pp.lanes.size() && i < m_tiles.size(); ++i)
         if (m_tiles[i] && m_tiles[i]->zoom() > 1.0) {

@@ -93,7 +93,8 @@ private slots:
     void onCancelAlign();
     void onStartSync();       ///< 勾选面板「开始同步播放」（P-59）
     void onBackToPicker();    ///< 工具行「重选机位」
-    void onExportClip();      ///< P-68 多机选段导出（模式A）
+    void onExportClip();      ///< v2.7 宫格视频导出（默认全区间；A/B 可选裁剪）
+    void updateExportAvailability();   ///< 导出按钮可用性（全路已入墙钟轴）
     void startClipExport(const speedplan::SpeedPlan &plan, bool burnOsd,
                          const QString &outPath);
 
@@ -152,6 +153,7 @@ private:
     QWidget *m_timelineHost = nullptr;
     QPushButton *m_playBtn = nullptr;
     QPushButton *m_rateBtn = nullptr;
+    QPushButton *m_gridOrderBtn = nullptr;    ///< v2.7 宫格顺序（显式入口）
     QPushButton *m_exportClipBtn = nullptr;   ///< P-68 导出选段（AB 存在时可用）
     qint64 m_lastWallMs = -1;                 ///< 最近墙钟游标（A/B 打点用）
     qint64 m_abA = -1, m_abB = -1;            ///< 选段（墙钟域）

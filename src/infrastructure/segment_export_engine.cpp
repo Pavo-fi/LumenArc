@@ -1032,6 +1032,24 @@ struct SeqDecoder {
 
 } // namespace
 
+int SegmentExportEngine::gridCellIndex(int lane, const QVector<int> &laneCell,
+                                      int laneCount)
+{
+    if (lane < 0 || laneCount <= 0)
+        return 0;
+    if (lane >= laneCell.size())
+        return qBound(0, lane, laneCount - 1);
+    const int want = laneCell.at(lane);
+    if (want < 0 || want >= laneCount)
+        return qBound(0, lane, laneCount - 1);
+    // 重复占用（脏数据）时仍按原顺序，避免两路重叠画在同一格
+    for (int i = 0; i < laneCell.size() && i < laneCount; ++i) {
+        if (i != lane && laneCell.at(i) == want)
+            return qBound(0, lane, laneCount - 1);
+    }
+    return want;
+}
+
 void SegmentExportEngine::runMultiCam()
 {
     const Params &p = m_params;
@@ -1179,8 +1197,10 @@ void SegmentExportEngine::runMultiCam()
             painter.setRenderHint(QPainter::SmoothPixmapTransform);
             // ---- 瓦片宫格 ----
             for (int i = 0; i < n; ++i) {
-                const int cx = gridRect.x() + (i % cols) * cellW;
-                const int cy = gridRect.y() + (i / cols) * cellH;
+                // 窗位映射：与播放窗格同一份顺序（用户排的宫格顺序即导出顺序）
+                const int cellIdx = gridCellIndex(i, p.laneCell, n);
+                const int cx = gridRect.x() + (cellIdx % cols) * cellW;
+                const int cy = gridRect.y() + (cellIdx / cols) * cellH;
                 const QRect cell(cx + 2, cy + 2, cellW - 4, cellH - 4);
                 const SyncLaneData &l = p.lanes[i];
                 QImage frame;

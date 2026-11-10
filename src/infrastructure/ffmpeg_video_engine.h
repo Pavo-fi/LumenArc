@@ -59,6 +59,7 @@ public:
 
     bool load(const QString &filePath) override;
     void play() override;
+    void playAt(qint64 timeMs) override;
     void pause() override;
     void stop() override;
     void unload() override;

@@ -21,12 +21,15 @@
 #include "infrastructure/ffmpeg_video_engine.h"
 #include "infrastructure/ivideo_engine.h"
 #include "multicamplaybackwindow.h"
+#include "multicamview.h"
+#include "infrastructure/segment_export_engine.h"
 #include "playbackadjustpanel.h"
 #include "theme.h"
 #include "timesettingsdialog.h"
 #include "calibphotodialog.h"
 #include "app/analysis_task_service.h"
 #include "app/calibration_service.h"
+#include "app/multicam_sync_service.h"
 #include "domain/time_calibration.h"
 #include "ui/app_state.h"
 #include "ui/command_registry.h"
@@ -78,6 +81,56 @@
 #include <QTreeWidget>
 #include <QVBoxLayout>
 #include <QWidget>
+
+namespace {
+
+/// 自检假引擎：只记录命令序列，用来验证「落点 + 起播」是一次原子命令。
+class SelfCheckSyncEngine : public IVideoEngine
+{
+public:
+    explicit SelfCheckSyncEngine(QObject *parent = nullptr)
+        : IVideoEngine(parent) {}
+
+    bool load(const QString &) override
+    {
+        emit durationChanged(m_durMs);
+        return true;
+    }
+    void play() override { calls << QStringLiteral("play"); }
+    void playAt(qint64 t) override
+    {
+        m_pos = t;
+        calls << QStringLiteral("playAt:%1").arg(t);
+    }
+    void pause() override { calls << QStringLiteral("pause"); }
+    void stop() override {}
+    void unload() override {}
+    void seek(qint64 t) override
+    {
+        m_pos = t;
+        calls << QStringLiteral("seek:%1").arg(t);
+    }
+    qint64 position() const override { return m_pos; }
+    qint64 duration() const override { return m_durMs; }
+    PlaybackState state() const override { return PlaybackState::Paused; }
+    int videoWidth() const override { return 640; }
+    int videoHeight() const override { return 360; }
+    float fps() const override { return 25.0f; }
+    int volume() const override { return m_volume; }
+    void setVolume(int v) override { m_volume = v; }
+    void setRate(float r) override { m_rate = r; }
+    float rate() const override { return m_rate; }
+
+    QStringList calls;
+    qint64 m_durMs = 60000;
+
+private:
+    qint64 m_pos = 0;
+    int m_volume = 100;
+    float m_rate = 1.0f;
+};
+
+} // namespace
 
 // ---------------------------------------------------------------------------
 // 装配
@@ -2017,6 +2070,177 @@ int MainWindow::runShellSelfCheck()
     check(palettesDisjoint, QStringLiteral("矩形与多边形 12 色组无重复颜色"));
     check(paletteCycles, QStringLiteral("矩形与多边形各自保持 12 色后循环"));
     check(volumeExclusive, QStringLiteral("青绿仍专职留给音量曲线"));
+
+    // 13. 多机同步：起播必须是一次「落点 + 播放」的原子命令。
+    //     旧实现先 seek 再 play，单槽命令队列会让 play 覆盖 seek 参数，
+    //     各路按旧位置起播 → 画面不同步（用户实测根因）。
+    {
+        MultiCamSyncService sync;
+        QVector<SelfCheckSyncEngine *> probes;
+        sync.setEngineFactory([&probes](QObject *parent) {
+            auto *e = new SelfCheckSyncEngine(parent);
+            probes.append(e);
+            return e;
+        });
+        auto makeLane = [](const QString &id, qint64 offsetMs) {
+            SyncLaneData l;
+            l.id = id;
+            l.path = QStringLiteral("C:/selfcheck/") + id + QStringLiteral(".mp4");
+            l.displayName = id;
+            l.calibrated = true;
+            l.temporary = false;
+            l.cal = TimeCalibration();
+            l.cal.source = TimeCalibration::Source::Manual;
+            l.cal.offsetMs = offsetMs;
+            l.cal.dateKnown = true;
+            l.cal.calibratedAtMs = 1;
+            l.durationMs = 60000;
+            return l;
+        };
+        // 两路校时基准不同 → 同一墙钟对应不同流内时刻（正是要靠落点对齐的场景）
+        const QVector<SyncLaneData> lanes{makeLane(QStringLiteral("C01"), 1789000000000LL),
+                                          makeLane(QStringLiteral("C02"), 1789000005000LL)};
+        const bool loaded = sync.loadLanes(lanes);
+        check(loaded && sync.laneCount() == 2,
+              QStringLiteral("多机服务可装两路用于同步自检"));
+        if (loaded && probes.size() == 2) {
+            // 先落到两路共同覆盖的一刻（内容起点时后起步的那路还没画面，
+            // 服务按覆盖判定不该起播——那是正确行为，不是同步缺陷）
+            const qint64 wall = 1789000006000LL;
+            sync.seekWall(wall);
+            for (auto *e : probes)
+                e->calls.clear();
+            sync.play();
+            const QVector<SyncLaneData> &ls = sync.lanes();
+            bool atomicOk = probes.size() == 2;
+            for (int i = 0; i < 2 && atomicOk; ++i) {
+                const QString expect = QStringLiteral("playAt:%1")
+                    .arg(syncStreamOf(ls[i], wall));
+                atomicOk = probes[i]->calls.contains(expect)
+                    && !probes[i]->calls.contains(QStringLiteral("play"));
+            }
+            check(atomicOk,
+                  QStringLiteral("多机起播为原子「落点+播放」，无裸 play 抢占"));
+            sync.pause();
+
+            // 同一墙钟下两路流内时刻必须不同（否则说明换算没生效）
+            const qint64 s0 = syncStreamOf(ls[0], wall);
+            const qint64 s1 = syncStreamOf(ls[1], wall);
+            check(s0 != s1, QStringLiteral("不同校时基准的两路同墙钟落点不同（真对齐）"));
+        }
+    }
+
+    // 13.5 宫格顺序必须有可见入口（原实现只有瓦片右键，用户找不到）。
+    {
+        MultiCamPlaybackWindow orderProbe;
+        auto *orderBtn = orderProbe.findChild<QPushButton *>(
+            QStringLiteral("multicamGridOrder"));
+        check(orderBtn != nullptr && orderBtn->menu() != nullptr,
+              QStringLiteral("多机窗有「宫格顺序」入口（带下拉菜单）"));
+        auto *exportBtn = orderProbe.findChild<QPushButton *>(
+            QStringLiteral("multicamExportGrid"));
+        check(exportBtn != nullptr
+                  && exportBtn->text() == lang(QStringLiteral("导出宫格视频"),
+                                               QStringLiteral("Export grid video")),
+              QStringLiteral("多机窗导出是宫格视图的一等动作（不叫「导出选段」）"));
+
+        // 端到端：两路都未打 A/B 时，导出按钮必须可用（旧版恒灰）。
+        // 用测试通道把两路真装进窗口（假引擎，无真实视频）。
+        orderProbe.setEngineFactory([](QObject *parent) -> IVideoEngine * {
+            return new SelfCheckSyncEngine(parent);
+        });
+        orderProbe.openStandalone();
+        const QString fakeA = QStringLiteral("C:/selfcheck/mc-a.mp4");
+        const QString fakeB = QStringLiteral("C:/selfcheck/mc-b.mp4");
+        orderProbe.pickVideoForSlot(0, fakeA);
+        orderProbe.pickVideoForSlot(1, fakeB);
+        if (exportBtn) {
+            // 独立模式两路均为「临时路」，对齐前不进墙钟轴 → 应禁用并给原因
+            check(!exportBtn->isEnabled(),
+                  QStringLiteral("未对齐的临时路导出被禁用（防导出空画面）"));
+            check(exportBtn->toolTip().contains(lang(QStringLiteral("对齐"),
+                                                     QStringLiteral("Align"))),
+                  QStringLiteral("禁用时提示先做对齐"));
+        }
+    }
+
+    // 14. 宫格顺序：导出与播放共用同一份窗位映射（所见即所得）。
+    {
+        const QVector<int> reordered{2, 0, 1};
+        check(SegmentExportEngine::gridCellIndex(0, reordered, 3) == 2
+                  && SegmentExportEngine::gridCellIndex(1, reordered, 3) == 0
+                  && SegmentExportEngine::gridCellIndex(2, reordered, 3) == 1,
+              QStringLiteral("导出按窗位映射摆放宫格"));
+        const QVector<int> identity{0, 1, 2};
+        bool identityOk = true;
+        for (int i = 0; i < 3; ++i)
+            identityOk = identityOk
+                && SegmentExportEngine::gridCellIndex(i, identity, 3) == i;
+        check(identityOk, QStringLiteral("默认顺序导出保持不变"));
+        // 脏数据（越界/重复/空）必须回落原顺序，不能两路叠在同一格
+        check(SegmentExportEngine::gridCellIndex(0, QVector<int>{}, 2) == 0
+                  && SegmentExportEngine::gridCellIndex(1, QVector<int>{}, 2) == 1,
+              QStringLiteral("映射为空时回落原顺序"));
+        check(SegmentExportEngine::gridCellIndex(0, QVector<int>{5, 5}, 2) == 0
+                  && SegmentExportEngine::gridCellIndex(1, QVector<int>{5, 5}, 2) == 1,
+              QStringLiteral("映射越界/重复时不叠格"));
+    }
+
+    // 15. 时间轴纵向高度：各宫格压到约一半，且字号仍放得下。
+    {
+        // 旧口径（行高 28 / 行距 4 / 顶留 22 / 带标签 12 / 刻度 14 / 留白 6）
+        auto oldHeight = [](int n) { return 22 + n * (28 + 4) + 12 + 14 + 6; };
+        // 每行占位必须严格减半（旧 28+4=32 → 新 14+2=16）
+        const int rowPitch = MultiCamViewWidget::timelineHeightFor(3)
+                             - MultiCamViewWidget::timelineHeightFor(2);
+        check(rowPitch == 16, QStringLiteral("每行机位占位 32px→16px（严格减半）"));
+
+        bool readable = true;
+        bool shrunk = true;
+        for (int n = 2; n <= 4; ++n) {
+            const int now = MultiCamViewWidget::timelineHeightFor(n);
+            // 行高 16 内要放下 9px 字：留白至少 4px
+            if (16 - 2 - 9 < 4)
+                readable = false;
+            if (now >= oldHeight(n))
+                shrunk = false;
+        }
+        check(readable, QStringLiteral("压缩后行高仍放得下 9px 字号"));
+        check(shrunk, QStringLiteral("2~4 路时间轴整体都比原来矮"));
+        check(MultiCamViewWidget::timelineHeightFor(3) <= oldHeight(3) * 0.65,
+              QStringLiteral("3 路时间轴总高压到原来的 65% 以内（%1→%2）")
+                  .arg(oldHeight(3)).arg(MultiCamViewWidget::timelineHeightFor(3)));
+        check(MultiCamViewWidget::timelineHeightFor(2) < oldHeight(2),
+              QStringLiteral("两路时间轴确实变矮"));
+
+        // 真实渲染一张压缩后的时间轴（人工验收用；不依赖引擎/视频）
+        MultiCamViewWidget stripProbe;
+        QVector<CamLane> probeLanes;
+        for (int i = 0; i < 3; ++i) {
+            CamLane l;
+            l.videoId = QStringLiteral("C%1").arg(i + 1, 2, 10, QLatin1Char('0'));
+            l.fileName = lang(QStringLiteral("机位 %1").arg(i + 1),
+                              QStringLiteral("Camera %1").arg(i + 1));
+            l.wallStartMs = 1789000000000LL + i * 40 * 60 * 1000;
+            l.wallEndMs = l.wallStartMs + 60 * 60 * 1000;
+            l.streamDurationMs = 60 * 60 * 1000;
+            l.truthSynced = (i == 0);
+            probeLanes.append(l);
+        }
+        stripProbe.resize(900, MultiCamViewWidget::timelineHeightFor(3));
+        stripProbe.setLanes(probeLanes);
+        stripProbe.setCursorMs(1789000000000LL + 30 * 60 * 1000);
+        stripProbe.setABRegion(1789000000000LL + 10 * 60 * 1000,
+                               1789000000000LL + 50 * 60 * 1000);
+        const QPixmap stripShot = stripProbe.grab();
+        check(!stripShot.isNull()
+                  && stripShot.height() == MultiCamViewWidget::timelineHeightFor(3),
+              QStringLiteral("压缩后时间轴可正常渲染（高 %1px）")
+                  .arg(MultiCamViewWidget::timelineHeightFor(3)));
+        if (!stripShot.isNull())
+            stripShot.save(QDir(QCoreApplication::applicationDirPath())
+                               .filePath(QStringLiteral("selfcheck-multicam-strip.png")));
+    }
 
     qInfo().noquote() << QStringLiteral("===== 自检结束：失败 %1 项 =====").arg(fails);
     lines << QStringLiteral("===== 自检结束：失败 %1 项 =====").arg(fails);

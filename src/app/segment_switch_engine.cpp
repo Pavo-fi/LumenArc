@@ -61,12 +61,19 @@ bool SegmentSwitchEngine::load(const QString & /*filePath*/)
                         m_segs[m_cur].durationMs = d;
                         emit durationChanged(totalDuration());
                     }
-                    // 换文件落点：seek + 续播意愿
+                    // 换文件落点：落点+续播必须一条原子命令（新引擎 position=0，
+                    // 若先 seek 再 play 会被 play 覆盖回 0，跨段起点闪回首帧）。
                     if (m_pendingSeek >= 0) {
-                        m_real->seek(m_pendingSeek);
+                        const qint64 seekTarget = m_pendingSeek;
                         m_pendingSeek = -1;
-                    }
-                    if (m_pendingPlay) {
+                        if (m_pendingPlay) {
+                            m_real->setRate(m_rate);
+                            m_real->playAt(seekTarget);
+                            m_pendingPlay = false;
+                        } else {
+                            m_real->seek(seekTarget);
+                        }
+                    } else if (m_pendingPlay) {
                         m_real->setRate(m_rate);
                         m_real->play();
                         m_pendingPlay = false;
@@ -124,6 +131,24 @@ void SegmentSwitchEngine::play()
     m_wantPlay = true;
     if (m_real && m_cur >= 0)
         m_real->play();
+}
+
+void SegmentSwitchEngine::playAt(qint64 virtMs)
+{
+    // 多机同步起播：虚拟轴落点与本段定位一次完成，再原子起播。
+    // 跨段时 switchToSegment 会带上 resumePlay=true，由段引擎落点后续播。
+    m_wantPlay = true;
+    if (m_segs.isEmpty() || !m_real)
+        return;
+    const auto cum = segCum();
+    int k = 0;
+    for (int i = int(m_segs.size()) - 1; i >= 0; --i)
+        if (virtMs >= cum[i]) { k = i; break; }
+    const qint64 real = qMax<qint64>(0, virtMs - cum[k]);
+    if (k != m_cur)
+        switchToSegment(k, real, true);
+    else
+        m_real->playAt(real);
 }
 
 void SegmentSwitchEngine::pause()

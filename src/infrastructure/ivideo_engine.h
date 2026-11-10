@@ -40,6 +40,9 @@ public:
 
     virtual bool load(const QString &filePath) = 0;
     virtual void play() = 0;
+    /// 从指定流内时刻原子起播。多机同步必须用它，避免 seek 尚未执行就被
+    /// 后续 Play 覆盖，导致按旧位置起播；默认实现供不支持原子命令的引擎使用。
+    virtual void playAt(qint64 timeMs) { seek(timeMs); play(); }
     virtual void pause() = 0;
     virtual void stop() = 0;
     /// 彻底卸载当前视频（停线程 + 释放文件上下文 + duration 归零）。

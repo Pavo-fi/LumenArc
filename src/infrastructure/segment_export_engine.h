@@ -48,6 +48,10 @@ public:
         // 每路按 syncStreamOf 换算取帧，缺席时刻画「无画面」占位。
         QVector<SyncLaneData> lanes;
         int audioLane = -1;            ///< 音轨来源路（-1 = 无音轨）
+        /// 多机宫格窗位映射：laneCell[i] = 第 i 路落在哪个格子（行优先 0 基）。
+        /// 必须与播放窗格的顺序完全一致，否则导出顺序与屏幕不同（所见非所得）。
+        /// 空/越界 → 按原顺序（向后兼容）。
+        QVector<int> laneCell;
 
         // ---- 放大镜 PIP（真机反馈：导出画面应包含放大镜画面）----
         /// 多机逐路放大（与 lanes 对齐；zoom>1 生效，center 归一化源坐标）
@@ -167,6 +171,10 @@ public:
                                              const QStringList &sourceSha256,
                                              const QString &outFileName,
                                              const QString &outSha256, qint64 outBytes);
+
+    /// 多机宫格：第 lane 路实际落在哪个格子（纯函数，播放/导出同源）。
+    /// laneCell 空、越界或重复占用时回落到原顺序，保证任何输入都能生成排列。
+    static int gridCellIndex(int lane, const QVector<int> &laneCell, int laneCount);
 
     /// 布局计算（纯函数）：给定画布与可用面板数（0~2），返回
     /// {视频区, 曲线区, 语谱区}（不可用面板区为空矩形）。上下布局（拍板 Q1 改判）。
