@@ -62,7 +62,7 @@ public:
     /// @brief 在矩形表内查找指定 ROI ID 的索引，未找到返回 -1
     int findIndexByRoiId(int roiId) const;
 
-    /// @brief 按索引返回调色板颜色（7色循环，Okabe-Ito）
+    /// @brief 矩形：Okabe-Ito 原色 + 45% 浅色，共 12 色后循环。
     static QColor regionColor(int index);
 
     // ==================== 多边形 ROI（原 PolygonModel API，加 polygon 前缀） ====================
@@ -84,7 +84,7 @@ public:
     /// @brief 在多边形表内查找指定 ROI ID 的索引，未找到返回 -1
     int findPolygonIndexByRoiId(int roiId) const;
 
-    /// @brief 按索引返回调色板颜色（与矩形同一 Okabe-Ito 板，偏移 +1，7色循环；规范§8）
+    /// @brief 多边形：独立 70% 浅色组，与矩形不撞色，12 色后循环。
     static QColor polygonColor(int index);
 
 signals:

@@ -76,7 +76,9 @@ void drawRoiOverlay(QPainter &painter, const QRect &dstRect, const QSize &srcSiz
         QPolygonF poly;
         for (const QPoint &pt : ov.polygons[i])
             poly << mapPt(pt);
-        const QColor base = RoiModel::regionColor(ov.rois.size() + i);
+        // v2.6：多边形必须使用独立浅色组，与屏上/曲线一致；
+        // 此前误用 regionColor(矩形数+i)，导出图会与屏上颜色不一致。
+        const QColor base = RoiModel::polygonColor(i);
         // v2.5s：只留框
         painter.setBrush(Qt::NoBrush);
         painter.setPen(QPen(base, w));

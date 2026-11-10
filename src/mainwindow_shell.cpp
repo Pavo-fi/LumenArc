@@ -1998,6 +1998,26 @@ int MainWindow::runShellSelfCheck()
               QStringLiteral("多边形以双击点收口且无连续重复顶点"));
     }
 
+    // 12. 矩形与多边形色板：两组完全分离，各自 12 色后循环，音量色不占位。
+    bool palettesDisjoint = true;
+    bool paletteCycles = true;
+    bool volumeExclusive = true;
+    const QColor volumeColor(0, 158, 115);
+    for (int i = 0; i < 12; ++i) {
+        const QColor rect = RoiModel::regionColor(i);
+        const QColor poly = RoiModel::polygonColor(i);
+        paletteCycles = paletteCycles
+            && rect == RoiModel::regionColor(i + 12)
+            && poly == RoiModel::polygonColor(i + 12);
+        volumeExclusive = volumeExclusive && rect != volumeColor && poly != volumeColor;
+        for (int j = 0; j < 12; ++j)
+            if (rect == RoiModel::polygonColor(j))
+                palettesDisjoint = false;
+    }
+    check(palettesDisjoint, QStringLiteral("矩形与多边形 12 色组无重复颜色"));
+    check(paletteCycles, QStringLiteral("矩形与多边形各自保持 12 色后循环"));
+    check(volumeExclusive, QStringLiteral("青绿仍专职留给音量曲线"));
+
     qInfo().noquote() << QStringLiteral("===== 自检结束：失败 %1 项 =====").arg(fails);
     lines << QStringLiteral("===== 自检结束：失败 %1 项 =====").arg(fails);
 

@@ -112,7 +112,7 @@ int RoiModel::findIndexByRoiId(int roiId) const
     return m_rectRoiIds.indexOf(roiId);
 }
 
-// 规范§8：数据系列颜色只从 DataPalette 顺序取色（第 7 条起循环）。
+// 规范§8：数据系列颜色从既有 Okabe-Ito 色板派生（矩形/多边形各 12 条后循环）。
 // 域层不可 include theme.h（lumenarc_roi_model_test 仅链 Core+Gui），
 // 此板镜像 Theme::DataPalette 六色同序（改动必须两边同步）；矩形/多边形统一同板（规范§14）。
 /// 与白色混合 pct%（提亮），用于把 6 个基色扩成 12 个互不相同的档位。
@@ -246,6 +246,15 @@ int RoiModel::findPolygonIndexByRoiId(int roiId) const
 
 QColor RoiModel::polygonColor(int index)
 {
-    // 规范§8：与矩形同一 DataPalette 顺序取色，偏移 +1 避免与同号矩形撞色，六色循环
-    return dataPalette()[(index + 1) % dataPalette().size()];
+    // v2.6：多边形独立使用浅色组，不再用「矩形颜色 +1」。
+    // 旧规则会让 P1==R2、P2==R3，仅靠编号错位，类型之间没有视觉区分。
+    // 现在矩形=原色/45% 浅色（12 档），多边形=对应 70% 浅色（12 档）；
+    // 两组无重复色，色相仍全部来自既有 Okabe-Ito 色板，不新增色值。
+    static const QList<QColor> colors = [] {
+        QList<QColor> out;
+        for (const QColor &c : dataPalette())
+            out.append(lighten(c, 70));
+        return out;
+    }();
+    return colors[index % colors.size()];
 }
