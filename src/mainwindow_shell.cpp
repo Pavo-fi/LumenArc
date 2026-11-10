@@ -21,8 +21,10 @@
 #include "infrastructure/ffmpeg_video_engine.h"
 #include "infrastructure/ivideo_engine.h"
 #include "multicamplaybackwindow.h"
+#include "camtilewidget.h"
 #include "multicamview.h"
 #include "infrastructure/segment_export_engine.h"
+#include "segmentexportdialog.h"
 #include "playbackadjustpanel.h"
 #include "theme.h"
 #include "timesettingsdialog.h"
@@ -2164,6 +2166,98 @@ int MainWindow::runShellSelfCheck()
         }
     }
 
+    // 13.6 左键拖拽换位 + 时间轴贴底（用户拍板的两条交互）
+    {
+        MultiCamPlaybackWindow dragProbe;
+        dragProbe.setEngineFactory([](QObject *parent) -> IVideoEngine * {
+            return new SelfCheckSyncEngine(parent);
+        });
+        dragProbe.resize(960, 640);
+        dragProbe.openStandalone();
+        dragProbe.pickVideoForSlot(0, QStringLiteral("C:/selfcheck/mc-a.mp4"));
+        dragProbe.pickVideoForSlot(1, QStringLiteral("C:/selfcheck/mc-b.mp4"));
+        dragProbe.show();
+        pump();
+        wait(60);
+
+        auto *gridHost = dragProbe.findChild<QWidget *>(
+            QStringLiteral("multicamGridHost"));
+        auto *tlHost = dragProbe.findChild<QWidget *>(
+            QStringLiteral("multicamTimelineHost"));
+        check(gridHost && tlHost, QStringLiteral("宫格与时间轴宿主都已创建"));
+        if (gridHost && tlHost) {
+            // 时间轴必须贴底：它的下沿要和窗口下沿对齐（不留说明条的空隙）
+            const int tlBottom = tlHost->mapTo(&dragProbe, QPoint(0, tlHost->height())).y();
+            check(qAbs(tlBottom - dragProbe.height()) <= 12,
+                  QStringLiteral("时间轴贴着窗口底部（下沿差 %1px）")
+                      .arg(qAbs(tlBottom - dragProbe.height())));
+            check(tlHost->mapTo(&dragProbe, QPoint(0, 0)).y()
+                      >= gridHost->mapTo(&dragProbe, QPoint(0, gridHost->height())).y() - 1,
+                  QStringLiteral("时间轴位于画面下方"));
+            // 画面视口必须拿到绝大部分纵向空间
+            check(gridHost->height() > tlHost->height() * 3,
+                  QStringLiteral("画面视口高度 %1 > 时间轴 %2 的 3 倍")
+                      .arg(gridHost->height()).arg(tlHost->height()));
+        }
+
+        // 拖拽换位：按住 tile0 拖到 tile1 上松手 → 两格交换
+        const auto tiles = dragProbe.findChildren<CamTileWidget *>();
+        const QVector<int> before = dragProbe.cellOrder();
+        if (tiles.size() >= 2 && before.size() >= 2) {
+            CamTileWidget *src = tiles.at(0);
+            CamTileWidget *dst = tiles.at(1);
+            const QPoint srcLocal = src->rect().center();
+            const QPoint srcGlobal = src->mapToGlobal(srcLocal);
+            const QPoint dstGlobal = dst->mapToGlobal(dst->rect().center());
+            // 真实拖拽语义：事件发给源瓦片，局部坐标 = 目标点在源瓦片里的映射
+            // （两个瓦片一样大，若用目标自己的局部中心，位移会是 0 而触发不到阈值）
+            const QPoint dragLocal = src->mapFromGlobal(dstGlobal);
+            QMouseEvent press(QEvent::MouseButtonPress, QPointF(srcLocal),
+                              QPointF(srcGlobal), Qt::LeftButton,
+                              Qt::LeftButton, Qt::NoModifier);
+            QCoreApplication::sendEvent(src, &press);
+            // 超过拖拽阈值（move 事件用目标中心，落点判定才成立）
+            QMouseEvent moveEv(QEvent::MouseMove, QPointF(dragLocal),
+                               QPointF(dstGlobal), Qt::NoButton,
+                               Qt::LeftButton, Qt::NoModifier);
+            QCoreApplication::sendEvent(src, &moveEv);
+            QMouseEvent release(QEvent::MouseButtonRelease, QPointF(dragLocal),
+                                QPointF(dstGlobal), Qt::LeftButton,
+                                Qt::NoButton, Qt::NoModifier);
+            QCoreApplication::sendEvent(src, &release);
+            pump();
+            const QVector<int> after = dragProbe.cellOrder();
+            check(after.size() == before.size() && after.value(0) == before.value(1)
+                      && after.value(1) == before.value(0),
+                  QStringLiteral("左键拖拽瓦片可交换宫格位置（前 %1 后 %2）")
+                      .arg(before.value(0)).arg(after.value(0)));
+
+            // 拖拽不能吃掉「单击切听」：原地按下松手必须仍发 clicked
+            int clickCount = 0;
+            const auto freshTiles = dragProbe.findChildren<CamTileWidget *>();
+            if (!freshTiles.isEmpty()) {
+                CamTileWidget *t0 = freshTiles.first();
+                connect(t0, &CamTileWidget::clicked, this,
+                        [&clickCount]() { ++clickCount; });
+                const QPoint c = t0->rect().center();
+                QMouseEvent p2(QEvent::MouseButtonPress, QPointF(c),
+                               QPointF(t0->mapToGlobal(c)), Qt::LeftButton,
+                               Qt::LeftButton, Qt::NoModifier);
+                QCoreApplication::sendEvent(t0, &p2);
+                QMouseEvent r2(QEvent::MouseButtonRelease, QPointF(c),
+                               QPointF(t0->mapToGlobal(c)), Qt::LeftButton,
+                               Qt::NoButton, Qt::NoModifier);
+                QCoreApplication::sendEvent(t0, &r2);
+                pump();
+            }
+            check(clickCount == 1,
+                  QStringLiteral("原地点一下仍是「单击」（不被拖拽逻辑吃掉）"));
+        } else {
+            check(false, QStringLiteral("瓦片数量不足，无法验证拖拽换位"));
+        }
+        dragProbe.close();
+    }
+
     // 14. 宫格顺序：导出与播放共用同一份窗位映射（所见即所得）。
     {
         const QVector<int> reordered{2, 0, 1};
@@ -2184,6 +2278,97 @@ int MainWindow::runShellSelfCheck()
         check(SegmentExportEngine::gridCellIndex(0, QVector<int>{5, 5}, 2) == 0
                   && SegmentExportEngine::gridCellIndex(1, QVector<int>{5, 5}, 2) == 1,
               QStringLiteral("映射越界/重复时不叠格"));
+    }
+
+    // 14.5 AB 区间内分段变速（用户举例：5 分钟里 0-3min 4X / 3:00-3:10 0.25X / 3:10-5:00 4X）
+    {
+        // 分段点写法解析：3:00 / 0:03:10 / 185（秒）
+        bool okA = false, okB = false, okC = false, okBad = true;
+        const qint64 pA = SegmentExportDialog::parseOffsetMs(
+            QStringLiteral("3:00"), &okA);
+        const qint64 pB = SegmentExportDialog::parseOffsetMs(
+            QStringLiteral("0:03:10"), &okB);
+        const qint64 pC = SegmentExportDialog::parseOffsetMs(
+            QStringLiteral("185"), &okC);
+        SegmentExportDialog::parseOffsetMs(QStringLiteral("abc"), &okBad);
+        check(okA && pA == 180000 && okB && pB == 190000 && okC && pC == 185000,
+              QStringLiteral("分段点写法 3:00 / 0:03:10 / 185 秒都能解析"));
+        check(!okBad, QStringLiteral("乱写的分段点被拒绝（不静默当成 0）"));
+
+        speedplan::SpeedPlan plan;
+        plan.aMs = 0;
+        plan.bMs = 5 * 60 * 1000;                     // AB = 5 分钟
+        plan.splits = {3 * 60 * 1000, 3 * 60 * 1000 + 10000};   // 3:00、3:10
+        plan.rates = {4.0, 0.25, 4.0};
+        plan.normalize();
+        check(plan.segmentCount() == 3 && plan.splits.size() == 2,
+              QStringLiteral("AB 内两个分段点切成三段"));
+        // 期望：180s/4 + 10s/0.25 + 110s/4 = 45 + 40 + 27.5 = 112.5s
+        const double outMs = plan.outputDurationMs();
+        check(qAbs(outMs - 112500.0) < 1.0,
+              QStringLiteral("三段变速后总时长 %1ms（期望 112500）").arg(outMs));
+        // 输出第 45s 应正好落在 3:00（第一段 4X 走完 3 分钟）
+        check(qAbs(plan.sourceMsAtOutputMs(45000.0) - 180000.0) < 50.0,
+              QStringLiteral("输出 45s ↔ 源 3:00（4X 段边界对齐）"));
+        // 慢放段：3:00-3:10 在输出上占 40s（10s ÷ 0.25）
+        check(qAbs(plan.sourceMsAtOutputMs(65000.0) - 185000.0) < 50.0,
+              QStringLiteral("输出 65s ↔ 源 3:05（0.25X 慢放段中点）"));
+        // 末段 4X 走完剩下的 110s
+        check(qAbs(plan.sourceMsAtOutputMs(112500.0) - 300000.0) < 200.0,
+              QStringLiteral("输出末尾 ↔ 源 5:00（末段 4X 收口）"));
+        // 倍率非法档会被收编（1.7x → 最近的允许档）
+        speedplan::SpeedPlan dirty;
+        dirty.aMs = 0;
+        dirty.bMs = 60000;
+        dirty.rates = {1.7};
+        dirty.normalize();
+        bool sanctioned = false;
+        for (double r : speedplan::allowedRates())
+            if (qAbs(r - dirty.segmentRate(0)) < 1e-9)
+                sanctioned = true;
+        check(sanctioned, QStringLiteral("非法倍率收编到允许档（不产生怪倍速）"));
+
+        // 端到端：在导出面板里输入「3:00, 3:10」→ plan 真的变成三段
+        speedplan::SpeedPlan seed;
+        seed.aMs = 0;
+        seed.bMs = 300000;
+        seed.rates = {1.0};
+        seed.normalize();
+        SegmentExportDialog dlg(seed, 0, QStringLiteral("C:/selfcheck/out.mp4"),
+                                nullptr, true);
+        auto *splitsEdit = dlg.findChild<QLineEdit *>(QStringLiteral("splitsEdit"));
+        check(splitsEdit != nullptr, QStringLiteral("导出面板有「分段点（相对 A）」输入框"));
+        if (splitsEdit) {
+            splitsEdit->setText(QStringLiteral("3:00, 3:10"));
+            dlg.applySplitsFromEdit();
+            const speedplan::SpeedPlan got = dlg.plan();
+            check(got.splits.size() == 2
+                      && qAbs(got.splits.value(0) - 180000) <= 1
+                      && qAbs(got.splits.value(1) - 190000) <= 1,
+                  QStringLiteral("输入 3:00, 3:10 后 plan 拿到两个分段点"));
+            check(got.segmentCount() == 3,
+                  QStringLiteral("两个分段点＝三段（可分别设倍率）"));
+            // 分速表必须按「相对 A」显示（3:00 而不是墙钟日历时刻）
+            auto *table = dlg.findChild<QTableWidget *>();
+            QStringList ranges;
+            if (table)
+                for (int r = 0; r < table->rowCount(); ++r)
+                    if (auto *it = table->item(r, 1))
+                        ranges << it->text();
+            check(ranges.size() == 3 && ranges.at(0).contains(QStringLiteral("+0:00"))
+                      && ranges.at(1).contains(QStringLiteral("+3:00"))
+                      && ranges.at(2).contains(QStringLiteral("+3:10")),
+                  QStringLiteral("分速表区间按相对 A 显示（%1）")
+                      .arg(ranges.join(QStringLiteral(" | "))));
+            dlg.resize(560, 520);
+            dlg.show();
+            wait(80);
+            const QPixmap dlgShot = dlg.grab();
+            if (!dlgShot.isNull())
+                dlgShot.save(QDir(QCoreApplication::applicationDirPath())
+                                 .filePath(QStringLiteral("selfcheck-export-splits.png")));
+            dlg.close();
+        }
     }
 
     // 15. 时间轴纵向高度：各宫格压到约一半，且字号仍放得下。

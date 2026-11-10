@@ -74,6 +74,9 @@ public:
     /// 为槽位装载视频（onPickVideo 的对话框后段；测试通道：绕过文件框直喂路径）
     void pickVideoForSlot(int slot, const QString &path);
 
+    /// 当前宫格顺序（lane → 格子；自检与导出对齐用同一份数据）
+    QVector<int> cellOrder() const { return m_cellOfLane; }
+
 protected:
     void closeEvent(QCloseEvent *event) override;
     void keyPressEvent(QKeyEvent *event) override;   // P-68：A/B 选段
@@ -207,6 +210,8 @@ private:
     QVector<int> m_cellOfLane;
     int  cellOfLane(int lane) const;
     void moveLaneToCell(int lane, int cell);
+    CamTileWidget *tileAtGlobal(const QPoint &globalPos) const;   ///< 拖拽落点命中
+    int m_dragFromLane = -1;   ///< v2.8 拖拽换位源路（-1=无）
     void resetCellOrder();
     QPushButton *m_alignBtn = nullptr;
     QPushButton *m_alignOkBtn = nullptr;

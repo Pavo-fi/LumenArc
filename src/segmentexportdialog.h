@@ -38,6 +38,10 @@ public:
     QString outputPath() const;
 
     static QString formatMs(qint64 ms);
+    /// v2.8：相对选段起点的偏移文本（3:05 / 1:03:05）
+    QString fmtOffset(qint64 ms) const;
+    /// "3:00" / "0:03:10" / "185"（秒）→ 毫秒；无法解析 ok=false
+    static qint64 parseOffsetMs(const QString &text, bool *ok = nullptr);
     QString fmtTime(qint64 ms) const;   // wallEpoch → 日历时刻；否则流内 h:mm:ss.mmm
 
     /// 选段/初值刷新（再次打开时）
@@ -63,6 +67,13 @@ signals:
 private:
     void rebuildTable();
     void updateSummary();
+public:
+    /// v2.8：把「分段点（相对 A）」输入框内容写进 plan（也可被自检调用）
+    void applySplitsFromEdit();
+private:
+    /// 用 plan 现有 splits 回填输入框（打开/恢复/游标分段后保持同步）
+    void syncSplitsEdit();
+    class QLineEdit *m_splitsEdit = nullptr;
 
     speedplan::SpeedPlan m_plan;
     qint64 m_cursorMs = 0;

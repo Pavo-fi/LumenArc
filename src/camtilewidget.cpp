@@ -10,6 +10,7 @@
  */
 #include "camtilewidget.h"
 
+#include <QApplication>
 #include <QPainter>
 #include <QMouseEvent>
 #include <QWheelEvent>
@@ -209,11 +210,33 @@ void CamTileWidget::mousePressEvent(QMouseEvent *event)
         event->accept();
         return;
     }
+    if (event->button() == Qt::LeftButton) {
+        // 先挂起：松手时若没超过阈值才算「单击切听」，超过就算拖拽换位
+        m_pressPending = true;
+        m_reordering = false;
+        m_pressPos = event->pos();
+        event->accept();
+        return;
+    }
     QWidget::mousePressEvent(event);
 }
 
 void CamTileWidget::mouseMoveEvent(QMouseEvent *event)
 {
+    if (m_pressPending && (event->buttons() & Qt::LeftButton)) {
+        if (!m_reordering
+            && (event->pos() - m_pressPos).manhattanLength()
+                   >= QApplication::startDragDistance()) {
+            m_reordering = true;
+            setCursor(Qt::ClosedHandCursor);
+            emit reorderDragStarted();
+        }
+        if (m_reordering) {
+            emit reorderDragMoved(event->globalPosition().toPoint());
+            event->accept();
+            return;
+        }
+    }
     if (m_panning) {
         const QRectF fit = frameFitRect();
         const QPointF d = event->pos() - m_panLast;
@@ -237,7 +260,15 @@ void CamTileWidget::mouseReleaseEvent(QMouseEvent *event)
         return;
     }
     if (event->button() == Qt::LeftButton) {
-        emit clicked();   // 切听（U-2）
+        const bool wasReorder = m_reordering;
+        m_pressPending = false;
+        m_reordering = false;
+        setCursor(Qt::PointingHandCursor);
+        if (wasReorder) {
+            emit reorderDragFinished(event->globalPosition().toPoint());
+        } else {
+            emit clicked();   // 切听（U-2）：没拖动才算单击
+        }
         event->accept();
         return;
     }
@@ -301,6 +332,14 @@ void CamTileWidget::paintEvent(QPaintEvent *)
 
     // v2.2：删除全幅选中画框（用户 2026-10-27）——选中已由右上角 🔊 徽标表达，
     // 3px 黄框压在画面上太抢眼。m_selected 仍用于「画面调节」的作用对象。
+
+    // v2.8 拖拽换位：落点框用虚线强调色，与被拖瓦片自身区分开
+    if (m_dropTarget) {
+        QPen pen(QColor(Theme::Accent), 2, Qt::DashLine);
+        p.setPen(pen);
+        p.setBrush(Qt::NoBrush);
+        p.drawRect(rect().adjusted(1, 1, -2, -2));
+    }
 
     // OSD（U-5 可关）
     if (m_osdVisible) {

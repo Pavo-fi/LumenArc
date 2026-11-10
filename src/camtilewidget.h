@@ -56,9 +56,18 @@ public:
     QRectF videoFitRect() const { return frameFitRect(); }
     QPointF zoomCenter() const { return m_center; }  ///< 归一化源坐标（导出 PIP 快照用）
 
+    /// 拖拽换位高亮（拖动中指针hover到的瓦片显示落点框）
+    void setDropTarget(bool on) { if (m_dropTarget == on) return; m_dropTarget = on; update(); }
+    bool isDropTarget() const { return m_dropTarget; }
+
 signals:
     void clicked();          ///< 单击：切听该路（U-2）
     void openRequested();    ///< 双击：回单路分析（U-6）
+    /// v2.8（用户拍板：宫格顺序要像以前那样左键拖拽换位）：
+    /// 左键拖动超过阈值即视为换位拖动，不再触发 clicked。
+    void reorderDragStarted();
+    void reorderDragMoved(const QPoint &globalPos);
+    void reorderDragFinished(const QPoint &globalPos);
 
 protected:
     void paintEvent(QPaintEvent *event) override;
@@ -87,6 +96,12 @@ private:
     bool m_lowresBadge = false;
     bool m_truthBadge = false;              ///< v1.16.0：“已对时”绿角标
     QString m_placeholder;
+
+    // v2.8 左键拖拽换位（与「单击切听」共存：靠位移阈值区分）
+    QPoint m_pressPos;
+    bool m_pressPending = false;   ///< 按下但还没超过阈值
+    bool m_reordering = false;     ///< 已进入换位拖动
+    bool m_dropTarget = false;     ///< 当前是否作为落点高亮
 
     // 放大镜状态（归一化源坐标：center ∈ [0,1]²，zoom ≥1）
     qreal m_zoom = 1.0;

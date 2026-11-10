@@ -457,6 +457,9 @@ void MultiCamPlaybackWindow::buildPlayPage()
     outerLay->setSpacing(0);
     auto *contentCol = new QWidget(m_playPage);
     auto *root = new QVBoxLayout(contentCol);
+    // v2.8（用户拍板）：时间轴往下贴、边距收紧，把纵向空间尽量留给画面
+    root->setContentsMargins(6, 2, 6, 2);
+    root->setSpacing(4);
     outerLay->addWidget(contentCol, 1);
     m_ecHost = new QWidget(m_playPage);
     m_ecHost->setFixedWidth(310);
@@ -643,21 +646,28 @@ void MultiCamPlaybackWindow::buildPlayPage()
     bar->addWidget(m_statusLabel);
     root->addLayout(bar);
 
-    // 瓦片网格
+    // 瓦片网格（唯一可拉伸区：画面吃掉时间轴之外的纵向空间）
     auto *gridHost = new QWidget(this);
+    gridHost->setObjectName(QStringLiteral("multicamGridHost"));
     m_grid = new QGridLayout(gridHost);
-    m_grid->setSpacing(6);
+    m_grid->setSpacing(4);
+    m_grid->setContentsMargins(0, 0, 0, 0);
     root->addWidget(gridHost, 1);
 
-    // 底部时间线宿主（模式A 合并条 / 模式B 每路进度条）
+    // 底部时间线宿主（模式A 合并条 / 模式B 每路进度条）。
+    // v2.8：高度固定、贴到窗口最底——不再被下面的说明文字顶起来留出空隙。
     m_timelineHost = new QWidget(this);
+    m_timelineHost->setObjectName(QStringLiteral("multicamTimelineHost"));
+    m_timelineHost->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
     root->addWidget(m_timelineHost, 0);
 
+    // 说明文字不再占布局高度（它曾把时间轴顶离底边）：文字转成时间轴的 tooltip。
     m_hintLabel = new QLabel(this);
     m_hintLabel->setWordWrap(true);
     m_hintLabel->setStyleSheet(
         QStringLiteral("color:%1;").arg(Theme::TextMuted));
-    root->addWidget(m_hintLabel);
+    m_hintLabel->hide();
+    root->addWidget(m_hintLabel, 0);
 }
 
 // ---------------------------------------------------------------------------
@@ -748,6 +758,31 @@ void MultiCamPlaybackWindow::rebuildTiles()
         m_grid->addWidget(tile, cell / cols, cell % cols);
 
         // v2.0：右键换窗位（不占用左键——左键仍用于缩放/平移/切听）
+        // v2.8（用户拍板）：左键按住拖动即可换位（最直觉的路径）；
+        // 工具栏「宫格顺序」菜单与瓦片右键菜单保留为备选。
+        connect(tile, &CamTileWidget::reorderDragStarted, this, [this, i]() {
+            m_dragFromLane = i;
+        });
+        connect(tile, &CamTileWidget::reorderDragMoved, this,
+                [this](const QPoint &gpos) {
+                    CamTileWidget *target = tileAtGlobal(gpos);
+                    for (auto *t : m_tiles)
+                        if (t)
+                            t->setDropTarget(t && t == target
+                                             && t->isDropTarget() == false ? true
+                                                                           : t == target);
+                });
+        connect(tile, &CamTileWidget::reorderDragFinished, this,
+                [this](const QPoint &gpos) {
+                    CamTileWidget *target = tileAtGlobal(gpos);
+                    const int to = target ? m_tiles.indexOf(target) : -1;
+                    for (auto *t : m_tiles)
+                        if (t)
+                            t->setDropTarget(false);
+                    if (m_dragFromLane >= 0 && to >= 0 && to != m_dragFromLane)
+                        moveLaneToCell(m_dragFromLane, cellOfLane(to));
+                    m_dragFromLane = -1;
+                });
         // 右键也能换（快捷路径）；工具栏「宫格顺序」是显式入口
         tile->setContextMenuPolicy(Qt::CustomContextMenu);
         connect(tile, &QWidget::customContextMenuRequested, this,
@@ -791,6 +826,18 @@ int MultiCamPlaybackWindow::cellOfLane(int lane) const
     return m_cellOfLane.value(lane, lane);
 }
 
+/// v2.8：全局坐标命中的瓦片（拖拽换位落点判定）
+CamTileWidget *MultiCamPlaybackWindow::tileAtGlobal(const QPoint &globalPos) const
+{
+    for (auto *t : m_tiles) {
+        if (!t || !t->isVisible())
+            continue;
+        if (t->rect().contains(t->mapFromGlobal(globalPos)))
+            return t;
+    }
+    return nullptr;
+}
+
 void MultiCamPlaybackWindow::moveLaneToCell(int lane, int cell)
 {
     if (lane < 0 || lane >= m_cellOfLane.size())
@@ -809,6 +856,9 @@ void MultiCamPlaybackWindow::moveLaneToCell(int lane, int cell)
     }
     m_cellOfLane[lane] = cell;
     rebuildTiles();
+    if (m_statusLabel)
+        m_statusLabel->setText(lang("宫格顺序已更新（导出同序）",
+                                    "Grid order updated (export follows)"));
 }
 
 void MultiCamPlaybackWindow::resetCellOrder()
@@ -861,6 +911,11 @@ void MultiCamPlaybackWindow::rebuildTimelineArea()
     auto *lay = new QVBoxLayout(m_timelineHost);
     lay->setContentsMargins(0, 0, 0, 0);
     lay->setSpacing(2);   // v2.7：时间轴整体压缩
+    // v2.8：宿主高度跟随内容（贴底、不被拉伸留下空隙）
+    if (m_mergedBar) {
+        m_timelineHost->setFixedHeight(
+            MultiCamViewWidget::timelineHeightFor(m_svc->laneCount()));
+    }
 
     // P-73：对时模式强制每路独立进度条（合并条无法分路定位事件帧）
     if (m_mode == SyncTimelineMode::Merged && !m_eventCalib) {
@@ -898,6 +953,8 @@ void MultiCamPlaybackWindow::rebuildTimelineArea()
         m_hintLabel->setToolTip(
             lang("拖游标可同步走带；双击块或瓦片回到单路分析",
                  "Drag the cursor to scrub; double-click a block or tile to open one lane"));
+        m_timelineHost->setToolTip(m_hintLabel->text()
+                                   + QStringLiteral("\n") + m_hintLabel->toolTip());
     } else {
         // 模式B：每路一条带时间进度条（无分析面板）
         const int n = qMax(2, m_svc->laneCount());
@@ -1035,6 +1092,8 @@ void MultiCamPlaybackWindow::refreshModeControls()
                           "双击瓦片回单路分析。",
                           "Aligned (session only): drag either bar to scrub "
                           "both; double-click a tile to open that lane.")));
+        // 模式B 也把说明收进 tooltip（说明条不占布局高度，时间轴才能贴底）
+        m_timelineHost->setToolTip(m_hintLabel->text());
     }
 }
 

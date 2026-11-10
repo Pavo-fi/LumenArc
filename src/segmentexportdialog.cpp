@@ -8,6 +8,7 @@
 #include <QHeaderView>
 #include <QLabel>
 #include <QLineEdit>
+#include <QRegularExpression>
 #include <QMessageBox>
 #include <QProcess>
 #include <QDesktopServices>
@@ -59,14 +60,84 @@ SegmentExportDialog::SegmentExportDialog(const speedplan::SpeedPlan &plan,
     m_table = new QTableWidget(this);
     m_table->setColumnCount(3);
     m_table->setHorizontalHeaderLabels({lang("段", "Seg"),
-                                        m_wallEpoch ? lang("区间（墙钟）", "Range (wall)")
-                                                    : lang("区间（流内）", "Range (stream)"),
+                                        lang("区间（相对 A）", "Range (from A)"),
                                         lang("倍速", "Speed")});
     m_table->horizontalHeader()->setSectionResizeMode(1, QHeaderView::Stretch);
     m_table->verticalHeader()->setVisible(false);
     m_table->setSelectionMode(QAbstractItemView::NoSelection);
     m_table->setMaximumHeight(220);
     lay->addWidget(m_table);
+
+    // v2.8（用户拍板「导出宫格视频要可以设置 AB 区间」）：
+    // 不必记快捷键——面板里就能用当前游标定 A/B，并直接看到选段有多长。
+    auto *abRow = new QHBoxLayout();
+    auto *setABtn = new QPushButton(lang("用游标作 A", "Cursor → A"), this);
+    auto *setBBtn = new QPushButton(lang("用游标作 B", "Cursor → B"), this);
+    auto *abInfo = new QLabel(this);
+    auto refreshAbInfo = [this, abInfo]() {
+        if (!m_plan.isValid()) {
+            abInfo->setText(QString());
+            return;
+        }
+        abInfo->setText(lang("A +%1 → B +%2（源 %3）",
+                             "A +%1 → B +%2 (source %3)")
+                            .arg(fmtOffset(0), fmtOffset(m_plan.bMs - m_plan.aMs),
+                                 fmtOffset(m_plan.bMs - m_plan.aMs)));
+    };
+    connect(setABtn, &QPushButton::clicked, this, [this, refreshAbInfo]() {
+        if (m_cursorMs >= m_plan.bMs || m_cursorMs < 0) {
+            m_resultLabel->setStyleSheet("color: " + Theme::Accent + ";");
+            m_resultLabel->setText(lang("游标必须早于 B 点", "Cursor must be before B"));
+            return;
+        }
+        m_plan.aMs = m_cursorMs;
+        m_plan.normalize();
+        syncSplitsEdit();
+        rebuildTable();
+        updateSummary();
+        refreshAbInfo();
+        m_resultLabel->clear();
+    });
+    connect(setBBtn, &QPushButton::clicked, this, [this, refreshAbInfo]() {
+        if (m_cursorMs <= m_plan.aMs) {
+            m_resultLabel->setStyleSheet("color: " + Theme::Accent + ";");
+            m_resultLabel->setText(lang("游标必须晚于 A 点", "Cursor must be after A"));
+            return;
+        }
+        m_plan.bMs = m_cursorMs;
+        m_plan.normalize();
+        syncSplitsEdit();
+        rebuildTable();
+        updateSummary();
+        refreshAbInfo();
+        m_resultLabel->clear();
+    });
+    abRow->addWidget(setABtn);
+    abRow->addWidget(setBBtn);
+    abRow->addWidget(abInfo, 1);
+    lay->addLayout(abRow);
+    refreshAbInfo();
+
+    // v2.8（用户拍板）：要能直接写「3:00 / 3:10」这种相对 A 的分段点，
+    // 而不是只能用游标一处一处按。格式：3:00, 3:10 或 0:03:10（逗号分隔）。
+    auto *splitsRow = new QHBoxLayout();
+    splitsRow->addWidget(new QLabel(lang("分段点（相对 A）：", "Splits (from A):"), this));
+    m_splitsEdit = new QLineEdit(this);
+    m_splitsEdit->setObjectName(QStringLiteral("splitsEdit"));
+    m_splitsEdit->setPlaceholderText(
+        lang("例：3:00, 3:10 —— 留空表示不分段", "e.g. 3:00, 3:10 - empty = no splits"));
+    m_splitsEdit->setToolTip(lang(
+        "按「相对选段起点」的偏移写分段点，逗号分隔；支持 3:00 / 0:03:10 / 185（秒）。"
+        "回车或点「应用」后刷新分段表。",
+        "Offsets from selection start, comma separated; 3:00 / 0:03:10 / 185 (sec)."));
+    splitsRow->addWidget(m_splitsEdit, 1);
+    auto *applySplitsBtn = new QPushButton(lang("应用", "Apply"), this);
+    connect(applySplitsBtn, &QPushButton::clicked, this,
+            &SegmentExportDialog::applySplitsFromEdit);
+    splitsRow->addWidget(applySplitsBtn);
+    connect(m_splitsEdit, &QLineEdit::returnPressed, this,
+            &SegmentExportDialog::applySplitsFromEdit);
+    lay->addLayout(splitsRow);
 
     auto *splitRow = new QHBoxLayout();
     auto *splitBtn = new QPushButton(lang("在当前游标处分段", "Split at cursor"), this);
@@ -81,6 +152,7 @@ SegmentExportDialog::SegmentExportDialog(const speedplan::SpeedPlan &plan,
         }
         m_plan.splits.append(m_cursorMs);
         m_plan.normalize();
+        syncSplitsEdit();
         rebuildTable();
         updateSummary();
     });
@@ -91,6 +163,7 @@ SegmentExportDialog::SegmentExportDialog(const speedplan::SpeedPlan &plan,
             return;
         m_plan.splits.removeLast();
         m_plan.normalize();
+        syncSplitsEdit();
         rebuildTable();
         updateSummary();
     });
@@ -120,6 +193,7 @@ SegmentExportDialog::SegmentExportDialog(const speedplan::SpeedPlan &plan,
             return;
         m_plan = m_lastPlan;
         m_plan.normalize();
+        syncSplitsEdit();
         rebuildTable();
         updateSummary();
         m_lastHint->setVisible(false);
@@ -239,6 +313,7 @@ void SegmentExportDialog::setPlan(const speedplan::SpeedPlan &plan,
     // 不——恢复只作用于本面板当前计划，恢复后即收起，语义见 setLastPlan）
     m_lastHint->setVisible(false);
     m_restoreBtn->setVisible(false);
+    syncSplitsEdit();
     rebuildTable();
     updateSummary();
 }
@@ -307,6 +382,93 @@ void SegmentExportDialog::setResult(bool ok, const QString &msg)
         m_openFolderBtn->setVisible(false);
 }
 
+/// 相对偏移格式化：3:05 / 1:03:05（与 fmtTime 的区别＝不带绝对时刻语义）
+void SegmentExportDialog::syncSplitsEdit()
+{
+    if (!m_splitsEdit)
+        return;
+    QStringList parts;
+    for (qint64 sp : m_plan.splits)
+        parts << fmtOffset(sp - m_plan.aMs);
+    m_splitsEdit->setText(parts.join(QStringLiteral(", ")));
+}
+
+QString SegmentExportDialog::fmtOffset(qint64 ms) const
+{
+    const qint64 s = qMax<qint64>(0, ms) / 1000;
+    if (s >= 3600) {
+        return QStringLiteral("%1:%2:%3")
+            .arg(s / 3600)
+            .arg((s % 3600) / 60, 2, 10, QLatin1Char('0'))
+            .arg(s % 60, 2, 10, QLatin1Char('0'));
+    }
+    return QStringLiteral("%1:%2")
+        .arg(s / 60)
+        .arg(s % 60, 2, 10, QLatin1Char('0'));
+}
+
+/// "3:00" / "0:03:10" / "185"（秒）→ 毫秒；无法解析返回 -1
+qint64 SegmentExportDialog::parseOffsetMs(const QString &text, bool *ok)
+{
+    QString t = text.trimmed();
+    if (t.startsWith(QLatin1Char('+')))
+        t.remove(0, 1);
+    if (t.isEmpty()) {
+        if (ok) *ok = false;
+        return -1;
+    }
+    const QStringList parts = t.split(QLatin1Char(':'));
+    if (parts.size() > 3) {
+        if (ok) *ok = false;
+        return -1;
+    }
+    qint64 total = 0;
+    for (int i = 0; i < parts.size(); ++i) {
+        bool numOk = false;
+        const double v = parts.at(i).trimmed().toDouble(&numOk);
+        if (!numOk || v < 0.0) {
+            if (ok) *ok = false;
+            return -1;
+        }
+        total = total * 60 + qint64(v * 1000.0 + 0.5);
+    }
+    if (ok) *ok = true;
+    return total;
+}
+
+/// 把输入框里的相对分段点写进 plan（越界/乱写会被 normalize 丢弃并提示）
+void SegmentExportDialog::applySplitsFromEdit()
+{
+    if (!m_splitsEdit || !m_plan.isValid())
+        return;
+    const QString raw = m_splitsEdit->text().trimmed();
+    QVector<qint64> splits;
+    if (!raw.isEmpty()) {
+        const QStringList items = raw.split(
+            QRegularExpression(QStringLiteral("[,，;；]")), Qt::SkipEmptyParts);
+        for (const QString &item : items) {
+            bool ok = false;
+            const qint64 off = parseOffsetMs(item, &ok);
+            if (!ok) {
+                m_resultLabel->setStyleSheet("color: " + Theme::Accent + ";");
+                m_resultLabel->setText(lang("分段点「%1」看不懂，用 3:00 这种写法",
+                                            "Cannot read split \"%1\" - use 3:00 style")
+                                           .arg(item.trimmed()));
+                return;
+            }
+            const qint64 abs = m_plan.aMs + off;
+            if (abs > m_plan.aMs && abs < m_plan.bMs)
+                splits.append(abs);
+        }
+    }
+    m_plan.splits = splits;
+    m_plan.normalize();
+    syncSplitsEdit();
+    rebuildTable();
+    updateSummary();
+    m_resultLabel->clear();
+}
+
 void SegmentExportDialog::rebuildTable()
 {
     const int n = m_plan.segmentCount();
@@ -316,8 +478,14 @@ void SegmentExportDialog::rebuildTable()
         qint64 s, e;
         m_plan.segmentBounds(i, &s, &e);
         m_table->setItem(i, 0, new QTableWidgetItem(QString::number(i + 1)));
-        m_table->setItem(i, 1, new QTableWidgetItem(
-            fmtTime(s) + QStringLiteral(" → ") + fmtTime(e)));
+        // v2.8：区间按「相对选段起点」显示——用户想的是一段 5 分钟里的
+        // 「前 3 分钟」「3:00–3:10」；绝对墙钟/流内时刻放进 tooltip 留档。
+        const qint64 offS = s - m_plan.aMs;
+        const qint64 offE = e - m_plan.aMs;
+        auto *rangeItem = new QTableWidgetItem(
+            QStringLiteral("+%1 → +%2").arg(fmtOffset(offS), fmtOffset(offE)));
+        rangeItem->setToolTip(fmtTime(s) + QStringLiteral(" → ") + fmtTime(e));
+        m_table->setItem(i, 1, rangeItem);
         auto *combo = new QComboBox(m_table);
         for (double r : rates) {
             combo->addItem(QStringLiteral("%1x").arg(r, 0, 'g', 3), r);
@@ -337,9 +505,9 @@ void SegmentExportDialog::updateSummary()
 {
     const double outSec = m_plan.outputDurationMs() / 1000.0;
     const double srcSec = (m_plan.bMs - m_plan.aMs) / 1000.0;
-    m_summary->setText(lang("选段 %1 → %2（源 %3 秒，导出时长约 %4 秒）",
-                            "Selection %1 → %2 (source %3 s, export ~%4 s)")
-                           .arg(fmtTime(m_plan.aMs), fmtTime(m_plan.bMs))
-                           .arg(srcSec, 0, 'f', 1)
-                           .arg(outSec, 0, 'f', 1));
+    m_summary->setText(lang("选段 %1 → %2（源 %3，导出约 %4）",
+                            "Selection %1 → %2 (source %3, export ~%4)")
+                           .arg(fmtTime(m_plan.aMs), fmtTime(m_plan.bMs),
+                                fmtOffset(qint64(srcSec * 1000.0)),
+                                fmtOffset(qint64(outSec * 1000.0))));
 }
