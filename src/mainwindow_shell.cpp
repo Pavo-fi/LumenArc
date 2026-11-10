@@ -57,6 +57,7 @@
 #include <QListWidget>
 #include <QLocale>
 #include <QMenuBar>
+#include <QMouseEvent>
 #include <QOpenGLWidget>
 #include <QPropertyAnimation>
 #include <QPushButton>
@@ -1869,6 +1870,44 @@ int MainWindow::runShellSelfCheck()
                   QStringLiteral("失效目录明确提示双击重新定位"));
             // 不在此触发 itemActivated：主窗连接会打开真实目录对话框。
             snap(QStringLiteral("start-stale"));
+
+            // 行容器必须恢复列表交互：单击选中、双击打开/重新定位。
+            CaseOpenPanel activationProbe(nullptr);
+            activationProbe.populateRecentCases(QStringList{caseA, missing});
+            auto *activationList = activationProbe.findChild<QListWidget *>(
+                QStringLiteral("caseOpenRecentList"));
+            QWidget *validRow = nullptr;
+            QWidget *missingRow = nullptr;
+            const auto activationRows = activationProbe.findChildren<QWidget *>(
+                QStringLiteral("caseOpenRecentRow"));
+            for (QWidget *row : activationRows) {
+                if (row->property("recentDir").toString() == caseA)
+                    validRow = row;
+                if (row->property("recentDir").toString() == missing)
+                    missingRow = row;
+            }
+            auto sendMouse = [](QWidget *target, QEvent::Type type) {
+                QMouseEvent mouse(type, QPointF(8, 8), Qt::LeftButton,
+                                  Qt::LeftButton, Qt::NoModifier);
+                QCoreApplication::sendEvent(target, &mouse);
+            };
+            if (validRow)
+                sendMouse(validRow, QEvent::MouseButtonPress);
+            check(activationList && activationList->currentItem()
+                      && activationList->currentItem()->data(Qt::UserRole).toString() == caseA,
+                  QStringLiteral("自定义案件行单击可正常选中"));
+            QString activatedDir;
+            QString relocatedDir;
+            connect(&activationProbe, &CaseOpenPanel::openCaseRequested,
+                    this, [&activatedDir](const QString &dir) { activatedDir = dir; });
+            connect(&activationProbe, &CaseOpenPanel::relocateCaseRequested,
+                    this, [&relocatedDir](const QString &dir) { relocatedDir = dir; });
+            if (validRow)
+                sendMouse(validRow, QEvent::MouseButtonDblClick);
+            if (missingRow)
+                sendMouse(missingRow, QEvent::MouseButtonDblClick);
+            check(activatedDir == caseA, QStringLiteral("自定义案件行双击可打开案件"));
+            check(relocatedDir == missing, QStringLiteral("失效案件行双击可重新定位"));
 
             // 删除行为用无 CaseManager 的独立展示组件验证，不碰用户设置。
             const QString chineseCase = QDir(temp.path()).filePath(

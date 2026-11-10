@@ -5,11 +5,13 @@
 #include "case_open_panel.h"
 
 #include <QDir>
+#include <QEvent>
 #include <QFontMetrics>
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QLineEdit>
 #include <QListWidget>
+#include <QMouseEvent>
 #include <QPushButton>
 #include <QSettings>
 #include <QShortcut>
@@ -312,6 +314,8 @@ void CaseOpenPanel::populateRecentCases(const QStringList &dirs)
 
         auto *row = new QWidget(m_recentList);
         row->setObjectName(QStringLiteral("caseOpenRecentRow"));
+        row->setProperty("recentDir", dir);
+        row->installEventFilter(this);
         row->setStyleSheet(QStringLiteral("QWidget#caseOpenRecentRow{background:transparent;}"));
         auto *rowLayout = new QHBoxLayout(row);
         rowLayout->setContentsMargins(10, 2, 4, 2);
@@ -374,6 +378,35 @@ void CaseOpenPanel::activateRecent(const QString &dir)
         emit openCaseRequested(dir);
     else
         emit relocateCaseRequested(dir);
+}
+
+bool CaseOpenPanel::eventFilter(QObject *watched, QEvent *event)
+{
+    // setItemWidget 的行容器会拦截列表鼠标事件；不能给整行设
+    // WA_TransparentForMouseEvents（会连同删除按钮一起屏蔽），
+    // 因此只对待命的行容器显式恢复「单击选中 / 双击打开或重新定位」。
+    if (watched->objectName() == QStringLiteral("caseOpenRecentRow")) {
+        const QEvent::Type type = event->type();
+        if (type == QEvent::MouseButtonPress || type == QEvent::MouseButtonDblClick) {
+            auto *mouse = static_cast<QMouseEvent *>(event);
+            if (mouse->button() == Qt::LeftButton) {
+                const QString dir = watched->property("recentDir").toString();
+                for (int i = 0; i < m_recentList->count(); ++i) {
+                    QListWidgetItem *item = m_recentList->item(i);
+                    if (item->data(Qt::UserRole).toString() == dir) {
+                        m_recentList->setCurrentItem(item);
+                        if (type == QEvent::MouseButtonDblClick)
+                            activateRecent(dir);
+                        break;
+                    }
+                }
+                return true;
+            }
+        } else if (type == QEvent::MouseButtonRelease) {
+            return true;
+        }
+    }
+    return QFrame::eventFilter(watched, event);
 }
 
 void CaseOpenPanel::removeRecentEntry(const QString &dir)

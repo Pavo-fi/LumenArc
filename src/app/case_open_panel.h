@@ -41,6 +41,9 @@ signals:
     void relocateCaseRequested(const QString &oldDir);
     void closeRequested();
 
+protected:
+    bool eventFilter(QObject *watched, QEvent *event) override;
+
 private:
     void onItemActivated(QListWidgetItem *item);
     void activateRecent(const QString &dir);
