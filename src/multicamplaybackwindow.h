@@ -74,8 +74,20 @@ public:
     /// 为槽位装载视频（onPickVideo 的对话框后段；测试通道：绕过文件框直喂路径）
     void pickVideoForSlot(int slot, const QString &path);
 
+    /// 测试通道：直接装载已校时机位（进入模式A 合并时间轴），
+    /// 供自检在无案件/无真实视频时验证布局与时间轴行为。
+    void loadCalibratedLanesForTest(const QVector<SyncLaneData> &lanes);
+
     /// 当前宫格顺序（lane → 格子；自检与导出对齐用同一份数据）
     QVector<int> cellOrder() const { return m_cellOfLane; }
+
+    // ---- v2.9 选段/断点（测试通道：自检驱动，与界面按钮同一套逻辑）----
+    void testSetCursor(qint64 wallMs) { m_lastWallMs = wallMs; }
+    void testMarkAB(bool isA) { markAB(isA); }
+    void testAddSplit() { addSplitAtCursor(); }
+    QVector<qint64> splitPoints() const { return m_splitWall; }
+    QVector<double> splitRates() const { return m_splitRates; }
+    void setSplitRate(int seg, double rate);
 
 protected:
     void closeEvent(QCloseEvent *event) override;
@@ -98,6 +110,10 @@ private slots:
     void onBackToPicker();    ///< 工具行「重选机位」
     void onExportClip();      ///< v2.7 宫格视频导出（默认全区间；A/B 可选裁剪）
     void updateExportAvailability();   ///< 导出按钮可用性（全路已入墙钟轴）
+    // ---- v2.9 选段 + 变速断点 ----
+    void markAB(bool isA);              ///< 设 A/B（两点齐了自动放大到该区间）
+    void addSplitAtCursor();            ///< 在选段内当前时刻加断点
+    void rebuildSegmentSpeedBar();      ///< 选段内每段倍速条
     void startClipExport(const speedplan::SpeedPlan &plan, bool burnOsd,
                          const QString &outPath);
 
@@ -212,6 +228,15 @@ private:
     void moveLaneToCell(int lane, int cell);
     CamTileWidget *tileAtGlobal(const QPoint &globalPos) const;   ///< 拖拽落点命中
     int m_dragFromLane = -1;   ///< v2.8 拖拽换位源路（-1=无）
+
+    // ---- v2.9 选段 + 变速断点（定义在选段之内，改 A/B 即清零）----
+    QPushButton *m_abABtn = nullptr;    ///< 工具栏 A
+    QPushButton *m_abBBtn = nullptr;    ///< 工具栏 B
+    QPushButton *m_splitBtn = nullptr;  ///< 工具栏「断点」
+    QWidget *m_segSpeedBar = nullptr;   ///< 每段倍速条
+    class QHBoxLayout *m_segSpeedLay = nullptr;
+    QVector<qint64> m_splitWall;        ///< 断点（墙钟，升序）
+    QVector<double> m_splitRates;       ///< 每段倍率（长度 = 断点数+1）
     void resetCellOrder();
     QPushButton *m_alignBtn = nullptr;
     QPushButton *m_alignOkBtn = nullptr;

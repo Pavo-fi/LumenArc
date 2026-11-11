@@ -104,6 +104,7 @@ void MultiCamPlaybackWindow::buildUi()
     buildPickerPage();
     m_stack->addWidget(m_pickerPage);
     m_playPage = new QWidget(this);
+    m_playPage->setObjectName(QStringLiteral("multicamPlayPage"));
     buildPlayPage();
     m_stack->addWidget(m_playPage);
     m_stack->setCurrentWidget(m_playPage);
@@ -456,6 +457,7 @@ void MultiCamPlaybackWindow::buildPlayPage()
     outerLay->setContentsMargins(0, 0, 0, 0);
     outerLay->setSpacing(0);
     auto *contentCol = new QWidget(m_playPage);
+    contentCol->setObjectName(QStringLiteral("multicamContentCol"));
     auto *root = new QVBoxLayout(contentCol);
     // v2.8（用户拍板）：时间轴往下贴、边距收紧，把纵向空间尽量留给画面
     root->setContentsMargins(6, 2, 6, 2);
@@ -595,6 +597,33 @@ void MultiCamPlaybackWindow::buildPlayPage()
     }
     bar->addWidget(m_gridOrderBtn);
 
+    // v2.9（用户拍板）：A/B 与变速断点做成显式按钮——不靠记快捷键，
+    // 也不会被键盘焦点（滑杆/下拉）吃掉。键盘 A/B 保留为快捷方式。
+    m_abABtn = new QPushButton(QStringLiteral("A"), this);
+    m_abABtn->setObjectName(QStringLiteral("multicamMarkA"));
+    m_abABtn->setToolTip(lang("在当前时刻设 A 点（快捷键 A）",
+                              "Mark A at cursor (key A)"));
+    m_abABtn->setFixedWidth(28);
+    connect(m_abABtn, &QPushButton::clicked, this, [this]() { markAB(true); });
+    bar->addWidget(m_abABtn);
+
+    m_abBBtn = new QPushButton(QStringLiteral("B"), this);
+    m_abBBtn->setObjectName(QStringLiteral("multicamMarkB"));
+    m_abBBtn->setToolTip(lang("在当前时刻设 B 点（快捷键 B）；A、B 都有后时间轴自动放大到该区间",
+                              "Mark B at cursor (key B); timeline zooms to A..B"));
+    m_abBBtn->setFixedWidth(28);
+    connect(m_abBBtn, &QPushButton::clicked, this, [this]() { markAB(false); });
+    bar->addWidget(m_abBBtn);
+
+    m_splitBtn = new QPushButton(lang("断点", "Split"), this);
+    m_splitBtn->setObjectName(QStringLiteral("multicamAddSplit"));
+    m_splitBtn->setToolTip(lang("在选段内的当前时刻打断点，断出的每一段可单独设倍速",
+                                "Add a speed breakpoint; each piece gets its own speed"));
+    m_splitBtn->setEnabled(false);
+    connect(m_splitBtn, &QPushButton::clicked, this,
+            &MultiCamPlaybackWindow::addSplitAtCursor);
+    bar->addWidget(m_splitBtn);
+
     // P-68 第 10 条：多机选段导出（与单路同款分段变速逻辑；模式A 可用）
     // v2.7（用户拍板「合并宫格播放和导出」）：导出是宫格视图的一等动作，
     // 不再要求先按 A/B 打点——默认导出整个覆盖区间，A/B 只是可选裁剪。
@@ -660,6 +689,17 @@ void MultiCamPlaybackWindow::buildPlayPage()
     m_timelineHost->setObjectName(QStringLiteral("multicamTimelineHost"));
     m_timelineHost->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
     root->addWidget(m_timelineHost, 0);
+
+    // v2.9：选段确定后出现的「每段倍速」条（只在有 A/B 时占高度）
+    m_segSpeedBar = new QWidget(this);
+    m_segSpeedBar->setObjectName(QStringLiteral("multicamSegSpeedBar"));
+    m_segSpeedBar->setStyleSheet(QStringLiteral("background:%1;")
+                                     .arg(Theme::BgPanel));
+    m_segSpeedLay = new QHBoxLayout(m_segSpeedBar);
+    m_segSpeedLay->setContentsMargins(6, 2, 6, 2);
+    m_segSpeedLay->setSpacing(6);
+    m_segSpeedBar->hide();
+    root->addWidget(m_segSpeedBar, 0);
 
     // 说明文字不再占布局高度（它曾把时间轴顶离底边）：文字转成时间轴的 tooltip。
     m_hintLabel = new QLabel(this);
@@ -911,11 +951,8 @@ void MultiCamPlaybackWindow::rebuildTimelineArea()
     auto *lay = new QVBoxLayout(m_timelineHost);
     lay->setContentsMargins(0, 0, 0, 0);
     lay->setSpacing(2);   // v2.7：时间轴整体压缩
-    // v2.8：宿主高度跟随内容（贴底、不被拉伸留下空隙）
-    if (m_mergedBar) {
-        m_timelineHost->setFixedHeight(
-            MultiCamViewWidget::timelineHeightFor(m_svc->laneCount()));
-    }
+    // 注：宿主高度在函数末尾收口。此处 m_mergedBar 还没创建，
+    // 早期把判断写在这里 → 固定高度从未生效，宿主按 sizeHint(220) 撑出空隙。
 
     // P-73：对时模式强制每路独立进度条（合并条无法分路定位事件帧）
     if (m_mode == SyncTimelineMode::Merged && !m_eventCalib) {
@@ -1051,6 +1088,15 @@ void MultiCamPlaybackWindow::rebuildTimelineArea()
                     });
         }
     }
+    // v2.8 收口：时间轴宿主高度 = 内容高度（贴底、绝不撑出空白）。
+    // 模式A 用 MultiCamViewWidget 自己的口径（MultiCamViewWidget::sizeHint
+    // 是 220，若放任 sizeHint 就会在时间轴下方留一大条空白）。
+    if (m_mergedBar) {
+        m_timelineHost->setFixedHeight(
+            MultiCamViewWidget::timelineHeightFor(m_svc->laneCount()));
+    } else {
+        m_timelineHost->setFixedHeight(qMax(28, lay->minimumSize().height()));
+    }
 }
 
 void MultiCamPlaybackWindow::refreshModeControls()
@@ -1095,6 +1141,7 @@ void MultiCamPlaybackWindow::refreshModeControls()
         // 模式B 也把说明收进 tooltip（说明条不占布局高度，时间轴才能贴底）
         m_timelineHost->setToolTip(m_hintLabel->text());
     }
+
 }
 
 bool MultiCamPlaybackWindow::lanesLoaded() const
@@ -1119,6 +1166,20 @@ void MultiCamPlaybackWindow::onPickVideo(int slot)
     if (path.isEmpty())
         return;
     pickVideoForSlot(slot, path);
+}
+
+void MultiCamPlaybackWindow::loadCalibratedLanesForTest(
+    const QVector<SyncLaneData> &lanes)
+{
+    if (lanes.size() < 2)
+        return;
+    m_mode = SyncTimelineMode::Merged;
+    if (!m_svc->loadLanes(lanes))
+        return;
+    m_stack->setCurrentWidget(m_playPage);
+    rebuildTiles();
+    rebuildTimelineArea();
+    refreshModeControls();
 }
 
 void MultiCamPlaybackWindow::pickVideoForSlot(int slot, const QString &path)
@@ -1494,30 +1555,32 @@ void MultiCamPlaybackWindow::keyPressEvent(QKeyEvent *event)
         QDialog::keyPressEvent(event);
         return;
     }
-    const auto setPt = [this](qint64 &pt, const QString &cn) {
-        pt = m_lastWallMs;
-        if (m_abA >= 0 && m_abB >= 0 && m_abA > m_abB)
-            qSwap(m_abA, m_abB);
-        m_mergedBar->setABRegion(m_abA, m_abB);
-        updateExportAvailability();
-        m_statusLabel->setText(QStringLiteral("%1 %2").arg(cn, fmtWall(m_lastWallMs)));
+    const auto setPt = [this](bool isA) {
+        markAB(isA);   // 与工具栏按钮同一入口（含自动缩放到 AB）
     };
     switch (event->key()) {
     case Qt::Key_A:
         if (event->modifiers() & Qt::ControlModifier) {
             // Ctrl+A：清除选段
             m_abA = m_abB = -1;
+            m_splitWall.clear();
+            m_splitRates.clear();
             m_mergedBar->setABRegion(-1, -1);
+            m_mergedBar->setSplits({});
+            m_mergedBar->setViewRange(m_svc->contentStartWallMs(),
+                                      m_svc->contentEndWallMs()
+                                          - m_svc->contentStartWallMs());
+            rebuildSegmentSpeedBar();
             updateExportAvailability();
             m_statusLabel->setText(
                 lang("选段已清除（导出将覆盖全部区间）",
                      "Selection cleared (export covers everything)"));
             return;
         }
-        setPt(m_abA, lang("A 点", "A:"));
+        setPt(true);
         return;
     case Qt::Key_B:
-        setPt(m_abB, lang("B 点", "B:"));
+        setPt(false);
         return;
     default:
         QDialog::keyPressEvent(event);
@@ -1527,6 +1590,137 @@ void MultiCamPlaybackWindow::keyPressEvent(QKeyEvent *event)
 /// v2.7：导出可用性统一判定（不再依赖 A/B 是否打点）。
 /// 导出按墙钟取帧，因此要求每一路都已在墙钟轴上（已校时或已对齐）；
 /// 有未对齐临时路时墙钟推算无意义，会导出「该时刻无画面」，故明确禁用并说明。
+/// v2.9：设 A 或 B（isA=true 设 A）。两点齐了就自动放大到该区间。
+void MultiCamPlaybackWindow::markAB(bool isA)
+{
+    if (m_lastWallMs < 0) {
+        m_statusLabel->setText(lang("先播放或拖动游标再打点",
+                                    "Play or move the cursor first"));
+        return;
+    }
+    if (isA)
+        m_abA = m_lastWallMs;
+    else
+        m_abB = m_lastWallMs;
+    if (m_abA >= 0 && m_abB >= 0 && m_abA > m_abB)
+        qSwap(m_abA, m_abB);
+    // 选段一变，旧的断点/倍速就没有意义了（它们定义在选段之内）
+    m_splitWall.clear();
+    m_splitRates.clear();
+    if (m_mergedBar) {
+        m_mergedBar->setABRegion(m_abA, m_abB);
+        m_mergedBar->setSplits({});
+    }
+    m_statusLabel->setText(
+        QStringLiteral("%1 %2").arg(isA ? lang("A 点", "A:") : lang("B 点", "B:"),
+                                    fmtWall(m_lastWallMs)));
+    if (m_mergedBar && m_mergedBar->hasAB()) {
+        // 像单路一样：选段定好就把时间轴放大到 AB，只盯这一段
+        m_mergedBar->setViewRange(m_abA, m_abB - m_abA);
+        m_statusLabel->setText(
+            lang("选段 %1 → %2，可加断点分段设倍速",
+                 "Selection %1 → %2 - add breakpoints for per-segment speeds")
+                .arg(fmtWall(m_abA), fmtWall(m_abB)));
+    }
+    updateExportAvailability();
+    rebuildSegmentSpeedBar();
+}
+
+/// v2.9：在选段内当前时刻打断点（重复点忽略）
+void MultiCamPlaybackWindow::addSplitAtCursor()
+{
+    if (!m_mergedBar || !m_mergedBar->hasAB())
+        return;
+    if (m_lastWallMs <= m_abA || m_lastWallMs >= m_abB) {
+        m_statusLabel->setText(lang("断点必须落在 A、B 之间",
+                                    "Breakpoint must be between A and B"));
+        return;
+    }
+    if (m_splitWall.contains(m_lastWallMs))
+        return;
+    m_splitWall.append(m_lastWallMs);
+    std::sort(m_splitWall.begin(), m_splitWall.end());
+    while (m_splitRates.size() < m_splitWall.size() + 1)
+        m_splitRates.append(1.0);
+    if (m_splitRates.size() > m_splitWall.size() + 1)
+        m_splitRates.resize(m_splitWall.size() + 1);
+    if (m_mergedBar)
+        m_mergedBar->setSplits(m_splitWall);
+    rebuildSegmentSpeedBar();
+    m_statusLabel->setText(
+        lang("已加断点：共 %1 段，可分别设倍速",
+             "%1 segments now - set a speed for each")
+            .arg(m_splitWall.size() + 1));
+}
+
+/// v2.9：选段内的「每段倍速」控件（段号 + 下拉）
+void MultiCamPlaybackWindow::setSplitRate(int seg, double rate)
+{
+    if (seg < 0 || seg >= m_splitRates.size())
+        return;
+    m_splitRates[seg] = rate;
+    rebuildSegmentSpeedBar();
+}
+
+void MultiCamPlaybackWindow::rebuildSegmentSpeedBar()
+{
+    if (!m_segSpeedBar || !m_segSpeedLay)
+        return;
+    while (QLayoutItem *it = m_segSpeedLay->takeAt(0)) {
+        if (QWidget *w = it->widget())
+            w->deleteLater();
+        delete it;
+    }
+    const bool hasAB = m_mergedBar && m_mergedBar->hasAB();
+    if (m_splitBtn)
+        m_splitBtn->setEnabled(hasAB);
+    if (!hasAB) {
+        m_segSpeedBar->hide();
+        return;
+    }
+    const int nSeg = m_splitWall.size() + 1;
+    while (m_splitRates.size() < nSeg)
+        m_splitRates.append(1.0);
+    m_segSpeedLay->addWidget(new QLabel(lang("每段倍速：", "Segment speed:"),
+                                       m_segSpeedBar));
+    for (int i = 0; i < nSeg; ++i) {
+        auto *tag = new QLabel(QStringLiteral("%1").arg(i + 1), m_segSpeedBar);
+        tag->setStyleSheet(QStringLiteral("color:%1; font-weight:bold;")
+                               .arg(Theme::Info));
+        m_segSpeedLay->addWidget(tag);
+        auto *combo = new QComboBox(m_segSpeedBar);
+        combo->setObjectName(QStringLiteral("segRate%1").arg(i));
+        for (double r : speedplan::allowedRates())
+            combo->addItem(QStringLiteral("%1x").arg(r, 0, 'g', 3), r);
+        combo->setCurrentIndex(combo->findData(m_splitRates.value(i, 1.0)));
+        connect(combo, QOverload<int>::of(&QComboBox::currentIndexChanged),
+                this, [this, i, combo](int) {
+                    if (i < m_splitRates.size())
+                        m_splitRates[i] = combo->currentData().toDouble();
+                });
+        m_segSpeedLay->addWidget(combo);
+        if (i + 1 < nSeg)
+            m_segSpeedLay->addWidget(new QLabel(QStringLiteral("|"), m_segSpeedBar));
+    }
+    m_segSpeedLay->addStretch(1);
+    // 提示：预计导出时长
+    double srcMs = 0.0, outMs = 0.0;
+    qint64 prev = m_abA;
+    for (int i = 0; i < nSeg; ++i) {
+        const qint64 end = (i < m_splitWall.size()) ? m_splitWall.at(i) : m_abB;
+        const double len = double(end - prev);
+        const double rate = m_splitRates.value(i, 1.0);
+        srcMs += len;
+        outMs += len / (rate > 0.0 ? rate : 1.0);
+        prev = end;
+    }
+    m_segSpeedLay->addWidget(new QLabel(
+        lang("源 %1 → 导出 %2", "source %1 → export %2")
+            .arg(fmtStream(qint64(srcMs)), fmtStream(qint64(outMs))),
+        m_segSpeedBar));
+    m_segSpeedBar->show();
+}
+
 void MultiCamPlaybackWindow::updateExportAvailability()
 {
     if (!m_exportClipBtn)
@@ -1581,7 +1775,16 @@ void MultiCamPlaybackWindow::onExportClip()
     speedplan::SpeedPlan plan;
     plan.aMs = aMs;
     plan.bMs = bMs;
-    plan.rates = {1.0};
+    // v2.9：把宫格视图里打的断点与每段倍速直接带进导出面板
+    // （用户在分析界面设好的分段 = 导出分段，不用再设一遍）
+    if (hasAB) {
+        for (qint64 sp : m_splitWall)
+            if (sp > aMs && sp < bMs)
+                plan.splits.append(sp);
+        plan.rates = m_splitRates;
+    } else {
+        plan.rates = {1.0};
+    }
     plan.normalize();
 
     // 建议输出路径：案件模式 = 案内 exports/；独立模式 = 首路源旁

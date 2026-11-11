@@ -124,7 +124,8 @@ public:
     float rate() const override { return m_rate; }
 
     QStringList calls;
-    qint64 m_durMs = 60000;
+    // 20 分钟：足够容纳「5 分钟选段」这类真实场景（引擎回报会覆盖机位预设时长）
+    qint64 m_durMs = 1200000;
 
 private:
     qint64 m_pos = 0;
@@ -2256,6 +2257,132 @@ int MainWindow::runShellSelfCheck()
             check(false, QStringLiteral("瓦片数量不足，无法验证拖拽换位"));
         }
         dragProbe.close();
+    }
+
+    // 13.7 嵌入到工作区后必须撑满（否则时间轴下面留一大片空白）
+    {
+        auto *embedProbe = new MultiCamPlaybackWindow(this);
+        embedProbe->setEngineFactory([](QObject *parent) -> IVideoEngine * {
+            return new SelfCheckSyncEngine(parent);
+        });
+        embedProbe->setAttribute(Qt::WA_DeleteOnClose, false);
+        embedProbe->setWindowFlags(Qt::Widget);
+        embedProbe->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
+        // 用 4 路已校时机位复现用户的真实场景（模式A 合并时间轴，4 行）
+        {
+            QVector<SyncLaneData> lanes;
+            for (int i = 0; i < 4; ++i) {
+                SyncLaneData l;
+                l.id = QStringLiteral("C0%1").arg(i + 1);
+                l.path = QStringLiteral("C:/selfcheck/lane%1.mp4").arg(i + 1);
+                l.displayName = QStringLiteral("C0%1 机位").arg(i + 1);
+                l.calibrated = true;
+                l.temporary = false;
+                l.cal.source = TimeCalibration::Source::Manual;
+                l.cal.offsetMs = 1789000000000LL;   // 同一时间基准 → 覆盖重叠
+                l.cal.dateKnown = true;
+                l.cal.conf = 0.95;
+                l.cal.calibratedAtMs = 1;
+                // 20 分钟覆盖：AB 选 5 分钟必须落在覆盖区间内（真实场景口径）
+                l.durationMs = 1200000;
+                lanes.append(l);
+            }
+            embedProbe->loadCalibratedLanesForTest(lanes);
+        }
+        m_workspaceStack->addWidget(embedProbe);
+        m_workspaceStack->setCurrentWidget(embedProbe);
+        resize(1680, 1020);
+        pump();
+        wait(120);
+        auto *col = embedProbe->findChild<QWidget *>(
+            QStringLiteral("multicamContentCol"));
+        auto *tl = embedProbe->findChild<QWidget *>(
+            QStringLiteral("multicamTimelineHost"));
+        auto *gh = embedProbe->findChild<QWidget *>(
+            QStringLiteral("multicamGridHost"));
+        check(col && tl && gh, QStringLiteral("嵌入探针控件齐全"));
+        if (col && tl && gh) {
+            const int colBottom = col->mapTo(embedProbe,
+                                             QPoint(0, col->height())).y();
+            const int tlBottom = tl->mapTo(embedProbe,
+                                           QPoint(0, tl->height())).y();
+            check(qAbs(colBottom - embedProbe->height()) <= 2,
+                  QStringLiteral("内容列撑满宫格页（列底 %1 / 页高 %2）")
+                      .arg(colBottom).arg(embedProbe->height()));
+            check(qAbs(tlBottom - colBottom) <= 2,
+                  QStringLiteral("时间轴就是内容列的最后一行（下沿 %1 / 列底 %2）")
+                      .arg(tlBottom).arg(colBottom));
+            check(gh->height() > 200,
+                  QStringLiteral("画面视口高度 %1px").arg(gh->height()));
+        // v2.9 选段 + 变速断点（用户场景：5 分钟选段，断两刀变三段设不同倍速）
+        {
+            const qint64 base = 1789000000000LL;
+            embedProbe->testSetCursor(base + 60000);     // 1:00 设 A
+            embedProbe->testMarkAB(true);
+            embedProbe->testSetCursor(base + 60000 + 300000);   // +5:00 设 B
+            embedProbe->testMarkAB(false);
+            pump();
+            // 选段定好后时间轴必须自动放大到该区间（像单路一样只看这一段）
+            auto *bar = embedProbe->findChild<MultiCamViewWidget *>();
+            check(bar && bar->hasAB() && bar->abB() - bar->abA() == 300000,
+                  QStringLiteral("A/B 落点正确（选段 5 分钟）"));
+            check(bar && bar->isZoomed() && bar->viewSpanMs() == 300000,
+                  QStringLiteral("时间轴自动放大到 AB 区间（视野 %1 / 全量 %2）")
+                      .arg(bar ? bar->viewSpanMs() : -1)
+                      .arg(bar ? bar->fullSpanMs() : -1));
+            // 两刀断点：+3:00 与 +3:10（相对 A）
+            embedProbe->testSetCursor(base + 60000 + 180000);
+            embedProbe->testAddSplit();
+            embedProbe->testSetCursor(base + 60000 + 190000);
+            embedProbe->testAddSplit();
+            pump();
+            const QVector<qint64> sp = embedProbe->splitPoints();
+            check(sp.size() == 2
+                      && sp.value(0) == base + 60000 + 180000
+                      && sp.value(1) == base + 60000 + 190000,
+                  QStringLiteral("选段内可打断点（两刀 → 三段）"));
+            // 每段不同倍速：4x / 0.25x / 4x
+            embedProbe->setSplitRate(0, 4.0);
+            embedProbe->setSplitRate(1, 0.25);
+            embedProbe->setSplitRate(2, 4.0);
+            pump();
+            const QVector<double> rt = embedProbe->splitRates();
+            check(rt.size() == 3 && rt.value(0) == 4.0 && rt.value(1) == 0.25
+                      && rt.value(2) == 4.0,
+                  QStringLiteral("三段可分别设倍速（4x / 0.25x / 4x）"));
+            auto *segBar = embedProbe->findChild<QWidget *>(
+                QStringLiteral("multicamSegSpeedBar"));
+            check(segBar && segBar->isVisible(),
+                  QStringLiteral("每段倍速条在选段后可见"));
+            check(embedProbe->findChild<QComboBox *>(QStringLiteral("segRate1"))
+                      != nullptr,
+                  QStringLiteral("每段都有独立倍速下拉"));
+            auto *markA = embedProbe->findChild<QPushButton *>(
+                QStringLiteral("multicamMarkA"));
+            auto *markB = embedProbe->findChild<QPushButton *>(
+                QStringLiteral("multicamMarkB"));
+            auto *splitBtn = embedProbe->findChild<QPushButton *>(
+                QStringLiteral("multicamAddSplit"));
+            check(markA && markB && splitBtn,
+                  QStringLiteral("工具栏有 A / B / 断点 显式按钮（不靠快捷键）"));
+            check(splitBtn && splitBtn->isEnabled(),
+                  QStringLiteral("有选段后「断点」按钮可用"));
+            const QPixmap segShot = grab();
+            if (!segShot.isNull())
+                segShot.save(QDir(QCoreApplication::applicationDirPath())
+                                 .filePath(QStringLiteral("selfcheck-ab-splits.png")));
+        }
+
+            const QPixmap shotEmbed = grab();
+            if (!shotEmbed.isNull())
+                shotEmbed.save(QDir(QCoreApplication::applicationDirPath())
+                                   .filePath(QStringLiteral("selfcheck-embed-grid.png")));
+        }
+        m_workspaceStack->removeWidget(embedProbe);
+        embedProbe->hide();
+        embedProbe->deleteLater();
+        showStage(ui::Stage::Analyze);
+        pump();
     }
 
     // 14. 宫格顺序：导出与播放共用同一份窗位映射（所见即所得）。

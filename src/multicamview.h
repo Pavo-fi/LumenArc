@@ -39,6 +39,12 @@ public:
     /// v2.7 用户拍板：各宫格时间轴纵向高度压到约一半，把高度还给画面。
     static int timelineHeightFor(int laneCount);
 
+    /// v2.9（用户拍板）：选段定好后时间轴自动放大到 AB 区间，像单路一样
+    /// 只看这一段；在这个视野里再加变速断点。
+    void setViewRange(qint64 t0Wall, qint64 spanMs);
+    /// 变速断点（墙钟，升序）——画成竖虚线 + 段号小标
+    void setSplits(const QVector<qint64> &splitsWall);
+
     /// 共享墙钟游标（P-57）：-1 = 不显示
     void setCursorMs(qint64 wallMs);
     qint64 cursorMs() const { return m_cursorMs; }
@@ -97,6 +103,7 @@ private:
     // 游标/拖动（P-57）
     qint64 m_cursorMs = -1;
     qint64 m_abA = -1, m_abB = -1;
+    QVector<qint64> m_splitsWall;   ///< v2.9 变速断点（墙钟）
     bool m_scrubbing = false;
     qint64 m_layoutT0 = 0;      // rebuildLayout 记录的轴域（xToWall 用）
     double m_layoutMsPerPx = 1.0;

@@ -65,6 +65,21 @@ void MultiCamViewWidget::setLanes(const QVector<CamLane> &lanes,
     update();
 }
 
+void MultiCamViewWidget::setViewRange(qint64 t0Wall, qint64 spanMs)
+{
+    m_viewT0 = t0Wall;
+    m_viewSpan = qMax<qint64>(1, spanMs);
+    rebuildLayout();
+    update();
+}
+
+void MultiCamViewWidget::setSplits(const QVector<qint64> &splitsWall)
+{
+    m_splitsWall = splitsWall;
+    std::sort(m_splitsWall.begin(), m_splitsWall.end());
+    update();
+}
+
 void MultiCamViewWidget::setCursorMs(qint64 wallMs)
 {
     if (m_cursorMs == wallMs)
@@ -395,6 +410,34 @@ void MultiCamViewWidget::paintEvent(QPaintEvent *)
                               width() - int(kMarginR) - 48);
         p.drawText(QRect(cx - 48, tickY + 4, 96, kTickLabelH),
                    Qt::AlignHCenter | Qt::AlignTop, tk.second);
+    }
+
+    // v2.9 变速断点：竖虚线 + 段号（画在选段底纹之后、游标之前）
+    if (!m_splitsWall.isEmpty() && m_layoutMsPerPx > 0) {
+        for (int i = 0; i < m_splitsWall.size(); ++i) {
+            const qint64 t = m_splitsWall.at(i);
+            if (t <= m_layoutT0
+                || t >= m_layoutT0 + qint64(width() * m_layoutMsPerPx))
+                continue;
+            const int x = kLabelW + int((t - m_layoutT0) / m_layoutMsPerPx);
+            if (x < kLabelW || x > width() - kMarginR)
+                continue;
+            p.setPen(QPen(QColor(Theme::Info), 1, Qt::DashLine));
+            p.drawLine(x, kTopMargin - 2, x, tickY + 2);
+            // 段号小标（断点右侧第 i+2 段）
+            const QString chip = QString::number(i + 2);
+            QFont cf = p.font();
+            cf.setPixelSize(kLaneFontPx - 1);
+            p.setFont(cf);
+            const int tw = p.fontMetrics().horizontalAdvance(chip) + 6;
+            const QRect box(x - tw / 2, kTopMargin - 2 - kCursorBubbleH,
+                            tw, kCursorBubbleH);
+            p.setPen(Qt::NoPen);
+            p.setBrush(QColor(Theme::Info));
+            p.drawRoundedRect(box, 2, 2);
+            p.setPen(QColor(Theme::AccentOnDark));
+            p.drawText(box, Qt::AlignCenter, chip);
+        }
     }
 
     // A/B 选段底纹与边界线（P-68：先于游标绘制，游标压顶）
