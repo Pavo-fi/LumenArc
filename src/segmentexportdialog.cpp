@@ -349,10 +349,13 @@ void SegmentExportDialog::setExportRunning(bool running, int totalFrames)
         m_openFolderBtn->setVisible(false);   // 新一轮导出收起旧产物入口
     m_table->setEnabled(!running);
     m_exportBtn->setEnabled(!running);
-    m_progressBox->setVisible(running);
+    // v3.0：进度框在导出结束后**继续显示**并停在 100%，作为「已完成」的凭据
+    // （原来结束时把整条进度隐藏，用户看到 100% 一闪就没了，无法判断成败）
     if (running) {
+        m_progressBox->setVisible(true);
         m_progressBar->setRange(0, qMax(1, totalFrames));
         m_progressBar->setValue(0);
+        m_progressBar->setFormat(QStringLiteral("%1%").arg(0));
         m_resultLabel->clear();
     }
 }
@@ -366,17 +369,36 @@ void SegmentExportDialog::setProgress(int done, int total)
 void SegmentExportDialog::setResult(bool ok, const QString &msg)
 {
     setExportRunning(false);
+    m_progressBox->setVisible(true);        // 保留进度区作为结果凭据
     if (ok) {
-        m_resultLabel->setStyleSheet("color: " + Theme::Success + ";");
-        m_resultLabel->setText(lang("✓ 已导出：", "✓ Exported: ") + msg);
+        m_progressBar->setRange(0, 100);
+        m_progressBar->setValue(100);
+        m_progressBar->setFormat(lang("已完成 100%", "Done 100%"));
+        m_resultLabel->setStyleSheet(
+            "color: " + Theme::Success + "; font-weight: bold; font-size: 13px;");
+        m_resultLabel->setText(
+            lang("✅ 导出成功，文件已保存到：\n",
+                 "Export finished, saved to:\n")
+            + QDir::toNativeSeparators(msg));
         m_openFolderBtn->setProperty("outPath", msg);
         m_openFolderBtn->setVisible(true);
+        // 导出是后台任务，用户此时可能在别处：把面板提到前面，别让结果石沉大海
+        show();
+        raise();
+        activateWindow();
     } else if (msg == QStringLiteral("已取消")) {
+        m_progressBar->setFormat(lang("已取消", "Cancelled"));
         m_resultLabel->setStyleSheet("color: " + Theme::TextSecond + ";");
-        m_resultLabel->setText(lang("已取消。", "Cancelled."));
+        m_resultLabel->setText(lang("已取消，未生成文件。",
+                                    "Cancelled - no file was written."));
     } else {
-        m_resultLabel->setStyleSheet("color: " + Theme::Danger + ";");
-        m_resultLabel->setText(lang("✗ 导出失败：", "✗ Failed: ") + msg);
+        m_progressBar->setFormat(lang("失败", "Failed"));
+        m_resultLabel->setStyleSheet(
+            "color: " + Theme::Danger + "; font-weight: bold;");
+        m_resultLabel->setText(lang("❌ 导出失败：", "Export failed: ") + msg);
+        show();
+        raise();
+        activateWindow();
     }
     if (!ok && m_openFolderBtn)
         m_openFolderBtn->setVisible(false);

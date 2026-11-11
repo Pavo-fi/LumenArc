@@ -1865,6 +1865,17 @@ void MultiCamPlaybackWindow::startClipExport(const speedplan::SpeedPlan &planIn,
             [this](bool ok, const QString &msg) {
                 if (m_exportDlg)
                     m_exportDlg->setResult(ok, msg);
+                // v3.0：导出是后台任务，宫格这边也留一条明确结论（别只靠面板）
+                if (m_statusLabel) {
+                    m_statusLabel->setStyleSheet(
+                        QStringLiteral("color:%1; font-weight:bold;")
+                            .arg(ok ? Theme::Success : Theme::Danger));
+                    m_statusLabel->setText(
+                        ok ? lang("导出完成：%1", "Export done: %1")
+                                 .arg(QFileInfo(msg).fileName())
+                           : lang("导出失败：%1", "Export failed: %1").arg(msg));
+                }
+                updateExportAvailability();
             }, Qt::UniqueConnection);
     eng->start(pp);
 }

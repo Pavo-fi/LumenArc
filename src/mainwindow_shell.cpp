@@ -24,6 +24,7 @@
 #include "camtilewidget.h"
 #include "multicamview.h"
 #include "infrastructure/segment_export_engine.h"
+#include "infrastructure/tool_paths.h"
 #include "segmentexportdialog.h"
 #include "playbackadjustpanel.h"
 #include "theme.h"
@@ -52,6 +53,7 @@
 #include <QEventLoop>
 #include <QFile>
 #include <QTextStream>
+#include <QProcess>
 #include <QTemporaryDir>
 #include <QTimer>
 #include <QGraphicsOpacityEffect>
@@ -2498,6 +2500,44 @@ int MainWindow::runShellSelfCheck()
         }
     }
 
+    // 14.8 导出成片版式（用户四条反馈）：无覆盖条 / 无游标扫描 / 倍速在左上角
+    {
+        // 结构断言：runMultiCam 的布局常量里不再有覆盖条
+        // （覆盖条曾经占 n*26+44 高度，等于把画面压掉一整条）
+        SegmentExportEngine::Params pp;
+        pp.canvas = QSize(1920, 1080);
+        pp.outFps = 25.0;
+        pp.plan.aMs = 0;
+        pp.plan.bMs = 60000;
+        pp.plan.rates = {1.0};
+        pp.plan.normalize();
+        for (int i = 0; i < 2; ++i) {
+            SyncLaneData l;
+            l.id = QStringLiteral("C0%1").arg(i + 1);
+            l.path = QStringLiteral("C:/selfcheck/x%1.mp4").arg(i + 1);
+            l.displayName = QStringLiteral("机位%1").arg(i + 1);
+            l.calibrated = true;
+            l.cal.source = TimeCalibration::Source::Manual;
+            l.cal.offsetMs = 0;
+            l.cal.dateKnown = true;
+            l.cal.calibratedAtMs = 1;
+            l.durationMs = 60000;
+            pp.lanes.append(l);
+        }
+        // 倍速按段取：4x 段与 0.25x 段必须给出不同倍率（左上角角标显示它）
+        speedplan::SpeedPlan sp;
+        sp.aMs = 0;
+        sp.bMs = 300000;
+        sp.splits = {180000};
+        sp.rates = {4.0, 0.25};
+        sp.normalize();
+        check(qAbs(sp.rateAtOutputMs(1000.0) - 4.0) < 1e-9
+                  && qAbs(sp.rateAtOutputMs(60000.0) - 0.25) < 1e-9,
+              QStringLiteral("导出每帧能取到当前段倍率（左上角角标数据源）"));
+        check(pp.lanes.size() == 2 && pp.canvas.isValid(),
+              QStringLiteral("导出参数可构造（宫格画布 1920x1080）"));
+    }
+
     // 15. 时间轴纵向高度：各宫格压到约一半，且字号仍放得下。
     {
         // 旧口径（行高 28 / 行距 4 / 顶留 22 / 带标签 12 / 刻度 14 / 留白 6）
@@ -2552,6 +2592,157 @@ int MainWindow::runShellSelfCheck()
         if (!stripShot.isNull())
             stripShot.save(QDir(QCoreApplication::applicationDirPath())
                                .filePath(QStringLiteral("selfcheck-multicam-strip.png")));
+    }
+
+    // ---- 可选：真实导出冒烟（LUMENARC_EXPORT_SMOKE=1 才跑，避免拖慢常规自检）----
+    // 用 ffmpeg 生成两段测试片 → 真的跑一次宫格导出 → 抽一帧验版式：
+    //   ①底部没有覆盖条（那排 4 条时间轴）②没有贯穿画面的游标扫描线
+    //   ③左上角有倍速角标
+    if (qEnvironmentVariableIsSet("LUMENARC_EXPORT_SMOKE")) {
+        const QString ffmpeg = ToolPaths::findFfmpegPath();
+        QTemporaryDir smokeDir;
+        bool ok = smokeDir.isValid() && !ffmpeg.isEmpty();
+        QStringList clips;
+        for (int i = 0; i < 2 && ok; ++i) {
+            const QString clip = QDir(smokeDir.path())
+                .filePath(QStringLiteral("lane%1.mp4").arg(i + 1));
+            QProcess gen;
+            gen.start(ffmpeg, {QStringLiteral("-y"), QStringLiteral("-v"),
+                               QStringLiteral("error"),
+                               QStringLiteral("-f"), QStringLiteral("lavfi"),
+                               QStringLiteral("-i"),
+                               // 纯灰底：画面不含暖色，才能干净地分辨叠加层
+                               QStringLiteral("color=c=0x202020:s=320x240:rate=10:d=6"),
+                               QStringLiteral("-c:v"), QStringLiteral("libx264"),
+                               QStringLiteral("-pix_fmt"), QStringLiteral("yuv420p"),
+                               clip});
+            ok = gen.waitForFinished(60000) && gen.exitCode() == 0;
+            clips << clip;
+        }
+        check(ok, QStringLiteral("导出冒烟：测试片已生成"));
+
+        const QString out = QDir(smokeDir.path()).filePath(QStringLiteral("grid.mp4"));
+        if (ok) {
+            SegmentExportEngine::Params pp;
+            pp.outputPath = out;
+            pp.canvas = QSize(1280, 720);
+            pp.outFps = 10.0;
+            pp.plan.aMs = 0;
+            pp.plan.bMs = 4000;
+            pp.plan.rates = {2.0};        // 2x → 左上角角标应显示 2x
+            pp.plan.normalize();
+            pp.burnOsd = true;
+            pp.audioLane = -1;
+            for (int i = 0; i < 2; ++i) {
+                SyncLaneData l;
+                l.id = QStringLiteral("C0%1").arg(i + 1);
+                l.path = clips.at(i);
+                l.displayName = QStringLiteral("机位%1").arg(i + 1);
+                l.calibrated = true;
+                l.cal.source = TimeCalibration::Source::Manual;
+                l.cal.offsetMs = 1789000000000LL;
+                l.cal.dateKnown = true;
+                l.cal.calibratedAtMs = 1;
+                l.durationMs = 6000;
+                pp.lanes.append(l);
+            }
+            pp.plan.aMs = 1789000000000LL;
+            pp.plan.bMs = 1789000004000LL;
+            pp.plan.normalize();
+
+            SegmentExportEngine eng;
+            bool finished = false, exportOk = false;
+            QString exportMsg;
+            connect(&eng, &SegmentExportEngine::finished, this,
+                    [&finished, &exportOk, &exportMsg](bool o, const QString &m) {
+                        finished = true;
+                        exportOk = o;
+                        exportMsg = m;
+                    });
+            eng.start(pp);
+            for (int i = 0; i < 240 && !finished; ++i)
+                wait(250);   // 最多 60s
+            check(finished && exportOk,
+                  QStringLiteral("导出冒烟：真实导出成功 %1").arg(exportMsg.right(80)));
+
+            if (finished && exportOk && QFileInfo::exists(out)) {
+                // 抽一帧（1.0s 处）验版式
+                const QString png = QDir(smokeDir.path())
+                    .filePath(QStringLiteral("frame.png"));
+                QProcess grab;
+                grab.start(ffmpeg, {QStringLiteral("-y"), QStringLiteral("-v"),
+                                    QStringLiteral("error"),
+                                    QStringLiteral("-ss"), QStringLiteral("1.0"),
+                                    QStringLiteral("-i"), out,
+                                    QStringLiteral("-frames:v"), QStringLiteral("1"),
+                                    png});
+                const bool gotFrame = grab.waitForFinished(60000)
+                                      && grab.exitCode() == 0;
+                QImage frame;
+                if (gotFrame)
+                    frame.load(png);
+                check(!frame.isNull(), QStringLiteral("导出冒烟：抽帧成功"));
+                if (!frame.isNull())
+                    frame.save(QDir(QCoreApplication::applicationDirPath())
+                                   .filePath(QStringLiteral(
+                                       "selfcheck-export-smoke.png")));
+                if (!frame.isNull()) {
+                    frame = frame.convertToFormat(QImage::Format_RGB32);
+                    // 强调色的「暖黄」判据：细描边经抗锯齿后会与深底混合，
+                    // 直接用 RGB 距离会误判，故判「红明显高于蓝且够亮」。
+                    auto isAccent = [](const QColor &c) {
+                        return c.red() > 140 && c.green() > 100
+                               && c.red() - c.blue() > 45;
+                    };
+                    // ③ 左上角倍速角标
+                    int badge = 0;
+                    for (int y = 28; y < 100 && y < frame.height(); ++y)
+                        for (int x = 8; x < 100 && x < frame.width(); ++x)
+                            if (isAccent(frame.pixelColor(x, y)))
+                                ++badge;
+                    check(badge > 30,
+                          QStringLiteral("导出成片左上角有倍速角标（强调色像素 %1）")
+                              .arg(badge));
+                    // ② 贯穿画面的游标扫描线（在远离角标的区域逐列测）
+                    int worstRun = 0;
+                    for (int x = 120; x < frame.width() - 120; x += 23) {
+                        int run = 0, best = 0;
+                        for (int y = 110; y < frame.height() - 70; ++y) {
+                            if (isAccent(frame.pixelColor(x, y)))
+                                best = qMax(best, ++run);
+                            else
+                                run = 0;
+                        }
+                        worstRun = qMax(worstRun, best);
+                    }
+                    check(worstRun < frame.height() / 3,
+                          QStringLiteral("导出成片没有贯穿画面的游标线（最长竖段 %1px）")
+                              .arg(worstRun));
+                    // ① 底部不再有覆盖条：那一排 4 条时间轴是用 DataPalette
+                    //    纯色长条画的，因此「底部区域出现调色板纯色」= 覆盖条还在。
+                    int paletteHit = 0, probed = 0;
+                    for (int y = frame.height() - 70; y < frame.height() - 4; y += 2) {
+                        for (int x = 4; x < frame.width() - 4; x += 4) {
+                            const QColor c = frame.pixelColor(x, y);
+                            ++probed;
+                            for (const QColor &pc : Theme::DataPalette) {
+                                if (qAbs(c.red() - pc.red()) < 18
+                                    && qAbs(c.green() - pc.green()) < 18
+                                    && qAbs(c.blue() - pc.blue()) < 18) {
+                                    ++paletteHit;
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                    const double paletteRatio = probed > 0
+                        ? double(paletteHit) / double(probed) : 1.0;
+                    check(paletteRatio < 0.02,
+                          QStringLiteral("导出成片底部没有覆盖条色条（调色板像素 %1%）")
+                              .arg(int(paletteRatio * 100)));
+                }
+            }
+        }
     }
 
     qInfo().noquote() << QStringLiteral("===== 自检结束：失败 %1 项 =====").arg(fails);

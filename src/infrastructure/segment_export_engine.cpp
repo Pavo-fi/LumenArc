@@ -1167,19 +1167,19 @@ void SegmentExportEngine::runMultiCam()
         fail(QStringLiteral("ffmpeg 启动失败：") + proc.errorString());
         return;
     }
-    // ---- 布局：上宫格 + 下覆盖条 ----
+    // ---- 布局：纯宫格，占满画布 ----
+    // v3.0（用户拍板）：产物里**不再画底部覆盖条**（那一排 4 条时间轴没人看，
+    // 还白白吃掉画面高度）。整块画布都留给视频。
     const int W = p.canvas.width(), H = p.canvas.height();
     const int pad = 8;
-    const int stripH = n * 26 + 44;
-    const QRect gridRect(pad, pad, W - 2 * pad, H - stripH - 2 * pad);
+    const QRect gridRect(pad, pad, W - 2 * pad, H - 2 * pad);
     const int cols = (n <= 2) ? n : 2;
     const int rows = (n + cols - 1) / cols;
     const int cellW = gridRect.width() / cols;
     const int cellH = gridRect.height() / rows;
-    const QRect stripRect(pad, gridRect.bottom() + 1 + pad, W - 2 * pad, stripH - pad);
 
     const qint64 totalFrames = p.plan.outputFrameCount(p.outFps);
-    const double outDur = p.plan.outputDurationMs();
+    // v3.0：覆盖条/游标移除后不再需要输出总时长
     QString errMsg;
     bool cancelled = false;
     qint64 k = 0;
@@ -1258,43 +1258,32 @@ void SegmentExportEngine::runMultiCam()
                 painter.setBrush(Qt::NoBrush);
                 painter.drawRect(cell);
             }
-            // ---- 覆盖条（每路行：色块=该路有画面的墙钟区，随分速 warp）----
-            painter.fillRect(stripRect, QColor(Theme::BgPanel));
-            const int labelW = 110;
-            const int barX = stripRect.x() + labelW;
-            const int barW = stripRect.width() - labelW - 8;
-            for (int i = 0; i < n; ++i) {
-                const int ry = stripRect.y() + 6 + i * 26;
-                const SyncLaneData &l = p.lanes[i];
-                painter.setPen(QColor(Theme::TextSecond));
-                QFont f = painter.font();
-                f.setPixelSize(12);
-                painter.setFont(f);
-                painter.drawText(QRect(stripRect.x() + 4, ry, labelW - 8, 20),
-                                 Qt::AlignVCenter | Qt::AlignLeft, l.displayName);
-                painter.fillRect(QRect(barX, ry + 3, barW, 14), QColor(Theme::BgCard));
-                if (laneErr[i].isEmpty()) {
-                    const qint64 c1 = qMax(syncLaneWallStart(l), p.plan.aMs);
-                    const qint64 c2 = qMin(syncLaneWallEnd(l), p.plan.bMs);
-                    if (c2 > c1 && outDur > 0.0) {
-                        const int x1 = barX + int(p.plan.outputMsAtSourceMs(c1) / outDur * barW);
-                        const int x2 = barX + int(p.plan.outputMsAtSourceMs(c2) / outDur * barW);
-                        painter.fillRect(QRect(x1, ry + 3, qMax(2, x2 - x1), 14),
-                                         Theme::DataPalette[i % Theme::DataPalette.size()]);
-                    }
-                }
-            }
-            // 游标（贯穿宫格+覆盖条）
-            const int cursorX = outDur > 0.0 ? int(outMs / outDur * W) : 0;
-            painter.setPen(QPen(QColor(Theme::Accent), 2));
-            painter.drawLine(cursorX, pad, cursorX, stripRect.bottom());
+            // v3.0：覆盖条与游标扫描线都已移除（用户：光标扫过整个画面，不需要）
             // ---- OSD ----
             if (p.burnOsd) {
                 const double rate = p.plan.rateAtOutputMs(outMs);
-                QString osd = QStringLiteral("%1x · %2")
-                                  .arg(rate, 0, 'g', 3)
-                                  .arg(QDateTime::fromMSecsSinceEpoch(qint64(wall))
-                                           .toString(QStringLiteral("yyyy-MM-dd HH:mm:ss")));
+                // v3.0（用户拍板）：当前倍速放在**画面左上角**，一眼可见
+                {
+                    QFont sf = painter.font();
+                    sf.setPixelSize(28);
+                    sf.setBold(true);
+                    painter.setFont(sf);
+                    const QString speedTxt =
+                        QStringLiteral("%1x").arg(rate, 0, 'g', 3);
+                    const int tw = painter.fontMetrics().horizontalAdvance(speedTxt);
+                    // 让开机位名行（每格左上角 110x22 的名称条），
+                    // 否则两行叠在一起互相遮挡
+                    const QRect chip(gridRect.left() + 10, gridRect.top() + 34,
+                                     tw + 24, 42);
+                    painter.setPen(Qt::NoPen);
+                    painter.setBrush(QColor(0, 0, 0, 160));
+                    painter.drawRoundedRect(chip, 6, 6);
+                    painter.setPen(QColor(Theme::Accent));
+                    painter.drawText(chip, Qt::AlignCenter, speedTxt);
+                }
+                // 底部：时刻 + 案号（倍速已在左上角，这里不再重复）
+                QString osd = QDateTime::fromMSecsSinceEpoch(qint64(wall))
+                                  .toString(QStringLiteral("yyyy-MM-dd HH:mm:ss"));
                 if (!p.caseLabel.isEmpty())
                     osd += QStringLiteral(" · 案件 %1").arg(p.caseLabel);
                 QFont f = painter.font();
