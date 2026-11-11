@@ -108,6 +108,56 @@
 #include <QHeaderView>
 #include <QLabel>
 
+namespace {
+/// 导出结果吐司：主窗顶部居中偏右的一条浮条。
+/// 为什么要有它：导出是后台任务，用户这时可能在别的页翻看证据；
+/// 只在导出面板里写一行字，等于没有提示（用户实测「还是没提示」）。
+}
+
+void MainWindow::showExportToast(bool ok, const QString &resultText)
+{
+    QWidget *host = centralWidget();
+    if (!host)
+        return;
+    if (!m_exportToast) {
+        m_exportToast = new QPushButton(host);
+        m_exportToast->setCursor(Qt::PointingHandCursor);
+        m_exportToast->setObjectName(QStringLiteral("exportToast"));
+        connect(m_exportToast, &QPushButton::clicked, this, [this]() {
+            const QString path = m_exportToast->property("outPath").toString();
+            if (!path.isEmpty())
+                QProcess::startDetached(QStringLiteral("explorer.exe"),
+                                        {QStringLiteral("/select,"),
+                                         QDir::toNativeSeparators(path)});
+            m_exportToast->hide();
+        });
+        m_exportToastTimer = new QTimer(this);
+        m_exportToastTimer->setSingleShot(true);
+        connect(m_exportToastTimer, &QTimer::timeout, this, [this]() {
+            if (m_exportToast)
+                m_exportToast->hide();
+        });
+    }
+    const QColor accent = ok ? QColor(Theme::Success) : QColor(Theme::Danger);
+    m_exportToast->setStyleSheet(QStringLiteral(
+        "QPushButton { background:%1; color:%2; border:1px solid %3;"
+        " border-radius:8px; padding:10px 16px; font-size:13px;"
+        " font-weight:bold; text-align:left; }"
+        "QPushButton:hover { border-color:%2; }")
+        .arg(Theme::BgCard, accent.name(), accent.name()));
+    m_exportToast->setText(resultText);
+    m_exportToast->setProperty("outPath", ok ? resultText.section(
+        QLatin1Char('\n'), -1) : QString());
+    m_exportToast->adjustSize();
+    const int w = qMin(m_exportToast->width(), qMax(320, host->width() - 80));
+    m_exportToast->setFixedWidth(w);
+    m_exportToast->adjustSize();
+    m_exportToast->move(qMax(16, (host->width() - m_exportToast->width()) / 2), 18);
+    m_exportToast->show();
+    m_exportToast->raise();
+    m_exportToastTimer->start(ok ? 12000 : 20000);
+}
+
 /// 构建时间戳（2026-08-13）：标题栏常驻，杜绝“用户在跑旧构建”无法辨识
 
 // ---------------------------------------------------------------------------
@@ -210,6 +260,12 @@ void MainWindow::startComposeExport(SegmentExportEngine::Params pp)
                 [this](bool ok, const QString &msg) {
                     if (m_workbench)
                         m_workbench->setResult(ok, msg);
+                    // v3.1：主窗顶部浮条——导出是后台任务，光在面板里写一行
+                    // 等于没有提示（用户实测「还是没提示」）
+                    showExportToast(ok, ok
+                        ? lang("✅ 导出完成\n%1",
+                               "✅ Export finished\n%1").arg(msg)
+                        : lang("❌ 导出失败：%1", "Export failed: %1").arg(msg));
                     if (ok)
                         showOperationStatus(lang("合成导出完成", "Compose export done"));
                 });

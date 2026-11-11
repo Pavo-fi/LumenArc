@@ -271,6 +271,12 @@ private:
     void onCaseRootDir();
     /// @brief 起始页（启动自动显示 + 案件菜单 reopen）
     void onShowStartPage();
+    /// @brief 导出结果吐司（v3.1）：不论从哪个面板导出，完成/失败都在主窗
+    ///        顶部弹一条可点击的浮条（点一下打开所在文件夹），10 秒自动消失。
+    void showExportToast(bool ok, const QString &resultText);
+    QPushButton *m_exportToast = nullptr;
+    class QTimer *m_exportToastTimer = nullptr;
+
     /// @brief 导出移交包（v1.3.0 M3 任务12）
     void onExportCase();
     /// @brief 生成分析报告（P-28 DOCX / P-26 复活 HTML，共用采集+光栅管线）

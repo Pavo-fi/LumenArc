@@ -63,6 +63,9 @@ signals:
     void exportRequested(const speedplan::SpeedPlan &plan, bool burnOsd,
                          const QString &outputPath);
     void cancelRequested();
+    /// v3.1：面板内改了选段/断点/倍率 → 播放页要跟着变（双向同步）。
+    /// 参数是完整方案（墙钟域），调用方可直接套用。
+    void planEdited(const speedplan::SpeedPlan &plan);
 
 private:
     void rebuildTable();

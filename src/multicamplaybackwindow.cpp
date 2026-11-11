@@ -1582,6 +1582,9 @@ void MultiCamPlaybackWindow::keyPressEvent(QKeyEvent *event)
     case Qt::Key_B:
         setPt(false);
         return;
+    case Qt::Key_S:
+        addSplitAtCursor();   // S = 打断点（B 已被选段终点占用）
+        return;
     default:
         QDialog::keyPressEvent(event);
     }
@@ -1624,6 +1627,7 @@ void MultiCamPlaybackWindow::markAB(bool isA)
     }
     updateExportAvailability();
     rebuildSegmentSpeedBar();
+    pushPlanToDialog();
 }
 
 /// v2.9：在选段内当前时刻打断点（重复点忽略）
@@ -1647,6 +1651,7 @@ void MultiCamPlaybackWindow::addSplitAtCursor()
     if (m_mergedBar)
         m_mergedBar->setSplits(m_splitWall);
     rebuildSegmentSpeedBar();
+    pushPlanToDialog();
     m_statusLabel->setText(
         lang("已加断点：共 %1 段，可分别设倍速",
              "%1 segments now - set a speed for each")
@@ -1654,12 +1659,56 @@ void MultiCamPlaybackWindow::addSplitAtCursor()
 }
 
 /// v2.9：选段内的「每段倍速」控件（段号 + 下拉）
+speedplan::SpeedPlan MultiCamPlaybackWindow::planFromWindow() const
+{
+    speedplan::SpeedPlan sp;
+    sp.aMs = (m_abA >= 0) ? m_abA : m_svc->contentStartWallMs();
+    sp.bMs = (m_abB >= 0) ? m_abB : m_svc->contentEndWallMs();
+    for (qint64 s : m_splitWall)
+        if (s > sp.aMs && s < sp.bMs)
+            sp.splits.append(s);
+    sp.rates = m_splitRates;
+    sp.normalize();
+    return sp;
+}
+
+void MultiCamPlaybackWindow::applyPlanFromDialog(const speedplan::SpeedPlan &plan)
+{
+    if (m_syncingPlan || !plan.isValid())
+        return;
+    m_syncingPlan = true;
+    m_abA = plan.aMs;
+    m_abB = plan.bMs;
+    m_splitWall = plan.splits;
+    m_splitRates = plan.rates;
+    if (m_mergedBar) {
+        m_mergedBar->setABRegion(m_abA, m_abB);
+        m_mergedBar->setSplits(m_splitWall);
+        m_mergedBar->setViewRange(m_abA, m_abB - m_abA);
+    }
+    rebuildSegmentSpeedBar();
+    m_syncingPlan = false;
+    if (m_statusLabel)
+        m_statusLabel->setText(lang("已按导出面板的设置同步时间轴",
+                                    "Timeline synced from export panel"));
+}
+
+void MultiCamPlaybackWindow::pushPlanToDialog()
+{
+    if (!m_exportDlg || m_syncingPlan)
+        return;
+    m_syncingPlan = true;
+    m_exportDlg->setPlan(planFromWindow(), m_exportDlg->outputPath());
+    m_syncingPlan = false;
+}
+
 void MultiCamPlaybackWindow::setSplitRate(int seg, double rate)
 {
     if (seg < 0 || seg >= m_splitRates.size())
         return;
     m_splitRates[seg] = rate;
     rebuildSegmentSpeedBar();
+    pushPlanToDialog();
 }
 
 void MultiCamPlaybackWindow::rebuildSegmentSpeedBar()
@@ -1703,6 +1752,10 @@ void MultiCamPlaybackWindow::rebuildSegmentSpeedBar()
             m_segSpeedLay->addWidget(new QLabel(QStringLiteral("|"), m_segSpeedBar));
     }
     m_segSpeedLay->addStretch(1);
+    // v3.1：这些下拉是「后建」的，创建窗口时还没它们 —— 不补挂守卫的话，
+    // 焦点落在下拉上按 A/B/S 会被键盘搜索吞掉（快捷键「失效」的真凶）。
+    if (onInstallKeyGuard)
+        onInstallKeyGuard(m_segSpeedBar);
     // 提示：预计导出时长
     double srcMs = 0.0, outMs = 0.0;
     qint64 prev = m_abA;
@@ -1812,6 +1865,11 @@ void MultiCamPlaybackWindow::onExportClip()
             if (m_segmentExporter)
                 m_segmentExporter->cancel();
         });
+        // v3.1（用户反馈②）：在导出面板里改选段/断点/倍率，播放页要立刻跟着变
+        connect(m_exportDlg, &SegmentExportDialog::planEdited, this,
+                [this](const speedplan::SpeedPlan &sp) {
+                    applyPlanFromDialog(sp);
+                });
     } else {
         m_exportDlg->setPlan(plan, suggested);
         m_exportDlg->setCursorMs(m_lastWallMs);
@@ -1875,6 +1933,9 @@ void MultiCamPlaybackWindow::startClipExport(const speedplan::SpeedPlan &planIn,
                                  .arg(QFileInfo(msg).fileName())
                            : lang("导出失败：%1", "Export failed: %1").arg(msg));
                 }
+                // v3.1：宫格导出也走主窗吐司（用户可能已经切到别的页在看证据）
+                if (onExportFinished)
+                    onExportFinished(ok, msg);
                 updateExportAvailability();
             }, Qt::UniqueConnection);
     eng->start(pp);

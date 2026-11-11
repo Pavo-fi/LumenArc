@@ -67,6 +67,10 @@ public:
     /// v1.16.0：多机起播前回调（主窗挂此暂停主视口——开窗时的一次暂停挡不住
     /// 用户回主窗再播，起播前拦才可靠）
     std::function<void()> onAboutToPlay;
+    /// v3.1：后建控件（每段倍速下拉）补挂快捷键守卫（主窗注入 installKeyGuardOn）
+    std::function<void(QWidget *)> onInstallKeyGuard;
+    /// v3.1：导出结束回调（主窗据此弹顶部浮条，做到「一定有提示」）
+    std::function<void(bool ok, const QString &msg)> onExportFinished;
 
     /// P-54b：播放降噪设置透传到全部路引擎（主窗设置联动）
     void applyPlaybackDenoise(bool on, double strength);
@@ -85,6 +89,7 @@ public:
     void testSetCursor(qint64 wallMs) { m_lastWallMs = wallMs; }
     void testMarkAB(bool isA) { markAB(isA); }
     void testAddSplit() { addSplitAtCursor(); }
+    void testApplyPlan(const speedplan::SpeedPlan &p) { applyPlanFromDialog(p); }
     QVector<qint64> splitPoints() const { return m_splitWall; }
     QVector<double> splitRates() const { return m_splitRates; }
     void setSplitRate(int seg, double rate);
@@ -111,6 +116,12 @@ private slots:
     void onExportClip();      ///< v2.7 宫格视频导出（默认全区间；A/B 可选裁剪）
     void updateExportAvailability();   ///< 导出按钮可用性（全路已入墙钟轴）
     // ---- v2.9 选段 + 变速断点 ----
+public slots:
+    /// v3.1：给 QMetaObject::invokeMethod 用的快捷键入口（A / B）
+    void markRangeA() { markAB(true); }
+    void markRangeB() { markAB(false); }
+
+private slots:
     void markAB(bool isA);              ///< 设 A/B（两点齐了自动放大到该区间）
     void addSplitAtCursor();            ///< 在选段内当前时刻加断点
     void rebuildSegmentSpeedBar();      ///< 选段内每段倍速条
@@ -237,6 +248,13 @@ private:
     class QHBoxLayout *m_segSpeedLay = nullptr;
     QVector<qint64> m_splitWall;        ///< 断点（墙钟，升序）
     QVector<double> m_splitRates;       ///< 每段倍率（长度 = 断点数+1）
+    bool m_syncingPlan = false;         ///< 播放页 ↔ 导出面板同步时防回环
+    /// 由当前播放页状态构造导出方案（墙钟域）
+    speedplan::SpeedPlan planFromWindow() const;
+    /// 导出面板改了选段/断点/倍率 → 反向同步到时间轴
+    void applyPlanFromDialog(const speedplan::SpeedPlan &plan);
+    /// 播放页改了 → 推给已打开的导出面板
+    void pushPlanToDialog();
     void resetCellOrder();
     QPushButton *m_alignBtn = nullptr;
     QPushButton *m_alignOkBtn = nullptr;

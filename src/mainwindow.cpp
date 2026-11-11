@@ -1966,14 +1966,43 @@ bool MainWindow::handleGlobalShortcut(QKeyEvent *e)
         return false;
     }
 
-    // v2.1：宫格在屏时，空格归宫格自己的播放键
-    // （否则会去打主视口那条已被暂停/隐藏的视频，用户观感就是「空格被劫持」）
+    // v2.1/v3.1：宫格在屏时，宫格自己的快捷键在这里统一收口。
+    // 必须在这里拦（KeyGuardFilter 挂在窗口与各交互子控件上），
+    // 否则焦点一旦落在倍速下拉/滑杆上，A/B/S 会被控件的输入法/键盘搜索吃掉，
+    // 用户看到的就是「宫格页快捷键全失效」。
     if (m_workspaceStack && m_multiCamWin
         && m_workspaceStack->currentWidget() == m_multiCamWin.data()) {
-        if (key == Qt::Key_Space) {
+        switch (key) {
+        case Qt::Key_Space:
             QMetaObject::invokeMethod(m_multiCamWin.data(), "onTogglePlay",
                                       Qt::DirectConnection);
             return true;
+        case Qt::Key_A:
+            // A = 设选段起点（Ctrl+A 仍留给清空选段，交给宫格自己处理）
+            if (!(e->modifiers() & (Qt::ControlModifier | Qt::AltModifier))) {
+                QMetaObject::invokeMethod(m_multiCamWin.data(), "markRangeA",
+                                          Qt::DirectConnection);
+                return true;
+            }
+            return false;
+        case Qt::Key_B:
+            if (!(e->modifiers() & (Qt::ControlModifier | Qt::AltModifier))) {
+                QMetaObject::invokeMethod(m_multiCamWin.data(), "markRangeB",
+                                          Qt::DirectConnection);
+                return true;
+            }
+            return false;
+        case Qt::Key_S:
+            // S = 在选段内打断点（Split）。B 已被「选段终点」占用，
+            // 断点用 S 不会互相打架。
+            if (!(e->modifiers() & (Qt::ControlModifier | Qt::AltModifier))) {
+                QMetaObject::invokeMethod(m_multiCamWin.data(), "addSplitAtCursor",
+                                          Qt::DirectConnection);
+                return true;
+            }
+            return false;
+        default:
+            break;
         }
     }
 

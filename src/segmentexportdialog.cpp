@@ -155,6 +155,7 @@ SegmentExportDialog::SegmentExportDialog(const speedplan::SpeedPlan &plan,
         syncSplitsEdit();
         rebuildTable();
         updateSummary();
+        emit planEdited(m_plan);
     });
     splitRow->addWidget(splitBtn);
     auto *removeBtn = new QPushButton(lang("删除最后一个分段点", "Remove last split"), this);
@@ -166,6 +167,7 @@ SegmentExportDialog::SegmentExportDialog(const speedplan::SpeedPlan &plan,
         syncSplitsEdit();
         rebuildTable();
         updateSummary();
+        emit planEdited(m_plan);
     });
     splitRow->addWidget(removeBtn);
     splitRow->addStretch();
@@ -196,6 +198,7 @@ SegmentExportDialog::SegmentExportDialog(const speedplan::SpeedPlan &plan,
         syncSplitsEdit();
         rebuildTable();
         updateSummary();
+        emit planEdited(m_plan);
         m_lastHint->setVisible(false);
         m_restoreBtn->setVisible(false);
         m_resultLabel->clear();
@@ -489,6 +492,7 @@ void SegmentExportDialog::applySplitsFromEdit()
     rebuildTable();
     updateSummary();
     m_resultLabel->clear();
+    emit planEdited(m_plan);
 }
 
 void SegmentExportDialog::rebuildTable()
@@ -516,8 +520,11 @@ void SegmentExportDialog::rebuildTable()
         }
         connect(combo, QOverload<int>::of(&QComboBox::currentIndexChanged),
                 this, [this, i, combo](int) {
+                    if (i >= m_plan.rates.size())
+                        return;
                     m_plan.rates[i] = combo->currentData().toDouble();
                     updateSummary();
+                    emit planEdited(m_plan);
                 });
         m_table->setCellWidget(i, 2, combo);
     }

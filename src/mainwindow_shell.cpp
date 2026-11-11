@@ -45,6 +45,7 @@
 
 #include <QAbstractAnimation>
 #include <QCheckBox>
+#include <QKeyEvent>
 #include <QComboBox>
 #include <QDebug>
 #include <QDir>
@@ -2369,6 +2370,28 @@ int MainWindow::runShellSelfCheck()
                   QStringLiteral("工具栏有 A / B / 断点 显式按钮（不靠快捷键）"));
             check(splitBtn && splitBtn->isEnabled(),
                   QStringLiteral("有选段后「断点」按钮可用"));
+            // 面板 → 时间轴：导出面板里改的选段/断点必须真的落到播放页
+            {
+                speedplan::SpeedPlan fromPanel;
+                fromPanel.aMs = base + 60000;
+                fromPanel.bMs = base + 60000 + 240000;
+                fromPanel.splits = {base + 60000 + 60000};
+                fromPanel.rates = {2.0, 0.5};
+                fromPanel.normalize();
+                embedProbe->testApplyPlan(fromPanel);
+                pump();
+                auto *bar2 = embedProbe->findChild<MultiCamViewWidget *>();
+                check(bar2 && bar2->hasAB()
+                          && bar2->abB() - bar2->abA() == 240000,
+                      QStringLiteral("导出面板改选段 → 时间轴选段同步"));
+                check(embedProbe->splitPoints().size() == 1
+                          && embedProbe->splitPoints().value(0)
+                                 == base + 60000 + 60000,
+                      QStringLiteral("导出面板改断点 → 时间轴断点同步"));
+                const QVector<double> r2 = embedProbe->splitRates();
+                check(r2.size() == 2 && r2.value(0) == 2.0 && r2.value(1) == 0.5,
+                      QStringLiteral("导出面板改倍率 → 时间轴每段倍率同步"));
+            }
             const QPixmap segShot = grab();
             if (!segShot.isNull())
                 segShot.save(QDir(QCoreApplication::applicationDirPath())
@@ -2536,6 +2559,55 @@ int MainWindow::runShellSelfCheck()
               QStringLiteral("导出每帧能取到当前段倍率（左上角角标数据源）"));
         check(pp.lanes.size() == 2 && pp.canvas.isValid(),
               QStringLiteral("导出参数可构造（宫格画布 1920x1080）"));
+    }
+
+    // 14.9 快捷键路由 + 面板↔时间轴双向同步 + 导出完成浮条
+    {
+        // ① A/B/S 必须在 handleGlobalShortcut 里被宫格页拦下
+        //    （否则焦点在倍速下拉上时会被键盘搜索吞掉）
+        QKeyEvent keyA(QEvent::KeyPress, Qt::Key_A, Qt::NoModifier);
+        QKeyEvent keyB(QEvent::KeyPress, Qt::Key_B, Qt::NoModifier);
+        QKeyEvent keyS(QEvent::KeyPress, Qt::Key_S, Qt::NoModifier);
+        // 宫格不在屏时必须放行，否则主视口/图表那边的 A/B 语义会被误吃
+        const bool passA = handleGlobalShortcut(&keyA);
+        const bool passB = handleGlobalShortcut(&keyB);
+        const bool passS = handleGlobalShortcut(&keyS);
+        check(!passA && !passB && !passS,
+              QStringLiteral("宫格不在屏时 A/B/S 放行（不误吃别的页）"));
+
+        // ② 导出面板改设置 → 时间轴跟着变（反向同步）
+        speedplan::SpeedPlan seed;
+        seed.aMs = 0;
+        seed.bMs = 600000;
+        seed.rates = {1.0};
+        seed.normalize();
+        SegmentExportDialog syncDlg(seed, 0,
+                                    QStringLiteral("C:/selfcheck/sync.mp4"),
+                                    nullptr, true);
+        auto *splitsEdit = syncDlg.findChild<QLineEdit *>(
+            QStringLiteral("splitsEdit"));
+        int planEdits = 0;
+        connect(&syncDlg, &SegmentExportDialog::planEdited, this,
+                [&planEdits](const speedplan::SpeedPlan &) { ++planEdits; });
+        if (splitsEdit) {
+            splitsEdit->setText(QStringLiteral("2:00"));
+            syncDlg.applySplitsFromEdit();
+        }
+        check(planEdits > 0,
+              QStringLiteral("导出面板编辑会广播 planEdited（供播放页同步）"));
+
+        // ③ 完成浮条：调用后必须真的可见且带结论文字
+        showExportToast(true, lang("✅ 导出完成\n%1",
+                                   "✅ Export finished\n%1")
+                                 .arg(QStringLiteral("C:/selfcheck/sync.mp4")));
+        pump();
+        auto *toast = findChild<QPushButton *>(QStringLiteral("exportToast"));
+        check(toast != nullptr && toast->isVisible()
+                  && toast->text().contains(lang(QStringLiteral("导出完成"),
+                                                 QStringLiteral("finished"))),
+              QStringLiteral("导出完成会在主窗弹出可见浮条"));
+        if (toast)
+            toast->hide();
     }
 
     // 15. 时间轴纵向高度：各宫格压到约一半，且字号仍放得下。

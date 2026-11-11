@@ -548,6 +548,14 @@ void MainWindow::onMultiCamView()
         return e;
     });
     win->onOpenVideo = [this](const QString &path) { openVideoFile(path); };
+    // v3.1：宫格后建的控件（每段倍速下拉）也要挂快捷键守卫，
+    // 否则焦点落在下拉上，A/B/S 会被键盘搜索吞掉。
+    win->onInstallKeyGuard = [this](QWidget *w) { installKeyGuardOn(w); };
+    win->onExportFinished = [this](bool ok, const QString &msg) {
+        showExportToast(ok, ok
+            ? lang("✅ 宫格导出完成\n%1", "✅ Grid export finished\n%1").arg(msg)
+            : lang("❌ 宫格导出失败：%1", "Grid export failed: %1").arg(msg));
+    };
     // v1.15.3：多机窗保存校时/改案数据 → 案件树徽标即刷新；
     // 若正中主视口当前视频：同步内存+时间轴，防旧值回写覆盖 .vla
     win->onCaseDataChanged = [this](const QString &path) {
