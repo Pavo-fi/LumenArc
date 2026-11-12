@@ -15,6 +15,7 @@
 #include "app/uistate.h"
 #include "casedock.h"
 #include "chartpanel.h"
+#include "spectrogrampanel_enhanced.h"
 #include "domain/roi_model.h"
 #include "i18n.h"
 #include "keyguardfilter.h"
@@ -2960,6 +2961,36 @@ int MainWindow::runShellSelfCheck()
             outWide.save(QDir(QCoreApplication::applicationDirPath())
                              .filePath(QStringLiteral(
                                  "selfcheck-snapshot-split.png")));
+    }
+
+    // 14.997 v3.7：快照里语谱图与图表的绘图区必须严格同宽同起点
+    {
+        // ① 图表能报出目标尺寸下的绘图区（快照据此对齐）
+        const QSize shot(1200, 420);
+        int chartLeft = -1, chartRight = -1;
+        const QImage chartImg = renderSnapshotChart(shot, &chartLeft, &chartRight);
+        check(!chartImg.isNull() && chartLeft > 0 && chartRight >= 0,
+              QStringLiteral("图表快照导出绘图区内缩量（左 %1 / 右 %2）")
+                  .arg(chartLeft).arg(chartRight));
+
+        // ② 语谱图按同一对内缩量排布 → 热力图起止像素与绘图区完全一致
+        const QPair<int, int> span = SpectrogramPanelEnhanced::heatSpan(
+            shot.width(), chartLeft, chartRight);
+        const int expectLeft = chartLeft;
+        const int expectRight = shot.width() - 1 - chartRight;
+        check(span.first == expectLeft && span.second == expectRight,
+              QStringLiteral("语谱热力图区间 [%1, %2] == 图表绘图区 [%1, %2]")
+                  .arg(span.first).arg(span.second));
+
+        // ③ 极端输入不能炸：内缩过大/负值时收敛到安全区间
+        const QPair<int, int> bad = SpectrogramPanelEnhanced::heatSpan(300, 400, 400);
+        check(bad.first >= 0 && bad.second > bad.first && bad.second < 300,
+              QStringLiteral("内缩过大时收敛到安全区间 [%1, %2]")
+                  .arg(bad.first).arg(bad.second));
+        const QPair<int, int> autoSpan = SpectrogramPanelEnhanced::heatSpan(1200, -1, -1);
+        check(autoSpan.first == qBound(56, 1200 / 40, 96)
+                  && autoSpan.second == 1199,
+              QStringLiteral("不给内缩量时保持自适应口径（%1）").arg(autoSpan.first));
     }
 
     // 15. 时间轴纵向高度：各宫格压到约一半，且字号仍放得下。

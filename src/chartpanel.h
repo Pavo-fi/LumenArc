@@ -86,7 +86,9 @@ public:
     /// 并用 CPU 矢量绘制（不经 widget grab——dock 内 resize+grab 实测不可靠，
     /// 曲线/坐标出不来）。曲线/标签/光标/辅助线全部随新布局重排，清晰不糊。
     /// 返回目标尺寸图像（BgPanel 底）；无图表场景时返回空图。
-    QImage renderToImage(const QSize &targetSize);
+    /// @param plotAreaOut 非空时返回「目标尺寸下」的绘图区（像素坐标）。
+    ///        v3.7：快照要拿它对齐语谱图，两图的绘图区必须严格同宽同起点。
+    QImage renderToImage(const QSize &targetSize, QRectF *plotAreaOut = nullptr);
 
     QVector<ChartLabel> labels() const { return m_labels; }
     void setLabels(const QVector<ChartLabel> &l) { m_labels = l; updateLabelItems(); }

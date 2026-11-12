@@ -118,11 +118,20 @@
 /// 为什么需要：renderToImage() 只渲染 QChart 本体，而图例、游标读数、
 /// 「● 亮度·音量」徽标都是叠在图表容器上的 **独立 widget**（不是图表的一部分），
 /// 所以旧快照的图表区域一直是「缺胳膊少腿」的旧样子。
-QImage MainWindow::renderSnapshotChart(const QSize &target)
+QImage MainWindow::renderSnapshotChart(const QSize &target, int *leftInset,
+                                       int *rightInset)
 {
     if (!m_chartPanel)
         return QImage();
-    QImage img = m_chartPanel->renderToImage(target);
+    QRectF plotArea;
+    QImage img = m_chartPanel->renderToImage(target, &plotArea);
+    // v3.7：把绘图区的左右内缩量交出去——语谱图靠它对齐，
+    // 否则两图各按各的轴宽排布，水平长度永远差几个像素（用户：逼死强迫症）
+    if (leftInset)
+        *leftInset = plotArea.isValid() ? qRound(plotArea.left()) : -1;
+    if (rightInset)
+        *rightInset = plotArea.isValid()
+            ? qRound(qreal(target.width()) - plotArea.right()) : -1;
     if (img.isNull() || !m_chartContainer)
         return img;
     QWidget *host = m_chartContainer;
@@ -247,11 +256,14 @@ void MainWindow::onSnapshotQuick()
     // 右半全黑（用户实测截图）。
     const int contentW = qMax(frame.width(),
                               SnapshotComposer::contentWidth(in));
+    int chartLeft = -1, chartRight = -1;
     if (!snap.isEmpty() || snap.hasAudio())
-        in.chartImg = renderSnapshotChart(QSize(contentW, 420));
+        in.chartImg = renderSnapshotChart(QSize(contentW, 420),
+                                          &chartLeft, &chartRight);
+    // 语谱图用图表绘图区的同一对左右内缩量 → 热力图起止像素与曲线严格对齐
     if (snap.hasAudio() && m_spectrogramEnhanced)
         in.specImg = m_spectrogramEnhanced->renderHeatmapImage(
-            QSize(contentW, 300));
+            QSize(contentW, 300), chartLeft, chartRight);
 
     const QImage out = SnapshotComposer::compose(in);
     if (out.isNull()) {

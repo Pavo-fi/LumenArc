@@ -44,7 +44,16 @@ public:
     /// 归一化 + 同一颜色 LUT + 同一视窗/频率轴设置，任意目标尺寸全幅输出，
     /// 不经 GL（QOpenGLWidget 的 grab 只能拿屏幕当前尺寸且尺寸错位）。
     /// 含橙色时间光标（与 paintGL 同款）。无语谱数据返回空图。
-    QImage renderHeatmapImage(const QSize &targetSize);
+    /// @param leftInset  左侧轴条宽度（像素）。<0 = 按自身规则（W/40）自适应。
+    /// @param rightInset 右侧留白（像素）。<0 = 0。
+    /// v3.7：快照里要让语谱热力图与图表绘图区**严格同宽同起点**，
+    ///       调用方把图表的绘图区左右内缩量传进来（用户：长度对不上逼死强迫症）。
+    QImage renderHeatmapImage(const QSize &targetSize, int leftInset = -1,
+                              int rightInset = -1);
+
+    /// 热力图水平区间（纯函数，自检直验）：给定画布宽与左右内缩，
+    /// 返回 [起始x, 结束x]（含端点）。保证与图表绘图区同口径。
+    static QPair<int, int> heatSpan(int width, int leftInset, int rightInset);
 
 public slots:
     void onXAxisRangeChanged(qreal xMin, qreal xMax);

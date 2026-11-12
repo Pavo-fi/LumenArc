@@ -477,7 +477,7 @@ void ChartPanel::setAutoYRange(bool enabled)
     }
 }
 
-QImage ChartPanel::renderToImage(const QSize &targetSize)
+QImage ChartPanel::renderToImage(const QSize &targetSize, QRectF *plotAreaOut)
 {
     if (targetSize.isEmpty() || !m_chart)
         return QImage();
@@ -496,6 +496,9 @@ QImage ChartPanel::renderToImage(const QSize &targetSize)
     updateCursorPosition();  // 光标项不听 plotAreaChanged，手动刷新
     sc->update();   // 强制场景立即 polish/布局（离屏无事件循环兜底）
     QCoreApplication::sendPostedEvents(m_chart, QEvent::Polish);
+    // 布局已按目标尺寸重排：此刻的绘图区就是快照里的真实绘图区
+    if (plotAreaOut)
+        *plotAreaOut = m_chart->plotArea();
 
     QImage img(targetSize, QImage::Format_ARGB32);
     img.fill(QColor(Theme::BgPanel));

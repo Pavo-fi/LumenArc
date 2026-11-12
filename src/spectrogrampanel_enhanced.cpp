@@ -427,7 +427,21 @@ void SpectrogramPanelEnhanced::uploadColorLUTTexture()
 /// @brief 离屏 CPU 光栅化：与 GPU 着色器同一归一化/颜色 LUT/视窗/频率轴。
 /// 目标尺寸任意（快照全宽输出），不经 GL——grabFramebuffer 只能拿屏幕当前
 /// 尺寸且 dock 内 resize 后 FBO 错位（实测右半黑）。
-QImage SpectrogramPanelEnhanced::renderHeatmapImage(const QSize &targetSize)
+QPair<int, int> SpectrogramPanelEnhanced::heatSpan(int width, int leftInset,
+                                                   int rightInset)
+{
+    if (width <= 0)
+        return {0, 0};
+    int left = (leftInset >= 0) ? leftInset : qBound(56, width / 40, 96);
+    left = qBound(0, left, qMax(0, width - 40));
+    int right = qMax(0, rightInset);
+    right = qBound(0, right, qMax(0, width - left - 20));
+    return {left, width - 1 - right};
+}
+
+QImage SpectrogramPanelEnhanced::renderHeatmapImage(const QSize &targetSize,
+                                                    int leftInset,
+                                                    int rightInset)
 {
     if (targetSize.isEmpty() || !m_audioData.hasSpectrogram())
         return QImage();
@@ -455,8 +469,10 @@ QImage SpectrogramPanelEnhanced::renderHeatmapImage(const QSize &targetSize)
     const int W = targetSize.width(), H = targetSize.height();
     // 左侧频率轴条（用户实测：快照语谱图要有单位/刻度）——热力图画在
     // [axisW, W)，轴条黑底 + 与屏上同款的刻度/标签（freqAxisTicks 共享）。
-    const int axisW = qBound(56, W / 40, 96);
-    const int heatW = W - axisW;
+    // v3.7：给了 leftInset/rightInset 就严格照办（与图表绘图区同宽同起点）。
+    const QPair<int, int> span = heatSpan(W, leftInset, rightInset);
+    const int axisW = span.first;
+    const int heatW = qMax(1, span.second - span.first + 1);
     QImage img(W, H, QImage::Format_ARGB32);
     img.fill(Qt::black);
     for (int r = 0; r < H; ++r) {
