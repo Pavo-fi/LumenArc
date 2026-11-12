@@ -2788,6 +2788,33 @@ int MainWindow::runShellSelfCheck()
               QStringLiteral("无视频时单路导出面板不硬开（优雅提示）"));
     }
 
+    // 14.98 快捷键不抢已有语义（S = 证据快照，断点改用 D / Ins）
+    {
+        // 同一组键在没有宫格在屏时必须放行：S 要走证据快照那条路，
+        // D / Ins 也不该被硬吞（由宫格在屏时才收口）。
+        QKeyEvent kS(QEvent::KeyPress, Qt::Key_S, Qt::NoModifier);
+        QKeyEvent kD(QEvent::KeyPress, Qt::Key_D, Qt::NoModifier);
+        QKeyEvent kIns(QEvent::KeyPress, Qt::Key_Insert, Qt::NoModifier);
+        const bool tookS = handleGlobalShortcut(&kS);
+        const bool tookD = handleGlobalShortcut(&kD);
+        const bool tookIns = handleGlobalShortcut(&kIns);
+        // 无宫格时这几个键都该放行：S 归单路的证据快照，D/Ins 归别的页。
+        // （宫格在屏时才会被收口，这里刻意不制造那种状态）
+        check(!tookS && !tookD && !tookIns,
+              QStringLiteral("无宫格时 S / D / Ins 都放行（不误吃别的页）"));
+
+        // 宫格里断点按钮的提示必须写明新快捷键，避免用户还按 S
+        MultiCamPlaybackWindow hintProbe;
+        auto *splitBtn = hintProbe.findChild<QPushButton *>(
+            QStringLiteral("multicamAddSplit"));
+        check(splitBtn != nullptr
+                  && splitBtn->toolTip().contains(QStringLiteral("D"))
+                  && splitBtn->toolTip().contains(QStringLiteral("Ins")),
+              QStringLiteral("断点按钮提示写明 D / Ins 快捷键"));
+        check(splitBtn && !splitBtn->toolTip().contains(QStringLiteral("快捷键 S")),
+              QStringLiteral("断点提示不再写 S（避免抢证据快照）"));
+    }
+
     // 15. 时间轴纵向高度：各宫格压到约一半，且字号仍放得下。
     {
         // 旧口径（行高 28 / 行距 4 / 顶留 22 / 带标签 12 / 刻度 14 / 留白 6）

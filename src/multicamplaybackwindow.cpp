@@ -617,8 +617,10 @@ void MultiCamPlaybackWindow::buildPlayPage()
 
     m_splitBtn = new QPushButton(lang("断点", "Split"), this);
     m_splitBtn->setObjectName(QStringLiteral("multicamAddSplit"));
-    m_splitBtn->setToolTip(lang("在选段内的当前时刻打断点，断出的每一段可单独设倍速",
-                                "Add a speed breakpoint; each piece gets its own speed"));
+    m_splitBtn->setToolTip(lang(
+        "在选段内的当前时刻打断点（快捷键 D 或 Ins），断出的每一段可单独设倍速",
+        "Add a speed breakpoint at the cursor (D or Ins); "
+        "each piece gets its own speed"));
     m_splitBtn->setEnabled(false);
     connect(m_splitBtn, &QPushButton::clicked, this,
             &MultiCamPlaybackWindow::addSplitAtCursor);
@@ -627,8 +629,10 @@ void MultiCamPlaybackWindow::buildPlayPage()
     m_delSplitBtn = new QPushButton(lang("删除断点", "Del split"), this);
     m_delSplitBtn->setObjectName(QStringLiteral("multicamDelSplit"));
     m_delSplitBtn->setToolTip(lang(
-        "先在时间轴上点一下要删的那条断点，再点这里（或直接按 Del）",
-        "Click a breakpoint on the timeline, then this (or press Del)"));
+        "先在时间轴上点一下要删的那条断点，再点这里（或直接按 Del）\n"
+        "加分断点用 D / Ins",
+        "Click a breakpoint on the timeline, then this (or press Del).\n"
+        "Add one with D / Ins"));
     m_delSplitBtn->setEnabled(false);
     connect(m_delSplitBtn, &QPushButton::clicked, this,
             &MultiCamPlaybackWindow::removeSelectedSplit);
@@ -1604,8 +1608,9 @@ void MultiCamPlaybackWindow::keyPressEvent(QKeyEvent *event)
     case Qt::Key_B:
         setPt(false);
         return;
-    case Qt::Key_S:
-        addSplitAtCursor();   // S = 打断点（B 已被选段终点占用）
+    case Qt::Key_D:
+    case Qt::Key_Insert:
+        addSplitAtCursor();   // D / Ins = 打断点（S 留给证据快照）
         return;
     case Qt::Key_Delete:
     case Qt::Key_Backspace:

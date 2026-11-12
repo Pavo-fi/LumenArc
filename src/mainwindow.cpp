@@ -2023,9 +2023,11 @@ bool MainWindow::handleGlobalShortcut(QKeyEvent *e)
                     return true;
             }
             return false;
-        case Qt::Key_S:
-            // S = 在选段内打断点（Split）。B 已被「选段终点」占用，
-            // 断点用 S 不会互相打架。
+        case Qt::Key_D:
+        case Qt::Key_Insert:
+            // v3.4：断点键从 S 改成 D / Ins。
+            // S 在单路里是「证据快照」，被宫格抢走属于抢占既有语义；
+            // D（断点）+ Insert（插入断点）都空闲，且不会与 A/B 冲突。
             if (!(e->modifiers() & (Qt::ControlModifier | Qt::AltModifier))) {
                 QMetaObject::invokeMethod(m_multiCamWin.data(), "addSplitAtCursor",
                                           Qt::DirectConnection);
