@@ -77,7 +77,27 @@ void MultiCamViewWidget::setSplits(const QVector<qint64> &splitsWall)
 {
     m_splitsWall = splitsWall;
     std::sort(m_splitsWall.begin(), m_splitsWall.end());
+    if (m_selectedSplit >= m_splitsWall.size())
+        m_selectedSplit = -1;   // 断点被删/重构后不留悬空选中
     update();
+}
+
+int MultiCamViewWidget::splitHitTest(int x) const
+{
+    if (m_splitsWall.isEmpty() || m_layoutMsPerPx <= 0.0)
+        return -1;
+    constexpr int kTol = 6;   // 竖向虚线很细，给 6px 容差好点
+    int best = -1, bestDist = kTol + 1;
+    for (int i = 0; i < m_splitsWall.size(); ++i) {
+        const int sx = kLabelW + int((m_splitsWall.at(i) - m_layoutT0)
+                                     / m_layoutMsPerPx);
+        const int d = qAbs(x - sx);
+        if (d <= kTol && d < bestDist) {
+            bestDist = d;
+            best = i;
+        }
+    }
+    return best;
 }
 
 void MultiCamViewWidget::setCursorMs(qint64 wallMs)
@@ -422,7 +442,9 @@ void MultiCamViewWidget::paintEvent(QPaintEvent *)
             const int x = kLabelW + int((t - m_layoutT0) / m_layoutMsPerPx);
             if (x < kLabelW || x > width() - kMarginR)
                 continue;
-            p.setPen(QPen(QColor(Theme::Info), 1, Qt::DashLine));
+            const bool sel = (i == m_selectedSplit);
+            p.setPen(sel ? QPen(QColor(Theme::Accent), 2)
+                         : QPen(QColor(Theme::Info), 1, Qt::DashLine));
             p.drawLine(x, kTopMargin - 2, x, tickY + 2);
             // 段号小标（断点右侧第 i+2 段）
             const QString chip = QString::number(i + 2);
@@ -534,6 +556,18 @@ void MultiCamViewWidget::mouseDoubleClickEvent(QMouseEvent *event)
 
 void MultiCamViewWidget::mousePressEvent(QMouseEvent *event)
 {
+    // v3.2：先判断点——点到断点只是「选中它」，不跳游标（否则删一个断点
+    // 会把播放位置也甩走，用户没法连续处理）
+    if (event->button() == Qt::LeftButton) {
+        const int hit = splitHitTest(event->pos().x());
+        if (hit >= 0) {
+            m_selectedSplit = hit;
+            emit splitClicked(hit);
+            update();
+            event->accept();
+            return;
+        }
+    }
     // 游标拖动（P-57 U-4 实时追逐）：仅在条图区（标签列右侧）起效
     if (event->button() == Qt::LeftButton && event->pos().x() >= kLabelW
         && !m_lanes.isEmpty()) {

@@ -17,6 +17,7 @@
 #include <QProgressBar>
 #include <QPushButton>
 #include <QTableWidget>
+#include <QToolButton>
 #include <QVBoxLayout>
 
 #include "i18n.h"
@@ -153,25 +154,24 @@ SegmentExportDialog::SegmentExportDialog(const speedplan::SpeedPlan &plan,
         m_plan.splits.append(m_cursorMs);
         m_plan.normalize();
         syncSplitsEdit();
+        rebuildSplitChips();
         rebuildTable();
         updateSummary();
         emit planEdited(m_plan);
     });
     splitRow->addWidget(splitBtn);
-    auto *removeBtn = new QPushButton(lang("删除最后一个分段点", "Remove last split"), this);
-    connect(removeBtn, &QPushButton::clicked, this, [this]() {
-        if (m_plan.splits.isEmpty())
-            return;
-        m_plan.splits.removeLast();
-        m_plan.normalize();
-        syncSplitsEdit();
-        rebuildTable();
-        updateSummary();
-        emit planEdited(m_plan);
-    });
-    splitRow->addWidget(removeBtn);
     splitRow->addStretch();
     lay->addLayout(splitRow);
+
+    // v3.2（用户反馈）：只能删「最后一个分段点」太不自由。
+    // 改成把每个分段点做成可点的 chip：点哪个删哪个，一眼看清删的是哪条。
+    auto *chipRow = new QHBoxLayout();
+    chipRow->addWidget(new QLabel(lang("分段点：", "Splits:"), this));
+    m_splitChipLay = new QHBoxLayout();
+    m_splitChipLay->setSpacing(6);
+    chipRow->addLayout(m_splitChipLay);
+    chipRow->addStretch(1);
+    lay->addLayout(chipRow);
 
     m_osdCheck = new QCheckBox(
         lang("烧录信息角标（倍速 · 时刻 · 案件号）",
@@ -196,6 +196,7 @@ SegmentExportDialog::SegmentExportDialog(const speedplan::SpeedPlan &plan,
         m_plan = m_lastPlan;
         m_plan.normalize();
         syncSplitsEdit();
+        rebuildSplitChips();
         rebuildTable();
         updateSummary();
         emit planEdited(m_plan);
@@ -281,6 +282,8 @@ SegmentExportDialog::SegmentExportDialog(const speedplan::SpeedPlan &plan,
     btnRow->addWidget(closeBtn);
     lay->addLayout(btnRow);
 
+    syncSplitsEdit();
+    rebuildSplitChips();
     rebuildTable();
     updateSummary();
 }
@@ -317,6 +320,7 @@ void SegmentExportDialog::setPlan(const speedplan::SpeedPlan &plan,
     m_lastHint->setVisible(false);
     m_restoreBtn->setVisible(false);
     syncSplitsEdit();
+    rebuildSplitChips();
     rebuildTable();
     updateSummary();
 }
@@ -489,10 +493,63 @@ void SegmentExportDialog::applySplitsFromEdit()
     m_plan.splits = splits;
     m_plan.normalize();
     syncSplitsEdit();
+    rebuildSplitChips();
     rebuildTable();
     updateSummary();
     m_resultLabel->clear();
     emit planEdited(m_plan);
+}
+
+/// v3.2：分段点 chip 列表（点哪个删哪个，替代「只能删最后一个」）
+void SegmentExportDialog::rebuildSplitChips()
+{
+    if (!m_splitChipLay)
+        return;
+    while (QLayoutItem *it = m_splitChipLay->takeAt(0)) {
+        if (QWidget *w = it->widget())
+            w->deleteLater();
+        delete it;
+    }
+    if (m_plan.splits.isEmpty()) {
+        auto *none = new QLabel(lang("（无，整段一个倍速）", "(none - single speed)"),
+                                this);
+        none->setStyleSheet("color: " + Theme::TextMuted + ";");
+        m_splitChipLay->addWidget(none);
+        return;
+    }
+    for (int i = 0; i < m_plan.splits.size(); ++i) {
+        const qint64 off = m_plan.splits.at(i) - m_plan.aMs;
+        auto *chip = new QToolButton(this);
+        chip->setObjectName(QStringLiteral("splitChip%1").arg(i));
+        chip->setText(QStringLiteral("%1  ×").arg(fmtOffset(off)));
+        chip->setCursor(Qt::PointingHandCursor);
+        chip->setToolTip(lang("点一下删掉这个分段点（%1）",
+                              "Click to delete this split (%1)")
+                             .arg(fmtTime(m_plan.splits.at(i))));
+        chip->setStyleSheet(QStringLiteral(
+            "QToolButton { background:%1; color:%2; border:1px solid %3;"
+            " border-radius:4px; padding:2px 8px; font-size:12px; }"
+            "QToolButton:hover { color:%4; border-color:%4; }")
+            .arg(Theme::BgCard, Theme::TextPrimary, Theme::Border,
+                 Theme::Danger));
+        const int idx = i;
+        connect(chip, &QToolButton::clicked, this, [this, idx]() {
+            if (idx < 0 || idx >= m_plan.splits.size())
+                return;
+            m_plan.splits.removeAt(idx);
+            // 删除断点 i = 第 i 段与 i+1 段合并：保留左段倍率
+            if (idx + 1 < m_plan.rates.size())
+                m_plan.rates.removeAt(idx + 1);
+            m_plan.normalize();
+            syncSplitsEdit();
+            rebuildSplitChips();
+            rebuildTable();
+            updateSummary();
+            m_resultLabel->clear();
+            emit planEdited(m_plan);
+        });
+        m_splitChipLay->addWidget(chip);
+    }
 }
 
 void SegmentExportDialog::rebuildTable()

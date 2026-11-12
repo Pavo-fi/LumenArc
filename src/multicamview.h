@@ -44,6 +44,17 @@ public:
     void setViewRange(qint64 t0Wall, qint64 spanMs);
     /// 变速断点（墙钟，升序）——画成竖虚线 + 段号小标
     void setSplits(const QVector<qint64> &splitsWall);
+    /// v3.2：点选断点（-1=无选中）。选中的那条画成强调色实线 + 加粗，
+    /// 供「按 Del 删除这个断点」使用——不再只能删最后一个。
+    int selectedSplit() const { return m_selectedSplit; }
+    void setSelectedSplit(int idx) { m_selectedSplit = idx; update(); }
+    int splitCount() const { return m_splitsWall.size(); }
+    qint64 splitAt(int idx) const
+    {
+        return (idx >= 0 && idx < m_splitsWall.size()) ? m_splitsWall.at(idx) : -1;
+    }
+    /// 断点像素命中（供点击判定；-1=没点到）
+    int splitHitTest(int x) const;
 
     /// 共享墙钟游标（P-57）：-1 = 不显示
     void setCursorMs(qint64 wallMs);
@@ -65,6 +76,8 @@ signals:
     void laneActivated(const QString &videoId);   ///< 双击块（回单路分析）
     void scrubPreview(qint64 wallMs);   ///< 游标拖动中（实时追逐，高频）
     void seekCommit(qint64 wallMs);     ///< 点击/松手（一次性精确 seek）
+    /// v3.2：点中了第 index 个变速断点（供上层提示「按 Del 删除」）
+    void splitClicked(int index);
 
 protected:
     void paintEvent(QPaintEvent *event) override;
@@ -104,6 +117,7 @@ private:
     qint64 m_cursorMs = -1;
     qint64 m_abA = -1, m_abB = -1;
     QVector<qint64> m_splitsWall;   ///< v2.9 变速断点（墙钟）
+    int m_selectedSplit = -1;       ///< v3.2 选中的断点（-1=无）
     bool m_scrubbing = false;
     qint64 m_layoutT0 = 0;      // rebuildLayout 记录的轴域（xToWall 用）
     double m_layoutMsPerPx = 1.0;

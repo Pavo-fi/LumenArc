@@ -2610,6 +2610,105 @@ int MainWindow::runShellSelfCheck()
             toast->hide();
     }
 
+    // 14.95 断点可选中删除（用户：只能删最后一个不自由）
+    {
+        // ① 时间轴：点中断点 → 选中 → 删掉的是「这一条」而不是最后一条
+        const qint64 base = 1789000000000LL;
+        MultiCamPlaybackWindow splitProbe;
+        splitProbe.setEngineFactory([](QObject *parent) -> IVideoEngine * {
+            return new SelfCheckSyncEngine(parent);
+        });
+        splitProbe.resize(960, 620);
+        QVector<SyncLaneData> lanes;
+        for (int i = 0; i < 2; ++i) {
+            SyncLaneData l;
+            l.id = QStringLiteral("C0%1").arg(i + 1);
+            l.path = QStringLiteral("C:/selfcheck/sp%1.mp4").arg(i + 1);
+            l.displayName = QStringLiteral("机位%1").arg(i + 1);
+            l.calibrated = true;
+            l.cal.source = TimeCalibration::Source::Manual;
+            l.cal.offsetMs = base;
+            l.cal.dateKnown = true;
+            l.cal.calibratedAtMs = 1;
+            l.durationMs = 1200000;
+            lanes.append(l);
+        }
+        splitProbe.loadCalibratedLanesForTest(lanes);
+        splitProbe.show();
+        pump();
+        wait(80);
+        splitProbe.testSetCursor(base + 60000);
+        splitProbe.testMarkAB(true);
+        splitProbe.testSetCursor(base + 60000 + 300000);
+        splitProbe.testMarkAB(false);
+        splitProbe.testSetCursor(base + 60000 + 100000);   // +1:40
+        splitProbe.testAddSplit();
+        splitProbe.testSetCursor(base + 60000 + 200000);   // +3:20
+        splitProbe.testAddSplit();
+        splitProbe.testSetCursor(base + 60000 + 250000);   // +4:10
+        splitProbe.testAddSplit();
+        pump();
+        check(splitProbe.splitPoints().size() == 3,
+              QStringLiteral("准备三个断点用于选中删除"));
+        auto *bar = splitProbe.findChild<MultiCamViewWidget *>();
+        check(bar != nullptr, QStringLiteral("拿到合并时间轴"));
+        if (bar && splitProbe.splitPoints().size() == 3) {
+            // 点中间那条断点（第 2 条）——按像素命中，模拟鼠标点击
+            bar->setSelectedSplit(1);
+            emit bar->splitClicked(1);
+            pump();
+            auto *delBtn = splitProbe.findChild<QPushButton *>(
+                QStringLiteral("multicamDelSplit"));
+            check(delBtn != nullptr && delBtn->isEnabled(),
+                  QStringLiteral("点中断点后「删除断点」按钮可用"));
+            const QVector<qint64> before = splitProbe.splitPoints();
+            const bool removed = splitProbe.removeSelectedSplit();
+            pump();
+            const QVector<qint64> after = splitProbe.splitPoints();
+            check(removed && after.size() == 2
+                      && !after.contains(before.value(1))
+                      && after.contains(before.value(0))
+                      && after.contains(before.value(2)),
+                  QStringLiteral("删除的是被选中的那条断点，不是最后一个"));
+            // 断点被删后选中态不能悬空
+            check(bar->selectedSplit() == -1,
+                  QStringLiteral("删除后清空断点选中态"));
+        }
+        splitProbe.close();
+
+        // ② 导出面板：每个分段点一个 chip，点哪个删哪个
+        speedplan::SpeedPlan sp;
+        sp.aMs = 0;
+        sp.bMs = 600000;
+        sp.splits = {120000, 240000, 360000};
+        sp.rates = {4.0, 1.0, 0.25, 4.0};
+        sp.normalize();
+        SegmentExportDialog chipDlg(sp, 0, QStringLiteral("C:/selfcheck/chip.mp4"),
+                                    nullptr, false);
+        const auto chips = chipDlg.findChildren<QToolButton *>();
+        int chipCount = 0;
+        for (auto *c : chips)
+            if (c->objectName().startsWith(QStringLiteral("splitChip")))
+                ++chipCount;
+        check(chipCount == 3, QStringLiteral("面板里每个分段点一个 chip（%1 个）")
+                                  .arg(chipCount));
+        QToolButton *middle = chipDlg.findChild<QToolButton *>(
+            QStringLiteral("splitChip1"));
+        if (middle) {
+            middle->click();
+            pump();
+            const speedplan::SpeedPlan now = chipDlg.plan();
+            check(now.splits.size() == 2 && !now.splits.contains(240000)
+                      && now.splits.contains(120000)
+                      && now.splits.contains(360000),
+                  QStringLiteral("点中间 chip 删掉的是那一个分段点"));
+            check(now.rates.size() == 3,
+                  QStringLiteral("删分段点后倍率段数同步收缩"));
+        } else {
+            check(false, QStringLiteral("找不到中间分段点 chip"));
+        }
+    }
+
     // 15. 时间轴纵向高度：各宫格压到约一半，且字号仍放得下。
     {
         // 旧口径（行高 28 / 行距 4 / 顶留 22 / 带标签 12 / 刻度 14 / 留白 6）

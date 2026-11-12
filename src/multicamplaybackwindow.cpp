@@ -624,6 +624,16 @@ void MultiCamPlaybackWindow::buildPlayPage()
             &MultiCamPlaybackWindow::addSplitAtCursor);
     bar->addWidget(m_splitBtn);
 
+    m_delSplitBtn = new QPushButton(lang("删除断点", "Del split"), this);
+    m_delSplitBtn->setObjectName(QStringLiteral("multicamDelSplit"));
+    m_delSplitBtn->setToolTip(lang(
+        "先在时间轴上点一下要删的那条断点，再点这里（或直接按 Del）",
+        "Click a breakpoint on the timeline, then this (or press Del)"));
+    m_delSplitBtn->setEnabled(false);
+    connect(m_delSplitBtn, &QPushButton::clicked, this,
+            &MultiCamPlaybackWindow::removeSelectedSplit);
+    bar->addWidget(m_delSplitBtn);
+
     // P-68 第 10 条：多机选段导出（与单路同款分段变速逻辑；模式A 可用）
     // v2.7（用户拍板「合并宫格播放和导出」）：导出是宫格视图的一等动作，
     // 不再要求先按 A/B 打点——默认导出整个覆盖区间，A/B 只是可选裁剪。
@@ -971,6 +981,18 @@ void MultiCamPlaybackWindow::rebuildTimelineArea()
                 [this](qint64 wallMs) {
                     Q_UNUSED(wallMs);
                     m_svc->endScrub();
+                });
+        connect(m_mergedBar, &MultiCamViewWidget::splitClicked, this,
+                [this](int idx) {
+                    if (!m_mergedBar || idx < 0)
+                        return;
+                    const qint64 t = m_mergedBar->splitAt(idx);
+                    if (m_delSplitBtn)
+                        m_delSplitBtn->setEnabled(true);   // 有选中就能删
+                    m_statusLabel->setText(
+                        lang("已选中断点 +%1（点「删除断点」或按 Del 移除）",
+                             "Breakpoint +%1 selected (Del to remove)")
+                            .arg(fmtStream(qMax<qint64>(0, t - m_abA))));
                 });
         connect(m_mergedBar, &MultiCamViewWidget::laneActivated, this,
                 [this](const QString &id) {
@@ -1585,6 +1607,12 @@ void MultiCamPlaybackWindow::keyPressEvent(QKeyEvent *event)
     case Qt::Key_S:
         addSplitAtCursor();   // S = 打断点（B 已被选段终点占用）
         return;
+    case Qt::Key_Delete:
+    case Qt::Key_Backspace:
+        // v3.2：删掉「选中的那个断点」，而不是永远删最后一个
+        if (removeSelectedSplit())
+            return;
+        break;
     default:
         QDialog::keyPressEvent(event);
     }
@@ -1652,6 +1680,8 @@ void MultiCamPlaybackWindow::addSplitAtCursor()
         m_mergedBar->setSplits(m_splitWall);
     rebuildSegmentSpeedBar();
     pushPlanToDialog();
+    if (m_delSplitBtn)
+        m_delSplitBtn->setEnabled(false);   // 新断点还没选中
     m_statusLabel->setText(
         lang("已加断点：共 %1 段，可分别设倍速",
              "%1 segments now - set a speed for each")
@@ -1711,6 +1741,30 @@ void MultiCamPlaybackWindow::setSplitRate(int seg, double rate)
     pushPlanToDialog();
 }
 
+bool MultiCamPlaybackWindow::removeSelectedSplit()
+{
+    if (!m_mergedBar)
+        return false;
+    const int idx = m_mergedBar->selectedSplit();
+    if (idx < 0 || idx >= m_splitWall.size())
+        return false;
+    m_splitWall.removeAt(idx);
+    // 断点 i 删除 = 第 i 段与第 i+1 段合并：保留左段倍率，丢掉右段
+    if (idx + 1 < m_splitRates.size())
+        m_splitRates.removeAt(idx + 1);
+    while (m_splitRates.size() < m_splitWall.size() + 1)
+        m_splitRates.append(1.0);
+    m_mergedBar->setSplits(m_splitWall);
+    m_mergedBar->setSelectedSplit(-1);
+    rebuildSegmentSpeedBar();
+    pushPlanToDialog();
+    if (m_statusLabel)
+        m_statusLabel->setText(
+            lang("已删除该断点，现有 %1 段", "%1 segments now")
+                .arg(m_splitWall.size() + 1));
+    return true;
+}
+
 void MultiCamPlaybackWindow::rebuildSegmentSpeedBar()
 {
     if (!m_segSpeedBar || !m_segSpeedLay)
@@ -1723,6 +1777,9 @@ void MultiCamPlaybackWindow::rebuildSegmentSpeedBar()
     const bool hasAB = m_mergedBar && m_mergedBar->hasAB();
     if (m_splitBtn)
         m_splitBtn->setEnabled(hasAB);
+    if (m_delSplitBtn)
+        m_delSplitBtn->setEnabled(
+            hasAB && m_mergedBar && m_mergedBar->selectedSplit() >= 0);
     if (!hasAB) {
         m_segSpeedBar->hide();
         return;

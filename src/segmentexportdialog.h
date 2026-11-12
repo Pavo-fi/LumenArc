@@ -76,6 +76,9 @@ public:
 private:
     /// 用 plan 现有 splits 回填输入框（打开/恢复/游标分段后保持同步）
     void syncSplitsEdit();
+    /// v3.2：分段点 chip（点哪个删哪个）
+    void rebuildSplitChips();
+    class QHBoxLayout *m_splitChipLay = nullptr;
     class QLineEdit *m_splitsEdit = nullptr;
 
     speedplan::SpeedPlan m_plan;

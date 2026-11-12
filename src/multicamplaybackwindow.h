@@ -124,6 +124,11 @@ public slots:
 private slots:
     void markAB(bool isA);              ///< 设 A/B（两点齐了自动放大到该区间）
     void addSplitAtCursor();            ///< 在选段内当前时刻加断点
+public slots:
+    /// v3.2：删除「在时间轴上点选」的那个断点（返回是否真的删了）。
+    /// 供工具栏按钮 / Del 键 / 全局快捷键三处共用。
+    bool removeSelectedSplit();
+private slots:
     void rebuildSegmentSpeedBar();      ///< 选段内每段倍速条
     void startClipExport(const speedplan::SpeedPlan &plan, bool burnOsd,
                          const QString &outPath);
@@ -244,6 +249,7 @@ private:
     QPushButton *m_abABtn = nullptr;    ///< 工具栏 A
     QPushButton *m_abBBtn = nullptr;    ///< 工具栏 B
     QPushButton *m_splitBtn = nullptr;  ///< 工具栏「断点」
+    QPushButton *m_delSplitBtn = nullptr;  ///< v3.2 工具栏「删除断点」（删选中的）
     QWidget *m_segSpeedBar = nullptr;   ///< 每段倍速条
     class QHBoxLayout *m_segSpeedLay = nullptr;
     QVector<qint64> m_splitWall;        ///< 断点（墙钟，升序）

@@ -1992,6 +1992,18 @@ bool MainWindow::handleGlobalShortcut(QKeyEvent *e)
                 return true;
             }
             return false;
+        case Qt::Key_Delete:
+            // 只有真的删掉了断点才吞掉 Del，否则放行（别占用其它页的删除语义）
+            {
+                bool removed = false;
+                QMetaObject::invokeMethod(m_multiCamWin.data(),
+                                          "removeSelectedSplit",
+                                          Qt::DirectConnection,
+                                          Q_RETURN_ARG(bool, removed));
+                if (removed)
+                    return true;
+            }
+            return false;
         case Qt::Key_S:
             // S = 在选段内打断点（Split）。B 已被「选段终点」占用，
             // 断点用 S 不会互相打架。
