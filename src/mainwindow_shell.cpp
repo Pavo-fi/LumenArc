@@ -32,6 +32,7 @@
 #include "calibphotodialog.h"
 #include "app/analysis_task_service.h"
 #include "app/calibration_service.h"
+#include "app/snapshot_composer.h"
 #include "app/multicam_sync_service.h"
 #include "domain/time_calibration.h"
 #include "ui/app_state.h"
@@ -2902,6 +2903,63 @@ int MainWindow::runShellSelfCheck()
         snapProbe->deleteLater();
         showStage(ui::Stage::Analyze);
         pump();
+    }
+
+    // 14.995 v3.6：放大镜分屏时，分析区宽度必须跟最终画布一致
+    //        （旧代码按视频宽度渲染 → 图表只占左半、右半全黑）
+    {
+        SnapshotInputs in;
+        in.frame = QImage(1920, 1080, QImage::Format_ARGB32);
+        in.frame.fill(Qt::darkGray);
+        in.videoSize = QSize(1920, 1080);
+        const int baseW = SnapshotComposer::contentWidth(in);
+        check(baseW == 1920,
+              QStringLiteral("无放大镜时画布宽度 = 视频宽度（%1）").arg(baseW));
+
+        // 加放大镜：右半按视频高度等比缩放 + 间隔
+        in.hasMagnifier = true;
+        in.magnifierSourceRect = QRect(400, 300, 480, 270);
+        in.magnifierZoom = 2.0;
+        in.magnifiedImage = QImage(960, 540, QImage::Format_ARGB32);
+        in.magnifiedImage.fill(Qt::black);
+        const int magW = SnapshotComposer::contentWidth(in);
+        // 右半缩放到 1080 高 → 1920 宽；间隔 = qBound(4, 1920/320=6, 12) = 6
+        check(magW == 1920 + 6 + 1920,
+              QStringLiteral("放大镜分屏画布宽度 = 左 + 间隔 + 右（%1）").arg(magW));
+
+        // 真的合成一次：图表若是按视频宽度给的，右侧应出现一整块纯黑；
+        // 按画布宽度给则右侧应有图表内容。
+        SnapshotInputs narrow = in;
+        narrow.chartImg = QImage(1920, 420, QImage::Format_ARGB32);
+        narrow.chartImg.fill(QColor(30, 40, 50));       // 假装是图表内容
+        const QImage outNarrow = SnapshotComposer::compose(narrow);
+        SnapshotInputs wide = in;
+        wide.chartImg = QImage(magW, 420, QImage::Format_ARGB32);
+        wide.chartImg.fill(QColor(30, 40, 50));
+        const QImage outWide = SnapshotComposer::compose(wide);
+        check(!outNarrow.isNull() && !outWide.isNull()
+                  && outNarrow.width() == outWide.width(),
+              QStringLiteral("两种输入合成出的画布同宽（%1）")
+                  .arg(outNarrow.width()));
+
+        // 取图表区最后一行，看右侧是否还是纯黑
+        auto rightMostIsBlack = [](const QImage &img) {
+            if (img.isNull())
+                return true;
+            const int y = img.height() - 10;   // 语谱/曲线区底部附近
+            const int x = img.width() - 40;    // 画布最右侧
+            const QColor c = img.pixelColor(x, y);
+            return c.red() < 12 && c.green() < 12 && c.blue() < 12;
+        };
+        check(rightMostIsBlack(outNarrow),
+              QStringLiteral("反证：图表按视频宽度给时，右侧是黑的（复现旧 bug）"));
+        check(!rightMostIsBlack(outWide),
+              QStringLiteral("图表按画布宽度给时，右侧不再是黑的（已修）"));
+        // 留一张图供人工核对版式（左视频 | 右放大 | 下方全宽曲线）
+        if (!outWide.isNull())
+            outWide.save(QDir(QCoreApplication::applicationDirPath())
+                             .filePath(QStringLiteral(
+                                 "selfcheck-snapshot-split.png")));
     }
 
     // 15. 时间轴纵向高度：各宫格压到约一半，且字号仍放得下。

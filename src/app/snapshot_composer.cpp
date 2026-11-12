@@ -41,6 +41,23 @@ QPair<QString, QString> SnapshotComposer::timeCode(const TimeCalibration &cal,
     return {timeText, fileTimeTag};
 }
 
+int SnapshotComposer::contentWidth(const SnapshotInputs &in)
+{
+    if (in.frame.isNull())
+        return 0;
+    int w = in.frame.width();
+    // 与 compose() 内的分屏算式保持一致：右半按视频高度等比缩放，
+    // 间隔 = qBound(4, 视频宽/320, 12)
+    if (in.hasMagnifier && in.magnifierSourceRect.isValid()
+        && !in.magnifiedImage.isNull()) {
+        const QImage right = in.magnifiedImage.scaledToHeight(
+            in.frame.height(), Qt::SmoothTransformation);
+        const int gap = qBound(4, w / 320, 12);
+        w += gap + right.width();
+    }
+    return w;
+}
+
 QImage SnapshotComposer::compose(const SnapshotInputs &in)
 {
     const QImage frame = in.frame;

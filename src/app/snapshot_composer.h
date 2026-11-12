@@ -45,6 +45,11 @@ public:
     /// 全量合成。入帧为空返回 null（调用方负责状态汇报）
     static QImage compose(const SnapshotInputs &in);
 
+    /// v3.6：最终画布宽度（含放大镜左右分屏时的右半 + 间隔）。
+    /// 调用方必须按这个宽度预渲染图表/语谱，否则分屏后右侧会空一大块
+    ///（旧实现按视频宽度渲染 → 图表只占左半、右半全黑，用户实测反馈）。
+    static int contentWidth(const SnapshotInputs &in);
+
     /// 时间码对：dateKnown → 北京时间（yyyyMMdd_HHmmss 标签）；否则相对时间（tH-M-S）
     static QPair<QString, QString> timeCode(const TimeCalibration &cal, qint64 posMs);
 };

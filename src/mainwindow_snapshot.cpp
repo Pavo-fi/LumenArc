@@ -242,11 +242,16 @@ void MainWindow::onSnapshotQuick()
     in.fileName = QFileInfo(m_sessionMgr->currentVideoPath()).fileName();
     // 分析数据区（§14 v2：离屏重渲染，widget 渲染留在 UI 层）
     const AnalysisSnapshot snap = m_timelineModel->snapshot();
+    // v3.6：分析区宽度必须跟"最终画布"一致。放大镜分屏时画布 = 左视频 + 间隔
+    // + 右放大图，比视频宽得多；旧代码按视频宽度渲染，导致图表只占左半、
+    // 右半全黑（用户实测截图）。
+    const int contentW = qMax(frame.width(),
+                              SnapshotComposer::contentWidth(in));
     if (!snap.isEmpty() || snap.hasAudio())
-        in.chartImg = renderSnapshotChart(QSize(frame.width(), 420));
+        in.chartImg = renderSnapshotChart(QSize(contentW, 420));
     if (snap.hasAudio() && m_spectrogramEnhanced)
         in.specImg = m_spectrogramEnhanced->renderHeatmapImage(
-            QSize(frame.width(), 300));
+            QSize(contentW, 300));
 
     const QImage out = SnapshotComposer::compose(in);
     if (out.isNull()) {
