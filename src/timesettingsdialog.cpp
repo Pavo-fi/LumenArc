@@ -164,6 +164,29 @@ void TimeSettingsDialog::buildUi()
         lay->addWidget(m_sidecarWarnLabel);
     }
 
+    // v3.3：多视频（多机位）校时入口——这是校时阶段的能力，
+    // 之前被挪到「产出」里，用户在③校时找不到。
+    {
+        auto *multiRow = new QHBoxLayout();
+        auto *multiBtn = new QPushButton(
+            lang("多视频校时（多机位对时）…", "Multi-camera calibration…"), this);
+        multiBtn->setObjectName(QStringLiteral("multiVideoCalibBtn"));
+        multiBtn->setMinimumHeight(32);
+        multiBtn->setToolTip(lang(
+            "打开多机位宫格：以已校时机位为参考，用同一事件给其它机位校时",
+            "Open the multi-camera grid to calibrate other cameras via a shared event"));
+        multiBtn->setStyleSheet(QStringLiteral(
+            "QPushButton { background:%1; color:%2; border:1px solid %3;"
+            " border-radius:6px; font-size:12px; }"
+            "QPushButton:hover { border-color:%2; }")
+            .arg(Theme::BgCard, Theme::Accent, Theme::Border));
+        connect(multiBtn, &QPushButton::clicked, this,
+                &TimeSettingsDialog::multiVideoCalibRequested);
+        multiRow->addWidget(multiBtn);
+        multiRow->addStretch(1);
+        lay->addLayout(multiRow);
+    }
+
     // ---- 顶部用法横幅（参考拼接窗口格式横幅）----
     lay->addWidget(buildUsageBanner());
 

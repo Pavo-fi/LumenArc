@@ -623,13 +623,28 @@ void MainWindow::showStage(ui::Stage s)
         return;
     }
 
+    // v3.3（用户拍板）：产出阶段与宫格**统一**——导出本来就是宫格视图里的
+    // 一等动作（选段/断点/每段倍速/导出），不再另开一套合成工作台当产出页。
+    if (s == ui::Stage::Produce) {
+        if (m_caseManager->isOpen()) {
+            onMultiCamView();               // 内部会把宫格设为当前工作区页
+            if (m_multiCamWin) {
+                m_workspaceStack->setCurrentWidget(m_multiCamWin.data());
+                m_appState->setStage(ui::Stage::Produce);   // 流程条停在⑤产出
+            }
+            return;
+        }
+        // 没开案件：独立单路也要能导出 → 回落到单路导出面板
+        onExportSingleClipDialog();
+        return;
+    }
+
     QWidget *page = m_stagePages.value(int(s), nullptr);
 
     // 页尚未创建 → 触发该阶段的既有入口（入口内部会 embedWorkspace 回来）
     if (!page) {
         switch (s) {
         case ui::Stage::Prepare: openPreprocessWindow(); break;
-        case ui::Stage::Produce: onExportSegmentClip();  break;
         default: break;
         }
         page = m_stagePages.value(int(s), nullptr);
@@ -1823,21 +1838,26 @@ int MainWindow::runShellSelfCheck()
         snap(QStringLiteral("prepare"));
     }
 
-    // 6. 产出：创建 + 嵌入
+    // 6. 产出：v3.3 起与宫格**统一**（导出就是宫格视图里的一等动作）。
+    //    无案件时回落到「单路选段变速导出」面板，不再另建一套产出页。
     showStage(ui::Stage::Produce);
     pump();
     wait(300);
-    QWidget *prod = m_stagePages.value(int(ui::Stage::Produce), nullptr);
-    check(prod != nullptr, QStringLiteral("产出页已创建"));
-    if (prod) {
-        check(m_workspaceStack->currentWidget() == prod, QStringLiteral("产出页成为当前页"));
-        check((prod->windowFlags() & Qt::WindowType_Mask) == Qt::Widget,
-              QStringLiteral("产出页是嵌入式（非独立窗口）"));
-        check(prod->isVisible(), QStringLiteral("产出页可见"));
-        check(prod->width() >= 900 && prod->height() >= 600,
-              QStringLiteral("产出页尺寸 %1x%2").arg(prod->width()).arg(prod->height()));
-        snap(QStringLiteral("produce"));
+    if (m_caseManager->isOpen() && m_multiCamWin) {
+        check(m_workspaceStack->currentWidget() == m_multiCamWin.data(),
+              QStringLiteral("产出阶段进入宫格页（统一逻辑）"));
+        if (m_appState)
+            check(m_appState->stage() == ui::Stage::Produce,
+                  QStringLiteral("流程条停在⑤产出"));
+    } else {
+        // 无案件（自检环境也没开视频）：产出不再另建一套页面；
+        // 有视频时它给的是「单路选段变速导出」面板（同一个 SegmentExportDialog）。
+        check(m_stagePages.value(int(ui::Stage::Produce), nullptr) == nullptr,
+              QStringLiteral("产出不再另建合成工作台页（与宫格统一）"));
+        if (m_singleExportDlg && m_singleExportDlg->isVisible())
+            m_singleExportDlg->hide();
     }
+    snap(QStringLiteral("produce"));
 
     // 7. 校时：无视频 → 优雅失败（不建页、不崩、当前页不变）
     QWidget *before = m_workspaceStack->currentWidget();
@@ -2707,6 +2727,65 @@ int MainWindow::runShellSelfCheck()
         } else {
             check(false, QStringLiteral("找不到中间分段点 chip"));
         }
+    }
+
+    // 14.97 v3.3：校时页多视频入口 / A 单条指示 / 单路同逻辑导出
+    {
+        // ① 校时面板里有「多视频校时」入口（用户：之前被挪到产出里了）
+        {
+            TimeCalibration emptyCal;
+            TimeSettingsDialog calDlg(QStringLiteral("C:/selfcheck/v.mp4"),
+                                      0, 10000, emptyCal, QString(), nullptr);
+            auto *multiBtn = calDlg.findChild<QPushButton *>(
+                QStringLiteral("multiVideoCalibBtn"));
+            // 面板本体没 show，子控件的 isVisible() 恒 false；用 isHidden 判"有没有被藏"
+            check(multiBtn != nullptr && !multiBtn->isHidden(),
+                  QStringLiteral("③校时面板里有「多视频校时」入口"));
+            int fired = 0;
+            connect(&calDlg, &TimeSettingsDialog::multiVideoCalibRequested,
+                    this, [&fired]() { ++fired; });
+            if (multiBtn)
+                multiBtn->click();
+            check(fired == 1,
+                  QStringLiteral("点「多视频校时」会请求打开多机宫格"));
+        }
+
+        // ② 只敲 A（还没敲 B）也必须有线：用真实绘制验「有指示」
+        {
+            MultiCamViewWidget abProbe;
+            QVector<CamLane> one;
+            CamLane l;
+            l.videoId = QStringLiteral("C01");
+            l.fileName = QStringLiteral("机位1");
+            l.wallStartMs = 1000;
+            l.wallEndMs = 61000;
+            l.streamDurationMs = 60000;
+            one.append(l);
+            abProbe.resize(900, MultiCamViewWidget::timelineHeightFor(1));
+            abProbe.setLanes(one);
+            const QImage before = abProbe.grab().toImage();
+            abProbe.setABRegion(31000, -1);        // 只有 A
+            const QImage onlyA = abProbe.grab().toImage();
+            check(!before.isNull() && !onlyA.isNull() && before != onlyA,
+                  QStringLiteral("只设 A 时时间轴立即有可见变化（不再无反馈）"));
+            abProbe.setABRegion(31000, 51000);      // 再补 B
+            const QImage both = abProbe.grab().toImage();
+            check(both != onlyA, QStringLiteral("补上 B 后画面继续变化（选区成形）"));
+            // A 单点也要能画：把 B 清掉仍应有 A 的线
+            abProbe.setABRegion(31000, -1);
+            const QImage onlyA2 = abProbe.grab().toImage();
+            check(onlyA2 == onlyA,
+                  QStringLiteral("A 单点渲染稳定（清掉 B 后回到只有 A 的样子）"));
+        }
+
+        // ③ 单路同逻辑导出：入口存在且有视频时使能（无视频时点击只给提示）
+        check(m_singleExportBtn != nullptr && m_singleExportAction != nullptr,
+              QStringLiteral("单路有「选段」导出按钮与产出菜单项"));
+        m_singleExportDlg = nullptr;
+        onExportSingleClipDialog();   // 无视频：应优雅提示而不是崩溃
+        pump();
+        check(m_singleExportDlg == nullptr,
+              QStringLiteral("无视频时单路导出面板不硬开（优雅提示）"));
     }
 
     // 15. 时间轴纵向高度：各宫格压到约一半，且字号仍放得下。

@@ -453,6 +453,10 @@ void MainWindow::enableVideoActions()
         m_snapshotBtn->setEnabled(true);
     if (m_exportClipBtn)
         m_exportClipBtn->setEnabled(true);
+        if (m_singleExportBtn)
+            m_singleExportBtn->setEnabled(true);
+        if (m_singleExportAction)
+            m_singleExportAction->setEnabled(true);
 }
 
 void MainWindow::openVideoFile(const QString &filePath)
@@ -971,6 +975,21 @@ void MainWindow::onSetStartTime()
     });
     connect(dlg, &TimeSettingsDialog::goTaskFinished,
             this, &MainWindow::showTrayNotification);
+    // v3.3：校时页里的「多视频校时」→ 打开多机宫格做同事件对时
+    connect(dlg, &TimeSettingsDialog::multiVideoCalibRequested,
+            this, [this]() {
+                if (!m_caseManager->isOpen()) {
+                    showOperationStatus(lang(
+                        "多视频校时需要先打开案件（机位清单来自案件）",
+                        "Multi-camera calibration needs an open case"));
+                    return;
+                }
+                onMultiCamView();
+                // 这是校时阶段的操作，工作流条仍停在③校时
+                if (m_appState && m_multiCamWin
+                    && m_workspaceStack->currentWidget() == m_multiCamWin.data())
+                    m_appState->setStage(ui::Stage::Align);
+            });
     connect(dlg, &TimeSettingsDialog::calibrationApplied,
             this, [this](const TimeCalibration &cal) {
                 m_calibration = cal;

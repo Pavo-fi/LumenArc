@@ -277,6 +277,14 @@ private:
     QPushButton *m_exportToast = nullptr;
     class QTimer *m_exportToastTimer = nullptr;
 
+    QPushButton *m_singleExportBtn = nullptr;   ///< 工具栏「选段」
+    QAction *m_singleExportAction = nullptr;    ///< 产出菜单项
+    /// @brief 单路「选段分段变速」导出面板（v3.3）：与宫格同一套逻辑——
+    ///        时间轴打 A/B → 选段内加断点 → 每段设倍速 → 导出。
+    void onExportSingleClipDialog();
+    /// 单路导出面板（非模态、复用）
+    class SegmentExportDialog *m_singleExportDlg = nullptr;
+
     /// @brief 导出移交包（v1.3.0 M3 任务12）
     void onExportCase();
     /// @brief 生成分析报告（P-28 DOCX / P-26 复活 HTML，共用采集+光栅管线）

@@ -463,23 +463,56 @@ void MultiCamViewWidget::paintEvent(QPaintEvent *)
     }
 
     // A/B 选段底纹与边界线（P-68：先于游标绘制，游标压顶）
-    if (hasAB() && m_layoutMsPerPx > 0) {
-        const int ax = kLabelW + int((m_abA - m_layoutT0) / m_layoutMsPerPx);
-        const int bx = kLabelW + int((m_abB - m_layoutT0) / m_layoutMsPerPx);
-        const int x1 = qMax(ax, int(kLabelW));
-        const int x2 = qMin(bx, width() - kMarginR);
-        if (x2 > x1) {
-            QColor fill(Theme::Accent);
-            fill.setAlpha(28);
-            p.setPen(Qt::NoPen);
-            p.setBrush(fill);
-            p.drawRect(QRect(x1, kTopMargin - 2, x2 - x1, tickY + 2 - kTopMargin + 2));
+    // v3.3（用户反馈）：原来是「A、B 都打了才画」，只敲 A 时画面毫无变化，
+    // 用户不确定自己到底敲上没有。改成 A、B **各自独立**画线 + 标 A/B 小牌，
+    // 与单路视频曲线图的行为一致。
+    if (m_layoutMsPerPx > 0) {
+        auto xOf = [this](qint64 t) {
+            return kLabelW + int((t - m_layoutT0) / m_layoutMsPerPx);
+        };
+        const int ax = (m_abA >= 0) ? xOf(m_abA) : -1;
+        const int bx = (m_abB >= 0) ? xOf(m_abB) : -1;
+        // 只画在可视区内（缩放/平移后越界就自然消失）
+        auto inView = [this](int x) {
+            return x >= kLabelW && x <= width() - kMarginR;
+        };
+
+        // 两点了才铺选段底纹
+        if (hasAB()) {
+            const int x1 = qMax(ax, int(kLabelW));
+            const int x2 = qMin(bx, width() - kMarginR);
+            if (x2 > x1) {
+                QColor fill(Theme::Accent);
+                fill.setAlpha(28);
+                p.setPen(Qt::NoPen);
+                p.setBrush(fill);
+                p.drawRect(QRect(x1, kTopMargin - 2, x2 - x1,
+                                 tickY + 2 - kTopMargin + 2));
+            }
         }
-        p.setPen(QPen(QColor(Theme::Info), 2, Qt::DashLine));
-        if (ax >= kLabelW && ax <= width() - kMarginR)
-            p.drawLine(ax, kTopMargin - 2, ax, tickY + 2);
-        if (bx >= kLabelW && bx <= width() - kMarginR)
-            p.drawLine(bx, kTopMargin - 2, bx, tickY + 2);
+        // 单条边界线 + 顶部小牌（A 实线 / B 虚线，便于区分）
+        auto drawEdge = [&](int x, const QString &tag, bool dashed) {
+            if (x < 0 || !inView(x))
+                return;
+            p.setPen(dashed ? QPen(QColor(Theme::Info), 2, Qt::DashLine)
+                            : QPen(QColor(Theme::Accent), 2));
+            p.drawLine(x, kTopMargin - 2, x, tickY + 2);
+            QFont ef = p.font();
+            ef.setPixelSize(kLaneFontPx);
+            ef.setBold(true);
+            p.setFont(ef);
+            const int tw = p.fontMetrics().horizontalAdvance(tag) + 8;
+            const int lx = qBound(int(kLabelW), x - tw / 2,
+                                  int(width()) - kMarginR - tw);
+            const QRect box(lx, kTopMargin - 2 - kCursorBubbleH, tw, kCursorBubbleH);
+            p.setPen(Qt::NoPen);
+            p.setBrush(dashed ? QColor(Theme::Info) : QColor(Theme::Accent));
+            p.drawRoundedRect(box, 2, 2);
+            p.setPen(QColor(Theme::AccentOnDark));
+            p.drawText(box, Qt::AlignCenter, tag);
+        };
+        drawEdge(ax, QStringLiteral("A"), false);
+        drawEdge(bx, QStringLiteral("B"), true);
     }
 
     // 共享墙钟游标（P-57 模式A）：跨行竖线 + 顶部时刻标签

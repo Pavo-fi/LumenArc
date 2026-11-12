@@ -330,6 +330,11 @@ void MainWindow::createMenus()
     // v1.18 UI 重组：新增「产出」菜单，集中所有交付物（替代原「导出」单项菜单）
     QMenu *deliverMenu = menuBar()->addMenu(lang("产出(&P)", "&Deliver"));
     deliverMenu->addAction(lang("证据快照(&S)", "Evidence &Snapshot"), this, &MainWindow::onSnapshotQuick);
+    // v3.3：单路选段变速导出——与宫格同一套逻辑（A/B → 断点 → 每段倍速）
+    m_singleExportAction = deliverMenu->addAction(
+        lang("选段分段变速导出(&V)...", "&Clip export (segmented speed)..."),
+        this, &MainWindow::onExportSingleClipDialog);
+    m_singleExportAction->setEnabled(false);
     m_composeExportAction = deliverMenu->addAction(
         lang("合成导出工作台(&E)...", "&Compose Export Workbench..."), this,
         &MainWindow::onExportSegmentClip);
@@ -880,6 +885,17 @@ void MainWindow::createToolBar()
     connect(m_exportClipBtn, &QPushButton::clicked,
             this, &MainWindow::onExportSegmentClip);
     toolBar->addWidget(m_exportClipBtn);
+    // v3.3：单路「选段」导出（A/B + 断点 + 每段倍速），与宫格同逻辑
+    m_singleExportBtn = new QPushButton(lang("选段", "Clip"), this);
+    m_singleExportBtn->setToolTip(lang(
+        "选段分段变速导出：曲线上打 A/B → 选段内加断点 → 每段设倍速 → 导出",
+        "Segmented-speed clip export: A/B on the chart, add breakpoints, "
+        "set per-segment speeds, export"));
+    m_singleExportBtn->setFixedHeight(32);
+    m_singleExportBtn->setEnabled(false);
+    connect(m_singleExportBtn, &QPushButton::clicked,
+            this, &MainWindow::onExportSingleClipDialog);
+    toolBar->addWidget(m_singleExportBtn);
     toolBar->addSeparator();
 
     // 素材转码拼接：高频独立任务窗口，固定在右端（2026-10 用户拍板保留一级位置）

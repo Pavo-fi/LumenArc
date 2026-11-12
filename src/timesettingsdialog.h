@@ -68,6 +68,9 @@ public:
                          bool userEdited);
 
 signals:
+    /// v3.3（用户拍板）：「多视频校时」属于校时阶段，不该埋在产出里。
+    /// 面板里给一个明确入口，主窗据此打开多机宫格做同事件对时。
+    void multiVideoCalibRequested();
     /// 校时已应用（非模态：主窗口收到后更新图表与状态栏）
     void calibrationApplied(const TimeCalibration &cal);
     /// 请求在主窗口视频上框选时间戳区域（GO 首次使用且无已存区域时）

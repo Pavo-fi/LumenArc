@@ -658,11 +658,19 @@ void MainWindow::setupCaseConnections()
             m_exportClipBtn->setEnabled(true);
         if (m_composeExportAction)
             m_composeExportAction->setEnabled(true);
+        if (m_singleExportBtn)
+            m_singleExportBtn->setEnabled(true);
+        if (m_singleExportAction)
+            m_singleExportAction->setEnabled(true);
     });
     connect(m_caseManager, &CaseManager::caseClosed, this, [this]() {
         if (m_exportClipBtn && m_sessionMgr->currentVideoPath().isEmpty())
             m_exportClipBtn->setEnabled(false);
         if (m_composeExportAction && m_sessionMgr->currentVideoPath().isEmpty())
             m_composeExportAction->setEnabled(false);
+        if (m_singleExportBtn && m_sessionMgr->currentVideoPath().isEmpty())
+            m_singleExportBtn->setEnabled(false);
+        if (m_singleExportAction && m_sessionMgr->currentVideoPath().isEmpty())
+            m_singleExportAction->setEnabled(false);
     });
 }
