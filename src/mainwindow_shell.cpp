@@ -2815,6 +2815,95 @@ int MainWindow::runShellSelfCheck()
               QStringLiteral("断点提示不再写 S（避免抢证据快照）"));
     }
 
+    // 14.99 v3.5：快照必须拍「当前在屏的页」，且图表区域要带浮块
+    {
+        // ① 图表快照包含图例/读数/徽标三块悬浮内容
+        //    （renderToImage 只画 QChart 本体，浮块是独立 widget）
+        auto *legendChip = m_chartContainer
+            ? m_chartContainer->findChild<QWidget *>(QStringLiteral("chartLegendChip"))
+            : nullptr;
+        auto *readoutChip = m_chartContainer
+            ? m_chartContainer->findChild<QWidget *>(QStringLiteral("chartReadoutChip"))
+            : nullptr;
+        auto *badgeChip = m_chartContainer
+            ? m_chartContainer->findChild<QWidget *>(QStringLiteral("trackBadge"))
+            : nullptr;
+        check(legendChip && readoutChip && badgeChip,
+              QStringLiteral("图表浮块都有 objectName（快照合成能定位）"));
+
+        // ② 渲染出的图表图里必须出现浮块的颜色（否则等于没画进去）
+        if (legendChip) {
+            legendChip->show();
+            legendChip->adjustSize();
+        }
+        if (badgeChip)
+            badgeChip->show();
+        pump();
+        const QSize shotSize(1200, 400);
+        const QImage chartShot = renderSnapshotChart(shotSize);
+        check(!chartShot.isNull(), QStringLiteral("图表快照渲染成功"));
+        if (!chartShot.isNull()) {
+            chartShot.save(QDir(QCoreApplication::applicationDirPath())
+                               .filePath(QStringLiteral(
+                                   "selfcheck-chart-snapshot.png")));
+            // 与「只渲染 QChart」的旧口径逐像素比对：浮块必须真的被画进去。
+            // 这比数暖色像素可靠——中文字形在无字体环境会退化成方框，
+            // 颜色取决于系列色，数颜色容易误判。
+            const QImage plain = m_chartPanel->renderToImage(shotSize);
+            int diff = 0;
+            if (!plain.isNull() && plain.size() == chartShot.size()) {
+                for (int y = 0; y < qMin(70, chartShot.height()); ++y)
+                    for (int x = 0; x < chartShot.width(); x += 2)
+                        if (plain.pixel(x, y) != chartShot.pixel(x, y))
+                            ++diff;
+            }
+            check(diff > 200,
+                  QStringLiteral("图表快照顶部带确实叠了浮块（差异像素 %1）")
+                      .arg(diff));
+        }
+
+        // ③ 宫格在屏时，快照走宫格分支（不再拍主视口那一帧）
+        auto *snapProbe = new MultiCamPlaybackWindow(this);
+        snapProbe->setEngineFactory([](QObject *parent) -> IVideoEngine * {
+            return new SelfCheckSyncEngine(parent);
+        });
+        snapProbe->setAttribute(Qt::WA_DeleteOnClose, false);
+        snapProbe->setWindowFlags(Qt::Widget);
+        snapProbe->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
+        QVector<SyncLaneData> spLanes;
+        for (int i = 0; i < 2; ++i) {
+            SyncLaneData l;
+            l.id = QStringLiteral("C0%1").arg(i + 1);
+            l.path = QStringLiteral("C:/selfcheck/sn%1.mp4").arg(i + 1);
+            l.displayName = QStringLiteral("机位%1").arg(i + 1);
+            l.calibrated = true;
+            l.cal.source = TimeCalibration::Source::Manual;
+            l.cal.offsetMs = 1789000000000LL;
+            l.cal.dateKnown = true;
+            l.cal.calibratedAtMs = 1;
+            l.durationMs = 600000;
+            spLanes.append(l);
+        }
+        snapProbe->loadCalibratedLanesForTest(spLanes);
+        m_workspaceStack->addWidget(snapProbe);
+        m_workspaceStack->setCurrentWidget(snapProbe);
+        resize(1680, 1020);
+        pump();
+        wait(120);
+        auto *gridHost = snapProbe->findChild<QWidget *>(
+            QStringLiteral("multicamGridHost"));
+        check(gridHost != nullptr && gridHost->width() > 40,
+              QStringLiteral("宫格宿主可抓取（快照目标）"));
+        const QPixmap gridShot = gridHost ? gridHost->grab() : QPixmap();
+        check(!gridShot.isNull(),
+              QStringLiteral("宫格快照能出图（不再是主视口那一帧）"));
+        m_workspaceStack->removeWidget(snapProbe);
+        snapProbe->hide();
+        snapProbe->deleteLater();
+        showStage(ui::Stage::Analyze);
+        pump();
+    }
+
     // 15. 时间轴纵向高度：各宫格压到约一半，且字号仍放得下。
     {
         // 旧口径（行高 28 / 行距 4 / 顶留 22 / 带标签 12 / 刻度 14 / 留白 6）

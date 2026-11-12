@@ -19,7 +19,9 @@
 #include "app/report_docx_builder.h"
 #include "reportpreflightdialog.h"
 #include "sitemapeditordialog.h"
+#include <QPainter>
 #include <QProgressDialog>
+#include <QStackedWidget>
 #include <QFutureWatcher>
 #include <QtConcurrent/QtConcurrent>
 #include "app/case_manager.h"
@@ -112,8 +114,95 @@
 
 /// 构建时间戳（2026-08-13）：标题栏常驻，杜绝“用户在跑旧构建”无法辨识
 
+/// v3.5：图表区域离屏重渲染 + 把悬浮浮块（徽标/读数/图例）一并画进去。
+/// 为什么需要：renderToImage() 只渲染 QChart 本体，而图例、游标读数、
+/// 「● 亮度·音量」徽标都是叠在图表容器上的 **独立 widget**（不是图表的一部分），
+/// 所以旧快照的图表区域一直是「缺胳膊少腿」的旧样子。
+QImage MainWindow::renderSnapshotChart(const QSize &target)
+{
+    if (!m_chartPanel)
+        return QImage();
+    QImage img = m_chartPanel->renderToImage(target);
+    if (img.isNull() || !m_chartContainer)
+        return img;
+    QWidget *host = m_chartContainer;
+    if (host->width() <= 0 || host->height() <= 0)
+        return img;
+    // 画面重渲染后字号不变，浮块也按原尺寸画；只有位置按比例映射。
+    const qreal sx = qreal(target.width()) / qreal(host->width());
+    const qreal sy = qreal(target.height()) / qreal(host->height());
+    const QStringList chipNames{QStringLiteral("trackBadge"),
+                                QStringLiteral("chartReadoutChip"),
+                                QStringLiteral("chartLegendChip")};
+    QPainter p(&img);
+    p.setRenderHint(QPainter::Antialiasing, true);
+    for (const QString &name : chipNames) {
+        auto *chip = host->findChild<QWidget *>(name);
+        if (!chip || !chip->isVisible() || chip->width() <= 0)
+            continue;
+        const QPoint inHost = chip->mapTo(host, QPoint(0, 0));
+        p.save();
+        p.translate(qreal(inHost.x()) * sx, qreal(inHost.y()) * sy);
+        chip->render(&p, QPoint(0, 0), QRegion(), QWidget::DrawChildren);
+        p.restore();
+    }
+    p.end();
+    return img;
+}
+
+namespace {
+/// 快照落盘目录与文件名主干（案件优先，其次源旁 snapshots/）
+} // namespace
+
 void MainWindow::onSnapshotQuick()
 {
+    // v3.5（用户反馈）：宫格在屏时，S 必须拍**宫格**，不能还去拍被暂停的
+    // 主视口那一帧（用户看到的是「快照还是原来页面的」）。
+    if (m_workspaceStack && m_multiCamWin
+        && m_workspaceStack->currentWidget() == m_multiCamWin.data()) {
+        QWidget *grid = m_multiCamWin->findChild<QWidget *>(
+            QStringLiteral("multicamGridHost"));
+        QWidget *src = grid && grid->width() > 40 ? grid : m_multiCamWin.data();
+        const QPixmap pm = src->grab();
+        if (pm.isNull()) {
+            showOperationStatus(lang("宫格无画面，无法快照",
+                                     "Grid has no picture to snapshot"));
+            return;
+        }
+        const QString base = QFileInfo(m_sessionMgr->currentVideoPath())
+                                 .completeBaseName();
+        QString dir;
+        const bool inCase = m_caseManager && m_caseManager->isOpen();
+        if (inCase)
+            dir = m_caseManager->caseDir() + QStringLiteral("/snapshots");
+        else
+            dir = QDir::homePath() + QStringLiteral("/LumenArc_Snapshots");
+        if (!QDir().mkpath(dir)) {
+            showOperationStatus(lang("快照目录创建失败：%1",
+                                     "Cannot create snapshot dir: %1").arg(dir));
+            return;
+        }
+        const QString stamp = QDateTime::currentDateTime()
+                                  .toString(QStringLiteral("yyyyMMdd_HHmmss"));
+        const QString stem = (base.isEmpty() ? QStringLiteral("grid") : base)
+                             + QStringLiteral("_") + stamp
+                             + QStringLiteral("_grid");
+        QString path = dir + QLatin1Char('/') + stem + QStringLiteral(".png");
+        for (int i = 1; QFile::exists(path) && i < 1000; ++i)
+            path = dir + QLatin1Char('/') + stem
+                   + QStringLiteral("_%1.png").arg(i);
+        if (!pm.save(path, "PNG")) {
+            showOperationStatus(lang("快照保存失败：%1",
+                                     "Snapshot save failed: %1").arg(path));
+            return;
+        }
+        if (inCase && m_caseDock)
+            m_caseDock->refreshTree();
+        showOperationStatus(lang("宫格快照已保存：%1",
+                                 "Grid snapshot saved: %1").arg(path));
+        return;
+    }
+
     const QImage frame = m_videoWidget->currentFrame();   // 已含画面调节+旋转（所见即所得）
     if (frame.isNull()) {
         showOperationStatus(lang("当前无画面，无法快照", "No frame to snapshot"));
@@ -154,7 +243,7 @@ void MainWindow::onSnapshotQuick()
     // 分析数据区（§14 v2：离屏重渲染，widget 渲染留在 UI 层）
     const AnalysisSnapshot snap = m_timelineModel->snapshot();
     if (!snap.isEmpty() || snap.hasAudio())
-        in.chartImg = m_chartPanel->renderToImage(QSize(frame.width(), 420));
+        in.chartImg = renderSnapshotChart(QSize(frame.width(), 420));
     if (snap.hasAudio() && m_spectrogramEnhanced)
         in.specImg = m_spectrogramEnhanced->renderHeatmapImage(
             QSize(frame.width(), 300));

@@ -134,6 +134,8 @@ private slots:
     /// 证据快照（2026-08-14）：视频当前帧（所见即所得含画面调节）+
     /// 曲线分析区合成 PNG，OSD 烧录标签/时间码，入案件 snapshots/。
     void onSnapshotQuick();
+    /// v3.5：快照用图表区域（含徽标/读数/图例浮块），不是只渲染 QChart
+    QImage renderSnapshotChart(const QSize &target);
     void onExportSegmentClip();   // 合成导出入口（v1.16.2 起：多段+双模式；单段全保真走旧复合路径）
     void startComposeExport(SegmentExportEngine::Params params);   // 传值：放大镜所见回填后再分发（见 mainwindow_export.cpp）
     /// P-98：秒级对齐结果落库接线（无对话框时也持久化，防长任务结果丢失）

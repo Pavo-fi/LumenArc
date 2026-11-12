@@ -1085,6 +1085,7 @@ void MainWindow::buildCentralLayout(const QString &titleBarStyle,
 
     // v2.5o：游标读数独立浮块（右上角），不跟左上角徽标挤在一起
     auto *readoutChip = new QWidget(m_chartContainer);
+    readoutChip->setObjectName(QStringLiteral("chartReadoutChip"));
     readoutChip->setStyleSheet(QStringLiteral(
         "QWidget{background:rgba(22,24,29,96);border:1px solid %1;border-radius:7px;}")
         .arg(Theme::Border));
@@ -1113,6 +1114,7 @@ void MainWindow::buildCentralLayout(const QString &titleBarStyle,
     // 原因：QChart 内建图例 QLegend 自带 5~6px 内边距且无 API 可去，
     // 无法贴底；这里改成标题行居中的小圆点图例，点击切换系列显隐。
     auto *legendChip = new QWidget(m_chartContainer);
+    legendChip->setObjectName(QStringLiteral("chartLegendChip"));
     legendChip->setStyleSheet(QStringLiteral(
         "QWidget{background:rgba(22,24,29,96);border:1px solid %1;border-radius:7px;}")
         .arg(Theme::Border));
