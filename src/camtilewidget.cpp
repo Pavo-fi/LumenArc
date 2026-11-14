@@ -330,8 +330,28 @@ void CamTileWidget::paintEvent(QPaintEvent *)
         p.drawText(rect(), Qt::AlignCenter, m_placeholder);
     }
 
-    // v2.2：删除全幅选中画框（用户 2026-10-27）——选中已由右上角 🔊 徽标表达，
-    // 3px 黄框压在画面上太抢眼。m_selected 仍用于「画面调节」的作用对象。
+    // 2026-11-13（用户：不清楚自己选中了哪个画面）：v2.2 曾把全幅黄框删掉，
+    // 只留右上角 🔊 徽标——但那是「发声」不是「选中」，两者混在一起看不出来。
+    // 现在恢复一层克制的选中框：2px 强调色内缩描边 + 四角加重，
+    // 画面再亮也一眼能认出选中的是哪一格，又不像旧版 3px 全框那样抢眼。
+    if (m_selected) {
+        const QRect r = rect().adjusted(1, 1, -2, -2);
+        p.setBrush(Qt::NoBrush);
+        p.setPen(QPen(QColor(Theme::Accent), 2));
+        p.drawRoundedRect(r, 3, 3);
+        const int L = qMin(30, qMin(r.width(), r.height()) / 5);
+        p.setPen(QPen(QColor(Theme::Accent), 5, Qt::SolidLine, Qt::FlatCap));
+        const QPoint tl = r.topLeft(), tr = r.topRight();
+        const QPoint bl = r.bottomLeft(), br = r.bottomRight();
+        p.drawLine(tl, tl + QPoint(L, 0));
+        p.drawLine(tl, tl + QPoint(0, L));
+        p.drawLine(tr, tr + QPoint(-L, 0));
+        p.drawLine(tr, tr + QPoint(0, L));
+        p.drawLine(bl, bl + QPoint(L, 0));
+        p.drawLine(bl, bl + QPoint(0, -L));
+        p.drawLine(br, br + QPoint(-L, 0));
+        p.drawLine(br, br + QPoint(0, -L));
+    }
 
     // v2.8 拖拽换位：落点框用虚线强调色，与被拖瓦片自身区分开
     if (m_dropTarget) {

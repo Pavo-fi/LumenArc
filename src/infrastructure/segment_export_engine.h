@@ -176,6 +176,27 @@ public:
     /// laneCell 空、越界或重复占用时回落到原顺序，保证任何输入都能生成排列。
     static int gridCellIndex(int lane, const QVector<int> &laneCell, int laneCount);
 
+    /// 从宫格参数派生「只导某一路」的单视频段参数（纯函数：无 UI、无 IO、不调 ffmpeg）。
+    /// 产物：`segments` 只留 1 个 ComposeSeg（sourcePath=lanePath、lanes/laneCell/annos
+    /// 清空、burnRoi/burnChart=false、gridLayout=0、audioLane=-1），走 runCompose
+    /// 的单视频段分支；顶层按路下标对齐的 lanes/laneCell/laneZooms/audioLane 一并清空
+    /// （避免残留悬空下标），sourcePath 同步置为 lanePath。
+    /// 沿用：outputPath / outFps / canvas / burnOsd / caseLabel / calibration /
+    /// plan / chartBase / specBase / labels / calibrationByPath / vlaPathByPath /
+    /// 放大镜 PIP 各字段 / evidenceCopy 与签署人。
+    ///  · 音轨：单视频段取该路源文件自带音轨（无音轨自动静音）——与宫格「主听路」无关。
+    ///  · 区间：段内 inMs/outMs 必须是**该路流内毫秒**。宫格 plan / 宫格段 inMs-outMs
+    ///    是墙钟域，故按该机位 SyncLaneData（syncStreamOf + 覆盖区间求交）换算，
+    ///    并按该路 durationMs 收边；找不到该机位数据时按「调用方给的已是流内域」直接用。
+    ///  · 速率：ComposeSeg 只能带一个速率 → 取 plan 首段速率（非法/空 → 1.0）。
+    ///    **分段变速不随单路段生效**（compose 模式引擎忽略 plan）：需要逐段倍速时，
+    ///    调用方按保留下来的 out.plan 自行拆成多个 ComposeSeg（本函数刻意只做一段）。
+    ///  · lanePath 为空 → **原样返回 gridParams**（不造 sourcePath 为空的非法段；
+    ///    调用方可据此判「没选到路」并回落宫格导出）。
+    static Params makeSingleLaneParams(const Params &gridParams,
+                                       const QString &lanePath,
+                                       int laneIndex);
+
     /// 布局计算（纯函数）：给定画布与可用面板数（0~2），返回
     /// {视频区, 曲线区, 语谱区}（不可用面板区为空矩形）。上下布局（拍板 Q1 改判）。
     static void layoutRects(const QSize &canvas, bool hasChart, bool hasSpec,

@@ -990,6 +990,26 @@ void MainWindow::onSetStartTime()
                     && m_workspaceStack->currentWidget() == m_multiCamWin.data())
                     m_appState->setStage(ui::Stage::Align);
             });
+    // v3.3（用户拍板）：「多机同事件对时」= 间接校时，属于③校时阶段的能力，
+    // 之前只能从⑤产出的宫格里点。这里打开宫格后直接进 P-73 对时面板，
+    // 收口与上面「多视频校时」一致：流程条停在③校时，不跳到⑤产出。
+    connect(dlg, &TimeSettingsDialog::multiEventCalibRequested,
+            this, [this]() {
+                if (!m_caseManager->isOpen()) {
+                    showOperationStatus(lang(
+                        "多机同事件对时需要先打开案件（机位清单来自案件）",
+                        "Same-event sync needs an open case (the camera list "
+                        "comes from the case)"));
+                    return;
+                }
+                onMultiCamView();
+                if (m_multiCamWin)
+                    m_multiCamWin->beginEventCalibEmpty();   // v3.7：直接进对时页，两窗空着等指派
+                // 这是校时阶段的操作，工作流条仍停在③校时
+                if (m_appState && m_multiCamWin
+                    && m_workspaceStack->currentWidget() == m_multiCamWin.data())
+                    m_appState->setStage(ui::Stage::Align);
+            });
     connect(dlg, &TimeSettingsDialog::calibrationApplied,
             this, [this](const TimeCalibration &cal) {
                 m_calibration = cal;

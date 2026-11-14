@@ -13,6 +13,7 @@
 #include <QProcess>
 #include <QDesktopServices>
 #include <QDir>
+#include <QFileInfo>
 #include <QUrl>
 #include <QProgressBar>
 #include <QPushButton>
@@ -43,6 +44,68 @@ SegmentExportDialog::SegmentExportDialog(const speedplan::SpeedPlan &plan,
 
     auto *lay = new QVBoxLayout(this);
     lay->setSpacing(8);
+
+    // ---- 导出内容（v1.18.x，用户拍板「要能只导某一路视频」）----
+    // 整行默认隐藏：只有宫格侧（多机播放窗）调 setContentSelectorVisible(true)
+    // 才出现「宫格合成 / 单路视频」二选一。隐藏时 QBoxLayout 不给它任何空间，
+    // 面板外观与导出行为与本功能之前逐位一致（主窗单路导出不受影响）。
+    m_contentRow = new QWidget(this);
+    m_contentRow->setObjectName(QStringLiteral("exportContentRow"));
+    auto *contentLay = new QHBoxLayout(m_contentRow);
+    contentLay->setContentsMargins(0, 0, 0, 0);
+    contentLay->addWidget(new QLabel(lang("导出内容：", "Export content:"), m_contentRow));
+    m_contentCombo = new QComboBox(m_contentRow);
+    m_contentCombo->setObjectName(QStringLiteral("exportContentCombo"));
+    m_contentCombo->addItem(lang("宫格合成视频", "Composite grid video"));
+    m_contentCombo->addItem(lang("单路视频", "Single camera video"));
+    m_contentCombo->setToolTip(lang(
+        "宫格合成视频＝多机位同屏（与播放窗所见一致）；\n"
+        "单路视频＝只导出所选机位那一路，不合成宫格。",
+        "Grid = all cameras composited on one canvas (as seen on screen);\n"
+        "Single = only the selected camera, no grid."));
+    contentLay->addWidget(m_contentCombo);
+    contentLay->addStretch(1);
+    lay->addWidget(m_contentRow);
+
+    m_laneRow = new QWidget(this);
+    m_laneRow->setObjectName(QStringLiteral("singleLaneRow"));
+    auto *laneLay = new QHBoxLayout(m_laneRow);
+    laneLay->setContentsMargins(0, 0, 0, 0);
+    laneLay->addWidget(new QLabel(lang("单路机位：", "Camera:"), m_laneRow));
+    m_laneCombo = new QComboBox(m_laneRow);
+    m_laneCombo->setObjectName(QStringLiteral("singleLaneCombo"));
+    m_laneCombo->setToolTip(lang(
+        "只导出这一路机位的画面（音轨取该路自带音频）。",
+        "Export only this camera (audio comes from that file)."));
+    laneLay->addWidget(m_laneCombo, 1);
+    lay->addWidget(m_laneRow);
+
+    // 选「单路视频」才显示机位下拉（选择器未启用时一律不显示）
+    connect(m_contentCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
+            this, [this](int) {
+                const bool single = m_contentSelector
+                                    && contentMode() == ContentMode::Single;
+                if (m_laneRow)
+                    m_laneRow->setVisible(single);
+                // 2026-11-13（走查发现）：单路模式下引擎只认一个倍速（取首段），
+                // 分段表却还开着，用户会以为能逐段调速。这里直接禁掉并说明。
+                if (m_table)
+                    m_table->setEnabled(!single);
+                if (m_splitsEdit)
+                    m_splitsEdit->setEnabled(!single);
+                if (m_table)
+                    m_table->setToolTip(single
+                        ? lang("单路导出只有一个倍速：按第一段的倍率整段导出",
+                               "Single-lane export uses one speed (the first segment's)")
+                        : QString());
+                if (m_splitsEdit)
+                    m_splitsEdit->setToolTip(single
+                        ? lang("单路导出不分段，这里填的分段点只对宫格合成生效",
+                               "Breakpoints apply to composite export only")
+                        : QString());
+            });
+    m_contentRow->setVisible(false);
+    m_laneRow->setVisible(false);
 
     m_summary = new QLabel(this);
     m_summary->setStyleSheet("color: " + Theme::TextPrimary + ";");
@@ -273,6 +336,13 @@ SegmentExportDialog::SegmentExportDialog(const speedplan::SpeedPlan &plan,
                                         "Please choose an output path."));
             return;
         }
+        // 单路模式必须先选到具体机位，否则会退回导整屏宫格（与用户所选不符）
+        if (contentMode() == ContentMode::Single && singleLaneIndex() < 0) {
+            m_resultLabel->setStyleSheet("color: " + Theme::Accent + ";");
+            m_resultLabel->setText(lang("请先选择要导出的单路机位。",
+                                        "Please pick a camera to export."));
+            return;
+        }
         emit exportRequested(m_plan, m_osdCheck->isChecked(),
                              m_pathEdit->text().trimmed());
     });
@@ -307,6 +377,85 @@ QString SegmentExportDialog::fmtTime(qint64 ms) const
 
 bool SegmentExportDialog::burnOsd() const { return m_osdCheck->isChecked(); }
 QString SegmentExportDialog::outputPath() const { return m_pathEdit->text().trimmed(); }
+
+// ---------------------------------------------------------------------------
+// 导出内容（宫格合成 / 单路视频）——v1.18.x
+// ---------------------------------------------------------------------------
+
+void SegmentExportDialog::setContentSelectorVisible(bool visible)
+{
+    m_contentSelector = visible;
+    if (m_contentRow)
+        m_contentRow->setVisible(visible);
+    // 关闭选择器 → 机位行一并收起，且 contentMode() 回落宫格（历史选择保留，
+    // 重新打开可续用）；开启 → 按当前选择决定机位行是否显示
+    if (m_laneRow)
+        m_laneRow->setVisible(visible && contentMode() == ContentMode::Single);
+}
+
+SegmentExportDialog::ContentMode SegmentExportDialog::contentMode() const
+{
+    // 选择器未启用 → 恒为宫格合成（旧版唯一口径，旧调用方零影响）
+    if (!m_contentSelector || !m_contentCombo)
+        return ContentMode::Grid;
+    return m_contentCombo->currentIndex() == 1 ? ContentMode::Single : ContentMode::Grid;
+}
+
+void SegmentExportDialog::setLaneChoices(
+    const QVector<QPair<QString, QString>> &nameAndPath)
+{
+    if (!m_laneCombo)
+        return;
+    // 复用面板重填时保住已选那一路（按路径认，不按序号——调用方可能重排）
+    const QString keep = m_laneCombo->currentData().toString();
+    const QSignalBlocker blocker(m_laneCombo);
+    m_laneCombo->clear();
+    for (const auto &pr : nameAndPath) {
+        // 顺序 = 机位序号：不排序、不剔除（singleLaneIndex() 要能当调用方向量下标用）
+        QString name = pr.first.trimmed();
+        if (name.isEmpty())
+            name = QFileInfo(pr.second).fileName();
+        if (name.isEmpty())
+            name = lang("（无效机位）", "(invalid camera)");
+        m_laneCombo->addItem(name, pr.second);
+    }
+    int idx = m_laneCombo->count() > 0 ? 0 : -1;
+    if (!keep.isEmpty()) {
+        for (int i = 0; i < m_laneCombo->count(); ++i) {
+            if (m_laneCombo->itemData(i).toString() == keep) {
+                idx = i;
+                break;
+            }
+        }
+    }
+    m_laneCombo->setCurrentIndex(idx);
+    // 逐条挂完整路径做 tooltip：同名机位（两路都叫 cam1.mp4）时能分辨
+    for (int i = 0; i < m_laneCombo->count(); ++i)
+        m_laneCombo->setItemData(i, QDir::toNativeSeparators(
+                                        m_laneCombo->itemData(i).toString()),
+                                 Qt::ToolTipRole);
+}
+
+int SegmentExportDialog::singleLaneIndex() const
+{
+    if (!m_laneCombo)
+        return -1;
+    const int i = m_laneCombo->currentIndex();
+    return (i >= 0 && i < m_laneCombo->count()) ? i : -1;
+}
+
+QString SegmentExportDialog::singleLanePath() const
+{
+    const int i = singleLaneIndex();
+    if (i < 0 || !m_laneCombo)
+        return QString();
+    return m_laneCombo->itemData(i).toString();
+}
+
+int SegmentExportDialog::laneChoiceCount() const
+{
+    return m_laneCombo ? m_laneCombo->count() : 0;
+}
 
 void SegmentExportDialog::setPlan(const speedplan::SpeedPlan &plan,
                                   const QString &suggestedPath)
@@ -356,6 +505,11 @@ void SegmentExportDialog::setExportRunning(bool running, int totalFrames)
         m_openFolderBtn->setVisible(false);   // 新一轮导出收起旧产物入口
     m_table->setEnabled(!running);
     m_exportBtn->setEnabled(!running);
+    // 导出中不许改「导哪一路」（改了下标与已在跑的产物不符）
+    if (m_contentCombo)
+        m_contentCombo->setEnabled(!running);
+    if (m_laneCombo)
+        m_laneCombo->setEnabled(!running);
     // v3.0：进度框在导出结束后**继续显示**并停在 100%，作为「已完成」的凭据
     // （原来结束时把整条进度隐藏，用户看到 100% 一闪就没了，无法判断成败）
     if (running) {

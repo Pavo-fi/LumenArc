@@ -87,15 +87,15 @@ QVector<CamInventoryItem> buildCamInventory(const CaseManager &cm)
         else if (it.pathExists)
             vlaPath = it.path + QStringLiteral(".vla");
         if (!vlaPath.isEmpty() && QFile::exists(vlaPath)) {
-            TimelineModel model;
-            TimeCalibration cal;
-            if (model.loadFromFile(vlaPath, nullptr, &cal)
-                && cal.isValid() && cal.isEffective()) {
+            // 2026-11-13（用户：第一次单路转宫格总要卡一下）：这里原来用
+            // TimelineModel::loadFromFile 把**整份**分析数据（亮度/语料行 +
+            // 秒级锚点表）全解一遍，只为拿一个校时值和时长——首切宫格时
+            // 按机位数叠加，5 路就是几百毫秒到一两秒的白屏。
+            // 现在只读 META 里的校时（VLA2 只解 META chunk），清单要的就是
+            // 「是否已校时 + 校时值」；时长改由装配时的 ffprobe/引擎回报兜底。
+            const TimeCalibration cal = TimelineModel::peekCalibrationFromVla(vlaPath);
+            if (cal.isValid() && cal.isEffective()) {
                 it.calibrated = true;
-                // P-69：段时长首选源 = .vla 已分析最大流内时刻（免 ffprobe）
-                const auto snap = model.snapshot();
-                if (!snap.isEmpty())
-                    it.analyzedDurationMs = snap.timestamps.last();
                 it.lane.id = v.id;
                 it.lane.path = it.path;
                 it.lane.displayName = it.displayName;

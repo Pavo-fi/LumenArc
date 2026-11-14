@@ -1050,6 +1050,141 @@ int SegmentExportEngine::gridCellIndex(int lane, const QVector<int> &laneCell,
     return want;
 }
 
+// ---------------------------------------------------------------------------
+// 单路派生（v1.18.x，用户拍板「导出里要能只导某一路视频」）
+// 纯函数：只做参数换算，不解码、不探文件、不起 ffmpeg。
+// ---------------------------------------------------------------------------
+
+SegmentExportEngine::Params SegmentExportEngine::makeSingleLaneParams(
+    const Params &gridParams, const QString &lanePath, int laneIndex)
+{
+    // 没选到路 → 原样返回宫格参数：绝不造 sourcePath 为空的段
+    // （那种段会被 start() 判「片段参数非法」，这里宁可不改）
+    if (lanePath.isEmpty())
+        return gridParams;
+
+    Params out = gridParams;    // 其余字段先整体沿用（输出/画布/帧率/plan/OSD/案件号/
+                                // 校时表/.vla 表/放大镜/证据模式与签署人）
+
+    // 派不出单路参数时的统一出口：清空一切「要导什么」的字段，让调用方据
+    // segments.isEmpty() 明确提示，而不是静默改导整屏宫格或整支录像。
+    auto noContent = [&gridParams, &lanePath]() {
+        Params none = gridParams;
+        none.sourcePath = lanePath;
+        none.segments.clear();
+        none.lanes.clear();
+        none.laneCell.clear();
+        none.laneZooms.clear();
+        none.audioLane = -1;
+        return none;
+    };
+
+    // ---- ① 找该机位数据：**只认路径**（换算必须与要导的源文件同源；按下标兜底
+    //      会拿别路的墙钟基线去换算，导出内容就会串到另一路）----
+    const SyncLaneData *lane = nullptr;
+    const Params::ComposeSeg *tplSeg = nullptr;   // 区间口径模板段
+    for (const auto &l : gridParams.lanes) {      // 顶层 lanes＝多机播放窗（plan 为墙钟域）
+        if (l.path == lanePath) {
+            lane = &l;
+            break;
+        }
+    }
+    for (const auto &s : gridParams.segments) {   // 合成模式：宫格段内各机位
+        if (!s.isLanes())
+            continue;
+        if (!tplSeg)
+            tplSeg = &s;
+        if (lane)
+            continue;
+        for (const auto &l : s.lanes) {
+            if (l.path == lanePath) {
+                lane = &l;
+                tplSeg = &s;
+                break;
+            }
+        }
+    }
+    if (!lane) {
+        // 该机位本来就是单视频段（工作台逐段模式）→ 它的区间已是流内域
+        for (const auto &s : gridParams.segments) {
+            if (!s.isLanes() && s.sourcePath == lanePath) {
+                tplSeg = &s;
+                break;
+            }
+        }
+    }
+    Q_UNUSED(laneIndex);   // 只用于面板里的选择，不进换算（见上：按路径认源）
+
+    // ---- ② 区间：宫格域（墙钟）→ 该路流内 ----
+    qint64 inMs = 0, outMs = 0;
+    if (tplSeg && !tplSeg->isLanes()) {
+        inMs = tplSeg->inMs;              // 已是流内域
+        outMs = tplSeg->outMs;
+    } else {
+        if (!lane || lane->durationMs <= 0) {
+            // 没有该路的墙钟数据 / 时长未回报 → 没法换算。绝不把墙钟毫秒当流内
+            // 毫秒塞进去（那会让 seek 越过文件尾，最后报「段起点后无可用帧」）。
+            return noContent();
+        }
+        qint64 a = gridParams.plan.aMs;   // 无模板段＝多机选段导出：plan 为墙钟域
+        qint64 b = gridParams.plan.bMs;
+        if (tplSeg) {                     // 宫格段的 inMs/outMs 同为墙钟域
+            a = tplSeg->inMs;
+            b = tplSeg->outMs;
+        }
+        // 与该路「有画面」的墙钟区间求交后再换算：缺画面的部分不进单路产物
+        const qint64 wa = qMax(a, syncLaneWallStart(*lane));
+        const qint64 wb = qMin(b, syncLaneWallEnd(*lane));
+        if (wb <= wa) {
+            // 各机位开机时间不同，「选段恰好没覆盖这一路」很常见 —— 明确交给
+            // 调用方提示「该机位在这段里没有画面」，不回落成整路导出
+            return noContent();
+        }
+        inMs = syncStreamOf(*lane, wa);
+        outMs = syncStreamOf(*lane, wb);
+    }
+    if (lane && lane->durationMs > 0) {
+        inMs = qBound<qint64>(0, inMs, lane->durationMs);
+        outMs = qBound<qint64>(0, outMs, lane->durationMs);
+    }
+    if (outMs <= inMs)
+        return noContent();
+
+    // ---- ③ 速率：单段只能一个倍速 → 取 plan 首段速率（NaN/越界回落 1.0）----
+    double rate = gridParams.plan.rates.isEmpty() ? 1.0 : gridParams.plan.rates.first();
+    if (!(rate >= 0.25 && rate <= 8.0))
+        rate = 1.0;
+
+    // ---- ④ 组段：单视频段（lanes 空＝引擎的单路分支）----
+    Params::ComposeSeg seg;
+    seg.sourcePath = lanePath;
+    seg.inMs = inMs;
+    seg.outMs = outMs;
+    seg.rate = rate;
+    seg.lanes.clear();        // 空 lanes = 单视频段
+    seg.laneCell.clear();     // 窗位映射只对宫格段有意义
+    seg.annos.clear();        // 宫格标注轨不沿用（时刻/坐标是按合成画面配的）
+    seg.burnRoi = false;
+    seg.burnChart = false;    // 曲线/ROI 数据按宫格合成配的，单路不烧
+    seg.audioLane = -1;       // 主听路只对宫格段有意义；单视频段音频取自身源
+    seg.gridLayout = 0;
+    seg.displayName.clear();  // 空＝自动（单视频段 OSD 不用它）
+
+    out.sourcePath = lanePath;
+    // P1（审查）：单路 OSD 的时间口径必须补上——宫格段是靠 lanes 里的 cal 得到
+    // 北京时间，而单视频段走的是 calibrationByPath；不补的话同一选段会出现
+    // 「宫格导出带日期、单路导出退化成流内 H:MM:SS」，取证交付物口径静默降级。
+    if (lane && lane->calibrated && lane->cal.isValid())
+        out.calibrationByPath.insert(lanePath, lane->cal);
+    out.segments.clear();
+    out.segments.append(seg);
+    out.lanes.clear();        // 以下均为「按路下标对齐」字段：lanes 已空，留着就是
+    out.laneCell.clear();     // 悬空下标（compose 分支本就不读它们，清干净防误用）
+    out.laneZooms.clear();
+    out.audioLane = -1;       // 同上；实际取音行为不变（见 ②/④ 注释）
+    return out;
+}
+
 void SegmentExportEngine::runMultiCam()
 {
     const Params &p = m_params;

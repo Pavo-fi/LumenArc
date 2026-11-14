@@ -435,11 +435,18 @@ void MultiCamPlaybackWindow::onStartSync()
     rebuildTiles();
     rebuildTimelineArea();
     refreshModeControls();
+    // P2（审查）：从③校时点「多机同事件对时…」时宫格往往还没装配，那时只能给
+    // 提示；用户勾选机位点「开始同步播放」后在这里自动补进对时流程。
+    if (m_pendingEventCalib) {
+        m_pendingEventCalib = false;
+        beginEventCalib();
+    }
 }
 
 void MultiCamPlaybackWindow::onBackToPicker()
 {
     m_svc->closeAll();          // 释放全部引擎（C5 资源有界）
+    m_pendingEventCalib = false; // 退回勾选页 = 放弃这一轮对时，别在下次装配时突然弹出来
     refreshInventory();         // 校时状态可能已变（去校时回来）
     m_stack->setCurrentWidget(m_pickerPage);
 }
@@ -514,7 +521,7 @@ void MultiCamPlaybackWindow::buildPlayPage()
     m_adjustBtn->setCheckable(true);
     m_adjustBtn->setToolTip(lang(
         "调节当前选中机位的亮度/对比度/伽马/色阶/反色/旋转（仅显示）。"
-        "点击瓦片切换作用对象。",
+        "点击画面切换作用对象。",
         "Adjust the selected tile (brightness/contrast/gamma/levels/invert/"
         "rotate, display only). Click a tile to change target."));
     connect(m_adjustBtn, &QPushButton::toggled, this, [this](bool on) {
@@ -674,9 +681,11 @@ void MultiCamPlaybackWindow::buildPlayPage()
     m_eventCalibBtn->setCheckable(true);
     m_eventCalibBtn->setToolTip(lang(
         "以已校时机位为参考，用同一事件（如：同一辆车压线）给未校时机位"
-        "生成正式校时。间接校准·取证链入报告·事件名必填。",
+        "生成正式校时。间接校准·取证链入报告·事件名必填。"
+        "也可从③校时的『多机同事件对时』进入。",
         "Cross-camera event sync: calibrate an uncalibrated lane against a "
-        "calibrated one via the same real-world event. Provenance recorded."));
+        "calibrated one via the same real-world event. Provenance recorded. "
+        "Also reachable from step 3 via \"Same-event sync…\"."));
     m_eventCalibBtn->setVisible(false);
     connect(m_eventCalibBtn, &QPushButton::toggled, this,
             &MultiCamPlaybackWindow::onEventCalibToggled);
@@ -771,6 +780,12 @@ void MultiCamPlaybackWindow::rebuildTiles()
     }
     m_tiles.clear();
 
+    // 2026-11-13（用户：不清楚自己选中了哪个画面）：默认把第一路设为当前作用对象。
+    // 原来默认 -1（谁都没选），于是刚进页面既没有金框、画面调节也没有对象，
+    // 用户点一下才“有”，但那时又没有任何视觉反馈。
+    if (m_selectedTile < 0 || m_selectedTile >= m_svc->laneCount())
+        m_selectedTile = m_svc->laneCount() > 0 ? 0 : -1;
+
     const int n = qMax(2, m_svc->laneCount());
     const int cols = (n <= 2) ? n : 2;
 
@@ -805,6 +820,16 @@ void MultiCamPlaybackWindow::rebuildTiles()
         });
         if (i < m_svc->laneCount() && !m_svc->lanes()[i].path.isEmpty())
             tile->setLaneName(m_svc->lanes()[i].displayName);
+        // 2026-11-13（用户：两边应该还有文字提示，哪一个是准的、哪一个要校正）：
+        // 对时指派阶段的两块空窗直接写明角色，点了就能选视频。
+        if (m_ecAssign && i < 2
+            && (i >= m_svc->laneCount() || m_svc->lanes()[i].path.isEmpty())) {
+            tile->setPlaceholder(i == 0
+                ? lang("① 参考路（钟准的）· 点此选择视频",
+                       "① Reference (clock correct) - click to pick")
+                : lang("② 要校时的路 · 点此选择视频",
+                       "② Lane to fix - click to pick"));
+        }
         // 帧通道：引擎在 loadLanes 时已创建（加载中亦可接，frameReady 异步到）
         tile->setEngine(m_svc->engineAt(i));
         m_tiles.append(tile);
@@ -1014,7 +1039,7 @@ void MultiCamPlaybackWindow::rebuildTimelineArea()
             lang("覆盖 = 块 · 红 = 重叠 · 灰纹 = 缺口",
                  "Block = coverage · Red = overlap · Hatch = gap"));
         m_hintLabel->setToolTip(
-            lang("拖游标可同步走带；双击块或瓦片回到单路分析",
+            lang("拖游标可同步走带；双击时间线块或画面回到单路分析",
                  "Drag the cursor to scrub; double-click a block or tile to open one lane"));
         m_timelineHost->setToolTip(m_hintLabel->text()
                                    + QStringLiteral("\n") + m_hintLabel->toolTip());
@@ -1152,7 +1177,7 @@ void MultiCamPlaybackWindow::refreshModeControls()
         m_hintLabel->setText(
             m_aligning
                 ? lang("对齐模式：分别拖动两路进度条到同一时刻（可用声音"
-                       "比对，点瓦片切听），然后点「确认对齐」。",
+                       "比对，点画面切听），然后点「确认对齐」。",
                        "Aligning: drag both lanes to the same moment "
                        "(use audio cues, click a tile to listen), then Apply.")
                 : (hasUnlinkedTemp
@@ -1161,7 +1186,7 @@ void MultiCamPlaybackWindow::refreshModeControls()
                           "Temp lane not aligned: lanes are independent. "
                           "Use Align… to sync them at the same moment.")
                    : lang("已对齐（会话级，不落盘）：拖任一路进度条两路联动；"
-                          "双击瓦片回单路分析。",
+                          "双击画面回单路分析。",
                           "Aligned (session only): drag either bar to scrub "
                           "both; double-click a tile to open that lane.")));
         // 模式B 也把说明收进 tooltip（说明条不占布局高度，时间轴才能贴底）
@@ -1185,6 +1210,36 @@ bool MultiCamPlaybackWindow::lanesLoaded() const
 // ---------------------------------------------------------------------------
 void MultiCamPlaybackWindow::onPickVideo(int slot)
 {
+    // 2026-11-13（用户：点此选择视频应该直接选机位组里的，不要重新找路径）：
+    // 有案件清单时先给"案件里的机位"菜单（已校时的标出来），翻路径留作兜底。
+    if (m_case && !m_inventory.isEmpty()) {
+        QMenu menu(this);
+        for (const auto &it : m_inventory) {
+            if (!it.pathExists)
+                continue;
+            QString label = it.displayName;
+            if (it.calibrated)
+                label += lang("（已校时 · 可当参考）", " (calibrated: usable as reference)");
+            QAction *a = menu.addAction(label);
+            a->setToolTip(it.path);
+            const QString p = it.path;
+            connect(a, &QAction::triggered, this, [this, slot, p]() {
+                pickVideoForSlot(slot, p);
+            });
+        }
+        menu.addSeparator();
+        QAction *browse = menu.addAction(lang("从文件选择…", "Browse files…"));
+        connect(browse, &QAction::triggered, this, [this, slot]() {
+            const QString path = QFileDialog::getOpenFileName(
+                this, lang("选择视频", "Pick video"), QString(),
+                lang("视频文件 (*.mp4 *.avi *.mkv *.mov);;所有文件 (*)",
+                     "Video files (*.mp4 *.avi *.mkv *.mov);;All files (*)"));
+            if (!path.isEmpty())
+                pickVideoForSlot(slot, path);
+        });
+        menu.exec(QCursor::pos());
+        return;
+    }
     const QString path = QFileDialog::getOpenFileName(
         this, lang("选择视频", "Pick video"), QString(),
         lang("视频文件 (*.mp4 *.avi *.mkv *.mov);;所有文件 (*)",
@@ -1223,10 +1278,43 @@ void MultiCamPlaybackWindow::pickVideoForSlot(int slot, const QString &path)
     if (!l.calibrated)
         l.temporary = true;
     l.durationMs = 0;
+    // v3.7：对时指派阶段选进来的路，要带上案件里的既有校时 —— 参考路的
+    // 「钟是准的」这个前提就来自 .vla，不能因为"是从窗口现选的"就当成未校时。
+    if (m_ecAssign) {
+        for (const auto &it : m_inventory) {
+            if (QDir::cleanPath(it.path).compare(QDir::cleanPath(path),
+                                                 Qt::CaseInsensitive) != 0)
+                continue;
+            l.calibrated = it.calibrated;
+            l.cal = it.lane.cal;
+            l.displayName = it.displayName;
+            l.durationMs = it.analyzedDurationMs;
+            l.temporary = !it.calibrated;   // 未校时的那一路＝临时进
+            break;
+        }
+    }
     m_svc->loadLanes(lanes);   // 全量重载（v1：换路=重开，语义简单可靠）
     rebuildTiles();
     rebuildTimelineArea();
     refreshModeControls();
+    // v3.7：两路选齐 → 指派完成，面板接回正常的 ①→④ 引导
+    if (m_ecAssign && m_svc->laneCount() >= 2) {
+        m_ecAssign = false;
+        refreshEcPanel();
+        if (m_statusLabel) {
+            bool anyCal = false;
+            for (const auto &x : m_svc->lanes())
+                if (x.calibrated)
+                    anyCal = true;
+            m_statusLabel->setText(anyCal
+                ? lang("两路已装载：按右侧 ①→④ 继续（选参考路 → 标同一事件 → 贴齐 → 保存）",
+                       "Two lanes loaded: continue with steps 1-4 on the right")
+                : lang("两路已装载，但都没有校时 —— 参考路的钟必须是准的，"
+                       "请先给其中一路做校时",
+                       "Both lanes are uncalibrated: the reference clock must be "
+                       "known, calibrate one lane first"));
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1313,7 +1401,7 @@ void MultiCamPlaybackWindow::ecSetPlayRange(int lane, bool on)
         const bool selRun = m_ecPlaying && m_ecPlayLane >= 0;
         m_ecPlaySelBtn->setText(
             selRun ? lang("⏸ 暂停选中", "⏸ Pause sel.")
-                   : lang("▶ 播放选中瓦片", "▶ Play selected"));
+                   : lang("▶ 播放选中的视频", "▶ Play selected"));
         const bool allRun = m_ecPlaying && m_ecPlayLane < 0;
         m_ecPlayAllBtn->setText(
             allRun ? lang("⏸ 暂停全部", "⏸ Pause all")
@@ -1563,8 +1651,14 @@ void MultiCamPlaybackWindow::updateTilesOsd()
         if (!l.path.isEmpty() && !m_svc->laneUsable(i))
             tile->setPlaceholder(lang("加载失败", "load failed"));
         else if (!m_eventCalib && !l.path.isEmpty()
-                 && !m_svc->laneCoversNow(i))
-            tile->setPlaceholder(lang("无信号（缺口）", "no signal (gap)"));
+                 && !m_svc->laneCoversNow(i)) {
+            // 2026-11-13（真机走查）：四格里三格全黑只写「无信号（缺口）」太像故障。
+            // 说清楚是「这一刻它还没开机 / 已经结束」，并把该机位的覆盖窗口报出来。
+            tile->setPlaceholder(
+                lang("本机位此刻无画面\n覆盖 %1 – %2",
+                     "No footage at this instant\ncovers %1 - %2")
+                    .arg(fmtWall(syncLaneWallStart(l)), fmtWall(syncLaneWallEnd(l))));
+        }
         else
             tile->setPlaceholder(QString());
     }
@@ -1932,13 +2026,38 @@ void MultiCamPlaybackWindow::onExportClip()
                 [this](const speedplan::SpeedPlan &sp) {
                     applyPlanFromDialog(sp);
                 });
+        // v3.4（用户）：「导出内容：宫格合成 / 单路视频」——只有宫格侧打开这个选择器，
+        // 主窗单路导出那条路默认隐藏，行为零变化。
+        m_exportDlg->setContentSelectorVisible(true);
+        refreshExportLaneChoices();
     } else {
         m_exportDlg->setPlan(plan, suggested);
         m_exportDlg->setCursorMs(m_lastWallMs);
+        // 每开一次重灌一次：路清单/勾选可能已变（重开面板走的是这一支）
+        m_exportDlg->setContentSelectorVisible(true);
+        refreshExportLaneChoices();
     }
     m_exportDlg->show();
     m_exportDlg->raise();
     m_exportDlg->activateWindow();
+}
+
+/// v3.4：路清单 → 导出面板「单路」下拉。顺序与 m_svc->lanes() 严格一致，
+/// 因为面板的 singleLaneIndex() 直接当这个向量的下标用（面板不排序、不剔除）。
+void MultiCamPlaybackWindow::refreshExportLaneChoices()
+{
+    if (!m_exportDlg || !m_svc)
+        return;
+    QVector<QPair<QString, QString>> choices;
+    const QVector<SyncLaneData> &lanes = m_svc->lanes();
+    choices.reserve(lanes.size());
+    for (const SyncLaneData &l : lanes) {
+        QString name = l.displayName;
+        if (name.isEmpty())
+            name = QFileInfo(l.path).fileName();
+        choices.append(qMakePair(name, l.path));
+    }
+    m_exportDlg->setLaneChoices(choices);
 }
 
 /// P-68 多机：面板「开始导出」执行体
@@ -1975,10 +2094,36 @@ void MultiCamPlaybackWindow::startClipExport(const speedplan::SpeedPlan &planIn,
             pp.laneZooms[i].center = m_tiles[i]->zoomCenter();
         }
 
+    // v3.4（用户）：「导出内容」选单路时，把宫格参数派生成单视频段参数。
+    // 引擎本来就有单视频段分支（sourcePath 非空 + lanes 为空），这里只换参数，
+    // 不动导出执行流程；进度总量必须按单路段的合成帧数算，否则进度条会卡在半路。
+    bool singleLane = false;
+    if (m_exportDlg
+        && m_exportDlg->contentMode() == SegmentExportDialog::ContentMode::Single) {
+        // P2（审查）：面板可能跨一次机位装配存活，导出前重灌清单，防下标错位
+        refreshExportLaneChoices();
+        const QString lanePath = m_exportDlg->singleLanePath();
+        pp = SegmentExportEngine::makeSingleLaneParams(
+            pp, lanePath, m_exportDlg->singleLaneIndex());
+        singleLane = !pp.segments.isEmpty()
+                     && pp.segments.first().sourcePath == lanePath;
+        if (!singleLane) {
+            // 派生不出来＝该路在这段里没画面 / 时长未就绪：明确说，不静默导整路
+            m_exportDlg->setResult(false, lang(
+                "该机位在所选区间内没有画面（或时长尚未就绪）——请改选段或换一路",
+                "That lane has no footage in the selected range"));
+            return;
+        }
+    }
+
     if (!m_segmentExporter)
         m_segmentExporter = new SegmentExportEngine(this);
     SegmentExportEngine *eng = m_segmentExporter;
-    m_exportDlg->setExportRunning(true, int(plan.outputFrameCount(pp.outFps)));
+    const qint64 totalFrames =
+        (singleLane && !pp.segments.isEmpty())
+            ? SegmentExportEngine::composeSegOutFrames(pp.segments.first(), pp.outFps)
+            : plan.outputFrameCount(pp.outFps);
+    m_exportDlg->setExportRunning(true, int(totalFrames));
     connect(eng, &SegmentExportEngine::progress, m_exportDlg,
             &SegmentExportDialog::setProgress, Qt::UniqueConnection);
     connect(eng, &SegmentExportEngine::finished, this,
@@ -2007,6 +2152,78 @@ void MultiCamPlaybackWindow::startClipExport(const speedplan::SpeedPlan &planIn,
 // P-73 多机同事件间接校时（拍板：允许多跳+取证链全记录入报告+成环禁止+
 // 事件名必填+累积容差如实呈现；间接校准=相对传递，与绝对校时视觉区分）
 // ---------------------------------------------------------------------------
+// v3.3：③校时阶段（TimeSettingsDialog「多机同事件对时…」）经主窗调这里。
+// 不另开一条路：直接驱动工具栏那颗钮，前置校验与中文提示全复用
+// onEventCalibToggled，保证两个入口行为一致。
+void MultiCamPlaybackWindow::beginEventCalib()
+{
+    if (!m_eventCalibBtn)
+        return;
+    if (m_eventCalib && m_svc->laneCount() > 0) {
+        // 已经在对时模式：那颗钮是 checked 态，再点一次会退出，所以只把
+        // 播放页 + 右列面板带回眼前（用户可能已经切去勾选页/别的页）。
+        if (m_stack)
+            m_stack->setCurrentWidget(m_playPage);
+        if (m_ecHost)
+            m_ecHost->show();
+        refreshEcPanel();
+        return;
+    }
+    if (m_eventCalib)
+        onEcExit();                      // 路已卸载的残留态：先干净退出再走校验
+    m_eventCalibBtn->setChecked(true);   // toggled → onEventCalibToggled(true)
+    if (m_eventCalib) {
+        m_pendingEventCalib = false;
+        return;                          // 已进入对时模式
+    }
+    // 前置校验没过（少于 2 路 / 没有已校时参考路 / 对齐会话进行中）：
+    // 记账，等「开始同步播放」装配完自动补进来（见 onStartSync 末尾）。
+    m_pendingEventCalib = true;
+    // onEventCalibToggled 已把中文提示写进播放页状态栏。而从③校时刚开窗时
+    // 多半还停在机位勾选页，状态栏此时看不见 → 同一句话再写进勾选页的
+    // 引导条（不用弹窗：自检是进程内直驱，模态框会把自检卡住）。
+    if (m_pickHint && m_statusLabel && !m_statusLabel->isVisible()
+        && m_stack && m_stack->currentWidget() == m_pickerPage) {
+        m_pickHint->setText(
+            m_statusLabel->text()
+            + lang(" 请先勾选 ≥2 路并点「开始同步播放」，装配好后再点「同事件对时」。",
+                   " Check 2+ lanes and press \"Start synced playback\" first, "
+                   "then use \"Event Sync\"."));
+    }
+}
+
+/// v3.7（用户原话「点了同事件对时应该跳到这个界面，但是两个视频窗空着，
+/// 需要一个提示指引让我指定需要校时的两个视频」）：
+/// ③校时的入口 → **直接进对时页面**，画面区给两个空窗（点一下就能选视频），
+/// 右列 ①② 先空着并提示怎么指派；两路选齐后自动接着走四步。
+void MultiCamPlaybackWindow::beginEventCalibEmpty()
+{
+    if (!m_eventCalibBtn)
+        return;
+    if (m_eventCalib)
+        onEcExit();                       // 先回到干净态
+    m_ecAssign = true;
+    m_eventCalib = true;
+    {
+        QSignalBlocker b(m_eventCalibBtn);
+        m_eventCalibBtn->setChecked(true);   // 只是让那颗钮显示为按下，不触发校验
+    }
+    buildEventCalibPanel();
+    if (m_ecHost)
+        m_ecHost->show();
+    if (m_stack)
+        m_stack->setCurrentWidget(m_playPage);
+    rebuildTiles();                       // 0 路 → 两块空瓦片（点一下即可选视频）
+    rebuildTimelineArea();
+    refreshModeControls();
+    refreshEcPanel();                     // 内部会写引导（指派阶段）
+    if (m_statusLabel)
+        m_statusLabel->setText(lang(
+            "同事件对时：点亮着的两个画面窗口，分别指定参考路（钟准的）和要校时的路",
+            "Same-event sync: click the two empty windows to pick the reference "
+            "and the lane to fix"));
+}
+
 void MultiCamPlaybackWindow::onEventCalibToggled(bool on)
 {
     if (on) {
@@ -2065,6 +2282,7 @@ void MultiCamPlaybackWindow::onEcExit()
     if (!m_eventCalib && !m_ecHost)
         return;
     m_eventCalib = false;
+    m_ecAssign = false;         // v3.7：退出对时即放弃"等指派"状态
     m_ecAnchors.clear();
     // 沙盒收场：停播 + 停跟随定时器 + 还单可听路 + 播放钮回位
     if (m_ecTick)
@@ -2200,12 +2418,12 @@ void MultiCamPlaybackWindow::buildEventCalibPanel()
         " font-weight:bold; padding:6px; }"
         "QPushButton:hover { background:%1; color:#20242B; }")
         .arg(Theme::Accent);
-    m_ecPlaySelBtn = new QPushButton(lang("▶ 播放选中瓦片", "▶ Play selected"),
+    m_ecPlaySelBtn = new QPushButton(lang("▶ 播放选中的视频", "▶ Play selected"),
                                      m_ecStep3);
     m_ecPlaySelBtn->setMinimumHeight(36);
     m_ecPlaySelBtn->setStyleSheet(ecPlayStyle);
     m_ecPlaySelBtn->setToolTip(lang(
-        "只播当前点选的那一路（金框瓦片），其余暂停——逐帧比对该路用",
+        "只播当前点选的那一路（金框画面），其余暂停——逐帧比对该路用",
         "Play only the selected tile; others paused"));
     m_ecPlayAllBtn = new QPushButton(lang("▶▶ 播放全部", "▶▶ Play all"),
                                      m_ecStep3);
@@ -2216,7 +2434,7 @@ void MultiCamPlaybackWindow::buildEventCalibPanel()
         "Play all lanes together"));
     connect(m_ecPlaySelBtn, &QPushButton::clicked, this, [this]() {
         if (m_selectedTile < 0 || m_selectedTile >= m_svc->laneCount()) {
-            m_ecStatus->setText(lang("先点选一个瓦片（金框 = 选中）",
+            m_ecStatus->setText(lang("先点选一个画面（金框 = 选中）",
                                      "Click a tile first (gold frame)"));
             return;
         }
@@ -2335,6 +2553,42 @@ void MultiCamPlaybackWindow::refreshEcPanel()
     if (!m_ecPanel)
         return;
     const auto &lanes = m_svc->lanes();
+    // v3.7（用户：进了对时页但两个窗还空着，先让我指定两路）：指派未完成时
+    // 两个下拉只放一个占位项，第③④步自然全部禁用（它们靠下拉取值）。
+    if (m_ecAssign && lanes.size() < 2) {
+        QSignalBlocker b1(m_ecRefCombo), b2(m_ecTargetCombo);
+        m_ecRefCombo->clear();
+        m_ecTargetCombo->clear();
+        m_ecRefCombo->addItem(lang("（先点下面画面窗口选视频）",
+                                   " (Pick a video in the window below)"), -1);
+        m_ecTargetCombo->addItem(lang("（先点下面画面窗口选视频）",
+                                      " (Pick a video in the window below)"), -1);
+        m_ecAnchors.clear();
+        m_ecPreviewed = false;
+        m_ecSaved = false;
+        m_ecTargetIdx = -1;
+        if (m_ecAnchorList)
+            m_ecAnchorList->clear();
+        if (m_ecSaveBtn)
+            updateEcSaveBtn();
+        // 走查补充：光 setEnabled(false) 不够——沙盒两颗播放钮有自绘样式，
+        // 变灰后看着仍像能点。指派阶段直接把 ③④ 两块收起来，只留 ①②。
+        if (m_ecStep3) {
+            m_ecStep3->setEnabled(false);
+            m_ecStep3->setVisible(false);
+        }
+        if (m_ecStep4) {
+            m_ecStep4->setEnabled(false);
+            m_ecStep4->setVisible(false);
+        }
+        updateEcGuidance();
+        return;
+    }
+    // 指派完成 → ③④ 复位显示（正常四步流程）
+    if (m_ecStep3)
+        m_ecStep3->setVisible(true);
+    if (m_ecStep4)
+        m_ecStep4->setVisible(true);
     const int keepRef = m_ecRefCombo->currentData().isValid()
         ? m_ecRefCombo->currentData().toInt() : -1;
     const int keepTgt = m_ecTargetCombo->currentData().isValid()
@@ -2426,7 +2680,20 @@ void MultiCamPlaybackWindow::updateEcGuidance()
         && m_ecRefCombo->currentData().toInt() >= 0
         && m_ecTargetCombo->currentData().isValid()
         && m_ecTargetCombo->currentData().toInt() >= 0;
-    const int step = eventcalib::guidanceStep(picked, m_ecAnchors.size(),
+    if (m_ecAssign && m_svc->laneCount() < 2) {
+        // 指派阶段：先说清"点两个窗口各选一路"，其它引导按未选满处理
+        if (m_ecBanner)
+            m_ecBanner->setText(lang(
+                "🧭 先在下面两个画面窗口各点一下，指定两路视频："
+                "左边＝钟准的（已校时）参考路，右边＝要校时的路",
+                "🧭 Click the two empty windows below: left = calibrated "
+                "reference lane, right = the lane to fix"));
+        if (m_ecStep3)
+            m_ecStep3->setEnabled(false);
+        if (m_ecStep4)
+            m_ecStep4->setEnabled(false);
+        return;
+    }    const int step = eventcalib::guidanceStep(picked, m_ecAnchors.size(),
                                               m_ecPreviewed);
     if (m_ecStep3)
         m_ecStep3->setEnabled(step >= 1);

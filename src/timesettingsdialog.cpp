@@ -166,23 +166,30 @@ void TimeSettingsDialog::buildUi()
 
     // v3.3：多视频（多机位）校时入口——这是校时阶段的能力，
     // 之前被挪到「产出」里，用户在③校时找不到。
+    // v3.5（用户：两个按钮有什么区别）：原来这里有两颗几乎同义的钮——
+    // 「多视频校时」（只负责打开宫格）+「多机同事件对时」（打开并直接进四步对时）。
+    // 合并成一颗：直达对时流程；未对齐的两路先在宫格里做「对齐」。
     {
         auto *multiRow = new QHBoxLayout();
-        auto *multiBtn = new QPushButton(
-            lang("多视频校时（多机位对时）…", "Multi-camera calibration…"), this);
-        multiBtn->setObjectName(QStringLiteral("multiVideoCalibBtn"));
-        multiBtn->setMinimumHeight(32);
-        multiBtn->setToolTip(lang(
-            "打开多机位宫格：以已校时机位为参考，用同一事件给其它机位校时",
-            "Open the multi-camera grid to calibrate other cameras via a shared event"));
-        multiBtn->setStyleSheet(QStringLiteral(
+        auto *eventBtn = new QPushButton(
+            lang("多机校时（同事件对时）…", "Multi-camera sync…"), this);
+        eventBtn->setObjectName(QStringLiteral("eventCalibBtn"));
+        eventBtn->setMinimumHeight(32);
+        eventBtn->setToolTip(lang(
+            "打开多机位宫格并直接进入同事件对时：以已校时的机位为参考，"
+            "用同一事件（如同一辆车压线）给未校时机位生成间接校时"
+            "（可为多跳，误差如实累加）。两路都未校时时，先在宫格里点「对齐…」。",
+            "Open the grid and start same-event sync: calibrate uncalibrated cameras "
+            "against a calibrated one via a shared event (multi-hop allowed). "
+            "If both lanes are uncalibrated, use Align in the grid first."));
+        eventBtn->setStyleSheet(QStringLiteral(
             "QPushButton { background:%1; color:%2; border:1px solid %3;"
             " border-radius:6px; font-size:12px; }"
             "QPushButton:hover { border-color:%2; }")
             .arg(Theme::BgCard, Theme::Accent, Theme::Border));
-        connect(multiBtn, &QPushButton::clicked, this,
-                &TimeSettingsDialog::multiVideoCalibRequested);
-        multiRow->addWidget(multiBtn);
+        connect(eventBtn, &QPushButton::clicked, this,
+                &TimeSettingsDialog::multiEventCalibRequested);
+        multiRow->addWidget(eventBtn);
         multiRow->addStretch(1);
         lay->addLayout(multiRow);
     }

@@ -71,6 +71,10 @@ signals:
     /// v3.3（用户拍板）：「多视频校时」属于校时阶段，不该埋在产出里。
     /// 面板里给一个明确入口，主窗据此打开多机宫格做同事件对时。
     void multiVideoCalibRequested();
+    /// v3.3（用户拍板）：多机「同事件对时」（间接校时）此前只能从⑤产出的
+    /// 宫格里点，③校时阶段进不去。这里补一个直达入口，主窗据此打开宫格
+    /// 并直接进 P-73 四步对时面板（流程条仍停在③校时）。
+    void multiEventCalibRequested();
     /// 校时已应用（非模态：主窗口收到后更新图表与状态栏）
     void calibrationApplied(const TimeCalibration &cal);
     /// 请求在主窗口视频上框选时间戳区域（GO 首次使用且无已存区域时）

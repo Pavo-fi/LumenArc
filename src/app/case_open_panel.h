@@ -14,6 +14,7 @@ class QLineEdit;
 class QListWidget;
 class QListWidgetItem;
 class QPushButton;
+class QResizeEvent;
 class QWidget;
 class CaseManager;
 
@@ -43,15 +44,25 @@ signals:
 
 protected:
     bool eventFilter(QObject *watched, QEvent *event) override;
+    /// 面板尺寸变化后按新的可用宽度重算行内省略号（不参与居中决策，
+    /// 居中仍由主窗 centerCaseOpenPanel() 以主窗口坐标完成）。
+    void resizeEvent(QResizeEvent *event) override;
 
 private:
     void onItemActivated(QListWidgetItem *item);
     void activateRecent(const QString &dir);
     void removeRecentEntry(const QString &dir);   // 只移除最近记录，不碰磁盘
     void applyFilter();
+    /// 主按钮下方那行案件名的省略绘制（宽度随面板变化，文本永远来自 UserRole 目录）
+    void updatePrimaryCaption();
+    /// 重绘所有带 "elideFull" 属性的行内标签（案件名 / 目录路径 / 失效提示）
+    void relayoutElidedTexts();
+    /// 最近案件行文字列在当前面板宽度下可用的像素宽度
+    int recentTextWidth() const;
 
     CaseManager *m_caseManager = nullptr;   // 不持有
     QStringList m_recents;
+    QString m_primaryCaseDir;   // 主按钮当前指向的最近案件目录（空 = 首访）
 
     QPushButton *m_primaryButton = nullptr;
     QLabel *m_primaryCaption = nullptr;

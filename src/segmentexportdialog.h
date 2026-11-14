@@ -9,12 +9,19 @@
 /// 交互流：打开（带入当前 AB 选段与标签初值分段）→ 调分速/分段/OSD/路径
 /// → 「开始导出」→ 面板内进度条与取消 → 完成提示。关闭即隐藏（不销毁，
 /// 由父窗口持有复用；选段变化时经 setPlan 刷新）。
+///
+/// v1.18.x：宫格侧可选「导出内容＝单路视频」（exportContentCombo + singleLaneCombo），
+/// 选择器默认隐藏（setContentSelectorVisible），隐藏时面板与旧版逐位一致；
+/// 面板只表达「导哪一路」，参数派生交 SegmentExportEngine::makeSingleLaneParams。
 
 #include <QDialog>
+#include <QPair>
+#include <QVector>
 #include "domain/speed_plan.h"
 
 class QTableWidget;
 class QCheckBox;
+class QComboBox;
 class QLineEdit;
 class QLabel;
 class QProgressBar;
@@ -25,6 +32,12 @@ class SegmentExportDialog : public QDialog
     Q_OBJECT
 
 public:
+    /// v1.18.x（用户反馈「导出里面没有可以导出单路视频的选项」）：导出内容二选一。
+    /// Grid = 宫格合成（既有唯一口径，**默认**）；Single = 只导所选机位那一路。
+    /// 只有 setContentSelectorVisible(true) 打开选择器后才可能为 Single；
+    /// 选择器隐藏时 contentMode() 恒为 Grid → 旧调用方（主窗单路导出等）零影响。
+    enum class ContentMode { Grid, Single };
+
     /// @param plan      初始方案（A/B + 标签边界初值）
     /// @param cursorMs  当前播放位置（「在游标处分段」钮用）
     /// @param suggestedPath 建议输出路径
@@ -51,6 +64,28 @@ public:
     /// 实时游标（父窗口 positionChanged 驱动）
     void setCursorMs(qint64 ms) { m_cursorMs = ms; }
 
+    // ---- 导出内容（宫格合成 / 单路视频）：默认隐藏，旧外观逐位不变 ----
+
+    /// 打开/关闭「导出内容」下拉与其下的机位下拉。默认 false（面板外观与
+    /// 行为与本功能之前完全一致）；宫格侧（多机播放窗）显式打开后才可选单路。
+    /// 关闭时 contentMode() 恒为 Grid（面板上的历史选择保留，重新打开可续用）。
+    void setContentSelectorVisible(bool visible);
+    bool contentSelectorVisible() const { return m_contentSelector; }
+
+    /// 机位下拉条目。`(显示名, 源文件路径)`，**顺序即机位序号**：本面板不排序、
+    /// 不剔除（条目 i 与调用方机位向量第 i 路一一对应，singleLaneIndex() 即该下标）。
+    /// 显示名为空时回落路径的文件名。复用面板重填时尽量保住原选中那一路。
+    void setLaneChoices(const QVector<QPair<QString, QString>> &nameAndPath);
+
+    /// 当前导出内容（选择器隐藏 → 恒为 Grid）
+    ContentMode contentMode() const;
+    /// 单路模式下选中的机位下标；无条目/越界返回 -1
+    int singleLaneIndex() const;
+    /// 选中机位的源文件路径；无有效选中返回空串（与 singleLaneIndex()<0 同义）
+    QString singleLanePath() const;
+    /// 机位条目数（= setLaneChoices 填入的数量）
+    int laneChoiceCount() const;
+
     /// 导出进行中（禁用编辑区，显示进度）
     void setExportRunning(bool running, int totalFrames = 0);
     void setProgress(int done, int total);
@@ -60,6 +95,8 @@ public:
 
 signals:
     /// 「开始导出」被点且参数合法（面板保持打开，进度内嵌）
+    /// 签名不变（宫格/主窗两处调用方无需改）：选的是「单路视频」时，调用方
+    /// 在本信号内读 contentMode() / singleLaneIndex() / singleLanePath() 派生参数。
     void exportRequested(const speedplan::SpeedPlan &plan, bool burnOsd,
                          const QString &outputPath);
     void cancelRequested();
@@ -98,6 +135,12 @@ private:
     QLabel *m_lastHint = nullptr;
     QPushButton *m_restoreBtn = nullptr;
     speedplan::SpeedPlan m_lastPlan;         ///< 上次导出的变速计划（可恢复）
+    // v1.18.x：导出内容选择（整行容器默认隐藏 → 面板外观与旧版逐位一致）
+    QWidget *m_contentRow = nullptr;         ///< 「导出内容」行
+    QComboBox *m_contentCombo = nullptr;     ///< objectName = exportContentCombo
+    QWidget *m_laneRow = nullptr;            ///< 「机位」行（仅单路模式显示）
+    QComboBox *m_laneCombo = nullptr;        ///< objectName = singleLaneCombo
+    bool m_contentSelector = false;          ///< 选择器是否启用（默认关）
 };
 
 #endif // SEGMENTEXPORTDIALOG_H

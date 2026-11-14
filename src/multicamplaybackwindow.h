@@ -58,6 +58,18 @@ public:
     /// 独立模式（无案件）：2 路空槽位，用户逐个选视频（模式B）
     void openStandalone();
 
+    /// v3.3：③校时阶段「多机同事件对时…」的外部入口——等价于点工具栏
+    /// 「同事件对时」（同一套前置校验与中文提示，走 onEventCalibToggled）；
+    /// 已在对时模式中则只把播放页与右列面板带回眼前，不会反向退出。
+    void beginEventCalib();
+
+    /// v3.7：③校时入口专用——直接进对时页面，画面区两个空窗，等用户点窗选两路；
+    /// 选齐后自动接回四步流程（不经过机位勾选页）。
+    void beginEventCalibEmpty();
+
+    /// 是否正处于同事件对时模式（自检/状态查询用；不改变任何状态）
+    bool isEventCalibActive() const { return m_eventCalib; }
+
     /// 双击瓦片回单路分析（U-6）
     std::function<void(const QString &path)> onOpenVideo;
     /// 案件数据被本窗口改写（如同事件对时保存校时）→ 主窗口刷新案件树徽标；
@@ -149,6 +161,8 @@ private slots:
 
 private:
     void buildUi();
+    /// v3.4：把当前路清单灌进导出面板的「单路」下拉（顺序必须与 m_svc->lanes() 一致）
+    void refreshExportLaneChoices();
     void buildPlayPage();
     void buildPickerPage();
     void refreshInventory();        ///< 重读案件清单+重建勾选行（默认勾已校时≤4）
@@ -198,6 +212,11 @@ private:
     // ---- P-73 对时模式状态 ----
     class QPushButton *m_eventCalibBtn = nullptr;
     bool m_eventCalib = false;
+    /// P2（审查）：从③校时进来时宫格往往还没装配（停在勾选页），先记账；
+    /// 用户点「开始同步播放」装配完成后自动补进对时流程，不用退回③再点一次。
+    bool m_pendingEventCalib = false;
+    /// v3.7：对时模式下的「等指派」阶段（画面区空着，等用户点窗口选两路）
+    bool m_ecAssign = false;
     QWidget *m_ecHost = nullptr;          ///< 右列宿主（默认隐藏，宽 300）
     QWidget *m_ecPanel = nullptr;
     class QComboBox *m_ecRefCombo = nullptr;

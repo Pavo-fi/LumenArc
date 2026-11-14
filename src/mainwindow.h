@@ -202,6 +202,8 @@ private:
     /// 视图 chips（单路 / 宫格 / 全屏）
     QWidget *buildViewChips(QWidget *parent);
     void syncViewChips(int active);
+    /// v3.5：⑤产出 + 单路取景时才露出「导出单路视频…」按钮（宫格取景走宫格面板）
+    void updateExportSingleButton();
     /// 宫格工作区（多机窗嵌入页）成为当前页
     void showGridWorkspace();
     /// 检视器刷新（500ms 拉取当前上下文）
@@ -416,6 +418,9 @@ protected:
     QHash<int, QWidget *> m_stagePages;              ///< Stage -> 页面
     QWidget             *m_analyzePage = nullptr;    ///< 分析页 = 原中央部件
     QList<QPushButton *>  m_viewChips;               ///< 视图 chips（单路/宫格/全屏）
+    QWidget             *m_viewChipsBar = nullptr;   ///< chips 的横条（v3.4：提到阶段容器顶部，各阶段共用）
+    int                  m_viewMode = 0;             ///< 取景方式 0=单路 1=宫格（⑤产出据此决定落哪）
+    QPushButton         *m_exportSingleBtn = nullptr; ///< v3.5：chips 行右端的「导出单路视频…」
     ui::InspectorPanel   *m_inspector = nullptr;     ///< 检视器（当前上下文）
     QDockWidget          *m_inspectorDock = nullptr; ///< 检视器停靠窗
     QWidget              *m_noiseBar = nullptr;      ///< 底部左侧降噪控件容器（有音频才显）

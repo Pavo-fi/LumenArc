@@ -192,6 +192,13 @@ void MainWindow::setupShell()
         }
     }
 
+    // 中：视图 chips（v3.4：从分析页内提到阶段容器顶部——单路/宫格互切在④分析、
+    // ③校时、⑤产出都要能用。原来它嵌在分析页里，一切到宫格页那排按钮就跟着
+    // 整页被藏掉，用户没法从宫格转回单路。提到这里后高度与分析页内那条相同，
+    // 总高度不变）
+    m_viewChipsBar = buildViewChips(central);
+    lay->addWidget(m_viewChipsBar, 0);
+
     // 中：阶段工作区
     m_workspaceStack = new QStackedWidget(central);
     lay->addWidget(m_workspaceStack, 1);
@@ -199,13 +206,12 @@ void MainWindow::setupShell()
     // 命令注册表先建——动作页要按标题去找命令
     m_commands->rebuild(menuBar());
 
-    // 分析页 = 原中央部件（QSplitter[视频|放大镜] + 图表 + 语谱图），上方加一排视图 chips
+    // 分析页 = 原中央部件（QSplitter[视频|放大镜] + 图表 + 语谱图）
     if (QWidget *legacy = takeCentralWidget()) {
         auto *page = new QWidget(m_workspaceStack);
         auto *pl = new QVBoxLayout(page);
         pl->setContentsMargins(0, 0, 0, 0);
         pl->setSpacing(0);
-        pl->addWidget(buildViewChips(page), 0);
         pl->addWidget(legacy, 1);
         m_analyzePage = page;
         m_stagePages.insert(int(ui::Stage::Analyze), page);
@@ -627,17 +633,43 @@ void MainWindow::showStage(ui::Stage s)
 
     // v3.3（用户拍板）：产出阶段与宫格**统一**——导出本来就是宫格视图里的
     // 一等动作（选段/断点/每段倍速/导出），不再另开一套合成工作台当产出页。
+    // v3.4（用户原话「点第五步就直接跳到多视频，太快了」）：不再**无条件**跳宫格，
+    // 改成跟着④分析时的取景走——分析时是单路就留在单路（导出走工具栏「选段」/
+    // 产出菜单那套），分析时是宫格才进宫格（导出宫格视频）。用户可以在⑤产出里
+    // 用顶部 chips 随时切换，流程条始终停在⑤。
     if (s == ui::Stage::Produce) {
         if (m_caseManager->isOpen()) {
-            onMultiCamView();               // 内部会把宫格设为当前工作区页
-            if (m_multiCamWin) {
-                m_workspaceStack->setCurrentWidget(m_multiCamWin.data());
-                m_appState->setStage(ui::Stage::Produce);   // 流程条停在⑤产出
+            // 此刻就在宫格页（例如经菜单进的宫格）也算「宫格取景」，
+            // 不能只看 m_viewMode，否则点⑤会反着落回单路。
+            const bool onGridNow = m_multiCamWin
+                && m_workspaceStack->currentWidget() == m_multiCamWin.data();
+            if (m_viewMode == 1 || onGridNow) {     // ④分析时是宫格 → 产出进宫格
+                onMultiCamView();
+                if (m_multiCamWin) {
+                    m_workspaceStack->setCurrentWidget(m_multiCamWin.data());
+                    m_appState->setStage(ui::Stage::Produce);   // 流程条停在⑤产出
+                    syncViewChips(1);
+                    return;
+                }
+            }
+            // 单路取景（默认）：留在分析页，导出走单路那套，不打断用户
+            if (m_analyzePage) {
+                m_workspaceStack->setCurrentWidget(m_analyzePage);
+                m_appState->setStage(ui::Stage::Produce);
+                syncViewChips(0);
             }
             return;
         }
         // 没开案件：独立单路也要能导出 → 回落到单路导出面板
         onExportSingleClipDialog();
+        return;
+    }
+
+    // v3.5（用户：⑤宫格时点回④会被拉成单路）：④分析也按当前取景走。
+    if (s == ui::Stage::Analyze && m_viewMode == 1 && m_multiCamWin) {
+        showGridWorkspace();                       // 宫内已置④并亮 chips
+        if (m_appState)
+            m_appState->setStage(ui::Stage::Analyze);
         return;
     }
 
@@ -898,6 +930,24 @@ QWidget *MainWindow::buildViewChips(QWidget *parent)
     }
     lay->addStretch(1);
 
+    // v3.5（用户：单路从分析点到产出，缺一个导出单路视频的按钮）：
+    // ⑤产出落单路时就在这里给一颗显眼入口 —— 与 chips 同一行，不额外吃高度。
+    m_exportSingleBtn = new QPushButton(
+        lang(QStringLiteral("导出单路视频…"), QStringLiteral("Export this video…")), bar);
+    m_exportSingleBtn->setObjectName(QStringLiteral("exportSingleVideoBtn"));
+    m_exportSingleBtn->setFixedHeight(24);
+    m_exportSingleBtn->setCursor(Qt::PointingHandCursor);
+    m_exportSingleBtn->setFocusPolicy(Qt::NoFocus);
+    m_exportSingleBtn->setStyleSheet(QStringLiteral(
+        "QPushButton{background:%1;color:%2;border:0;border-radius:4px;"
+        "padding:2px 12px;font-size:12px;font-weight:600;}"
+        "QPushButton:hover{background:%3;}")
+        .arg(Theme::Accent, Theme::BgApp, Theme::AccentHover));
+    connect(m_exportSingleBtn, &QPushButton::clicked, this,
+            &MainWindow::onExportSingleClipDialog);
+    lay->addWidget(m_exportSingleBtn);
+    m_exportSingleBtn->setVisible(false);
+
     // 复用现有入口：单路回分析页 / 宫格嵌入 / 副屏全屏（不改业务）
     if (m_viewChips.size() == 3) {
         m_viewChips[0]->setToolTip(lang(QStringLiteral("在画面上滚动滚轮可呼出放大镜"),
@@ -908,7 +958,13 @@ QWidget *MainWindow::buildViewChips(QWidget *parent)
             syncViewChips(0);
         });
         connect(m_viewChips[1], &QPushButton::clicked, this, [this]() {
+            // v3.4：切宫格只是换取景，不该改阶段（showGridWorkspace 内部会把阶段
+            // 置 Analyze）——原来只给⑤还原，在③校时里点宫格会被推到④。
+            const ui::Stage keep = m_appState ? m_appState->stage()
+                                              : ui::Stage::Analyze;
             onMultiCamView();   // 内部 embed 后会让宫格页成为当前页
+            if (m_appState)
+                m_appState->setStage(keep);
             syncViewChips(1);
         });
         connect(m_viewChips[2], &QPushButton::clicked, this, [this]() {
@@ -932,6 +988,12 @@ void MainWindow::showGridWorkspace()
     m_workspaceStack->setCurrentWidget(m_multiCamWin.data());
     if (m_appState)
         m_appState->setStage(ui::Stage::Analyze);   // 宫格是分析阶段的取景方式
+    // P1（审查）：经菜单 / ③校时等旁路进宫格时，取景状态要一起对齐 ——
+    // 否则 chips 还高亮「单路」（点⑤会反着落回单路），或从交付/整备进来时
+    // chips 已被 applyStageChrome 藏掉、宫格页上那排按钮又「没了」。
+    syncViewChips(1);
+    if (m_viewChipsBar)
+        m_viewChipsBar->setVisible(true);
 }
 
 // ---------------------------------------------------------------------------
@@ -956,6 +1018,12 @@ void MainWindow::refreshInspector()
         if (!path.isEmpty())
             name = QFileInfo(path).fileName();
     }
+    // 2026-11-13（真机走查）：宫格在屏时，检视器显示的仍是**主视口**那一路，
+    // 而宫格里金框选的是另一格 —— 两者不是一回事，容易被当成"我选中的那路"。
+    // 明确标出来源；要真正跟随宫格选中，得再给检视器接一路当前机位。
+    if (m_multiCamWin && m_workspaceStack
+        && m_workspaceStack->currentWidget() == m_multiCamWin.data())
+        name = lang("主视口：", "Main view: ") + name;
 
     const qint64 dur = m_uiState ? m_uiState->effectiveDurationMs() : 0;
     m_inspector->setSource(name, w, h, fps, dur);
@@ -988,8 +1056,23 @@ void MainWindow::refreshInspector()
 
 void MainWindow::syncViewChips(int active)
 {
+    // v3.4：记住取景方式——⑤产出据此决定进单路还是宫格。
+    // 只有「单路 / 宫格」改口径；「全屏」是瞬时态，点了它不能把宫格拨回单路。
+    if (active == 0 || active == 1)
+        m_viewMode = active;
     for (int i = 0; i < m_viewChips.size(); ++i)
         m_viewChips[i]->setChecked(i == active);
+    updateExportSingleButton();
+}
+
+/// v3.5：那颗「导出单路视频…」只在「⑤产出 + 单路取景」下露出——
+/// 宫格取景时导出走宫格面板里那套（含单路选项），这里不重复出现。
+void MainWindow::updateExportSingleButton()
+{
+    if (!m_exportSingleBtn)
+        return;
+    const bool produce = m_appState && m_appState->stage() == ui::Stage::Produce;
+    m_exportSingleBtn->setVisible(produce && m_viewMode == 0);
 }
 
 // ---------------------------------------------------------------------------
@@ -1011,9 +1094,20 @@ void MainWindow::applyStageChrome(ui::Stage s)
 {
     // v2.1：分析工具栏已整行取消（工具收进检视器，随检视器显隐）
 
+    // v3.4：视图 chips 只在「有画面」的阶段出现（分析 / 校时 / 产出）；
+    // 接入 / 整备 / 交付是卡片页，留着它既没用又白占那 32px。
+    if (m_viewChipsBar)
+        m_viewChipsBar->setVisible(s == ui::Stage::Analyze || s == ui::Stage::Align
+                                   || s == ui::Stage::Produce);
+    updateExportSingleButton();
+
     // 停靠面板：整备 / 产出 是满幅工作面，接入是入口页 → 暂存并隐藏；离开时原样恢复
+    // 2026-11-14（用户：在⑤产出点案件，打开后只剩一个视频、以为案件没开）：
+    // ⑤产出在**单路取景**时其实还是分析页 + 导出，左侧案件树必须留着，
+    // 否则和"独立模式单视频"长得一模一样。只有宫格取景（满幅画面）才收起来。
+    const bool produceSingle = (s == ui::Stage::Produce && m_viewMode == 0);
     const bool wantDocks = (s == ui::Stage::Analyze || s == ui::Stage::Align
-                            || s == ui::Stage::Deliver);
+                            || s == ui::Stage::Deliver || produceSingle);
     // v2.2：左侧栏整体收起时，阶段切换不得把它放出来
     if (m_leftColumnHidden) {
         for (QDockWidget *d : findChildren<QDockWidget *>())
@@ -1859,7 +1953,45 @@ int MainWindow::runShellSelfCheck()
         if (m_singleExportDlg && m_singleExportDlg->isVisible())
             m_singleExportDlg->hide();
     }
+    if (m_appState)
+        check(m_appState->stage() == ui::Stage::Produce,
+              QStringLiteral("流程条停在⑤产出"));
     snap(QStringLiteral("produce"));
+
+    // 6b. v3.4（用户原话「点第五步就直接跳到多视频，太快了」+「那一排按钮给吞掉了」）：
+    //     视图 chips 已从分析页内提到阶段容器顶层 —— ⑤产出里也能单路/宫格互切；
+    //     产出不再无条件跳宫格，按④分析时的取景走（单路→单路，宫格→宫格）。
+    check(m_viewChipsBar != nullptr && m_viewChips.size() == 3,
+          QStringLiteral("视图 chips 横条存在（单路/宫格/全屏 三枚）"));
+    if (m_viewChipsBar && m_analyzePage) {
+        check(!m_analyzePage->isAncestorOf(m_viewChipsBar),
+              QStringLiteral("chips 不再嵌在分析页里（切宫格不跟着被藏）"));
+        check(m_viewChipsBar->height() <= 40,
+              QStringLiteral("chips 横条高度 %1 ≤ 40（不额外吃高度）")
+                  .arg(m_viewChipsBar->height()));
+    }
+    showStage(ui::Stage::Analyze);
+    pump();
+    const bool chipsInAnalyze = m_viewChipsBar && m_viewChipsBar->isVisible();
+    showStage(ui::Stage::Deliver);
+    pump();
+    const bool chipsInDeliver = m_viewChipsBar && m_viewChipsBar->isVisible();
+    check(chipsInAnalyze && !chipsInDeliver,
+          QStringLiteral("chips 只在有画面的阶段出现（分析=可见 / 交付=隐藏）"));
+    // 回到产出（单路取景策略的回落路径：无案件 → 单路导出面板，不建宫格页）
+    showStage(ui::Stage::Produce);
+    pump();
+    // v3.5（用户）：⑤产出 + 单路取景时要有一个「导出单路视频…」的显眼按钮
+    check(m_exportSingleBtn != nullptr
+              && m_exportSingleBtn->objectName()
+                     == QStringLiteral("exportSingleVideoBtn"),
+          QStringLiteral("⑤单路取景有「导出单路视频…」按钮"));
+    syncViewChips(1);   // 切宫格口径：该按钮应让位给宫格导出面板
+    check(m_exportSingleBtn && !m_exportSingleBtn->isVisible(),
+          QStringLiteral("宫格取景时该按钮隐藏（导出走宫格面板）"));
+    syncViewChips(0);
+    check(m_exportSingleBtn && m_exportSingleBtn->isVisible(),
+          QStringLiteral("切回单路取景后该按钮恢复"));
 
     // 7. 校时：无视频 → 优雅失败（不建页、不崩、当前页不变）
     QWidget *before = m_workspaceStack->currentWidget();
@@ -2255,7 +2387,7 @@ int MainWindow::runShellSelfCheck()
             const QVector<int> after = dragProbe.cellOrder();
             check(after.size() == before.size() && after.value(0) == before.value(1)
                       && after.value(1) == before.value(0),
-                  QStringLiteral("左键拖拽瓦片可交换宫格位置（前 %1 后 %2）")
+                  QStringLiteral("左键拖拽画面可交换宫格位置（前 %1 后 %2）")
                       .arg(before.value(0)).arg(after.value(0)));
 
             // 拖拽不能吃掉「单击切听」：原地按下松手必须仍发 clicked
@@ -2279,7 +2411,7 @@ int MainWindow::runShellSelfCheck()
             check(clickCount == 1,
                   QStringLiteral("原地点一下仍是「单击」（不被拖拽逻辑吃掉）"));
         } else {
-            check(false, QStringLiteral("瓦片数量不足，无法验证拖拽换位"));
+            check(false, QStringLiteral("画面数量不足，无法验证拖拽换位"));
         }
         dragProbe.close();
     }
@@ -2739,17 +2871,25 @@ int MainWindow::runShellSelfCheck()
             TimeSettingsDialog calDlg(QStringLiteral("C:/selfcheck/v.mp4"),
                                       0, 10000, emptyCal, QString(), nullptr);
             auto *multiBtn = calDlg.findChild<QPushButton *>(
-                QStringLiteral("multiVideoCalibBtn"));
+                QStringLiteral("eventCalibBtn"));
             // 面板本体没 show，子控件的 isVisible() 恒 false；用 isHidden 判"有没有被藏"
             check(multiBtn != nullptr && !multiBtn->isHidden(),
-                  QStringLiteral("③校时面板里有「多视频校时」入口"));
+                  QStringLiteral("③校时面板里有「多机校时（同事件对时）」入口"));
+            check(calDlg.findChild<QPushButton *>(
+                      QStringLiteral("multiVideoCalibBtn")) == nullptr,
+                  QStringLiteral("旧的「多视频校时」已合并（不再有两个同义入口）"));
             int fired = 0;
-            connect(&calDlg, &TimeSettingsDialog::multiVideoCalibRequested,
+            connect(&calDlg, &TimeSettingsDialog::multiEventCalibRequested,
                     this, [&fired]() { ++fired; });
             if (multiBtn)
                 multiBtn->click();
             check(fired == 1,
-                  QStringLiteral("点「多视频校时」会请求打开多机宫格"));
+                  QStringLiteral("点「多机校时」会请求打开宫格并进对时流程"));
+            // v3.7（用户）：点了就直接进对时页面 —— 画面两窗空着，等用户点窗指定两路
+            MultiCamPlaybackWindow pickProbe;
+            pickProbe.beginEventCalibEmpty();
+            check(pickProbe.isEventCalibActive(),
+                  QStringLiteral("③校时进入直接落在对时页面（不等装配）"));
         }
 
         // ② 只敲 A（还没敲 B）也必须有线：用真实绘制验「有指示」
@@ -2788,6 +2928,78 @@ int MainWindow::runShellSelfCheck()
         pump();
         check(m_singleExportDlg == nullptr,
               QStringLiteral("无视频时单路导出面板不硬开（优雅提示）"));
+
+        // ④ v3.4：导出面板「导出内容：宫格合成 / 单路视频」+ 单路参数派生（纯函数）
+        {
+            speedplan::SpeedPlan cp;
+            cp.aMs = 0;
+            cp.bMs = 60000;
+            cp.rates = {1.0};
+            cp.normalize();
+            SegmentExportDialog contentDlg(cp, 0, QStringLiteral("C:/selfcheck/c.mp4"),
+                                           nullptr, /*wallEpoch=*/true);
+            auto *combo = contentDlg.findChild<QComboBox *>(
+                QStringLiteral("exportContentCombo"));
+            check(combo != nullptr && !contentDlg.contentSelectorVisible()
+                      && contentDlg.contentMode()
+                             == SegmentExportDialog::ContentMode::Grid,
+                  QStringLiteral("导出面板默认隐藏「导出内容」且口径 = 宫格"));
+            contentDlg.setContentSelectorVisible(true);
+            if (combo) {
+                combo->setCurrentIndex(1);
+                pump();
+                check(contentDlg.contentMode()
+                          == SegmentExportDialog::ContentMode::Single,
+                      QStringLiteral("切到「单路视频」→ contentMode = Single"));
+                combo->setCurrentIndex(0);
+                pump();
+                check(contentDlg.contentMode()
+                          == SegmentExportDialog::ContentMode::Grid,
+                      QStringLiteral("切回「宫格合成」→ 口径复原"));
+            }
+            contentDlg.setLaneChoices(
+                {qMakePair(QStringLiteral("机位1"), QStringLiteral("C:/a.mp4")),
+                 qMakePair(QStringLiteral("机位2"), QStringLiteral("C:/b.mp4"))});
+            check(contentDlg.laneChoiceCount() == 2
+                      && contentDlg.singleLaneIndex() >= 0,
+                  QStringLiteral("灌入两路后机位可选（当前 index=%1）")
+                      .arg(contentDlg.singleLaneIndex()));
+
+            SegmentExportEngine::Params gp;
+            gp.outputPath = QStringLiteral("C:/selfcheck/g.mp4");
+            gp.plan = cp;
+            gp.outFps = 25.0;
+            // 单路派生需要该路的墙钟数据（P1 审查后：没有就不再瞎派生）
+            SyncLaneData gl;
+            gl.id = QStringLiteral("C01");
+            gl.path = QStringLiteral("C:/a.mp4");
+            gl.displayName = QStringLiteral("机位1");
+            gl.calibrated = true;
+            gl.durationMs = 60000;
+            gp.lanes = {gl};
+            const SegmentExportEngine::Params same =
+                SegmentExportEngine::makeSingleLaneParams(gp, QString(), 0);
+            check(same.segments.isEmpty() && same.outputPath == gp.outputPath,
+                  QStringLiteral("空路径 → 原样返回宫格参数（调用方可判没选到路）"));
+            const SegmentExportEngine::Params one =
+                SegmentExportEngine::makeSingleLaneParams(
+                    gp, QStringLiteral("C:/a.mp4"), 1);
+            check(one.segments.size() == 1 && one.lanes.isEmpty()
+                      && one.segments.first().lanes.isEmpty()
+                      && one.segments.first().sourcePath == QStringLiteral("C:/a.mp4")
+                      && one.outputPath == gp.outputPath,
+                  QStringLiteral("单路派生：一个单视频段 / lanes 清空 / 输出路径沿用"));
+            // P1：选段与该路完全无交集（各机位开机时间不同很常见）时，必须
+            // 明确不派生，而不是静默回落成「导整支录像」或把墙钟当流内值。
+            SegmentExportEngine::Params gp2 = gp;
+            gp2.plan.aMs = 100000;
+            gp2.plan.bMs = 200000;
+            const SegmentExportEngine::Params none =
+                SegmentExportEngine::makeSingleLaneParams(
+                    gp2, QStringLiteral("C:/a.mp4"), 0);
+            check(none.segments.isEmpty(),
+                  QStringLiteral("选段与该路无交集 → 不派生（不静默改导整路）"));
+        }
     }
 
     // 14.98 快捷键不抢已有语义（S = 证据快照，断点改用 D / Ins）
@@ -3047,6 +3259,83 @@ int MainWindow::runShellSelfCheck()
         if (!stripShot.isNull())
             stripShot.save(QDir(QCoreApplication::applicationDirPath())
                                .filePath(QStringLiteral("selfcheck-multicam-strip.png")));
+    }
+
+    // ---- 走查截图（v3.7）：把"用户会看到的界面"抓下来，供主执行人读图评判 ----
+    // 这里不跑业务，只把两个新界面摆出来抓图：①对时指派页（两窗空着 + 角色提示）
+    // ②导出面板开「导出内容」选择器（宫格/单路）。
+    {
+        MultiCamPlaybackWindow ecProbe;
+        ecProbe.resize(1400, 860);
+        ecProbe.show();
+        pump();
+        ecProbe.beginEventCalibEmpty();
+        pump();
+        wait(120);
+        const QPixmap pm = ecProbe.grab();
+        if (!pm.isNull())
+            pm.save(QDir(QCoreApplication::applicationDirPath())
+                        .filePath(QStringLiteral("selfcheck-eventcalib-empty.png")));
+        check(!pm.isNull() && pm.width() > 800,
+              QStringLiteral("走查：对时指派页能出图（%1x%2）").arg(pm.width()).arg(pm.height()));
+        ecProbe.hide();
+    }
+    {
+        speedplan::SpeedPlan wp;
+        wp.aMs = 0;
+        wp.bMs = 300000;
+        wp.rates = {1.0};
+        wp.normalize();
+        SegmentExportDialog wdlg(wp, 0, QStringLiteral("C:/selfcheck/walk.mp4"),
+                                 nullptr, /*wallEpoch=*/true);
+        wdlg.setContentSelectorVisible(true);
+        wdlg.setLaneChoices(
+            {qMakePair(QStringLiteral("C01 商铺D07"), QStringLiteral("C:/a.mp4")),
+             qMakePair(QStringLiteral("C02 中间通道"), QStringLiteral("C:/b.mp4"))});
+        auto *wc = wdlg.findChild<QComboBox *>(QStringLiteral("exportContentCombo"));
+        if (wc)
+            wc->setCurrentIndex(1);          // 切到「单路视频」，看机位下拉是否出现
+        wdlg.resize(560, 720);
+        wdlg.show();
+        pump();
+        wait(120);
+        const QPixmap pm = wdlg.grab();
+        if (!pm.isNull())
+            pm.save(QDir(QCoreApplication::applicationDirPath())
+                        .filePath(QStringLiteral("selfcheck-export-single-mode.png")));
+        check(!pm.isNull() && pm.width() > 400,
+              QStringLiteral("走查：导出面板单路口径能出图（%1x%2）").arg(pm.width()).arg(pm.height()));
+        wdlg.hide();
+    }
+
+    // 走查：宫格页「选中画面」的金框（用户：不清楚自己选中了哪个）
+    // 直接拿两块真实 CamTileWidget 摆一排抓图：左边选中、右边未选中，
+    // 一眼能对比出框的强弱是否合适（比截整窗更可靠——整窗依赖引擎加载成功）。
+    {
+        QWidget host;
+        host.resize(900, 420);
+        auto *lay = new QHBoxLayout(&host);
+        lay->setContentsMargins(0, 0, 0, 0);
+        lay->setSpacing(6);
+        for (int i = 0; i < 2; ++i) {
+            auto *t = new CamTileWidget(&host);
+            t->setLaneName(QStringLiteral("机位%1").arg(i + 1));
+            t->setPlaceholder(i == 0 ? QStringLiteral("选中（金框）")
+                                     : QStringLiteral("未选中"));
+            t->setSelected(i == 0);
+            lay->addWidget(t);
+        }
+        host.show();
+        pump();
+        wait(120);
+        const QPixmap pm = host.grab();
+        if (!pm.isNull())
+            pm.save(QDir(QCoreApplication::applicationDirPath())
+                        .filePath(QStringLiteral("selfcheck-grid-selected.png")));
+        check(!pm.isNull() && pm.width() > 600,
+              QStringLiteral("走查：宫格选中/未选中对比能出图（%1x%2）")
+                  .arg(pm.width()).arg(pm.height()));
+        host.hide();
     }
 
     // ---- 可选：真实导出冒烟（LUMENARC_EXPORT_SMOKE=1 才跑，避免拖慢常规自检）----
