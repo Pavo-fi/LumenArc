@@ -54,26 +54,22 @@ AccountDialog::AccountDialog(QWidget* parent) : QDialog(parent) {
                                             : cred.name + QStringLiteral("（") + cred.org + QStringLiteral("）");
     m_infoLabel = new QLabel(
         QStringLiteral("当前账号：%1\n登录方式：%2")
-            .arg(who, m_isInvite ? QStringLiteral("邀请码 %1").arg(m_uid.mid(7))
-                                 : QStringLiteral("手机号 %1").arg(maskPhone(m_uid))),
+            .arg(who, m_uid.contains(QLatin1Char('@'))
+                          ? QStringLiteral("邮箱 %1").arg(m_uid)
+                          : QStringLiteral("手机号 %1").arg(maskPhone(m_uid))),
         this);
     m_infoLabel->setWordWrap(true);
     root->addWidget(m_infoLabel);
 
-    // ---- 修改姓名/单位（手机号用户）----
+    // ---- 修改姓名/单位（密码验证身份；不再走短信）----
     m_editBox = new QGroupBox(QStringLiteral("修改姓名 / 单位"), this);
     auto* ef = new QFormLayout(m_editBox);
-    auto* codeRow = new QWidget(m_editBox);
-    auto* cr = new QHBoxLayout(codeRow);
-    cr->setContentsMargins(0, 0, 0, 0);
-    m_code = new QLineEdit(codeRow);
-    m_code->setPlaceholderText(QStringLiteral("短信验证码（发到当前手机号）"));
-    m_sendBtn = new QPushButton(QStringLiteral("发送验证码"), codeRow);
-    cr->addWidget(m_code, 1);
-    cr->addWidget(m_sendBtn);
+    m_code = new QLineEdit(m_editBox);
+    m_code->setEchoMode(QLineEdit::Password);
+    m_code->setPlaceholderText(QStringLiteral("当前密码（验证身份用）"));
     m_name = new QLineEdit(cred.name, m_editBox);
     m_org = new QLineEdit(cred.org, m_editBox);
-    ef->addRow(QStringLiteral("验 证"), codeRow);
+    ef->addRow(QStringLiteral("验 证"), m_code);
     ef->addRow(QStringLiteral("姓 名"), m_name);
     ef->addRow(QStringLiteral("单 位"), m_org);
     m_submitBtn = new QPushButton(QStringLiteral("提交修改"), m_editBox);
@@ -100,20 +96,8 @@ AccountDialog::AccountDialog(QWidget* parent) : QDialog(parent) {
     root->addLayout(btnRow);
 
     connect(closeBtn, &QPushButton::clicked, this, &QDialog::accept);
-    connect(m_sendBtn, &QPushButton::clicked, this, &AccountDialog::onSendCode);
     connect(m_submitBtn, &QPushButton::clicked, this, &AccountDialog::onSubmitProfile);
     connect(m_signoutBtn, &QPushButton::clicked, this, &AccountDialog::onSignOut);
-
-    m_countdown = new QTimer(this);
-    connect(m_countdown, &QTimer::timeout, this, [this]() {
-        if (--m_countdownLeft <= 0) {
-            m_countdown->stop();
-            m_sendBtn->setEnabled(true);
-            m_sendBtn->setText(QStringLiteral("发送验证码"));
-        } else {
-            m_sendBtn->setText(QStringLiteral("重新发送(%1s)").arg(m_countdownLeft));
-        }
-    });
 }
 
 void AccountDialog::setBusy(bool busy, const QString& hint) {
@@ -132,64 +116,35 @@ void AccountDialog::fail(const QString& machineCode, const QString& serverMsg) {
 }
 
 void AccountDialog::onSendCode() {
-    const QString phone = m_uid.mid(4);  // 去 "+86 "
-    setBusy(true, QStringLiteral("正在发送验证码…"));
-    // v1.18.0 P1 修复：请求挂在静态 CloudAccount::m_nam 上，而本对话框是栈对象
-    // （mainwindow_ui.cpp: dlg.exec()），可能在请求在途时被关闭 —— 原 [this]
-    // 捕获回调触发时即悬空 → 0xC0000005。QPointer 守卫对话框生命周期。
-    QPointer<AccountDialog> self(this);
-    CloudAccount::instance().sendSmsCode(phone, [this, self](const CloudAccount::Result& r) {
-        if (!self) return;
-        setBusy(false);
-        if (!r.ok) {
-            fail(r.error, r.message);
-            return;
-        }
-        m_status->setStyleSheet(QStringLiteral("color:%1;").arg(Theme::Status::Ok));
-        m_status->setText(QStringLiteral("验证码已发送到当前手机号（5 分钟内有效）"));
-        m_countdownLeft = 60;
-        m_sendBtn->setEnabled(false);
-        m_countdown->start(1000);
-    });
+    // v2：不再有短信通道；改资料用当前密码验证身份（见 onSubmitProfile）
 }
 
 void AccountDialog::onSubmitProfile() {
-    const QString code = m_code->text().trimmed();
+    const QString pwd = m_code->text();
     const QString name = m_name->text().trimmed();
     const QString org = m_org->text().trimmed();
-    if (code.length() < 4) { fail(QStringLiteral("bad_code"), QStringLiteral("请输入短信验证码")); return; }
+    if (pwd.isEmpty()) { fail(QStringLiteral("bad_password"), QStringLiteral("请输入当前密码")); return; }
     if (name.isEmpty() || org.isEmpty()) { fail(QStringLiteral("missing_fields"), QString()); return; }
 
-    const QString phone = m_uid.mid(4);
-    setBusy(true, QStringLiteral("正在验证身份…"));
-    // v1.18.0 P1 修复：见 onSendCode —— QPointer 守卫对话框生命周期（含内层回调）
+    setBusy(true, QStringLiteral("正在验证并提交…"));
+    // v1.18.0 P1 修复：QPointer 守卫对话框生命周期
     QPointer<AccountDialog> self(this);
-    CloudAccount::instance().reauthPhone(phone, code, [this, self, phone, code, name, org](const CloudAccount::Result& r) {
+    const Credential cred = CredentialStore::load();
+    CloudAccount::instance().updateProfile(cred.token, pwd, name, org,
+                                           [this, self, name, org](const CloudAccount::Result& r) {
         if (!self) return;
         if (!r.ok) {
             fail(r.error, r.message);
             return;
         }
-        const QString accessToken = r.data.value(QStringLiteral("access_token")).toString();
-        const Credential cred = CredentialStore::load();
-        setBusy(true, QStringLiteral("正在提交修改…"));
-        CloudAccount::instance().updateProfile(cred.token, accessToken, name, org,
-                                               [this, self, name, org](const CloudAccount::Result& r2) {
-            if (!self) return;
-            if (!r2.ok) {
-                fail(r2.error, r2.message);
-                return;
-            }
-            Credential c = CredentialStore::load();
-            c.name = name;
-            c.org = org;
-            CredentialStore::save(c);
-            setBusy(false);
-            m_status->setStyleSheet(QStringLiteral("color:%1;").arg(Theme::Status::Ok));
-            m_status->setText(QStringLiteral("资料已更新。新建案件与报告将使用新的姓名和单位。"));
-            m_infoLabel->setText(QStringLiteral("当前账号：%1（%2）\n登录方式：手机号 %3")
-                                     .arg(name, org, maskPhone(m_uid)));
-        });
+        Credential c = CredentialStore::load();
+        c.name = name;
+        c.org = org;
+        CredentialStore::save(c);
+        setBusy(false);
+        m_status->setStyleSheet(QStringLiteral("color:%1;").arg(Theme::Status::Ok));
+        m_status->setText(QStringLiteral("资料已更新。新建案件与报告将使用新的姓名和单位。"));
+        m_infoLabel->setText(QStringLiteral("当前账号：%1（%2）").arg(name, org));
     });
 }
 
