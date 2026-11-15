@@ -38,6 +38,7 @@ class QCheckBox;
 class QRadioButton;
 class QScrollArea;
 class QFrame;
+class QMimeData;
 class ClipTimelineWidget;
 class IAnalysisEngine;
 class CaseManager;
@@ -117,6 +118,13 @@ private:
 
     void setStep(int idx);
     void addFiles(const QStringList &files);
+    /// 外部文件拖入判定：处于空闲态（Idle/Done/Failed/Cancelled）且 MIME 含
+    /// 可识别视频 URL → true（2026-11 修复；任务运行中/待人确认时一律拒收）
+    bool canAcceptVideoDrop(const QMimeData *mime) const;
+    /// 收下 MIME 里的视频 URL（addFiles + 回到导入页）；没有可用文件返回 false
+    bool takeVideoUrls(const QMimeData *mime);
+    /// 虚线提示框拖拽悬停高亮（主题色实线）开关
+    void setImportDropHighlight(bool on);
     void rebuildReviewViews();          // 时间线+卡片（m_groups → UI）
     void refreshReviewSummary();
     QWidget *makeCard(const SortEntry &e, int groupIdx, const QString &channel);
@@ -151,9 +159,14 @@ private:
     int m_currentStep = 0;
 
     QStackedWidget *m_stack = nullptr;
+    /// 中心容器：嵌入主窗口时（mainwindow_shell.cpp embedWorkspace 只搬
+    /// centralWidget），窗口本体被 hide，本控件是整页拖拽的唯一锚点（2026-11）
+    QWidget *m_central = nullptr;
 
     // ① 导入
     QTableWidget *m_fileTable = nullptr;
+    QFrame *m_importHint = nullptr;         ///< 虚线拖入提示框（接外部文件 URL）
+    bool m_importDropHot = false;           ///< 拖拽悬停高亮态（防 DragMove 重复刷样式）
     QLabel *m_importSummary = nullptr;
     QProgressBar *m_importProgress = nullptr;
     QLabel *m_importStatus = nullptr;

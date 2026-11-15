@@ -171,6 +171,7 @@ void PreprocessWindow::roiPickForFile(const QString &filePath)
 #include <QDragEnterEvent>
 #include <QDropEvent>
 #include <QMimeData>
+#include <QUrl>
 #include <QDrag>
 #include <QMouseEvent>
 #include <QKeyEvent>
@@ -222,20 +223,33 @@ PreprocessWindow::PreprocessWindow(IAnalysisEngine *analysis, QWidget *parent)
     setAttribute(Qt::WA_DeleteOnClose);
     resize(1120, 780);
     m_coord->setAnalysisEngine(analysis);
+    // 独立窗口形态：本体可直接接收文件拖入（嵌入形态下本体被 hide，
+    // 由 m_central / m_importHint 兜底，见下）
+    setAcceptDrops(true);
 
-    auto *central = new QWidget(this);
-    auto *root = new QVBoxLayout(central);
+    m_central = new QWidget(this);
+    auto *root = new QVBoxLayout(m_central);
     root->setContentsMargins(10, 8, 10, 8);
     root->setSpacing(8);
     root->addWidget(buildFormatBanner());
     root->addWidget(buildCaseBanner());
-    m_stack = new QStackedWidget(central);
+    m_stack = new QStackedWidget(m_central);
     m_stack->addWidget(buildPageImport());
     m_stack->addWidget(buildPageReview());
     m_stack->addWidget(buildPageSettings());
     m_stack->addWidget(buildPageRun());
     root->addWidget(m_stack, 1);
-    setCentralWidget(central);
+    setCentralWidget(m_central);
+
+    // 整备页拖放接收点（2026-11 修复：拖视频进整备页无反应）：
+    // ① central——页内空白处；② 虚线提示框——用户预期的拖入区。
+    // 子控件不接收时 Qt 会沿父链找最近 acceptDrops 的祖先，central 即锚点。
+    m_central->setAcceptDrops(true);
+    m_central->installEventFilter(this);
+    if (m_importHint) {
+        m_importHint->setAcceptDrops(true);
+        m_importHint->installEventFilter(this);
+    }
 
     connect(m_coord, &PreprocessingCoordinator::phaseChanged,
             this, &PreprocessWindow::onPhaseChanged);
@@ -434,20 +448,21 @@ QWidget *PreprocessWindow::buildPageImport()
     auto *w = new QWidget(this);
     auto *lay = new QVBoxLayout(w);
 
-    auto *hint = new QFrame(w);
-    hint->setFrameShape(QFrame::StyledPanel);
-    hint->setStyleSheet(QStringLiteral(
+    // 虚线提示框：整页最显眼的拖入区，本身接收外部文件 URL（构造函数挂过滤器）
+    m_importHint = new QFrame(w);
+    m_importHint->setFrameShape(QFrame::StyledPanel);
+    m_importHint->setStyleSheet(QStringLiteral(
         "QFrame { border: 2px dashed %1; border-radius: 10px; background: %2; }"
         "QLabel { border: none; }").arg(Theme::Border, Theme::BgPanel));
-    hint->setMinimumHeight(96);
-    auto *hintLay = new QVBoxLayout(hint);
+    m_importHint->setMinimumHeight(96);
+    auto *hintLay = new QVBoxLayout(m_importHint);
     auto *hintLbl = new QLabel(lang("把监控录像文件拖到这里\n或点击下方「添加文件」",
-                                    "Drop surveillance video files here\nor click Add below"), hint);
+                                    "Drop surveillance video files here\nor click Add below"), m_importHint);
     hintLbl->setAlignment(Qt::AlignCenter);
     hintLbl->setStyleSheet(QStringLiteral("color:%1; font-size:11px;")  // 规范§3：辅助说明=Caption 11px
                                .arg(Theme::TextSecond));
     hintLay->addWidget(hintLbl);
-    lay->addWidget(hint);
+    lay->addWidget(m_importHint);
 
     m_importSummary = new QLabel(lang("尚未导入文件", "No files imported"), w);
     lay->addWidget(m_importSummary);
@@ -2571,8 +2586,94 @@ int insertIndexForChan(QWidget *host, const QString &chan, int x,
 }
 } // namespace
 
+// ---------------------------------------------------------------------------
+// 外部视频文件拖入（2026-11 修复：整备页拖文件无反应）
+// 判定与收取集中在这里：只有 Idle/Done/Failed/Cancelled 四个空闲态接收，
+// 其余（Probing/Ocr/Sorting/Precheck/UserConfirm/Transcoding/Concat…）一律
+// 不接收，避免把文件塞进正在跑或待人工确认的任务。扩展名口径同「添加文件…」。
+// ---------------------------------------------------------------------------
+bool PreprocessWindow::canAcceptVideoDrop(const QMimeData *mime) const
+{
+    if (!mime || !mime->hasUrls())
+        return false;
+    const TaskPhase ph = m_coord->phase();
+    if (ph != TaskPhase::Idle && ph != TaskPhase::Done
+        && ph != TaskPhase::Failed && ph != TaskPhase::Cancelled)
+        return false;
+    for (const QUrl &u : mime->urls())
+        if (u.isLocalFile() && isVideoFile(u.toLocalFile()))
+            return true;
+    return false;
+}
+
+bool PreprocessWindow::takeVideoUrls(const QMimeData *mime)
+{
+    QStringList files;
+    if (mime && mime->hasUrls()) {
+        for (const QUrl &u : mime->urls()) {
+            if (!u.isLocalFile())
+                continue;
+            const QString f = u.toLocalFile();
+            if (isVideoFile(f))
+                files << f;
+        }
+    }
+    if (files.isEmpty())
+        return false;
+    addFiles(files);
+    setStep(0);
+    return true;
+}
+
+void PreprocessWindow::setImportDropHighlight(bool on)
+{
+    if (!m_importHint || m_importDropHot == on)
+        return;
+    m_importDropHot = on;
+    // 悬停：主题色实线加粗；恢复：与 buildPageImport 里初始虚线样式一致
+    m_importHint->setStyleSheet(on
+        ? QStringLiteral(
+            "QFrame { border: 3px solid %1; border-radius: 10px; background: %2; }"
+            "QLabel { border: none; }").arg(Theme::Accent, Theme::BgPanel)
+        : QStringLiteral(
+            "QFrame { border: 2px dashed %1; border-radius: 10px; background: %2; }"
+            "QLabel { border: none; }").arg(Theme::Border, Theme::BgPanel));
+}
+
 bool PreprocessWindow::eventFilter(QObject *watched, QEvent *event)
 {
+    // --- 整页（central）/虚线提示框：外部视频文件拖入（2026-11 修复） ---
+    // 嵌入形态下窗口本体被 hide，central 是整页的兜底接收点（卡片页 m_cardHost
+    // 自带 acceptDrops，自己收）；子控件不接收时 Qt 沿父链把拖放事件交到这里。
+    // 非视频/任务运行中返回 false：本页不做处理，Qt 选定落点后不会再上抛给主窗，
+    // 因此整备页里拖非视频文件表现为「禁止光标、无反应」——这是有意的（整备只收
+    // 视频），分析页/起始页的拖入逻辑不受影响。
+    if ((m_central && watched == m_central) || (m_importHint && watched == m_importHint)) {
+        const auto et = event->type();
+        if (et == QEvent::DragEnter || et == QEvent::DragMove) {
+            auto *de = static_cast<QDragMoveEvent *>(event);
+            if (!canAcceptVideoDrop(de->mimeData()))
+                return false;
+            setImportDropHighlight(true);
+            de->acceptProposedAction();
+            return true;
+        }
+        if (et == QEvent::DragLeave) {
+            setImportDropHighlight(false);
+            return false;
+        }
+        if (et == QEvent::Drop) {
+            auto *de = static_cast<QDropEvent *>(event);
+            if (!canAcceptVideoDrop(de->mimeData()))
+                return false;
+            setImportDropHighlight(false);
+            takeVideoUrls(de->mimeData());
+            de->acceptProposedAction();
+            return true;
+        }
+        return false;
+    }
+
     // --- 导入表键盘：Del/Backspace 删除选中行（现场反馈：个别错了无法删除） ---
     if (m_fileTable && watched == m_fileTable) {
         if (event->type() == QEvent::KeyPress) {
@@ -2671,12 +2772,20 @@ bool PreprocessWindow::eventFilter(QObject *watched, QEvent *event)
                 de->acceptProposedAction();
                 return true;
             }
+            // 外部文件 URL：表格区也兜住（否则会掉到 QTableWidget 默认实现，
+            // 光标变禁止、事件也不再冒泡到 central）
+            if (canAcceptVideoDrop(de->mimeData())) {
+                setImportDropHighlight(true);
+                de->acceptProposedAction();
+                return true;
+            }
             break;
         }
         case QEvent::DragLeave: {
             auto *st = static_cast<SortableFileTable *>(m_fileTable);
             st->dragActive = false;
             st->clearDropIndicator();
+            setImportDropHighlight(false);
             break;
         }
         case QEvent::Drop: {
@@ -2684,6 +2793,7 @@ bool PreprocessWindow::eventFilter(QObject *watched, QEvent *event)
             auto *st = static_cast<SortableFileTable *>(m_fileTable);
             st->dragActive = false;
             st->clearDropIndicator();
+            setImportDropHighlight(false);
             if (st->handleRowDrop(de->mimeData(), de->position().toPoint())) {
                 syncPendingFromTable();
                 de->acceptProposedAction();
@@ -2692,6 +2802,11 @@ bool PreprocessWindow::eventFilter(QObject *watched, QEvent *event)
             if (de->mimeData()->hasFormat(
                     QStringLiteral("application/x-lumenarc-filerow"))) {
                 de->acceptProposedAction();   // 落点无效但属于行拖拽：消化掉
+                return true;
+            }
+            if (canAcceptVideoDrop(de->mimeData())) {   // 外部视频文件 → 入待处理列表
+                takeVideoUrls(de->mimeData());
+                de->acceptProposedAction();
                 return true;
             }
             break;
@@ -2938,28 +3053,16 @@ void PreprocessWindow::promptGroupAssignment(
 
 void PreprocessWindow::dragEnterEvent(QDragEnterEvent *event)
 {
-    if (event->mimeData()->hasUrls()) {
-        for (const QUrl &u : event->mimeData()->urls())
-            if (isVideoFile(u.toLocalFile())) {
-                event->acceptProposedAction();
-                return;
-            }
-    }
+    if (canAcceptVideoDrop(event->mimeData()))
+        event->acceptProposedAction();
 }
 
 void PreprocessWindow::dropEvent(QDropEvent *event)
 {
-    QStringList files;
-    for (const QUrl &u : event->mimeData()->urls()) {
-        const QString f = u.toLocalFile();
-        if (isVideoFile(f))
-            files << f;
-    }
-    if (!files.isEmpty()) {
-        addFiles(files);
-        setStep(0);
+    if (!canAcceptVideoDrop(event->mimeData()))
+        return;
+    if (takeVideoUrls(event->mimeData()))
         event->acceptProposedAction();
-    }
 }
 
 void PreprocessWindow::closeEvent(QCloseEvent *event)
