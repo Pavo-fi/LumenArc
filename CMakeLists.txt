@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(LumenArc VERSION 1.19.1 LANGUAGES CXX)
+project(LumenArc VERSION 1.19.2 LANGUAGES CXX)
 add_compile_definitions(APP_VERSION="${PROJECT_VERSION}")
 
 set(CMAKE_CXX_STANDARD 17)
@@ -313,6 +313,24 @@ elseif(APPLE)
     )
 else()
     add_executable(${PROJECT_NAME} ${SOURCES} ${HEADERS})
+endif()
+
+# --- 发布包启动器（仅 Windows）---
+# 根目录只放几十 KB 的启动器 + 操作手册，程序本体与全部运行库收进 runtime\。
+# 原因见 launcher/main.cpp 顶部注释（Windows 只在 exe 同目录找 DLL）。
+if(WIN32)
+    add_executable(LumenArcLauncher WIN32 launcher/main.cpp)
+    # 必须静态链接 CRT：这个文件要是依赖 vcruntime140.dll，根目录又得多两个 DLL
+    set_property(TARGET LumenArcLauncher PROPERTY
+        MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+    set_target_properties(LumenArcLauncher PROPERTIES
+        OUTPUT_NAME "LumenArc"
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/Release/launcher"
+        RUNTIME_OUTPUT_DIRECTORY_RELEASE "${CMAKE_BINARY_DIR}/Release/launcher"
+        RUNTIME_OUTPUT_DIRECTORY_RELWITHDEBINFO "${CMAKE_BINARY_DIR}/Release/launcher"
+        RUNTIME_OUTPUT_DIRECTORY_MINSIZEREL "${CMAKE_BINARY_DIR}/Release/launcher"
+        RUNTIME_OUTPUT_DIRECTORY_DEBUG "${CMAKE_BINARY_DIR}/Release/launcher"
+    )
 endif()
 
 target_include_directories(${PROJECT_NAME} PRIVATE

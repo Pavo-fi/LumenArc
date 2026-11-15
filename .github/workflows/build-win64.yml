@@ -172,8 +172,10 @@ jobs:
           generate_release_notes: true
           body: |
             ## 下载说明
-            - **Windows**：`LumenArc-v<版本>-win64.zip` — 解压后双击 `LumenArc.exe` 运行
-              - 解压后目录内已自带 Python 分析环境与 ffmpeg，无需另外安装
-              - 若程序提示缺少 `VCRUNTIME140.dll` / `MSVCP140.dll`，双击同目录的
-                `vc_redist.x64.exe` 装一次运行库即可（旧版精简系统常见）
+            - **Windows**：`LumenArc-v<版本>-win64.zip` — 解压后双击根目录的 `LumenArc.exe` 运行
+              - 解压后根目录只有三样：`LumenArc.exe`、操作手册 PDF、`runtime\` 文件夹
+              - 程序和全部运行库都在 `runtime\` 里（含随包 Python 与 ffmpeg，无需另装），
+                请勿单独把 exe 拷出来用，也不要改 `runtime\` 的名字
+              - 若程序提示缺少 `VCRUNTIME140.dll` / `MSVCP140.dll`，双击 `runtime\vc_redist.x64.exe`
+                装一次运行库即可（旧版精简系统常见）
             - **macOS**：`LumenArc-mac-arm64.dmg`（Apple Silicon）
