@@ -945,7 +945,8 @@ static QString findFfprobePath()
 }
 
 static qint64 ffprobeStreamDurationMs(const QString &videoPath,
-                                      const QString &streamSpec)
+                                      const QString &streamSpec,
+                                      int timeoutMs = 30000)
 {
     const QString ffprobe = findFfprobePath();
     if (ffprobe.isEmpty())
@@ -964,7 +965,7 @@ static qint64 ffprobeStreamDurationMs(const QString &videoPath,
     // （视频流时长防御失效，容器虚标时尾部取样落空 → 三点退化）
     proc.setWorkingDirectory(QCoreApplication::applicationDirPath());
     proc.start();
-    if (!proc.waitForFinished(30000))
+    if (!proc.waitForFinished(timeoutMs))
         return 0;
     const QString out = QString::fromUtf8(proc.readAllStandardOutput()).trimmed();
     bool ok = false;
@@ -972,9 +973,10 @@ static qint64 ffprobeStreamDurationMs(const QString &videoPath,
     return (ok && sec > 0.0) ? static_cast<qint64>(sec * 1000.0) : 0;
 }
 
-qint64 CalibrationService::probeVideoStreamDurationMs(const QString &videoPath)
+qint64 CalibrationService::probeVideoStreamDurationMs(const QString &videoPath,
+                                                      int timeoutMs)
 {
-    return ffprobeStreamDurationMs(videoPath, QStringLiteral("v:0"));
+    return ffprobeStreamDurationMs(videoPath, QStringLiteral("v:0"), timeoutMs);
 }
 
 qint64 CalibrationService::probeAudioDurationMs(const QString &videoPath)

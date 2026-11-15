@@ -49,6 +49,17 @@ qint64 jsonWallStart(const QJsonObject &first)
         - static_cast<qint64>(first[QStringLiteral("relMs")].toDouble());
 }
 
+/// 依赖探测「失败结果」的有效期终点（epoch ms，进程级共享）。
+/// v1.18.x（GO「时不时出错」复盘）：失败此前被永久缓存（m_availability 一旦置 0
+/// 就再也不探），用户中途把 python 依赖装好之后，本会话所有 GO 仍全失败，只能
+/// 重启软件。改为：失败只在很短的冷却窗口内有效，过期即复探——装好依赖后下一次
+/// 点「开始」就能过；同时避免引擎真缺失时每次点击都重跑一趟 python import
+/// （那趟最长 15 s，且在 UI 线程）。
+/// 注：进程级而非成员级（本类有多个实例：校时服务/预处理窗口各一个）——
+/// 只会让复探更保守，不会造成重复探测。
+qint64 g_availFailedUntilMs = 0;
+constexpr qint64 kAvailReprobeCooldownMs = 10000;
+
 } // namespace
 
 TimestampOcrEngine::TimestampOcrEngine(QObject *parent)
@@ -65,6 +76,7 @@ void TimestampOcrEngine::setPythonExecutable(const QString &path)
 {
     m_pythonPath = path;
     m_availability = -1;
+    g_availFailedUntilMs = 0;   // 换了 python：旧失败结论立刻作废，下次即复探
 }
 
 QString TimestampOcrEngine::pythonExecutable() const
@@ -75,40 +87,51 @@ QString TimestampOcrEngine::pythonExecutable() const
 
 bool TimestampOcrEngine::available(QString *errorDetail)
 {
-    if (m_availability >= 0) {
+    // 「可用」永久缓存；「不可用」只在冷却窗口内有效，过期即复探
+    // （v1.18.x：旧版失败永久缓存 → 中途装好依赖也得重启软件，见上面注释）
+    if (m_availability == 1
+        || (m_availability == 0
+            && QDateTime::currentMSecsSinceEpoch() < g_availFailedUntilMs)) {
         if (errorDetail)
             *errorDetail = m_availError;
         return m_availability == 1;
     }
-    m_availability = 0;
-    const QString py = pythonExecutable();
-    if (py.isEmpty() || !QFile::exists(py)) {
-        m_availError = QStringLiteral("python not found");
+    // 失败统一出口：记原因 + 开冷却窗口
+    auto unavailable = [&](const QString &detail) {
+        m_availability = 0;
+        m_availError = detail;
+        g_availFailedUntilMs
+            = QDateTime::currentMSecsSinceEpoch() + kAvailReprobeCooldownMs;
         if (errorDetail)
             *errorDetail = m_availError;
         return false;
-    }
+    };
+    const QString py = pythonExecutable();
+    if (py.isEmpty() || !QFile::exists(py))
+        return unavailable(QStringLiteral("python not found"));
     const QString script = QCoreApplication::applicationDirPath()
         + QStringLiteral("/probe_timestamps.py");
-    if (!QFile::exists(script)) {
-        m_availError = QStringLiteral("probe_timestamps.py not found");
-        if (errorDetail)
-            *errorDetail = m_availError;
-        return false;
-    }
-    // rapidocr 导入检测（一次性，缓存）
+    if (!QFile::exists(script))
+        return unavailable(QStringLiteral("probe_timestamps.py not found"));
+    // rapidocr 导入检测（成功才缓存；失败只缓存 kAvailReprobeCooldownMs）
     QProcess proc;
     proc.setProgram(py);
     proc.setArguments({QStringLiteral("-c"),
                        QStringLiteral("import rapidocr_onnxruntime, cv2, numpy")});
     proc.start();
-    if (!proc.waitForFinished(15000) || proc.exitCode() != 0) {
-        m_availError = QStringLiteral("rapidocr_onnxruntime not installed");
-        if (errorDetail)
-            *errorDetail = m_availError;
-        return false;
+    // 超时压到 5s：这趟跑在 UI 线程上（每次 GO / 预处理 GO 都会在冷却过期后走一遍），
+    // 依赖齐全时 python 导入约 1~2s，卡住的 python 不该让界面假死 15s。
+    // 注：g_availFailedUntilMs 是文件级 static，只在 UI 线程调用（现网唯一调用方），
+    // 若将来挪到工作线程需改 atomic。
+    if (!proc.waitForFinished(5000) || proc.exitCode() != 0) {
+        const int code = proc.exitCode();
+        return unavailable(code > 0
+            ? QStringLiteral("rapidocr_onnxruntime not installed (import exit %1)").arg(code)
+            : QStringLiteral("rapidocr_onnxruntime not installed (import timeout)"));
     }
     m_availability = 1;
+    m_availError.clear();
+    g_availFailedUntilMs = 0;
     if (errorDetail)
         *errorDetail = QString();
     return true;

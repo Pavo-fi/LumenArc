@@ -50,6 +50,7 @@ static bool calibDebugEnabled()
 #include <QComboBox>
 #include <QSpinBox>
 #include <QPixmap>
+#include <QStringList>
 
 namespace {
 QString fmtStreamMs(qint64 ms)
@@ -59,6 +60,34 @@ QString fmtStreamMs(qint64 ms)
     const int s = int(ms % 60000 / 1000);
     return QStringLiteral("%1:%2:%3")
         .arg(h, 2, 10, QChar('0')).arg(m, 2, 10, QChar('0')).arg(s, 2, 10, QChar('0'));
+}
+
+/// v1.18.x（GO「时不时出错」复盘）：OCR 引擎「本身不可用/起不来」的精确判据。
+/// 旧判据 `error.contains("ocr")` 过宽——"rapidocr_onnxruntime not installed"
+/// 里也含 "ocr"，于是「引擎没装」被当成「画面没时间」：先白跑三点、再白跑全帧，
+/// 最后弹一条五条猜测的提示，真因被吃掉（现场：装好依赖前怎么点都失败）。
+/// 下列串与 timestamp_ocr_engine.cpp 中 available() 的三个失败分支
+/// 以及 python 启动失败的产串一一对应。
+bool isOcrEngineUnavailable(const QString &error)
+{
+    static const QStringList kEngineDown{
+        QStringLiteral("engine_missing"),                     // 引擎缺失语义串
+        QStringLiteral("ocr_engine_missing"),
+        QStringLiteral("rapidocr_onnxruntime not installed"),
+        QStringLiteral("python not found"),
+        QStringLiteral("probe_timestamps.py not found"),
+        QStringLiteral("failed to start python"),
+        QStringLiteral("python start failed"),
+        // python 起来了但 probe 非 0 退出且 stdout 全空：import 失败 / 脚本被删 /
+        // ffmpeg 不可运行都长这样，属于「识别链路没起来」而不是「这一帧没有时间」。
+        // 提示文案已按此口径写成中性描述（不武断归因到某一个依赖）。
+        QStringLiteral("probe_timestamps.py exit"),
+    };
+    for (const QString &m : kEngineDown) {
+        if (error.contains(m, Qt::CaseInsensitive))
+            return true;
+    }
+    return false;
 }
 } // namespace
 
@@ -920,6 +949,30 @@ void TimeSettingsDialog::onCancelGo()
 
 void TimeSettingsDialog::startGo()
 {
+    // v1.18.x（现场「点了完全没反应」主因）：m_durationMs 是开窗那一刻的快照
+    // （主窗传 effectiveDurationMs()），画面还在加载就点开始会拿到 0；而服务层
+    // runQuickCheck/runThreePoint 在 dur<=0 时**静默 return**（不发失败信号），
+    // 本窗口于是永远停在「快速检查中…」、按钮一直灰着。
+    // 修法：先自己补一次时长（同口径的视频流时长，复用 CalibrationService 现成
+    // 静态探测——它本来也在服务层同一趟里跑，正常时长 >0 时这趟不花）。
+    // 本窗口拿不到 IVideoEngine/主窗接口，故 ffprobe 是唯一可用的刷新口径。
+    // 超时压到 3s：这趟跑在 UI 线程上（同步 ffprobe），默认 30s 会让「点开始」
+    // 变成最长 30 秒假死；正常文件 ffprobe 读个时长只要几十毫秒。
+    if (m_durationMs <= 0 && !m_videoPath.isEmpty())
+        m_durationMs = CalibrationService::probeVideoStreamDurationMs(m_videoPath, 3000);
+    if (m_durationMs <= 0) {
+        // 补不到就别发请求（发了就是静默无响应）：说清原因，留在可重试态。
+        m_goStage = GoStage::Idle;
+        setGoBusy(false, QString());
+        m_resultLabel->setText(lang(
+            "视频时长还没就绪（画面还在加载/未能读取），现在还不能开始校时。\n"
+            "等画面能正常显示、时间轴有了长度，再点一次「开始」即可。",
+            "Video duration is not ready yet (still loading / unreadable), so "
+            "calibration cannot start.\n"
+            "Wait until the frame shows and the timeline has a length, then "
+            "click Start again."));
+        return;
+    }
     m_goStage = GoStage::Quick;
     m_roiRetried = false;   // v1.7.1：新一轮校时重置自动重试标记
     m_autoApplied = false;
@@ -1691,8 +1744,52 @@ void TimeSettingsDialog::onServiceFailed(const QString &videoPath,
 {
     if (videoPath != m_videoPath)
         return;
+    // ⓪ 引擎本身不可用（没 python / 没装 rapidocr / 缺 probe_timestamps.py /
+    // python 起不来）：这不是「画面没时间」。旧代码用 contains("ocr") 判据把它
+    // 混进识别失败，白跑三点 + 全帧两轮，最后弹一条把真因吃掉的猜测清单。
+    // 这里直接点名引擎不可用并带原始错误；引擎侧的失败结果只缓存很短一段时间
+    // （见 timestamp_ocr_engine.cpp），装好依赖后不重启、再点一次「开始」即可。
+    if (isOcrEngineUnavailable(error)) {
+        // 复核/重建阶段（Done）不能改写成「失败」：此时 m_working 可能已经应用，
+        // 把「✓ 校时完成」改成「✗ 引擎不可用」并发失败托盘就是误报。只写进度行。
+        if (m_goStage == GoStage::Done) {
+            setGoBusy(false, QString());
+            if (m_progressLabel)
+                m_progressLabel->setText(lang(
+                    "复核时识别组件没能运行（%1）；已应用的校时结果未改动。",
+                    "Recognizer could not run during verify (%1); the applied "
+                    "calibration is untouched.")
+                                             .arg(error));
+            return;
+        }
+        m_goStage = GoStage::Failed;
+        m_fitPending = false;   // 本轮没算出可用结果（与下方终态同语义）
+        setGoBusy(false, QString());
+        m_resultLabel->setText(lang(
+            "✗ 识别组件没能运行：%1\n"
+            "这不是「画面里没有时间」，是本机识别链路没起来，本次识别根本没跑：\n"
+            "· 没有 python，或没装 rapidocr_onnxruntime → 按部署说明装一次依赖\n"
+            "· 软件目录里缺 probe_timestamps.py → 重新部署软件\n"
+            "· 软件目录里缺 ffmpeg/ffprobe，或它们不可运行 → 重新部署软件\n"
+            "· 设置里改过 python 路径 → 确认它指向装了依赖的那个解释器\n"
+            "弄好后直接再点一次「开始」即可（会自动重新探测，无需重启软件）。",
+            "✗ The recognizer could not run: %1\n"
+            "This is not \"no time on screen\" — the local recognition chain never "
+            "started:\n"
+            "- no python, or rapidocr_onnxruntime not installed -> install the deps\n"
+            "- probe_timestamps.py missing in the app folder -> redeploy the app\n"
+            "- ffmpeg/ffprobe missing or not runnable -> redeploy the app\n"
+            "- python path overridden in settings -> point it at that interpreter\n"
+            "Then just click Start again (re-probed automatically, no restart).")
+                                    .arg(error));
+        emit goTaskFinished(lang("校时失败：识别引擎不可用",
+                                 "Calibration failed: OCR engine unavailable"),
+                            lang("%1：%2", "%1: %2")
+                                .arg(QFileInfo(videoPath).fileName(), error));
+        return;
+    }
     // 快速检查失败：OCR 类错误（首尾帧可能恰好黑屏/片头）→ 降级直接三点识别；
-    // 系统性错误（python/脚本缺失等）→ 直接报错。
+    // 系统性错误（python/脚本缺失等）→ 直接报错（引擎不可用已在 ⓪ 单独点名）。
     if (m_goStage == GoStage::Quick) {
         if (error.contains(QStringLiteral("ocr"))) {
             m_goStage = GoStage::Ocr;
@@ -1727,14 +1824,18 @@ void TimeSettingsDialog::onServiceFailed(const QString &videoPath,
     if (m_goStage == GoStage::Ocr || m_goStage == GoStage::Recon) {
         // v1.7.1：带框选识别失败 → 自动清框选全画面重试一次（用户实测：
         // 拼接产物沿用旧框选记忆，位置不匹配致 ocr_all_failed；全画面
-        // 自适应搜索实测可成功识别）
+        // 自适应搜索实测可成功识别）。
+        // v1.18.x：判据收紧为 ocr_all_failed（=「这个区域里一个时间都没读到」）。
+        // 看门狗超时之类换成全画面同样会超时，不再白跑一轮几十秒；
+        // 一次性语义不变（m_roiRetried 仍只放行一次，新一轮 GO 在 startGo 复位）。
         if (m_goStage == GoStage::Ocr && m_roi.isValid() && !m_roiRetried
-            && error.contains(QStringLiteral("ocr"))) {
+            && error.contains(QStringLiteral("ocr_all_failed"))) {
             m_roiRetried = true;
             m_roi = QRectF();
             m_resultLabel->setText(lang(
-                "框选区域未识别到时间，已切换全画面自动识别重试…",
-                "Boxed region had no time; retrying with full-frame OCR…"));
+                "框选区域未识别到时间（旧框可能已框偏），已切换全画面自动识别重试…",
+                "Boxed region had no time (a remembered box can be off); retrying "
+                "with full-frame OCR…"));
             setGoBusy(true, lang("识别中…", "Recognizing…"));
             m_service->runThreePoint(m_videoPath, m_currentPosMs, m_durationMs,
                                      m_roi);
@@ -1745,26 +1846,45 @@ void TimeSettingsDialog::onServiceFailed(const QString &videoPath,
         // v1.18.x：终态清 pending——本轮三点没算出可用结果，不能让第 2 步
         // 把上一轮（已被本次取代）的 fit 当“第 1 步结果”并入
         m_fitPending = false;
-        m_resultLabel->setText(lang(
-            "未能识别画面中的时间（%1）。\n"
-            "可能原因：\n"
-            "· 画面中没有时间显示，或时间不含日期（需 年月日 时分秒）\n"
-            "· 时间格式为「时分 + 独立秒框」之类非标准写法（如水印相机）\n"
-            "· 时间字体/位置特殊\n"
-            "· 框选区域与时间戳位置不匹配（可重新框选）\n"
-            "→ 不用卡在这里：用上方「画面时间读不出？手动录入」照拄画面时间\n"
-            "   建立基准，第 2 步即可继续。\n"
-            "   （单点只能定基准；如需修正“时钟快慢”仍建议修好框选后重跑 GO）",
-            "Could not read on-screen time (%1).\n"
-            "Possible causes:\n"
-            "- no timestamp on screen, or no date (needs yyyy-mm-dd hh:mm:ss)\n"
-            "- non-standard layout, e.g. hh:mm plus a separate seconds chip\n"
-            "- unusual font/position\n"
-            "- boxed area does not match the timestamp (re-select it)\n"
-            "-> Do not get stuck: use \"Enter on-screen time\" above to set the base\n"
-            "   manually, then continue with step 2.\n"
-            "   (A single point fixes the offset only; GO is still needed for drift.)")
-                .arg(error));
+        // v1.18.x（已存 ROI 记忆错位兜底）：本轮用到过时间戳区域（用户框选，
+        // 或按视频路径记忆自动恢复的旧框）时，终态提示必须点名「区域可能已变化」
+        // 并说清全画面已经自动重试过——否则用户只看到「画面没时间」，无路可走。
+        const bool roiWasInPlay = m_roiRetried || m_roiSticky.isValid();
+        const QString retriedLine = m_roiRetried
+            ? lang(QStringLiteral("（已用「全画面自动识别」重试一次，仍未识别到时间）\n"),
+                   QStringLiteral("(Full-frame retry also found no time.)\n"))
+            : QString();
+        const QString roiHint = roiWasInPlay
+            ? lang(QStringLiteral("\n→ 可能是时间戳区域已变化（换机位/拼接后旧框会框偏）："
+                                  "请点「重新框选时间戳」重新框住整行时间（含日期与秒）。"),
+                   QStringLiteral("\n-> The timestamp area may have moved (a remembered "
+                                  "box goes off after re-export): click "
+                                  "\"Re-select timestamp\" and box the whole time line "
+                                  "(date + seconds)."))
+            : QString();
+        m_resultLabel->setText(
+            retriedLine
+            + lang(
+                "未能识别画面中的时间（%1）。\n"
+                "可能原因：\n"
+                "· 画面中没有时间显示，或时间不含日期（需 年月日 时分秒）\n"
+                "· 时间格式为「时分 + 独立秒框」之类非标准写法（如水印相机）\n"
+                "· 时间字体/位置特殊\n"
+                "· 框选区域与时间戳位置不匹配（可重新框选）\n"
+                "→ 不用卡在这里：用上方「画面时间读不出？手动录入」照拄画面时间\n"
+                "   建立基准，第 2 步即可继续。\n"
+                "   （单点只能定基准；如需修正“时钟快慢”仍建议修好框选后重跑 GO）",
+                "Could not read on-screen time (%1).\n"
+                "Possible causes:\n"
+                "- no timestamp on screen, or no date (needs yyyy-mm-dd hh:mm:ss)\n"
+                "- non-standard layout, e.g. hh:mm plus a separate seconds chip\n"
+                "- unusual font/position\n"
+                "- boxed area does not match the timestamp (re-select it)\n"
+                "-> Do not get stuck: use \"Enter on-screen time\" above to set the base\n"
+                "   manually, then continue with step 2.\n"
+                "   (A single point fixes the offset only; GO is still needed for drift.)")
+                  .arg(error)
+            + roiHint);
         emit goTaskFinished(lang("校时失败", "Calibration failed"),
                             lang("%1：%2", "%1: %2")
                                 .arg(QFileInfo(videoPath).fileName(), error));

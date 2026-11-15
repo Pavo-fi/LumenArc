@@ -116,7 +116,10 @@ public:
     /// 视频流时长（ffprobe -select_streams v:0）。容器总时长取音画最长流，
     /// 音画不同长时会虚标（B3一单元客梯：音轨 102min/画面 74min）→
     /// 校时尾部取样必须用视频流时长（v1.2.1 防御）。0=探测失败。
-    static qint64 probeVideoStreamDurationMs(const QString &videoPath);
+    /// 视频流时长（ffprobe 同步探测）。timeoutMs 默认 30s；校时对话框里当
+    /// 「时长为 0 兜底」用时要传小值——那条路径在 UI 线程上，不能卡住。
+    static qint64 probeVideoStreamDurationMs(const QString &videoPath,
+                                             int timeoutMs = 30000);
     /// 音频流时长（ffprobe -select_streams a:0），用于 OSD 跨度校验。0=无/失败。
     static qint64 probeAudioDurationMs(const QString &videoPath);
 
