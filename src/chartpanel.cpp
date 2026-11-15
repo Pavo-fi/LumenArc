@@ -455,7 +455,9 @@ QString ChartPanel::formatDisplayTime(qint64 displayMs) const
     if (!m_calibration.dateKnown)
         return formatTimeHMS(displayMs);
     const QDateTime dt = QDateTime::fromMSecsSinceEpoch(displayMs);
-    return m_spanCrossDay ? dt.toString(QStringLiteral("MM-dd HH:mm"))
+    // v1.19.3：跨天也保留秒（用户要求「秒级对应」，与语谱图轨道同格式）。
+    // 标签是 QGraphicsSimpleTextItem，宽度自适应，且已有碰撞隐藏，不会叠字。
+    return m_spanCrossDay ? dt.toString(QStringLiteral("MM-dd HH:mm:ss"))
                           : dt.toString(QStringLiteral("HH:mm:ss"));
 }
 

@@ -42,6 +42,14 @@ public:
     /// 空路径清除高亮）
     void setCurrentVideoPath(const QString &videoPath);
 
+    /// v1.18.x：素材缺失文字拼装（纯函数，自检可直接断言）。
+    /// missing=true 时在标签后追加「　　素材缺失」（两个全角空格分隔），
+    /// 正常行原样返回（不加任何后缀）。
+    static QString missingMarkedLabel(const QString &label, bool missing);
+    /// v1.18.x：有效路径不存在的登记视频数（开案状态栏提示用）。
+    /// 只做 exists 判定，绝不算 SHA256（指纹仍归后台队列）。
+    static int countMissingVideos(const CaseManager *cm);
+
 signals:
     /// 双击视频/前处理输出 → MainWindow openVideoFile
     void openVideoRequested(const QString &path);
@@ -77,8 +85,9 @@ private:
     void fillReports(QTreeWidgetItem *group);
     void fillSnapshots(QTreeWidgetItem *group);
     /// 哈希徽标：✗缺失 ⚠已变更 ⏳待算 ✓一致（同步快判，与 M1 校验语义一致）
+    /// missing（可选出参）= 有效路径不存在：v1.18.x 行文本要追加「素材缺失」
     QString hashBadge(const CaseVideoRef &v, QString *tooltip,
-                      QColor *color) const;
+                      QColor *color, bool *missing = nullptr) const;
     void relocateVideo(const QString &id);
     void deleteVideoFile(const QString &id);   // 删除源文件+案内数据（2026-08）
     void removePreprocessSession(int si);      // 删除会话与文件（2026-08）

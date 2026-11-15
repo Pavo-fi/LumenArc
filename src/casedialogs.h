@@ -126,6 +126,8 @@ public:
 
 private slots:
     void onScan();
+    /// v1.18.x：选一个目录 → 递归按「文件名+大小」自动填候选（唯一命中才填）
+    void onAutoMatchFromDir();
     void onBrowseRow();
     void onVerifyAndApply();
     void onApplyOverrides();
@@ -153,8 +155,10 @@ private:
     QLineEdit *m_dirEdit = nullptr;
     QTableWidget *m_table = nullptr;
     QLabel *m_summary = nullptr;
+    QLabel *m_autoSummary = nullptr;   ///< 「已匹配 9 / 12…」一行（自动匹配后出现）
     QProgressBar *m_progress = nullptr;
     QPushButton *m_btnScan = nullptr;
+    QPushButton *m_btnAutoMatch = nullptr;   ///< 从目录自动匹配…
     QPushButton *m_btnBrowseRow = nullptr;
     QPushButton *m_btnVerify = nullptr;
     QPushButton *m_btnOverride = nullptr;

@@ -206,6 +206,7 @@ set(HEADERS
     src/ui/workflow_bar.h
     src/ui/task_bar.h
     src/ui/inspector_panel.h
+    src/ui/calib_format.h         # v1.18.x：校时漂移统一人读口径（header-only）
     src/ui/chevron_button.h
     src/videowidget.h
     src/domain/task_registry.h

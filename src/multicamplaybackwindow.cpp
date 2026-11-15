@@ -32,6 +32,7 @@
 #include "app/cam_timeline.h"
 #include "app/case_manager.h"
 #include "app/project_io.h"
+#include "ui/calib_format.h"      // v1.18.x：漂移统一口径「比标准时间每天快/慢 X 秒」
 #include <QSignalBlocker>
 #include <QLineEdit>
 #include <QListWidget>
@@ -2901,18 +2902,12 @@ void MultiCamPlaybackWindow::onEcFitPreview()
         maxRes = qMax(maxRes, r);
     QString how = m_ecCorrText;
     if (m_ecFit.affine) {
-        // v1.15.3：速率人话——不再说「每 1 天快 X 秒」（吓人且概念错：
-        // 不是表走快，是画面时间轴与真实时间的比例关系）
-        const double per100 = (m_ecFit.rate - 1.0) * 100.0;   // 画面每 100 秒真实多/少走的秒
-        const double hourBias = qAbs(m_ecFit.rate - 1.0) * 3600.0;
-        how += lang("；全程速率：画面每走 100 秒，真实约走 %1 秒"
-                     "（画面相对真实%2 %3%），已按此修正"
-                     "——否则离标记越远偏得越多（每 1 小时约偏 %4 秒）",
-                     "; rate: real %1 s per 100 s of video, fixed")
-            .arg(100.0 + per100, 0, 'f', 2)
-            .arg(per100 >= 0 ? lang("慢", "slow") : lang("快", "fast"))
-            .arg(qAbs(per100), 0, 'f', 2)
-            .arg(hourBias, 0, 'f', 1);
+        // v1.18.x：口径收口（原句方向是反的）——rate>1 = 画面钟走快，而
+        // 「画面每走 100 秒，真实约走 100.X 秒」后面却接「画面相对真实慢 X%」，
+        // 正好说反；且 100 秒窗口上 2 位小数的分辨率约 8.6 秒/天，2.3 秒/天
+        // 会显示成「100.00、慢 0.00%」。统一走 calibDriftText：明说快/慢+每天秒数。
+        how += lang("；全程速率：", "; rate: ") + calibDriftText(cal)
+             + lang("——离标记越远偏得越多", " (worse the farther from a mark)");
         if (qAbs(m_ecFit.rate - 1.0) > 0.002)
             how += lang(" ⚠速率偏差较大，请确认该文件不是变速/抽帧录制",
                         " (large rate bias - check if VFR/time-lapse)");
@@ -3021,17 +3016,10 @@ void MultiCamPlaybackWindow::onEcSave()
         summary += lang("方式：平移 + 快慢修正（%1 个标记）\n",
                         "Mode: shift + rate (%1 marks)\n")
             .arg(m_ecCal.eventAnchors.size());
-        // v1.15.3：速率人话（同预览口径）
-        const double per100 = (m_ecCal.rate - 1.0) * 100.0;
-        const double hourBias = qAbs(m_ecCal.rate - 1.0) * 3600.0;
-        summary += lang("全程速率：画面每走 100 秒，真实约走 %1 秒"
-                        "（画面相对真实%2 %3%），已按此修正"
-                        "——否则离标记越远偏得越多（每 1 小时约偏 %4 秒）\n",
-                        "Rate: real %1 s per 100 s of video, fixed\n")
-            .arg(100.0 + per100, 0, 'f', 2)
-            .arg(per100 >= 0 ? lang("慢", "slow") : lang("快", "fast"))
-            .arg(qAbs(per100), 0, 'f', 2)
-            .arg(hourBias, 0, 'f', 1);
+        // v1.18.x：口径收口（同预览处：原句把方向说反了，见 onEcFitPreview）
+        summary += lang("全程速率：", "Rate: ") + calibDriftText(m_ecCal)
+                 + lang("——离标记越远偏得越多", " (worse the farther from a mark)")
+                 + QChar(10);   // 人读串换行（确认卡按行显示）
         if (qAbs(m_ecCal.rate - 1.0) > 0.002)
             summary += lang("⚠ 速率偏差较大，请确认该文件不是变速/抽帧录制\n",
                             "! large rate bias - VFR/time-lapse?\n");

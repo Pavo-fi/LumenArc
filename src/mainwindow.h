@@ -248,6 +248,10 @@ private:
     void toggleFullscreenLastScreen();                // F11：上次选择/非主屏
     void updateTimeDisplay();
     QString formatTime(qint64 ms) const;
+    /// 播放条时间文本：已校时 → 墙钟 / 总时长（悬浮提示给流内时间）；未校时 → 旧口径
+    QString playbackTimeText(qint64 posMs, qint64 durMs, QString *tipOut = nullptr) const;
+    /// 校时后的墙钟文本（HH:mm:ss；口径与 ChartPanel::displayMsOf 一致）
+    QString wallClockText(qint64 streamMs) const;
     /// @brief 打开视频对话框公共流程（admitToCase=false 为临时打开不入案）
     void openVideosInteractive(bool admitToCase);
     /// @brief 视频入案登记（v1.3.0 M2 任务7）：重复跳过/源旁 .vla 询问导入

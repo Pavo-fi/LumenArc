@@ -33,6 +33,9 @@ public:
     void setSource(const QString &name, int w, int h, double fps, qint64 durationMs);
     void setCalibration(const QString &state, bool ok);
     void setCursor(qint64 ms);
+    /// 游标行文本由主窗格式化好再传（校时后是墙钟，本面板不做换算）；
+    /// tip 非空时同时作为悬浮提示（放流内时间，便于对照）。
+    void setCursorTimeText(const QString &text, const QString &tip = QString());
     void setRoi(int rects, int polys);
     void setMagnifier(bool on);
 

@@ -218,6 +218,16 @@ void MainWindow::enterCaseMode()
         if (QFile::exists(v->originalPath))
             openVideoFile(v->originalPath);
     }
+    // v1.18.x：开案扫一遍素材路径——缺失以前只有行末一个 ✗，用户看不出问题
+    // （机位组照常列着、点开没画面）。这里给一句总数：不弹模态框，不播报 0。
+    // 只做 QFileInfo::exists（含包内副本兜底），SHA256 仍归后台队列。
+    const int missingVideos = CaseDock::countMissingVideos(m_caseManager);
+    if (missingVideos > 0)
+        showOperationStatus(
+            lang("⚠ %1 路素材缺失，播放会失败；右键机位组「批量重新定位…」可修复",
+                 "⚠ %1 media file(s) missing — playback will fail; right-click a"
+                 " camera group and use \"Batch relocate…\" to fix")
+                .arg(missingVideos));
 }
 
 void MainWindow::exitCaseMode()
@@ -570,6 +580,8 @@ void MainWindow::onMultiCamView()
             if (cal.isValid()) {
                 m_calibration = cal;
                 m_chartPanel->setCalibration(m_calibration);
+                if (m_spectrogramEnhanced)
+                    m_spectrogramEnhanced->setCalibration(m_calibration);
                 showOperationStatus(lang(
                     "主视口校时已与多机窗口同步（同事件对时）",
                     "Main view calibration synced from multicam"));
@@ -635,6 +647,8 @@ void MainWindow::onMultiCamStandalone()
             if (cal.isValid()) {
                 m_calibration = cal;
                 m_chartPanel->setCalibration(m_calibration);
+                if (m_spectrogramEnhanced)
+                    m_spectrogramEnhanced->setCalibration(m_calibration);
                 showOperationStatus(lang(
                     "主视口校时已与多机窗口同步（同事件对时）",
                     "Main view calibration synced from multicam"));

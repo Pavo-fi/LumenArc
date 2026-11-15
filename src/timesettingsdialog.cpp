@@ -27,6 +27,7 @@ static bool calibDebugEnabled()
 #include "domain/filename_timestamp.h"   // v1.18.x：文件名时间↔画面时间日期差提示
 #include "i18n.h"
 #include "theme.h"
+#include "ui/calib_format.h"      // v1.18.x：漂移统一口径「比标准时间每天快/慢 X 秒」
 
 #include <QVBoxLayout>
 #include <QHBoxLayout>
@@ -830,8 +831,8 @@ void TimeSettingsDialog::refreshWorkingSummary()
                                      : fmtStreamMs(m_working.offsetMs));
         m_workingSummary->setToolTip(lang("来源：%1", "Source: %1").arg(src));
         if (m_working.rateApplied) {
-            text += lang(" · 漂移 %1 秒/天", " · drift %1 s/day")
-                .arg(m_working.driftSecondsPerDay(), 0, 'f', 1);
+            // v1.18.x：统一口径「比标准时间每天快/慢 X 秒」（用户明确要求写出方向）
+            text += QStringLiteral(" · ") + calibDriftBadge(m_working);
         } else if (!m_working.samples.isEmpty()
                    && std::fabs(m_working.driftSecondsPerDay()) >= 10.0) {
             // v2.5：算出漂移但没应用 —— 说清为什么（否则用户以为软件算错了）
@@ -841,12 +842,13 @@ void TimeSettingsDialog::refreshWorkingSummary()
                     && smp.conf < TimeCalibration::kRateFitMinConf)
                     ++lowConf;
             text += lowConf > 0
-                ? lang("；测得漂移 %1 秒/天但未采用（%2 个低置信测点）→ 可「更多 ▾ → 秒级精细对齐」",
-                       "; measured drift %1 s/day NOT applied (%2 low-confidence "
+                ? lang("；%1，但本次未采用（%2 个低置信测点）→ 可「更多 ▾ → 秒级精细对齐」",
+                       "; %1, but NOT applied (%2 low-confidence "
                        "sample(s) excluded from rate)")
-                      .arg(m_working.driftSecondsPerDay(), 0, 'f', 1).arg(lowConf)
-                : lang("；测得漂移 %1 秒/天但未采用（测点不足）→ 可「更多 ▾ → 秒级精细对齐」",
-                       "; measured drift %1 s/day not applied (insufficient samples)");
+                      .arg(calibDriftPhrase(m_working)).arg(lowConf)
+                : lang("；%1，但本次未采用（测点不足）→ 可「更多 ▾ → 秒级精细对齐」",
+                       "; %1, but not applied (insufficient samples)")
+                       .arg(calibDriftPhrase(m_working));
         }
         // v1.18.x：非实时导出/变速件（画面时间 ≈ rate× 播放进度）——报告与徽标需一眼可见
         // （piecewise 路径已有“分段重建 N 段（变速）”，此处只管全局倍率那类）
@@ -1957,8 +1959,9 @@ void TimeSettingsDialog::refitSummaryRefresh()
               .arg(fr.pointsUsed).arg(fmtWall(fr.offsetMs))
         : lang("有效取样点不足", "Not enough samples");
     if (fr.ok && fr.pointsUsed >= 2) {
-        text += lang("；时钟每天快/慢 %1 秒", "; clock drift %1 s/day")
-                    .arg(fr.driftSecondsPerDay(), 0, 'f', 1);
+        // v1.18.x：统一口径写出方向（原「每天快/慢 %1 秒」二选一没落地，等于没说）。
+        // 这一行是「还没点应用」的结果，故用不带已修正/未修正括注的那一档。
+        text += QStringLiteral("；") + calibDriftPhrase(m_fitResult);
     }
     // v1.18.x：取样跨度太短 → 只能定基准，不可能测出快慢（实测踩过：两点相隔 2 秒
     // 被当成“校时完成”，实际只定了基准 → 时间仍然越走越偏）
@@ -2266,13 +2269,12 @@ bool TimeSettingsDialog::applyManualSamples(
                    .arg(fmtStreamMs(samples.last().streamMs),
                         fmtWall(samples.last().wallMs));
         if (c.rateApplied)
-            msg += lang("\n　 已修正时钟快慢：每天 %1 秒",
-                        "\n   drift corrected: %1 s/day")
-                       .arg(fr.driftSecondsPerDay(), 0, 'f', 1);
+            msg += lang("\n　 已修正时钟快慢：%1", "\n   drift corrected: %1")
+                       .arg(calibDriftBadge(c));   // 统一口径：写出快/慢
         else
-            msg += lang("\n　 跨度内时钟快慢不显著（每天 %1 秒），仅对基准",
-                        "\n   drift not significant (%1 s/day); offset only")
-                       .arg(fr.driftSecondsPerDay(), 0, 'f', 1);
+            msg += lang("\n　 %1，本次仅对基准（不修正快慢）",
+                        "\n   %1; offset only (no drift correction)")
+                       .arg(calibDriftPhrase(c));
     } else {
         msg += lang("\n　 仅对基准；如需修正时钟快慢，展开下方两点模式",
                     "\n   offset only; expand two-point mode for drift");

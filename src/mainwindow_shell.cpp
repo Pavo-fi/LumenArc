@@ -37,6 +37,7 @@
 #include "app/multicam_sync_service.h"
 #include "domain/time_calibration.h"
 #include "ui/app_state.h"
+#include "ui/calib_format.h"      // v1.18.x：漂移统一口径「比标准时间每天快/慢 X 秒」
 #include "ui/command_registry.h"
 #include "multicamview.h"
 #include "ui/chevron_button.h"
@@ -52,9 +53,11 @@
 #include <QDebug>
 #include <QDir>
 #include <QDockWidget>
+#include <QDateTime>
 #include <QEasingCurve>
 #include <QEventLoop>
 #include <QFile>
+#include <QFileInfo>
 #include <QTextStream>
 #include <QProcess>
 #include <QTemporaryDir>
@@ -86,6 +89,7 @@
 #include <QWheelEvent>
 #include <QToolButton>
 #include <QTreeWidget>
+#include <QTreeWidgetItemIterator>
 #include <QVBoxLayout>
 #include <QWidget>
 
@@ -1029,18 +1033,32 @@ void MainWindow::refreshInspector()
     m_inspector->setSource(name, w, h, fps, dur);
 
     if (m_calibration.isValid()) {
+        // v1.18.x：检视器一行也并入口径（原来只写「1.003×」，方向与量级都得用户
+        // 自己换算）。effectiveRate()=1.0（漂移未应用）时仍只写「已校时」——
+        // 那时时间轴确实没按拟合 rate 走，报方向会误导。
         const double r = m_calibration.effectiveRate();
         const QString txt = qFuzzyCompare(r, 1.0)
                                 ? lang(QStringLiteral("已校时"), QStringLiteral("Calibrated"))
-                                : QStringLiteral("%1×").arg(r, 0, 'f', 3);
+                                : lang("已校时 · %1", "Calibrated · %1")
+                                      .arg(calibDriftBadge(m_calibration));
         m_inspector->setCalibration(txt, true);
     } else {
         m_inspector->setCalibration(lang(QStringLiteral("未校时"),
                                          QStringLiteral("Not calibrated")), false);
     }
 
-    if (m_chartPanel)
-        m_inspector->setCursor(m_chartPanel->cursorTime());
+    if (m_chartPanel) {
+        const qint64 cur = m_chartPanel->cursorTime();
+        if (m_calibration.isEffective()) {
+            // 已校时：游标行显墙钟（与时间轴/播放条同口径），流内时间留在悬浮提示
+            m_inspector->setCursorTimeText(
+                wallClockText(cur),
+                lang(QStringLiteral("流内 %1"), QStringLiteral("Stream %1"))
+                    .arg(formatTime(cur)));
+        } else {
+            m_inspector->setCursor(cur);      // 未校时：旧行为（流内 HH:mm:ss.zzz）
+        }
+    }
 
     if (m_roiModel)
         m_inspector->setRoi(m_roiModel->regionCount(), m_roiModel->polygonCount());
@@ -1743,6 +1761,139 @@ int MainWindow::runShellSelfCheck()
         const TC::FitResult p2 = TC::fit(hiTwo);
         check(low2 == 0 && g2.rate == p2.rate && g2.offsetMs == p2.offsetMs,
               QStringLiteral("校时门控：全高置信时与 fit() 完全一致"));
+    }
+
+    // 4c4b. 漂移口径收口：文案必须写明「快」还是「慢」（2026-11-15 用户拍板）
+    {
+        TimeCalibration fast;
+        fast.source = TimeCalibration::Source::Ocr;
+        fast.dateKnown = true;
+        fast.rate = 1.000104;              // 每天快 9.0 秒
+        fast.rateApplied = true;
+        const QString tFast = calibDriftText(fast);
+        check(tFast.contains(QStringLiteral("快")) && tFast.contains(QStringLiteral("9.0")),
+              QStringLiteral("漂移口径：已修正的快钟 → %1").arg(tFast));
+
+        TimeCalibration slow;
+        slow.source = TimeCalibration::Source::Ocr;
+        slow.dateKnown = true;
+        slow.rate = 0.999906;              // 每天慢 8.1 秒
+        slow.rateApplied = false;
+        slow.sigmaRate = 6.1e-5;           // ±5.3 秒/天（σ < 1.5|漂移| → 方向可定）
+        const QString tSlow = calibDriftText(slow);
+        check(tSlow.contains(QStringLiteral("慢"))
+                  && tSlow.contains(QStringLiteral("未修正")),
+              QStringLiteral("漂移口径：未修正的慢钟须自证没动手 → %1").arg(tSlow));
+
+        TimeCalibration fuzzy;             // 观测跨度不够：σ ≫ 漂移 → 方向测不准
+        fuzzy.source = TimeCalibration::Source::Ocr;
+        fuzzy.dateKnown = true;
+        fuzzy.rate = 0.999906;
+        fuzzy.sigmaRate = 2.34e-3;         // ±202 秒/天
+        const QString tFuzzy = calibDriftText(fuzzy);
+        check(tFuzzy.contains(QStringLiteral("测不准")),
+              QStringLiteral("漂移口径：σ 太大时不许把数字当结论 → %1").arg(tFuzzy));
+
+        // 间接校时（同事件对时）方向是反的：event_calib 拟合 refWall = rate×stream，
+        // rate>1 表示本路时间轴比参考机位**慢**（2026-11-15 审查 P0，别把方向又写反）
+        TimeCalibration cross;
+        cross.source = TimeCalibration::Source::CrossCamEvent;
+        cross.dateKnown = true;
+        cross.rate = 1.000104;
+        cross.rateApplied = true;
+        const QString tCross = calibDriftText(cross);
+        check(tCross.contains(QStringLiteral("慢"))
+                  && tCross.contains(QStringLiteral("参考机位")),
+              QStringLiteral("漂移口径：间接校时 rate>1 必须说成「比参考机位慢」→ %1")
+                  .arg(tCross));
+    }
+
+    // 4c5. 校时口径贯通三处显示（用户：时间轴上也要体现，保证校时结果的秒级对应）
+    //      ① 语谱图轨道 X 刻度 ② 播放条时间 ③ 检视器「游标」行
+    {
+        using TC = TimeCalibration;
+        // 流内 0 点 = 2026-09-26 15:04:30（本地时区，与 QDateTime 显示口径一致）
+        const QDateTime base(QDate(2026, 9, 26), QTime(15, 4, 30));
+        TC cal;
+        cal.source = TC::Source::Manual;
+        cal.dateKnown = true;
+        cal.offsetMs = base.toMSecsSinceEpoch();
+        check(cal.isEffective(), QStringLiteral("校时贯通：探针校时模型判为有效"));
+
+        // ① 语谱图刻度：校时后显墙钟（与上方亮度/音量图同口径，不再从 00:00:00 起）
+        SpectrogramPanelEnhanced spec;
+        spec.onXAxisRangeChanged(0.0, 3600000.0);      // 可视 1 小时（不跨天）
+        spec.setCalibration(cal);
+        check(spec.axisTickTextForTest(0) == QStringLiteral("15:04:30"),
+              QStringLiteral("语谱图刻度：流内 0 → %1（应 15:04:30）")
+                  .arg(spec.axisTickTextForTest(0)));
+        check(spec.axisTickTextForTest(3600000) == QStringLiteral("16:04:30"),
+              QStringLiteral("语谱图刻度：流内 1h → %1（应 16:04:30）")
+                  .arg(spec.axisTickTextForTest(3600000)));
+        // 可视范围跨过 0 点 → 刻度带日期（格式与 ChartPanel 一致，且保留秒）
+        spec.onXAxisRangeChanged(32000000.0, 33000000.0);
+        check(spec.axisTickTextForTest(32000000) == QStringLiteral("09-26 23:57:50"),
+              QStringLiteral("语谱图刻度：跨天带日期且保留秒 → %1（应 09-26 23:57:50）")
+                  .arg(spec.axisTickTextForTest(32000000)));
+        // 旧「日内秒偏移」（dateKnown=false，v7 迁移值）：仍是钟点串，只整体平移
+        TC legacy = TC::fromLegacyOffset(5000);
+        SpectrogramPanelEnhanced spec2;
+        spec2.onXAxisRangeChanged(0.0, 3600000.0);
+        spec2.setCalibration(legacy);
+        check(spec2.axisTickTextForTest(65000) == QStringLiteral("01:10"),
+              QStringLiteral("语谱图刻度：日内偏移 +5s → %1（应 01:10）")
+                  .arg(spec2.axisTickTextForTest(65000)));
+        // 未校时必须与改动前逐字一致（回归锁）
+        SpectrogramPanelEnhanced spec0;
+        spec0.onXAxisRangeChanged(0.0, 3600000.0);
+        check(spec0.axisTickTextForTest(65000) == QStringLiteral("01:05")
+                  && spec0.axisTickTextForTest(3661000) == QStringLiteral("1:01:01"),
+              QStringLiteral("语谱图刻度：未校时仍是流内口径（%1 / %2）")
+                  .arg(spec0.axisTickTextForTest(65000))
+                  .arg(spec0.axisTickTextForTest(3661000)));
+
+        // ② 播放条 + ③ 检视器游标：临时换上探针校时，测完还原（自检不污染状态）
+        const TimeCalibration savedCal = m_calibration;
+        const qint64 savedCursor = m_chartPanel ? m_chartPanel->cursorTime() : -1;
+        if (m_chartPanel)
+            m_chartPanel->setCursorTime(3600000);
+        m_calibration = cal;
+        QString tip;
+        const QString pb = playbackTimeText(3600000, 7200000, &tip);
+        check(pb == QStringLiteral("16:04:30 / 2:00:00"),
+              QStringLiteral("播放条：已校时显墙钟「%1」（应 16:04:30 / 2:00:00）").arg(pb));
+        check(tip.contains(QStringLiteral("1:00:00")),
+              QStringLiteral("播放条：悬浮提示保留流内时间「%1」").arg(tip));
+
+        QLabel *cursorRow = nullptr;
+        if (m_inspector) {
+            for (QLabel *l : m_inspector->findChildren<QLabel *>()) {
+                if (l->property("inline").toBool()
+                    && l->property("k").toString()
+                       == lang(QStringLiteral("游标"), QStringLiteral("Cursor"))) {
+                    cursorRow = l;
+                    break;
+                }
+            }
+        }
+        refreshInspector();
+        check(cursorRow && cursorRow->text().contains(QStringLiteral("16:04:30")),
+              QStringLiteral("检视器：已校时时「游标」行显墙钟（%1）")
+                  .arg(cursorRow ? cursorRow->text() : QStringLiteral("<无该行>")));
+        m_calibration = TimeCalibration();
+        refreshInspector();
+        const QString pb0 = playbackTimeText(3600000, 7200000, &tip);
+        check(pb0 == QStringLiteral("1:00:00 / 2:00:00") && tip.isEmpty()
+                  && pb0 != pb,
+              QStringLiteral("播放条：未校时回到旧口径「%1」（与已校时「%2」不同）")
+                  .arg(pb0).arg(pb));
+        check(cursorRow && cursorRow->text().contains(QStringLiteral("01:00:00.000")),
+              QStringLiteral("检视器：未校时时「游标」行仍是流内 %1")
+                  .arg(cursorRow ? cursorRow->text() : QStringLiteral("<无该行>")));
+        m_calibration = savedCal;
+        if (m_chartPanel && savedCursor >= 0)
+            m_chartPanel->setCursorTime(savedCursor);
+        refreshInspector();
     }
 
     // 4c3. 校时坞刷新入口：没开校时窗时必须是**空操作**（不新建坞、不崩）
@@ -3486,6 +3637,113 @@ int MainWindow::runShellSelfCheck()
                               .arg(int(paletteRatio * 100)));
                 }
             }
+        }
+    }
+
+    // ---- 素材缺失标记（v1.18.x）：素材被挪走时，机位组不再「照常列着、点开没画面」 ----
+    // 临时案件两路：一路指向真实存在的小文件，一路指向不存在路径。
+    // 断言：①缺失行文本含「素材缺失」且前景色 = Danger ②缺失计数 = 1
+    // ③正常行无后缀 ④组内有可用文件 → 组节点不标 ⑤全组都缺 → 组节点红字。
+    {
+        const QString mark = lang(QStringLiteral("素材缺失"),
+                                  QStringLiteral("media missing"));
+        // 纯函数：标签拼装（正常行一律不加后缀）
+        const QString plain = CaseDock::missingMarkedLabel(
+            QStringLiteral("V01  a.mp4  ✓"), false);
+        const QString tagged = CaseDock::missingMarkedLabel(
+            QStringLiteral("V01  a.mp4  ✗"), true);
+        check(plain == QStringLiteral("V01  a.mp4  ✓")
+                  && tagged.contains(mark)
+                  && tagged.startsWith(QStringLiteral("V01  a.mp4  ✗")),
+              QStringLiteral("标签拼装：正常行不加后缀，缺失行行末追加「素材缺失」"));
+
+        QTemporaryDir tmp;
+        check(tmp.isValid(), QStringLiteral("素材缺失自检：临时目录可用"));
+        const QString liveFile = QDir(tmp.path()).filePath(
+            QStringLiteral("C01__real.mp4"));
+        {
+            QFile f(liveFile);
+            if (tmp.isValid() && f.open(QIODevice::WriteOnly))
+                f.write("LumenArc-selfcheck-material");
+        }
+        CaseMeta meta;
+        meta.caseNo = QStringLiteral("20260101-selfcheck-a");
+        meta.title = QStringLiteral("素材缺失自检");
+        CaseVideoRef live;
+        live.id = QStringLiteral("V01");
+        live.originalPath = liveFile;
+        const QFileInfo lfi(liveFile);
+        live.sizeBytes = lfi.size();
+        live.mtimeMs = lfi.lastModified().toMSecsSinceEpoch();
+        CaseVideoRef gone;
+        gone.id = QStringLiteral("V02");
+        gone.originalPath = QDir(tmp.path()).filePath(
+            QStringLiteral("C02__moved.mp4"));     // 不存在 → 应判缺失
+        gone.sizeBytes = 4096;
+        meta.videos = {live, gone};
+        CaseCameraGroup grp;
+        grp.groupId = QStringLiteral("G001");
+        grp.camNo = QStringLiteral("C01");
+        grp.name = QStringLiteral("自检机位");
+        grp.memberIds = {QStringLiteral("V01"), QStringLiteral("V02")};
+        meta.cameraGroups = {grp};
+        meta.nextVideoSeq = 3;
+        meta.nextGroupSeq = 2;
+        meta.nextCamSeq = 2;
+
+        // 独立 CaseManager（不接主窗信号，不动正在放的案件）；建在临时目录，
+        // 用完 closeCase + 撤掉「最近案件」里的一条，不给用户留痕
+        CaseManager probe;
+        QString cerr;
+        const bool made = tmp.isValid() && probe.createCase(tmp.path(), meta, &cerr);
+        check(made, QStringLiteral("素材缺失自检：临时案件已建（%1）").arg(cerr));
+        if (made) {
+            const QString probeDir = probe.caseDir();
+            check(CaseDock::countMissingVideos(&probe) == 1,
+                  QStringLiteral("开案缺失计数 = 1（另一路路径有效）"));
+
+            CaseDock dock(&probe, nullptr);
+            dock.refreshTree();
+            auto *tree = dock.findChild<QTreeWidget *>();
+            QTreeWidgetItem *missRow = nullptr;
+            QTreeWidgetItem *okRow = nullptr;
+            QTreeWidgetItem *grpNode = nullptr;
+            auto findNodes = [&]() {
+                missRow = okRow = grpNode = nullptr;
+                if (!tree)
+                    return;
+                QTreeWidgetItemIterator itm(tree);
+                while (*itm) {
+                    const QString t = (*itm)->text(0);
+                    if (t.contains(QStringLiteral("C02__moved.mp4")))
+                        missRow = *itm;
+                    else if (t.contains(QStringLiteral("C01__real.mp4")))
+                        okRow = *itm;
+                    else if (t.contains(grp.name))
+                        grpNode = *itm;
+                    ++itm;
+                }
+            };
+            findNodes();
+            check(missRow && missRow->text(0).contains(mark)
+                      && missRow->foreground(0).color() == QColor(Theme::Danger),
+                  QStringLiteral("缺失行文本含「素材缺失」且前景色 = Danger"));
+            check(okRow && !okRow->text(0).contains(mark),
+                  QStringLiteral("正常行文本不带「素材缺失」"));
+            check(grpNode && !grpNode->text(0).contains(mark),
+                  QStringLiteral("组内还有可用文件 → 组节点不标缺失"));
+
+            // 唯一可用文件也拿走 → 整组失效：组节点应转红字「素材缺失」
+            QFile::remove(liveFile);
+            dock.refreshTree();
+            check(CaseDock::countMissingVideos(&probe) == 2,
+                  QStringLiteral("可用文件消失后缺失计数 = 2"));
+            findNodes();
+            check(grpNode && grpNode->text(0).contains(mark)
+                      && grpNode->foreground(0).color() == QColor(Theme::Danger),
+                  QStringLiteral("组内全部缺失 → 组节点红字「素材缺失」"));
+            probe.closeCase();
+            probe.removeRecent(probeDir);
         }
     }
 

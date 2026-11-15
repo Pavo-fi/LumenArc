@@ -16,9 +16,11 @@
 #include <QDateTime>
 #include <QDialogButtonBox>
 #include <QDir>
+#include <QDirIterator>
 #include <QFileDialog>
 #include <QFormLayout>
 #include <QHBoxLayout>
+#include <QHash>
 #include <QHeaderView>
 #include <QLabel>
 #include <QLineEdit>
@@ -570,6 +572,23 @@ void ExportCaseDialog::onExport()
 // ---------------------------------------------------------------------------
 // BatchRelocateDialog（M3 任务13）
 // ---------------------------------------------------------------------------
+namespace {
+/// 目录扫描认作视频的扩展名：与 preprocesswindow.cpp isVideoFile 与
+/// CaseManager::proposeRelocations 两处口径取并集（那边有 mts 无 webm，
+/// 这边有 webm 无 mts——重定位宁可多扫到也不漏）
+bool isVideoForRelocate(const QString &path)
+{
+    static const char *kExts[] = {"mp4", "avi", "wmv", "flv", "ts", "mts",
+                                  "m2ts", "dav", "mov", "mkv", "mpg", "mpeg",
+                                  "3gp", "webm"};
+    const QString suf = QFileInfo(path).suffix().toLower();
+    for (const char *e : kExts)
+        if (suf == QLatin1String(e))
+            return true;
+    return false;
+}
+} // namespace
+
 BatchRelocateDialog::BatchRelocateDialog(CaseManager *cm, QWidget *parent)
     : QDialog(parent)
     , m_cm(cm)
@@ -587,9 +606,17 @@ BatchRelocateDialog::BatchRelocateDialog(CaseManager *cm, QWidget *parent)
              "Folder where source videos now live (recursive, name+size match)"));
     auto *btnDir = new QPushButton(lang("浏览…", "Browse…"), this);
     m_btnScan = new QPushButton(lang("扫描候选", "Scan"), this);
+    // v1.18.x：用户手动跑过的那套「换目录后按名+大小重指」做成一键
+    m_btnAutoMatch = new QPushButton(lang("从目录自动匹配…", "Auto-match from folder…"), this);
+    m_btnAutoMatch->setToolTip(lang(
+        "选素材现在所在的目录：递归找同名同大小的文件，唯一命中才填进候选列；"
+        "重名或大小不符一律留空交人工。填完仍要按「比对并采用」做 SHA-256 校验。",
+        "Pick the folder the media now lives in: recursive name+size match,"
+        " only unique hits fill candidates; verify & apply still checks SHA-256."));
     dirRow->addWidget(m_dirEdit, 1);
     dirRow->addWidget(btnDir);
     dirRow->addWidget(m_btnScan);
+    dirRow->addWidget(m_btnAutoMatch);
     lay->addLayout(dirRow);
     connect(btnDir, &QPushButton::clicked, this, [this]() {
         const QString dir = QFileDialog::getExistingDirectory(this,
@@ -598,6 +625,8 @@ BatchRelocateDialog::BatchRelocateDialog(CaseManager *cm, QWidget *parent)
             m_dirEdit->setText(dir);
     });
     connect(m_btnScan, &QPushButton::clicked, this, &BatchRelocateDialog::onScan);
+    connect(m_btnAutoMatch, &QPushButton::clicked, this,
+            &BatchRelocateDialog::onAutoMatchFromDir);
 
     // 候选表：V### | 原路径（缺失） | 候选新路径 | 匹配 | 状态/备注
     m_table = new QTableWidget(this);
@@ -622,6 +651,12 @@ BatchRelocateDialog::BatchRelocateDialog(CaseManager *cm, QWidget *parent)
     m_summary->setStyleSheet(QStringLiteral("color:%1;").arg(Theme::TextSecond));
     rowOps->addWidget(m_summary, 1);
     lay->addLayout(rowOps);
+    // 自动匹配的一行汇总（首次自动匹配前不占位）
+    m_autoSummary = new QLabel(this);
+    m_autoSummary->setStyleSheet(QStringLiteral("color:%1; font-weight:600;")
+                                     .arg(Theme::Accent));
+    m_autoSummary->setVisible(false);
+    lay->addWidget(m_autoSummary);
     connect(m_btnBrowseRow, &QPushButton::clicked,
             this, &BatchRelocateDialog::onBrowseRow);
     connect(m_table, &QTableWidget::itemSelectionChanged, this, [this]() {
@@ -694,6 +729,92 @@ void BatchRelocateDialog::onScan()
     }
     rebuildTable();
     refreshSummary();
+}
+
+void BatchRelocateDialog::onAutoMatchFromDir()
+{
+    const QString dir = QFileDialog::getExistingDirectory(this,
+        lang("选择素材所在目录（递归按文件名+大小匹配）",
+             "Choose the folder the media now lives in (recursive name+size match)"),
+        m_dirEdit->text().trimmed());
+    if (dir.isEmpty())
+        return;
+    m_dirEdit->setText(dir);   // 之后逐行【浏览…】默认落在同一目录
+
+    // 缺失清单沿用 CaseManager::proposeRelocations 的判定（含完整包副本兜底），
+    // 但它的模糊候选（仅同名）一律不采用：本函数只认「文件名+大小唯一命中」
+    if (m_rows.isEmpty()) {
+        const auto cands = m_cm->proposeRelocations(dir);
+        m_rows.clear();
+        m_rows.reserve(cands.size());
+        for (const auto &c : cands) {
+            Row r;
+            r.videoId = c.videoId;
+            r.originalPath = c.originalPath;
+            r.status = 5;     // 先按无候选，命中后回到待比对
+            m_rows.append(r);
+        }
+    }
+
+    // 索引：「文件名(小写)|大小」→ 路径列表；另建一份仅按名的，用于「候选 N 个」
+    // （Windows 路径大小写不敏感，故按小写名比）
+    QHash<QString, QStringList> byNameSize;
+    QHash<QString, QStringList> byName;
+    QDirIterator it(dir, QDir::Files, QDirIterator::Subdirectories);
+    while (it.hasNext()) {
+        const QString f = it.next();
+        if (!isVideoForRelocate(f))
+            continue;
+        const QFileInfo fi(f);
+        byName[fi.fileName().toLower()].append(f);
+        byNameSize[QStringLiteral("%1|%2")
+                       .arg(fi.fileName().toLower()).arg(fi.size())]
+            .append(f);
+    }
+
+    for (Row &r : m_rows) {
+        if (r.manual)                    // 手工指定的候选不动
+            continue;
+        if (r.status == 1 || r.status == 3)   // 已采用的不回头（路径已改对）
+            continue;
+        r.candidatePath.clear();
+        r.matchLevel = 0;
+        r.status = 5;
+        r.note.clear();
+        r.computedSha.clear();
+        const auto *v = m_cm->videoById(r.videoId);
+        const qint64 wantSize = v ? v->sizeBytes : -1;
+        const QString want = QFileInfo(r.originalPath).fileName().toLower();
+        const QStringList exact = wantSize >= 0
+            ? byNameSize.value(QStringLiteral("%1|%2").arg(want).arg(wantSize))
+            : QStringList();
+        const QStringList sameName = byName.value(want);
+        if (exact.size() == 1) {
+            // 唯一命中才填：状态回到待比对（【比对并采用】仍走 SHA-256 校验）
+            r.candidatePath = exact.constFirst();
+            r.matchLevel = 2;
+            r.status = 0;
+        } else if (sameName.isEmpty()) {
+            r.note = lang("目录内无同名文件", "no same-name file in folder");
+        } else {
+            // 重名（多份同名同大小）或只有同名但大小不符 → 一律留空交人工
+            r.note = lang("候选 %1 个，需手工确认",
+                          "%1 candidate(s), confirm manually")
+                         .arg(exact.size() > 1 ? exact.size() : sameName.size());
+        }
+    }
+
+    int matched = 0;
+    for (const Row &r : m_rows)
+        if (!r.candidatePath.isEmpty())
+            ++matched;
+    rebuildTable();
+    refreshSummary();
+    m_autoSummary->setText(lang("已匹配 %1 / %2，%3 条需手工指定",
+                                "Matched %1 / %2, %3 need a manual pick")
+                               .arg(matched).arg(m_rows.size())
+                               .arg(m_rows.size() - matched));
+    m_autoSummary->setVisible(true);
 }
 
 void BatchRelocateDialog::onBrowseRow()
@@ -797,6 +918,7 @@ void BatchRelocateDialog::refreshSummary()
     m_btnVerify->setEnabled(!m_hashing && hasWork);
     m_btnOverride->setEnabled(!m_hashing && mismatch > 0);
     m_btnScan->setEnabled(!m_hashing);
+    m_btnAutoMatch->setEnabled(!m_hashing);
 }
 
 QString BatchRelocateDialog::registeredSha(const QString &id) const

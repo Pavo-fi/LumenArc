@@ -11,6 +11,7 @@
 #include "project_io.h"
 #include "case_manager.h"
 #include "i18n.h"
+#include "ui/calib_format.h"      // v1.18.x：漂移统一口径「比标准时间每天快/慢 X 秒」
 #include <QDateTime>
 #include <QDir>
 #include <QFile>
@@ -155,15 +156,24 @@ QString ProjectIO::calibrationBadgeSummary(const TimeCalibration &cal)
     case TimeCalibration::Source::Inherited: src = lang("继承", "inherited"); break;
     default: break;
     }
-    // 例："OCR 3点, rate=1.000"；分段重建模式标注 piecewise
+    // 例："OCR 3点, rate=1.000104, 每天快约 9.0 秒"；分段重建模式标注 piecewise
+    // v1.18.x：rate= 前缀保留（案件树/操作留档都按人读串展示，数值不能丢），但改打
+    // **拟合值** cal.rate 且给 6 位小数——原来打 effectiveRate() 3 位小数，未应用漂移
+    // 时恒为 "rate=1.000"，实测出来的快慢在案件树里等于没写（.vla 字段本身没动）。
     QString s = lang("%1 %2点, rate=%3", "%1 %2pts, rate=%3")
         .arg(src).arg(cal.samples.size())
-        .arg(cal.effectiveRate(), 0, 'f', 3);
+        .arg(cal.rate, 0, 'f', 6);
     if (cal.tickMode())
         s += lang("（秒级对齐 %1 个秒锚点）", " (second-level, %1 ticks)")
                  .arg(cal.tickAnchors.size());
     if (cal.piecewiseMode())
         s += lang("（分段重建）", " (piecewise)");
+    // 秒级表/分段表都不按 rate 换算（wallMsOf 优先查表），此时报方向会误导
+    if (!cal.tickMode() && !cal.piecewiseMode() && !calibDriftNegligible(cal)) {
+        s += QStringLiteral(", ") + calibDriftBadge(cal);
+        if (!cal.rateApplied)
+            s += lang("（未修正）", " (not applied)");
+    }
     return s;
 }
 

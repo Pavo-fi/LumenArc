@@ -168,17 +168,44 @@ QTreeWidgetItem *CaseDock::addGroup(const QString &text)
     return g;
 }
 
-QString CaseDock::hashBadge(const CaseVideoRef &v, QString *tooltip,
-                            QColor *color) const
+QString CaseDock::missingMarkedLabel(const QString &label, bool missing)
 {
+    if (!missing)
+        return label;
+    // 两个全角空格分隔（行内一眼可读；emoji ✗ 只有图形，用户看不出是缺素材）
+    return label + QStringLiteral("　　") + lang("素材缺失", "media missing");
+}
+
+int CaseDock::countMissingVideos(const CaseManager *cm)
+{
+    if (!cm || !cm->isOpen())
+        return 0;
+    int n = 0;
+    for (const auto &v : cm->meta().videos) {
+        // 只做 exists（含完整包 sources/ 副本兜底），不算指纹——开案路径要快
+        if (!QFileInfo::exists(cm->effectivePathFor(v)))
+            ++n;
+    }
+    return n;
+}
+
+QString CaseDock::hashBadge(const CaseVideoRef &v, QString *tooltip,
+                            QColor *color, bool *missing) const
+{
+    if (missing) *missing = false;
     // 完整包接收端：原路径缺失时以包内 sources/ 副本为准（M3 任务12）
     const QString eff = m_caseManager->effectivePathFor(v);
     const QFileInfo fi(eff);
     const bool bundled = (eff != v.originalPath);
     if (!fi.exists()) {
-        if (tooltip) *tooltip = lang("源文件缺失（右键可重新定位）",
-                                     "Source missing (right-click to relocate)");
+        // v1.18.x：只有 ✗ 用户看不出是「文件不在」——行文本另加「素材缺失」，
+        // tooltip 补一句怎么修（右键/菜单两个入口都指到同一个批量对话框）
+        if (tooltip) *tooltip = lang(
+            "源文件缺失。右键「批量重新定位…」或菜单「案件 → 重新定位素材…」",
+            "Source missing. Right-click \"Batch relocate…\" or use menu"
+            " Case → Relocate media…");
         if (color) *color = QColor(Theme::Danger);
+        if (missing) *missing = true;
         return QStringLiteral("✗");
     }
     if (!bundled
@@ -216,15 +243,12 @@ void CaseDock::fillCameraGroups(QTreeWidgetItem *group)
         // 标题写着「2 个文件」但下面一个子项都建不出来 → 节点没有展开箭头，
         // 用户点不开也看不到里面是什么。
         int liveCount = 0;
+        int missingCount = 0;   // v1.18.x：整组都缺 → 组节点也标红，一眼看到哪个组废了
         for (const QString &mid : g.memberIds)
             if (m_caseManager->videoById(mid))
                 ++liveCount;
         const int staleCount = g.memberIds.size() - liveCount;
-        QString title = lang("%1（%2 个文件）", "%1 (%2 files)")
-                            .arg(gname).arg(liveCount);
-        if (staleCount > 0)
-            title += lang("  ⚠ %1 项失效", "  ⚠ %1 stale").arg(staleCount);
-        auto *gIt = new QTreeWidgetItem(group, {title});
+        auto *gIt = new QTreeWidgetItem(group);
         gIt->setData(0, kRoleKind, QStringLiteral("camgroup"));
         gIt->setData(0, kRoleId, g.groupId);
         gIt->setData(0, kRolePath, g.groupId);   // 右键菜单非空守卫
@@ -232,10 +256,11 @@ void CaseDock::fillCameraGroups(QTreeWidgetItem *group)
         // 显式声明「有子项要展开」：成员数量为 0 时 Qt 默认不给箭头
         if (!g.memberIds.isEmpty())
             gIt->setChildIndicatorPolicy(QTreeWidgetItem::ShowIndicator);
-        gIt->setToolTip(0, g.name.isEmpty()
+        QString gTip = g.name.isEmpty()
             ? lang("未命名机位组 %1——右键「机位组改名」",
                    "Unnamed camera group %1 — right-click to rename").arg(g.groupId)
-            : QStringLiteral("%1（%2）").arg(g.name, g.groupId));
+            : QStringLiteral("%1（%2）").arg(g.name, g.groupId);
+        gIt->setToolTip(0, gTip);
         QFont f = gIt->font(0);
         f.setBold(true);
         gIt->setFont(0, f);
@@ -262,7 +287,10 @@ void CaseDock::fillCameraGroups(QTreeWidgetItem *group)
             ++totalFiles;
             QString badgeTip;
             QColor badgeColor;
-            const QString badge = hashBadge(*v, &badgeTip, &badgeColor);
+            bool rowMissing = false;
+            const QString badge = hashBadge(*v, &badgeTip, &badgeColor, &rowMissing);
+            if (rowMissing)
+                ++missingCount;
             const QString eff = m_caseManager->effectivePathFor(*v);
             const bool bundled = (eff != v->originalPath);
             // 规范§6：emoji 禁令——包内副本改纯文字前缀；校时标记改 ToolTip 表达
@@ -270,8 +298,10 @@ void CaseDock::fillCameraGroups(QTreeWidgetItem *group)
                 ? lang("（副本）", "(copy)") + QFileInfo(eff).fileName()
                 : QFileInfo(eff).fileName();
             const bool isOutput = mid.startsWith(QLatin1Char('P'));
-            auto *it = new QTreeWidgetItem(gIt,
-                {QStringLiteral("%1  %2  %3").arg(v->id, name, badge)});
+            // 列结构不动（id + 名 + 徽标）：缺失只在行末追加「素材缺失」文字，
+            // 前景色沿用徽标色（缺失 = Theme::Danger）
+            auto *it = new QTreeWidgetItem(gIt, {missingMarkedLabel(
+                QStringLiteral("%1  %2  %3").arg(v->id, name, badge), rowMissing)});
             it->setData(0, kRoleKind, isOutput ? QStringLiteral("output")
                                                : QStringLiteral("video"));
             it->setData(0, kRoleId, v->id);
@@ -295,6 +325,24 @@ void CaseDock::fillCameraGroups(QTreeWidgetItem *group)
                         }
             }
         }
+        // 组标题在成员遍历完才拼（要知道有几路缺失）：全部成员都缺 → 组节点
+        // 也上红字，例「C02 002（1 个文件，素材缺失）」——一眼看到哪个组废了
+        const bool allMissing = liveCount > 0 && missingCount == liveCount;
+        QString title = lang("%1（%2 个文件%3）", "%1 (%2 files%3)")
+                            .arg(gname).arg(liveCount)
+                            .arg(allMissing ? lang("，素材缺失", ", media missing")
+                                            : QString());
+        if (staleCount > 0)
+            title += lang("  ⚠ %1 项失效", "  ⚠ %1 stale").arg(staleCount);
+        gIt->setText(0, title);
+        if (allMissing) {
+            gIt->setForeground(0, QColor(Theme::Danger));
+            gIt->setToolTip(0, gTip + QStringLiteral("\n")
+                + lang("组内素材全部缺失，右键「批量重新定位…」或菜单"
+                       "「案件 → 重新定位素材…」",
+                       "All media in this group are missing — right-click"
+                       " \"Batch relocate…\" or Case → Relocate media…"));
+        }
     }
     group->setText(0, lang("机位组（%1 组 / %2 文件）", "Camera groups (%1 / %2 files)")
                           .arg(meta.cameraGroups.size()).arg(totalFiles));
@@ -305,7 +353,8 @@ void CaseDock::fillVideos(QTreeWidgetItem *group)
     for (const auto &v : m_caseManager->meta().videos) {
         QString badgeTip;
         QColor badgeColor;
-        const QString badge = hashBadge(v, &badgeTip, &badgeColor);
+        bool rowMissing = false;
+        const QString badge = hashBadge(v, &badgeTip, &badgeColor, &rowMissing);
         // 规范§6：emoji 禁令——校时标记改 ToolTip 表达（详情已在下方 tip）
         // 有效路径：包内副本兜底（双击直接可播，完整包零操作）
         const QString eff = m_caseManager->effectivePathFor(v);
@@ -315,9 +364,9 @@ void CaseDock::fillVideos(QTreeWidgetItem *group)
         const QString name = bundled
             ? lang("（副本）", "(copy)") + QFileInfo(eff).fileName()   // 规范§6：去复本 emoji
             : QFileInfo(v.originalPath).fileName();
-        auto *it = new QTreeWidgetItem(group,
-            {QStringLiteral("%1  %2%3  %4")
-                 .arg(v.id, name, cam, badge)});
+        auto *it = new QTreeWidgetItem(group, {missingMarkedLabel(
+            QStringLiteral("%1  %2%3  %4").arg(v.id, name, cam, badge),
+            rowMissing)});
         it->setData(0, kRoleKind, QStringLiteral("video"));
         it->setData(0, kRoleId, v.id);
         it->setData(0, kRolePath, eff);

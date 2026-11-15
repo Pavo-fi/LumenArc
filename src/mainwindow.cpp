@@ -61,6 +61,7 @@
 #include "infrastructure/credential_store.h"
 #include "theme.h"
 #include "ui/task_bar.h"
+#include "ui/calib_format.h"      // v1.18.x：漂移统一口径「比标准时间每天快/慢 X 秒」
 
 #include <QListWidget>
 #include <QSplitter>
@@ -350,6 +351,8 @@ void MainWindow::applyRestoredState(const VideoState &st)
 
     m_calibration = st.calibration;
     m_chartPanel->setCalibration(m_calibration);
+    if (m_spectrogramEnhanced)            // 语谱图轨道同口径（两轨时间轴必须一致）
+        m_spectrogramEnhanced->setCalibration(m_calibration);
     // 校时徽标以 .vla 为 SSOT：空校时模型（旧 v7 迁移 offset=0）同步
     // 熄灭案件里误亮的 ⏰（用户实测反馈）
     m_caseManager->updateCalibrationBadge(
@@ -416,6 +419,8 @@ m_chartPanel->setLabels({});
 m_chartPanel->clearChartGuideLines();
 m_calibration = TimeCalibration();
 m_chartPanel->setCalibration(m_calibration);
+if (m_spectrogramEnhanced)
+    m_spectrogramEnhanced->setCalibration(m_calibration);   // 语谱图一并复位
 m_chartPanel->clearAB();
 m_pinnedRect = QRect();
 m_snapshotFusion = SnapshotFusionData();
@@ -615,6 +620,8 @@ void MainWindow::openVideoFile(const QString &filePath)
                 && inherited.isValid()) {
                 m_calibration = inherited;
                 m_chartPanel->setCalibration(m_calibration);
+                if (m_spectrogramEnhanced)
+                    m_spectrogramEnhanced->setCalibration(m_calibration);
                 // v1.7.1 修复：继承的校时必须落盘 .vla 并刷新案件 ⏰ 徽标
                 // （用户实测：前处理产物继承校时后切换/重开丢失、无徽标——
                 // 旧流程只在内存，产物无分析数据时从未写 vla）
@@ -894,6 +901,8 @@ void MainWindow::applyPendingCalibration()
     m_calibration = cal;
     if (m_chartPanel)
         m_chartPanel->setCalibration(m_calibration);
+    if (m_spectrogramEnhanced)
+        m_spectrogramEnhanced->setCalibration(m_calibration);
     saveCurrentVlaAsync();
     if (m_caseDock)
         m_caseDock->refreshTree();
@@ -1014,6 +1023,8 @@ void MainWindow::onSetStartTime()
             this, [this](const TimeCalibration &cal) {
                 m_calibration = cal;
                 m_chartPanel->setCalibration(m_calibration);
+                if (m_spectrogramEnhanced)
+                    m_spectrogramEnhanced->setCalibration(m_calibration);
                 QString msg;
                 if (!cal.isValid()) {
                     msg = lang("校时已清除", "Calibration cleared");
@@ -1023,8 +1034,8 @@ void MainWindow::onSetStartTime()
                               .arg(QDateTime::fromMSecsSinceEpoch(cal.offsetMs)
                                        .toString(QStringLiteral("yyyy-MM-dd HH:mm:ss")));
                     if (cal.rateApplied)
-                        msg += lang("；漂移 %1 秒/天", "; drift %1 s/day")
-                                   .arg(cal.driftSecondsPerDay(), 0, 'f', 1);
+                        // v1.18.x：统一口径（明确写出快/慢，见 ui/calib_format.h）
+                        msg += lang("；", "; ") + calibDriftBadge(cal);
                     if (cal.truthSet)
                         msg += lang("；北京时间偏移 %1s", "; Beijing offset %1s")
                                    .arg(cal.truthOffsetMs / 1000.0, 0, 'f', 1);
@@ -1084,6 +1095,8 @@ void MainWindow::wireTickAlignPersistence()
                     return;              // 已切走别的视频：不越权写别人的校时
                 m_calibration = cal;
                 m_chartPanel->setCalibration(m_calibration);
+                if (m_spectrogramEnhanced)
+                    m_spectrogramEnhanced->setCalibration(m_calibration);
                 showOperationStatus(lang(
                     "秒级精细对齐已完成并落库（%1 个秒级锚点；校时窗口已关闭，"
                     "结果直接写入 .vla）",
@@ -1910,7 +1923,46 @@ void MainWindow::updateTimeDisplay()
     qint64 dur = m_uiState->effectiveDurationMs();
     if (dur <= 0 && m_videoEngine)
         dur = m_videoEngine->duration();
-    m_timeLabel->setText(QString("%1 / %2").arg(formatTime(pos)).arg(formatTime(dur)));
+    // 用户拍板：时间轴上也要体现校时（保证秒级对应）→ 已校时时这一行显墙钟，
+    // 流内时间挪到悬浮提示里对照。
+    QString tip;
+    const QString text = playbackTimeText(pos, dur, &tip);
+    if (m_timeLabel) {
+        // 只在变了的时候写：位置每拍都刷，重复 setToolTip 会把已弹出的提示打断
+        if (m_timeLabel->text() != text)
+            m_timeLabel->setText(text);
+        if (m_timeLabel->toolTip() != tip)
+            m_timeLabel->setToolTip(tip);
+    }
+}
+
+/// 播放条时间文本（口径与 ChartPanel::displayMsOf/formatDisplayTime 同一套）：
+/// 有有效校时 → 墙钟 HH:mm:ss / 总时长；未校时 → 旧的「流内 / 总时长」逐字不变。
+/// 右侧总时长始终是流内长度（文件属性，不是时刻）。
+QString MainWindow::playbackTimeText(qint64 posMs, qint64 durMs, QString *tipOut) const
+{
+    if (!m_calibration.isEffective()) {
+        if (tipOut)
+            tipOut->clear();
+        return QStringLiteral("%1 / %2")
+            .arg(formatTime(posMs)).arg(formatTime(durMs));
+    }
+    if (tipOut)
+        *tipOut = lang(QStringLiteral("流内 %1 / 总时长 %2（本行按校时显墙钟）"),
+                       QStringLiteral("Stream %1 / total %2 (this line shows wall clock)"))
+                     .arg(formatTime(posMs)).arg(formatTime(durMs));
+    return QStringLiteral("%1 / %2")
+        .arg(wallClockText(posMs)).arg(formatTime(durMs));
+}
+
+/// 校时后的墙钟文本：dateKnown → 北京时间 epoch；否则旧「日内秒偏移」口径
+/// （流内 + offset，仍是钟点串，不引 epoch 日期）——分支判据同 ChartPanel。
+QString MainWindow::wallClockText(qint64 streamMs) const
+{
+    if (m_calibration.dateKnown)
+        return QDateTime::fromMSecsSinceEpoch(m_calibration.beijingMsOf(streamMs))
+            .toString(QStringLiteral("HH:mm:ss"));
+    return formatTime(streamMs + m_calibration.offsetMs);
 }
 
 QString MainWindow::formatTime(qint64 ms) const
@@ -1978,6 +2030,8 @@ void MainWindow::restoreAnalysisState(const QVector<QRect> &regions,
     }
     m_calibration = calibration;
     m_chartPanel->setCalibration(m_calibration);
+    if (m_spectrogramEnhanced)
+        m_spectrogramEnhanced->setCalibration(m_calibration);
     m_chartPanel->setLabels(labels);
     if (!pinnedRect.isEmpty())
         m_pinnedRect = pinnedRect;

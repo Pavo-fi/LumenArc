@@ -3,6 +3,7 @@
 #include "case_manager.h"
 #include "videostatemanager.h"
 #include "domain/report_fmt.h"
+#include "ui/calib_format.h"      // v1.18.x：漂移统一口径（本模块用强制中文的 *Zh 版）
 #include "infrastructure/tool_paths.h"
 #include "infrastructure/credential_store.h"
 
@@ -226,11 +227,22 @@ ReportData ReportService::collect(CaseManager *cm, VideoStateManager *vsm,
             const qint64 truth = cal.truthSet ? cal.truthOffsetMs : 0;
             row.wallStartMs = cal.wallMsOf(0) + truth;
             row.wallEndMs = cal.wallMsOf(row.durationMs > 0 ? row.durationMs : 0) + truth;
-            row.formulaText = QStringLiteral("标准时间 = 录像时间 × %1 %2")
+            // v1.18.x：报告须同时写「本次有没有修正」和「实测是多少」——旧写法在
+            // rateApplied=false 时把速率硬写成 1.0，实测漂移在报告里完全看不见。
+            // 公式里的 × 仍是**实际换算**用的值（未应用就是 1.0，不能虚报修正过）；
+            // 实测快慢单独一句（含不确定度）。秒级表/分段表不按 rate 换算，不报方向。
+            const QString driftNote =
+                (cal.tickMode() || cal.piecewiseMode())
+                    ? QString() : calibDriftTextZh(cal);
+            const bool driftShown = !driftNote.isEmpty() && !calibDriftNegligible(cal);
+            row.formulaText = QStringLiteral("标准时间 = 录像时间 × %1 %2%3")
                 .arg(cal.rateApplied ? QString::number(cal.rate, 'g', 9)
                                      : QStringLiteral("1.0"))
                 .arg(cal.offsetMs != 0
                      ? QStringLiteral("+ 偏移 %1 秒").arg(cal.offsetMs / 1000.0, 0, 'f', 1)
+                     : QString())
+                .arg(driftShown
+                     ? QStringLiteral("；实测时钟漂移：%1").arg(driftNote)
                      : QString());
             // 取样点：显示时间 vs 校时后北京时间 → 时间差
             for (const auto &sp : cal.samples)
@@ -333,6 +345,10 @@ ReportData ReportService::collect(CaseManager *cm, VideoStateManager *vsm,
                     "已建立监控时间轴（OCR 拟合，取样 %1 点），未与北京时间比对")
                     .arg(cal.samples.size());
             }
+            // v1.18.x：docx / HTML 的「校准结果」列优先取 resultText（formulaText 只是
+            // 兜底），所以实测快慢在这里也要落一句，不然报告里还是看不见
+            if (driftShown && !row.resultText.isEmpty())
+                row.resultText += QStringLiteral("；%1").arg(driftNote);
             // P-48：错读点 → 局限性
             int suspicious = 0;
             for (const auto &sp : cal.samples)

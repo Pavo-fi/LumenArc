@@ -280,6 +280,16 @@ void InspectorPanel::setCalibration(const QString &state, bool ok)
 void InspectorPanel::setCursor(qint64 ms)
 {
     setRowText(m_cursor, fmtMs(ms), Theme::TextPrimary);
+    if (m_cursor && !m_cursor->toolTip().isEmpty())
+        m_cursor->setToolTip(QString());   // 流内口径无对照需求：别留着上次的校时提示
+}
+
+void InspectorPanel::setCursorTimeText(const QString &text, const QString &tip)
+{
+    setRowText(m_cursor, text, Theme::TextPrimary);
+    // 提示只在内容变了时写（本面板 500ms 刷一次，重复 setToolTip 会打断已弹出的提示）
+    if (m_cursor && m_cursor->toolTip() != tip)
+        m_cursor->setToolTip(tip);
 }
 
 void InspectorPanel::setRoi(int rects, int polys)

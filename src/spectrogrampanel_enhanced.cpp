@@ -17,6 +17,7 @@
 #include <QResizeEvent>
 #include <QMouseEvent>
 #include <QWheelEvent>
+#include <QDateTime>
 #include <QtMath>
 #include <QOpenGLVertexArrayObject>
 
@@ -577,6 +578,59 @@ void SpectrogramPanelEnhanced::buildColorLUT()
     }
 }
 
+// ---- 校时口径（照抄 ChartPanel：上下两轨同宽并排，时间轴必须同一套换算）----
+
+void SpectrogramPanelEnhanced::setCalibration(const TimeCalibration &cal)
+{
+    m_calibration = cal;
+    update();      // 刻度文本随校时而变：重画（paintGL → drawAxes）
+}
+
+qint64 SpectrogramPanelEnhanced::displayMsOf(qint64 streamMs) const
+{
+    if (!m_calibration.dateKnown)
+        return streamMs + m_calibration.offsetMs;   // 旧路径：日内偏移（v7 行为）
+    return m_calibration.beijingMsOf(streamMs);     // 新路径：北京时间
+}
+
+QString SpectrogramPanelEnhanced::formatDisplayTime(qint64 displayMs) const
+{
+    if (!m_calibration.dateKnown) {
+        // 旧口径（v7 日内偏移）：沿用本面板原样式——不足 1 小时只显 mm:ss，
+        // 未校时（offset=0）时刻度文本与改动前逐字一致。
+        const qint64 ms = qMax<qint64>(0, displayMs);
+        const int totalSec = static_cast<int>(ms / 1000);
+        const int h = totalSec / 3600;
+        const int m = (totalSec % 3600) / 60;
+        const int s = totalSec % 60;
+        return (h > 0)
+            ? QString("%1:%2:%3").arg(h).arg(m, 2, 10, QChar('0')).arg(s, 2, 10, QChar('0'))
+            : QString("%1:%2").arg(m, 2, 10, QChar('0')).arg(s, 2, 10, QChar('0'));
+    }
+    const QDateTime dt = QDateTime::fromMSecsSinceEpoch(displayMs);
+    // 跨天带日期：与 ChartPanel::formatDisplayTime 同格式，且**保留秒**
+    //（用户要求「秒级对应」；标签框宽度已按文字实测宽给，不再裁字）
+    return m_spanCrossDay ? dt.toString(QStringLiteral("MM-dd HH:mm:ss"))
+                          : dt.toString(QStringLiteral("HH:mm:ss"));
+}
+
+void SpectrogramPanelEnhanced::updateSpanCrossDay()
+{
+    if (m_calibration.dateKnown && m_viewXMax > m_viewXMin) {
+        m_spanCrossDay =
+            QDateTime::fromMSecsSinceEpoch(displayMsOf(static_cast<qint64>(m_viewXMin))).date()
+            != QDateTime::fromMSecsSinceEpoch(displayMsOf(static_cast<qint64>(m_viewXMax))).date();
+    } else {
+        m_spanCrossDay = false;
+    }
+}
+
+QString SpectrogramPanelEnhanced::axisTickTextForTest(qint64 streamMs)
+{
+    updateSpanCrossDay();
+    return formatDisplayTime(displayMsOf(streamMs));
+}
+
 void SpectrogramPanelEnhanced::drawAxes(QPainter &painter)
 {
     int heatW = width() - m_leftMargin - m_rightMargin;
@@ -613,8 +667,11 @@ void SpectrogramPanelEnhanced::drawAxes(QPainter &painter)
     // 避免标签糊成一团——现场反馈；算法见 domain/tick_utils.h 单测）
     const qint64 visibleDuration = static_cast<qint64>(m_viewXMax - m_viewXMin);
     const qint64 timeStep = computeXAxisStepMs(visibleDuration, heatW);
+    // 校时口径：先按可视范围定「跨天要不要带日期」，再逐刻度换算墙钟
+    updateSpanCrossDay();
 
     qint64 startTime = (static_cast<qint64>(m_viewXMin) / timeStep) * timeStep;
+    int lastLabelRight = -100000;   // 防重叠：上一个标签的右边界（见下方绘制处）
     for (qint64 t = startTime; t <= static_cast<qint64>(m_viewXMax); t += timeStep) {
         if (t < static_cast<qint64>(m_viewXMin)) continue;
         qreal xRatio = (t - m_viewXMin) / (m_viewXMax - m_viewXMin);
@@ -625,14 +682,20 @@ void SpectrogramPanelEnhanced::drawAxes(QPainter &painter)
         painter.drawLine(x, TOP_MARGIN + heatH, x, TOP_MARGIN + heatH + 5);
         painter.setPen(labelColor);
 
-        int totalSec = static_cast<int>(t / 1000);
-        int h = totalSec / 3600;
-        int m = (totalSec % 3600) / 60;
-        int s = totalSec % 60;
-        QString timeText = (h > 0)
-            ? QString("%1:%2:%3").arg(h).arg(m, 2, 10, QChar('0')).arg(s, 2, 10, QChar('0'))
-            : QString("%1:%2").arg(m, 2, 10, QChar('0')).arg(s, 2, 10, QChar('0'));
-        painter.drawText(QRect(x - 30, TOP_MARGIN + heatH + 5, 60, BOTTOM_MARGIN - 5),
+        // 刻度仍按**流内等距**排布（像素位置与热力图列严格对应）；rate≠1 时
+        // 换算出的墙钟秒差本来就不均匀——这是正确行为，不为「整齐」回退。
+        const QString timeText = formatDisplayTime(displayMsOf(t));
+        // v1.19.3（用户要求「秒级对应」）：标签按实测文字宽度给框，并与上一个
+        // 标签做防重叠，宁可少画几个也不裁字、不叠字（旧版固定 60px 框，跨天
+        // 12 字的 "MM-dd HH:mm:ss" 必被裁掉秒位）。
+        static const int kLabelGapPx = 6;
+        const int labelW = painter.fontMetrics().horizontalAdvance(timeText) + 12;
+        const int labelLeft = x - labelW / 2;
+        if (labelLeft < lastLabelRight + kLabelGapPx)
+            continue;
+        lastLabelRight = labelLeft + labelW;
+        painter.drawText(QRect(labelLeft, TOP_MARGIN + heatH + 5, labelW,
+                               BOTTOM_MARGIN - 5),
                          Qt::AlignHCenter | Qt::AlignTop, timeText);
     }
 
@@ -1064,6 +1127,11 @@ void SpectrogramPanelEnhanced::mouseMoveEvent(QMouseEvent *event)
             QString timeText = QString("%1:%2:%3.%4")
                 .arg(h).arg(m, 2, 10, QChar('0'))
                 .arg(s, 2, 10, QChar('0')).arg(ms, 3, 10, QChar('0'));
+            if (m_calibration.isEffective()) {
+                // 已校时：主读数是墙钟（与 X 轴刻度同口径），流内时间留括号里对照
+                timeText = lang("%1（流内 %2）", "%1 (stream %2)")
+                               .arg(formatDisplayTime(displayMsOf(timeMs)), timeText);
+            }
 
             QString freqText = (freq >= 1000)
                 ? QString("%1 kHz").arg(freq / 1000.0, 0, 'f', 2)

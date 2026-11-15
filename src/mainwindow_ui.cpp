@@ -284,9 +284,10 @@ void MainWindow::createMenus()
     m_casePropsAction = caseMenu->addAction(
         lang("案件属性与设置(&P)...", "Case &Properties && Settings..."), this,
         &MainWindow::onCaseProperties);
-    // v1.3.0 M3 任务13：批量重新定位（检材维持）
+    // v1.3.0 M3 任务13：批量重新定位（检材维持）。v1.18.x 更名「重新定位素材…」
+    // ——与开案状态栏/缺失行 tooltip 指的入口名对齐（同一个对话框，不另加重复项）
     m_batchRelocateAction = caseMenu->addAction(
-        lang("批量重新定位(&B)...", "&Batch Relocate..."), this,
+        lang("重新定位素材(&B)...", "&Relocate Media..."), this,
         &MainWindow::onBatchRelocate);
     m_batchRelocateAction->setEnabled(false);
     caseMenu->addSeparator();
@@ -1753,6 +1754,8 @@ void MainWindow::buildCaseUi(const QString &collapseBtnStyle)
                 if (clearedCurrent) {
                     m_calibration = TimeCalibration();
                     m_chartPanel->setCalibration(m_calibration);
+                    if (m_spectrogramEnhanced)
+                        m_spectrogramEnhanced->setCalibration(m_calibration);
                     showOperationStatus(lang(
                         "该视频已移出案件，内存中的校时/分析已清除（文件仍在播放）",
                         "Video removed from case: in-memory calibration/analysis "

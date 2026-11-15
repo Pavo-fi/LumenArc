@@ -18,6 +18,7 @@
 #include <QVector>
 #include <QVector2D>
 #include "domain/analysis_snapshot.h"
+#include "domain/time_calibration.h"
 
 QT_FORWARD_DECLARE_CLASS(QOpenGLVertexArrayObject)
 
@@ -39,6 +40,20 @@ public:
     FreqScale freqScale() const { return m_freqScale; }
     void setNoiseFloor(qreal value);
     bool isDraggingCursor() const { return m_draggingCursor; }
+
+    /// 校时下发（与 ChartPanel 同口径）：本轨道 X 轴刻度从「流内 00:00:00 起」
+    /// 改为校时后的墙钟——两轨同宽并排，时间轴必须一致（用户：秒级对得上）。
+    /// 传空模型（未校时）→ 与旧行为逐字一致。
+    void setCalibration(const TimeCalibration &cal);
+    const TimeCalibration &calibration() const { return m_calibration; }
+
+    /// 流内 ms → 显示域 ms（与 ChartPanel::displayMsOf 同一口径，不另立一套）
+    qint64 displayMsOf(qint64 streamMs) const;
+    /// 显示域 ms → 刻度文本（与 ChartPanel::formatDisplayTime 同一口径）
+    QString formatDisplayTime(qint64 displayMs) const;
+    /// 测试钩子（自检）：按当前可视范围刷新跨天标志后，返回该流内位置
+    /// 会画出的 X 刻度文本（不依赖 GL 绘制上下文）。
+    QString axisTickTextForTest(qint64 streamMs);
 
     /// 离屏 CPU 光栅化渲染（2026-08-14 §14 快照全面化）：与 GPU 着色器同一
     /// 归一化 + 同一颜色 LUT + 同一视窗/频率轴设置，任意目标尺寸全幅输出，
@@ -89,12 +104,17 @@ private:
     double pixelToFreq(int y) const;
     int freqToPixel(double freq) const;
     int freqToBin(double freq) const;
+    /// 按当前可视范围刷新「是否跨天」（dateKnown 路径决定刻度要不要带日期）
+    void updateSpanCrossDay();
 
     // Data
     AudioData m_audioData;
     QVector<QRgb> m_colorLUT;
     ColorScale m_colorScale = ColorScale::Thermal;
     FreqScale m_freqScale = FreqScale::Linear;
+    /// 校时模型（只读派生：X 轴刻度文本；SSOT 在 MainWindow/VideoState）
+    TimeCalibration m_calibration;
+    bool m_spanCrossDay = false;   ///< 可视范围跨天（drawAxes 前刷新，同 ChartPanel）
 
     // Viewport
     qreal m_viewXMin = 0;

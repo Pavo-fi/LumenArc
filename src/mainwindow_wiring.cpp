@@ -583,6 +583,8 @@ void MainWindow::setupVideoListConnections()
                 m_chartPanel->setLabels({});
                 m_calibration = TimeCalibration();
                 m_chartPanel->setCalibration(m_calibration);
+                if (m_spectrogramEnhanced)
+                    m_spectrogramEnhanced->setCalibration(m_calibration);  // 一并复位
                 m_chartPanel->clearAB();
                 m_pinnedRect = QRect();
                 m_snapshotFusion = SnapshotFusionData();
