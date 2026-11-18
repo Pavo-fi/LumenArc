@@ -39,6 +39,11 @@ VideoListPanel::VideoListPanel(QWidget *parent)
     m_listWidget->setDragDropMode(QAbstractItemView::InternalMove);
     m_listWidget->setDefaultDropAction(Qt::MoveAction);
     m_listWidget->setSelectionMode(QAbstractItemView::SingleSelection);
+    // v1.19.3（用户：视频栏擅自增长，把下面的工具区挤没了）：列表不再无限抢纵向空间。
+    // 用 Preferred/Maximum 让它在内容少时自然收缩，配合一个宽松上限（约 12 行），
+    // 再多就出滚动条；用户拖动停靠栏分界仍可自行调整。
+    m_listWidget->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Maximum);
+    m_listWidget->setMaximumHeight(280);
     layout->addWidget(m_listWidget);
 
     // Button row

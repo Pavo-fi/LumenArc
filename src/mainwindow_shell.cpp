@@ -612,6 +612,7 @@ void MainWindow::showStage(ui::Stage s)
     if (!m_workspaceStack || !m_appState)
         return;
 
+    logStageGeometry("before");
     m_appState->setStage(s);
 
     // v2.1：离开「校时」阶段 → 右侧校时坞自动收起（否则它一直压在视频上，
@@ -622,6 +623,7 @@ void MainWindow::showStage(ui::Stage s)
     }
 
     applyStageChrome(s);
+    logStageGeometry("after");
 
     // 校时：停靠式——视频必须保持可见（否则无法框选时间戳），所以不换页
     if (s == ui::Stage::Align) {
@@ -1108,6 +1110,27 @@ QList<QDockWidget *> MainWindow::stageDocks() const
     return out;
 }
 
+// v1.19.3 诊断（用户报「打开校时页屏幕尺寸会变」）：把切阶段前后的几何写盘，
+// 一次复现就能看清是窗口变了、中央区变了、还是画面区变了。文件很小，可随时删。
+void MainWindow::logStageGeometry(const char *tag)
+{
+    QFile f(QCoreApplication::applicationDirPath()
+            + QStringLiteral("/stage_geometry.log"));
+    if (!f.open(QIODevice::WriteOnly | QIODevice::Append | QIODevice::Text))
+        return;
+    const auto sz = [](QWidget *w) {
+        return w ? QStringLiteral("%1x%2").arg(w->width()).arg(w->height())
+                 : QStringLiteral("-");
+    };
+    QTextStream ts(&f);
+    ts << QStringLiteral("%1 [%2] win=%3 max=%4 central=%5 stack=%6\n")
+              .arg(QDateTime::currentDateTime().toString(QStringLiteral("HH:mm:ss.zzz")))
+              .arg(QString::fromLatin1(tag))
+              .arg(sz(this))
+              .arg(isMaximized() ? 1 : 0)
+              .arg(sz(centralWidget()))
+              .arg(sz(m_workspaceStack));
+}
 void MainWindow::applyStageChrome(ui::Stage s)
 {
     // v2.1：分析工具栏已整行取消（工具收进检视器，随检视器显隐）
@@ -1168,9 +1191,18 @@ void MainWindow::dockWorkspace(ui::Stage s, QWidget *w)
     auto *dk = new QDockWidget(lang(QStringLiteral("校时"), QStringLiteral("Calibration")), this);
     dk->setObjectName(QStringLiteral("calibrationDock"));
     dk->setAllowedAreas(Qt::LeftDockWidgetArea | Qt::RightDockWidgetArea);
-    dk->setWidget(w);                 // 接管所有权
+    // v1.19.3（用户：打开校时页屏幕尺寸会变）：原来把面板直接塞进坞并钉 380 最小宽，
+    // 面板自身的 minimumSizeHint 会把主窗最小尺寸顶起来，表现就是"窗口跳大"。
+    // 改法：面板装进 QScrollArea（内容可压缩、必要时出滚动条），坞最小宽降到 260，
+    // 主窗几何不再被校时面板撑动。
+    auto *scroll = new QScrollArea(dk);
+    scroll->setWidgetResizable(true);
+    scroll->setFrameShape(QFrame::NoFrame);
+    scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAsNeeded);
+    scroll->setWidget(w);             // 接管所有权
+    dk->setWidget(scroll);
     addDockWidget(Qt::RightDockWidgetArea, dk);
-    dk->setMinimumWidth(380);
+    dk->setMinimumWidth(260);
     dk->setMaximumWidth(560);   // 压缩：别把视频挤太窄
     dk->show();
     installKeyGuardOn(w);       // v2.0：停靠的校时面板也走全局快捷键
@@ -1808,6 +1840,14 @@ int MainWindow::runShellSelfCheck()
                   .arg(tCross));
     }
 
+    // 4c6. 案件菜单「保存案件」= Ctrl+S（2026-11-15 用户拍板；分析结果退到 Ctrl+Shift+S）
+    {
+        check(m_saveCaseAction != nullptr,
+              QStringLiteral("菜单：案件 → 保存案件 已创建"));
+        check(m_saveCaseAction
+                  && m_saveCaseAction->shortcut() == QKeySequence::Save,
+              QStringLiteral("菜单：保存案件 绑定 Ctrl+S"));
+    }
     // 4c5. 校时口径贯通三处显示（用户：时间轴上也要体现，保证校时结果的秒级对应）
     //      ① 语谱图轨道 X 刻度 ② 播放条时间 ③ 检视器「游标」行
     {

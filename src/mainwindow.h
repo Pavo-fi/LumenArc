@@ -149,6 +149,10 @@ private slots:
     void onClearData();
     void onExportCsv();
     void onSaveAnalysis();
+    /// v1.19.3（用户拍板）：显式保存案件（Ctrl+S），未开案件时菜单项置灰
+    void onSaveCase();
+    /// v1.19.3 诊断：切换阶段前后把窗口/中央区几何写盘（用户报尺寸跳动）
+    void logStageGeometry(const char *tag);
     void onLoadAnalysis();
     /// @brief 加载截图叠加参考图
     void onLoadOverlayImage();
@@ -379,6 +383,7 @@ protected:
     QPushButton *m_caseStatusBtn = nullptr;  ///< 状态栏📁标识（点击=退出案件模式）
     QAction *m_closeCaseAction = nullptr;    ///< 菜单「关闭案件」(Ctrl+W)
     QAction *m_casePropsAction = nullptr;    ///< 菜单「案件属性」
+    QAction *m_saveCaseAction = nullptr;     ///< 菜单「保存案件」(Ctrl+S)
     QAction *m_genReportAction = nullptr;    ///< P-28 菜单「生成分析报告」
     QAction *m_genHtmlReportAction = nullptr; ///< P-26 复活 菜单「导出HTML报告（含时间轴）」
     QAction *m_sitemapAction = nullptr;      ///< P-74 菜单「编辑监控点位图」

@@ -312,6 +312,28 @@ void MainWindow::closeEvent(QCloseEvent *event)
 // ---------------------------------------------------------------------------
 // 案件对话框与起始页（v1.3.0 M2 任务11）
 // ---------------------------------------------------------------------------
+void MainWindow::onSaveCase()
+{
+    // v1.19.3（用户拍板）：案件菜单的「保存案件」/ Ctrl+S。
+    // 只落 case.json（登记、分组、校时摘要等）；分析结果仍走「保存分析结果」。
+    if (!m_caseManager || !m_caseManager->isOpen()) {
+        showOperationStatus(lang(QStringLiteral("当前没有打开的案件"),
+                                 QStringLiteral("No case is open")));
+        return;
+    }
+    QString err;
+    if (!m_caseManager->saveCase(&err)) {
+        QMessageBox::warning(this, lang(QStringLiteral("保存案件"),
+                                        QStringLiteral("Save Case")), err);
+        return;
+    }
+    if (m_caseDock)
+        m_caseDock->refreshTree();
+    showOperationStatus(lang(QStringLiteral("案件已保存：%1")
+                                 .arg(QFileInfo(m_caseManager->caseDir()).fileName()),
+                             QStringLiteral("Case saved: %1")
+                                 .arg(QFileInfo(m_caseManager->caseDir()).fileName())));
+}
 void MainWindow::onNewCase()
 {
     if (m_caseManager->isOpen()) {

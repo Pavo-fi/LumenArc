@@ -200,6 +200,9 @@ void InspectorPanel::setRowText(QLabel *l, const QString &value, const QString &
             "<span style='color:%3;font-size:12px;font-weight:600;'>&nbsp;&nbsp;%4</span>")
             .arg(Theme::TextMuted, key.toHtmlEscaped(), color, value.toHtmlEscaped()));
     } else {
+        // v1.19.3（用户：检视器里名称显示不全）：主读数行允许换行，并挂完整文本
+        // 到 tooltip——文件名几十个字符，单行硬裁等于看不见是哪路。
+        l->setToolTip(value);   // 完整文本挂 tooltip（名称行另有省略号处理）
         // 主读数（名称/分辨率/帧率/时长）：键做行首说明，值独占一行、最大最亮
         l->setStyleSheet(QStringLiteral("color:%1;font-size:13px;font-weight:600;"
                                         "background:transparent;")
@@ -258,11 +261,44 @@ QLabel *InspectorPanel::addRow(QVBoxLayout *lay, const QString &key, bool inline
     return val;
 }
 
+bool InspectorPanel::eventFilter(QObject *watched, QEvent *event)
+{
+    if (watched == m_name && event->type() == QEvent::Resize)
+        updateSourceNameElide();
+    return QWidget::eventFilter(watched, event);
+}
+
+void InspectorPanel::updateSourceNameElide()
+{
+    if (!m_name || m_sourceNameFull.isEmpty())
+        return;
+    // v1.19.3（用户第三次反馈：过长的视频名称显示不全）：不再省略，改成**换行显示**。
+    // 关键是把标签最大宽钉死成面板可用宽——上一版只开 wordWrap 不管用，因为面板在
+    // 滚动区里，QLabel 会按未换行的 sizeHint 把父容器撑宽，再被裁掉。
+    // 最多 3 行（再长就挂 tooltip），行高按字体实测，避免撑坏下面各行的间距。
+    const int avail = qMax(80, this->width() - 24);
+    m_name->setWordWrap(true);
+    m_name->setMaximumWidth(avail);
+    const QFontMetrics fm(m_name->font());
+    m_name->setMaximumHeight(fm.lineSpacing() * 3 + 6);
+    if (m_name->text() != m_sourceNameFull)
+        m_name->setText(m_sourceNameFull);
+}
 void InspectorPanel::setSource(const QString &name, int w, int h, double fps, qint64 durationMs)
 {
-    setRowText(m_name, name.isEmpty()
-                   ? lang(QStringLiteral("未打开"), QStringLiteral("None")) : name,
-               Theme::TextPrimary);
+    // v1.19.3（用户两次反馈「素材名称显示不全」）：名称单行、按控件实测宽度做中间
+    // 省略（头尾都看得见），完整串挂 tooltip，控件宽变时在 eventFilter 里重算。
+    // 上一版 setWordWrap 不管用：面板在滚动区里，QLabel 的 sizeHint 会把它撑成
+    // 一条长行再被裁掉，根本不会换行。
+    m_sourceNameFull = name.isEmpty()
+        ? lang(QStringLiteral("未打开"), QStringLiteral("None")) : name;
+    setRowText(m_name, m_sourceNameFull, Theme::TextPrimary);
+    if (m_name) {
+        m_name->setWordWrap(true);
+        m_name->setToolTip(m_sourceNameFull);
+        m_name->installEventFilter(this);
+    }
+    updateSourceNameElide();
     setRowText(m_size, w > 0 && h > 0 ? QStringLiteral("%1×%2").arg(w).arg(h)
                                       : QStringLiteral("—"), Theme::TextPrimary);
     setRowText(m_fps, fps > 0.0 ? QStringLiteral("%1").arg(fps, 0, 'f', 2)

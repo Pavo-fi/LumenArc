@@ -53,6 +53,10 @@ public:
 signals:
     void magnifierToggled(bool on);
 
+protected:
+    /// 名称行随宽度重算省略（v1.19.3）
+    bool eventFilter(QObject *watched, QEvent *event) override;
+
 private:
     QLabel *addSection(QVBoxLayout *lay, const QString &title, int topPad = 12);
     /// L1 一级标题（检视器 / 工具）—— 与「案件：XXX」同字号同字重
@@ -63,6 +67,8 @@ private:
                       QLabel **valOut = nullptr);
 
     QLabel *m_name = nullptr;
+    QString m_sourceNameFull;      ///< 名称原文（省略显示用）
+    void updateSourceNameElide();  ///< 按控件宽度做中间省略
     QLabel *m_size = nullptr;
     QLabel *m_fps = nullptr;
     QLabel *m_dur = nullptr;

@@ -244,7 +244,8 @@ void MainWindow::createMenus()
                         this, &MainWindow::onOpenLiveMonitor);
     fileMenu->addAction(lang("加载图片为叠加(&I)...", "Load Image as &Overlay..."), this, &MainWindow::onLoadOverlayImage);
     fileMenu->addSeparator();
-    fileMenu->addAction(lang("保存分析结果(&S)...", "&Save Analysis Result..."), this, &MainWindow::onSaveAnalysis, QKeySequence::Save);
+    // v1.19.3（用户拍板）：Ctrl+S 归「保存案件」，分析结果退到 Ctrl+Shift+S
+    fileMenu->addAction(lang("保存分析结果(&S)...", "&Save Analysis Result..."), this, &MainWindow::onSaveAnalysis, QKeySequence(QStringLiteral("Ctrl+Shift+S")));
     fileMenu->addAction(lang("加载分析结果(&L)...", "&Load Analysis Result..."), this, &MainWindow::onLoadAnalysis, QKeySequence(QStringLiteral("Ctrl+L")));
     fileMenu->addSeparator();
     fileMenu->addAction(lang("退出(&X)", "E&xit"), this, &QWidget::close, QKeySequence::Quit);
@@ -256,6 +257,16 @@ void MainWindow::createMenus()
                         &MainWindow::onNewCase);
     caseMenu->addAction(lang("打开案件(&O)...", "&Open Case..."), this,
                         &MainWindow::onOpenCase);
+    // v1.19.3（用户拍板）：案件菜单里给一个显式的「保存案件」，Ctrl+S；
+    // 未开案件时置灰（Ctrl+S 也随之失效，不会在空案上触发保存）
+    m_saveCaseAction = caseMenu->addAction(lang("保存案件(&S)", "&Save Case"),
+                                              this, &MainWindow::onSaveCase);
+    m_saveCaseAction->setShortcut(QKeySequence::Save);
+    m_saveCaseAction->setEnabled(m_caseManager && m_caseManager->isOpen());
+    connect(caseMenu, &QMenu::aboutToShow, this, [this]() {
+        if (m_saveCaseAction)
+            m_saveCaseAction->setEnabled(m_caseManager && m_caseManager->isOpen());
+    });
     QMenu *recentMenu = caseMenu->addMenu(lang("最近案件(&R)", "&Recent Cases"));
     connect(recentMenu, &QMenu::aboutToShow, this, [this, recentMenu]() {
         recentMenu->clear();
@@ -528,7 +539,8 @@ void MainWindow::createMenus()
                 {"Delete", "删除选中的 ROI / 辅助线"},
                 {"右键", "删除鼠标下的 ROI / 辅助线（无需先选中）"},
                 {"Esc", "关闭放大镜 / 退出当前模式"},
-                {"Ctrl+S", "保存分析结果"},
+                {"Ctrl+S", "保存案件"},
+    {"Ctrl+Shift+S", "保存分析结果"},
                 {"Ctrl+L", "加载分析结果"},
                 {"Ctrl+O", "打开视频文件"},
             };
@@ -543,7 +555,8 @@ void MainWindow::createMenus()
                 {"Delete", "Delete Selected ROI / Guide Line"},
                 {"Right-click", "Delete ROI / Guide Line under cursor (no selection needed)"},
                 {"Esc", "Close Magnifier / Exit Mode"},
-                {"Ctrl+S", "Save Analysis"},
+                {"Ctrl+S", "Save Case"},
+    {"Ctrl+Shift+S", "Save Analysis"},
                 {"Ctrl+L", "Load Analysis"},
                 {"Ctrl+O", "Open Video"},
             };
